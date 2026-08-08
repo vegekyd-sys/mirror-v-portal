@@ -1,0 +1,10 @@
+{
+  "email": "tiangengjun@meorient.com",
+  "smtp": {
+    "host": "smtp.exmail.qq.com",
+    "port": 465,
+    "secure": true
+  },
+  "imap": null,
+  "bound_at": "2026-07-14T08:42:11.077Z"
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scene CLI"
+  short_description: "Search Scene video projects and export playable clips"
+  default_prompt: "Use Scene CLI to list indexed projects, search video moments, preserve source ranges, and optionally export ready MP4 clips."

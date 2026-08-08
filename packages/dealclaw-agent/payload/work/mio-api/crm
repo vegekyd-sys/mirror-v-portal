@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""Agent-callable Zoho CRM CLI.
+
+Design goals:
+- self-discovery: `crm commands`, `crm schema`, `crm <module> schema`
+- safe planning: every live command supports `--dry-run`
+- offline contract tests: every live command supports `--mock`
+- machine output: always JSON envelope with count/data/error/meta
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import defaultdict
+from typing import Any
+
+from agent_cli_common import and_criteria, coql_quote, emit, eq_criteria, fail, ge_criteria, le_criteria, like_criteria, normalize_record, safe_call, split_csv
+from zoho_crm_client import ZohoCrmClient
+
+VERSION = "agent-friendly-crm-cli/3.0.0"
+
+COMMANDS = {
+    "accounts.search": {"args": {"--name": "string required", "--fields": "csv optional"}, "example": "crm accounts search --name 海南省", "live": True},
+    "accounts.batch": {"args": {"--names": "csv required", "--fields": "csv optional"}, "example": "crm accounts batch --names 海南鹏翔,河南歆楷焕", "live": True},
+    "accounts.get": {"args": {"--ids": "csv required", "--fields": "csv optional"}, "example": "crm accounts get --ids 185165007858443947,185165007858562555", "live": True},
+    "accounts.list": {"args": {"--fields": "csv optional"}, "example": "crm accounts list --fields Account_Name,field4", "live": True},
+    "accounts.fields": {"args": {}, "example": "crm accounts fields", "live": True},
+    "accounts.dict": {"args": {}, "example": "crm accounts dict", "live": False},
+    "contacts.search": {"args": {"--name": "string", "--account-id": "id", "--email": "string", "--mobile": "string", "--fields": "csv optional"}, "example": "crm contacts search --name 张三", "live": True},
+    "contacts.list": {"args": {"--fields": "csv optional"}, "example": "crm contacts list", "live": True},
+    "contacts.fields": {"args": {}, "example": "crm contacts fields", "live": True},
+    "contacts.dict": {"args": {}, "example": "crm contacts dict", "live": False},
+    "deals.list": {"args": {"--stage": "string", "--sales": "string", "--account-id": "id", "--from": "yyyy-mm-dd", "--to": "yyyy-mm-dd", "--fields": "csv"}, "example": "crm deals list --stage 赢单 --sales 杨盛麟", "live": True},
+    "deals.fields": {"args": {}, "example": "crm deals fields", "live": True},
+    "deals.dict": {"args": {}, "example": "crm deals dict", "live": False},
+    "orders.list": {"args": {"--zone": "string", "--project": "string", "--stage": "string", "--status": "string", "--sales": "string", "--from": "yyyy-mm-dd", "--to": "yyyy-mm-dd", "--fields": "csv"}, "example": "crm orders list --zone 宠物展区 --project 2026印尼 --stage 赢单", "live": True},
+    "orders.summary": {"args": {"--group-by": "sales|special_zone|api field", "filters": "same as orders.list"}, "example": "crm orders summary --project 2026印尼 --group-by sales", "live": True},
+    "orders.fields": {"args": {}, "example": "crm orders fields", "live": True},
+    "orders.dict": {"args": {}, "example": "crm orders dict", "live": False},
+    "events.list": {"args": {"--account-id": "id", "--from": "yyyy-mm-dd", "--to": "yyyy-mm-dd", "--fields": "csv"}, "example": "crm events list --account-id 185165007858443947", "live": True},
+    "events.count": {"args": {"--from": "yyyy-mm-dd", "--to": "yyyy-mm-dd"}, "example": "crm events count --from 2026-01-01 --to 2026-06-30", "live": True},
+    "users.list": {"args": {}, "example": "crm users list", "live": True},
+    "users.search": {"args": {"--name": "string required"}, "example": "crm users search --name 杨盛麟", "live": True},
+    "account-view": {"args": {"--name": "string required"}, "example": "crm account-view --name 台州市乔巴塑料有限公司", "live": True},
+    "sales-dashboard": {"args": {"--sales": "string required", "--from": "yyyy-mm-dd"}, "example": "crm sales-dashboard --sales 杨盛麟 --from 2026-01-01", "live": True},
+    "similar": {"args": {"filters": "same as orders.list"}, "example": "crm similar --zone 宠物展区 --project 2026印尼 --stage 赢单", "live": True},
+    "unified": {"args": {"--name": "string required"}, "example": "crm unified --name 台州市乔巴塑料有限公司", "live": True},
+}
+
+FIELD_DICT = {
+    "accounts": {"module": "Accounts", "name": "Account_Name", "customer_level": "Customer_Level", "industry": "field4", "sales": "Sales_Man"},
+    "contacts": {"module": "Contacts", "name": "Full_Name", "account": "Account_Name", "phone": "Phone", "mobile": "Mobile", "email": "Email"},
+    "deals": {"module": "Deals", "name": "Deal_Name", "stage": "Stage", "account": "Account_Name", "amount": "Amount", "sales": "Sales_Man"},
+    "orders": {"module": "Sales_Orders", "name": "Subject", "stage": "Contract_Stage", "status": "Status", "zone": "field1", "project": "Subject", "special_zone": "field3", "sales": "Deals.Sales_Man", "amount": "Grand_Total", "created": "Created_Time", "account": "Account_Name"},
+    "events": {"module": "Events", "name": "Event_Title", "account": "What_Id", "owner": "Owner", "start": "Start_DateTime", "end": "End_DateTime", "minutes": "FeiShu_Meeting_Url"},
+    "users": {"module": "users", "name": "full_name"},
+}
+
+ALIASES = {"公司名": "Account_Name", "客户名称": "Account_Name", "联系人": "Full_Name", "手机": "Mobile", "电话": "Phone", "邮箱": "Email", "合同阶段": "Contract_Stage", "展区": "field1", "项目简称": "Subject", "专区": "field3", "销售人员": "Sales_Man", "合同金额": "Grand_Total", "创建时间": "Created_Time", "拜访标题": "Event_Title", "妙记链接": "FeiShu_Meeting_Url"}
+
+ACCOUNT_DEFAULT_FIELDS = ["Account_Name", "id", "Owner", "Customer_Level", "field4"]
+CONTACT_DEFAULT_FIELDS = ["Full_Name", "id", "Account_Name", "Phone", "Mobile", "Email", "Owner", "Created_Time"]
+DEAL_DEFAULT_FIELDS = ["Deal_Name", "id", "Stage", "Account_Name", "Sales_Man", "Owner", "Amount", "Created_Time", "Closing_Date", "Second_Exhibition", "field1", "field3"]
+ORDER_DEFAULT_FIELDS = ["Subject", "id", "Account_Name", "Contract_Stage", "Status", "field1", "Second_Exhibition", "field3", "Grand_Total", "Created_Time", "Modified_Time", "Owner"]
+EVENT_DEFAULT_FIELDS = ["Event_Title", "id", "What_Id", "Owner", "Created_Time", "Start_DateTime", "End_DateTime", "FeiShu_Meeting_Url"]
+
+
+def envelope(data, meta=None):
+    emit(data, meta={"version": VERSION, **(meta or {})})
+
+
+def fields_arg(value: str | None, defaults: list[str]) -> list[str]:
+    return list(dict.fromkeys(defaults + split_csv(value)))
+
+
+def with_aliases(records: list[dict]) -> list[dict]:
+    return [normalize_record(r, ALIASES) for r in records]
+
+
+def mock_records(kind: str) -> list[dict]:
+    samples = {
+        "accounts": [{"id": "mock-account-1", "Account_Name": "海南省示例客户", "field4": ["宠物"], "公司名": "海南省示例客户"}],
+        "contacts": [{"id": "mock-contact-1", "Full_Name": "张三", "Mobile": "13800000000", "联系人": "张三"}],
+        "deals": [{"id": "mock-deal-1", "Deal_Name": "示例商机", "Stage": "赢单", "Sales_Man": "杨盛麟", "销售人员": "杨盛麟"}],
+        "orders": [{"id": "mock-order-1", "Subject": "示例客户关于2026年第十二届中国（印尼）出口品牌联展的合同", "Contract_Stage": "赢单", "field1": "宠物展区", "Sales_Man": "杨盛麟", "Grand_Total": 91399, "销售人员": "杨盛麟"}],
+        "events": [{"id": "mock-event-1", "Event_Title": "客户拜访", "FeiShu_Meeting_Url": "https://example.invalid/minutes", "拜访标题": "客户拜访"}],
+        "users": [{"id": "mock-user-1", "full_name": "杨盛麟"}],
+    }
+    return samples.get(kind, [{"ok": True}])
+
+
+def plan(command: str, module: str, query: str | None = None, filters: dict | None = None, fields: list[str] | None = None, notes: list[str] | None = None):
+    return {"command": command, "module": module, "query": query, "filters": {k:v for k,v in (filters or {}).items() if v not in (None, "")}, "fields": fields or [], "notes": notes or []}
+
+
+def maybe_plan_or_mock(args, module: str, command: str, query: str | None = None, filters: dict | None = None, fields: list[str] | None = None, mock_kind: str | None = None, notes: list[str] | None = None) -> bool:
+    p = plan(command, module, query, filters, fields, notes)
+    if getattr(args, "dry_run", False):
+        envelope(p, meta={"mode": "dry-run"}); return True
+    if getattr(args, "mock", False):
+        envelope(mock_records(mock_kind or module), meta={"mode": "mock", "plan": p}); return True
+    return False
+
+
+def module_fields(client: ZohoCrmClient, args, module_key: str) -> None:
+    if maybe_plan_or_mock(args, module_key, f"{module_key}.fields", fields=[], mock_kind=module_key): return
+    result = client.get_module_fields(FIELD_DICT[module_key]["module"])
+    envelope(result.get("fields") or result.get("data") or result)
+
+
+def module_dict(module_key: str) -> None:
+    envelope({"module": module_key, "fields": FIELD_DICT[module_key], "aliases": ALIASES})
+
+
+def project_matches(record: dict, project: str | None) -> bool:
+    if not project: return True
+    hay = str(record.get("Subject") or "") + " " + str(record.get("Second_Exhibition") or "")
+    if project in hay: return True
+    aliases = {"印尼": ["印尼", "雅加达", "JPE", "Indonesia"], "越南": ["越南", "vietnam", "GPE越南"], "巴西": ["巴西", "Brazil", "GPE巴西"]}
+    year = "".join(ch for ch in project if ch.isdigit())[:4]
+    country_hit = True
+    for key, vals in aliases.items():
+        if key in project:
+            country_hit = any(v.lower() in hay.lower() for v in vals); break
+    return ((not year) or year in hay) and country_hit
+
+
+def enrich_order_sales(client: ZohoCrmClient, orders: list[dict], project: str | None = None) -> list[dict]:
+    ids = []
+    for order in orders:
+        acc = order.get("Account_Name") or {}
+        if isinstance(acc, dict) and acc.get("id"): ids.append(str(acc["id"]))
+    ids = list(dict.fromkeys(ids))
+    if not ids: return orders
+    deal_map = {}
+    for i in range(0, len(ids), 200):
+        id_clause = ",".join(coql_quote(x) for x in ids[i:i+200])
+        try: deals = client.search_deals_full(f"Account_Name.id in ({id_clause})", DEAL_DEFAULT_FIELDS)
+        except Exception: deals = []
+        for d in deals:
+            acc = d.get("Account_Name") or {}; aid = str(acc.get("id")) if isinstance(acc, dict) else ""
+            if not aid or not d.get("Sales_Man"): continue
+            if project and not project_matches({"Subject": d.get("Deal_Name"), "Second_Exhibition": d.get("Second_Exhibition")}, project): continue
+            score = 2 if d.get("Stage") == "赢单" else 1
+            if aid not in deal_map or score > deal_map[aid][0]: deal_map[aid] = (score, d)
+    for order in orders:
+        acc = order.get("Account_Name") or {}; aid = str(acc.get("id")) if isinstance(acc, dict) else ""
+        deal = (deal_map.get(aid) or (None, None))[1]
+        if deal and not order.get("Sales_Man"):
+            order["Sales_Man"] = deal.get("Sales_Man"); order["销售人员"] = deal.get("Sales_Man"); order["_sales_source"] = "Deals.Sales_Man"
+    return orders
+
+
+def cmd_accounts(args, client):
+    if args.action == "dict": return module_dict("accounts")
+    if args.action == "fields": return module_fields(client, args, "accounts")
+    fields = fields_arg(args.fields, ACCOUNT_DEFAULT_FIELDS)
+    if args.action == "search":
+        if not args.name: fail("MISSING_ARG", "accounts search 需要 --name")
+        q = f"select {','.join(fields)} from Accounts where {like_criteria('Account_Name', args.name)}"
+        if maybe_plan_or_mock(args, "Accounts", "accounts.search", q, vars(args), fields, "accounts"): return
+        return envelope(with_aliases(client.search_accounts_by_field("Account_Name", args.name, fields)))
+    if args.action == "batch":
+        names = split_csv(args.names)
+        if not names: fail("MISSING_ARG", "accounts batch 需要 --names")
+        if maybe_plan_or_mock(args, "Accounts", "accounts.batch", "COQL IN batched by 200", vars(args), fields, "accounts"): return
+        return envelope(with_aliases(client.search_accounts_batch(names, fields)))
+    if args.action == "get":
+        ids = split_csv(args.ids)
+        if not ids: fail("MISSING_ARG", "accounts get 需要 --ids")
+        if maybe_plan_or_mock(args, "Accounts", "accounts.get", "REST v8 ids batch", vars(args), fields, "accounts"): return
+        return envelope(with_aliases(client.get_accounts_by_ids(ids, fields)))
+    if args.action == "list":
+        if maybe_plan_or_mock(args, "Accounts", "accounts.list", "REST list pages", vars(args), fields, "accounts"): return
+        return envelope(with_aliases(client.get_accounts(fields)))
+
+
+def cmd_contacts(args, client):
+    if args.action == "dict": return module_dict("contacts")
+    if args.action == "fields": return module_fields(client, args, "contacts")
+    fields = fields_arg(args.fields, CONTACT_DEFAULT_FIELDS)
+    parts = []
+    if args.name: parts.append(like_criteria("Full_Name", args.name))
+    if args.account_id: parts.append(eq_criteria("Account_Name.id", args.account_id))
+    if args.email: parts.append(like_criteria("Email", args.email))
+    if args.mobile: parts.append(like_criteria("Mobile", args.mobile))
+    q = f"select {','.join(fields)} from Contacts where {and_criteria(parts)}"
+    if maybe_plan_or_mock(args, "Contacts", f"contacts.{args.action}", q, vars(args), fields, "contacts"): return
+    envelope(with_aliases(client._coql_all(q)))
+
+
+def cmd_deals(args, client):
+    if args.action == "dict": return module_dict("deals")
+    if args.action == "fields": return module_fields(client, args, "deals")
+    fields = fields_arg(args.fields, DEAL_DEFAULT_FIELDS); parts=[]
+    if args.stage: parts.append(eq_criteria("Stage", args.stage))
+    if args.sales: parts.append(like_criteria("Sales_Man", args.sales))
+    if args.account_id: parts.append(eq_criteria("Account_Name.id", args.account_id))
+    if args.from_date: parts.append(ge_criteria("Created_Time", args.from_date))
+    if args.to_date: parts.append(le_criteria("Created_Time", args.to_date))
+    q = f"select {','.join(fields)} from Deals where {and_criteria(parts)}"
+    if maybe_plan_or_mock(args, "Deals", "deals.list", q, vars(args), fields, "deals"): return
+    envelope(with_aliases(client.search_deals_full(and_criteria(parts), fields)))
+
+
+def order_query_parts(args):
+    parts=[]
+    if args.zone: parts.append(eq_criteria("field1", args.zone))
+    if args.stage: parts.append(eq_criteria("Contract_Stage", args.stage))
+    if args.status: parts.append(eq_criteria("Status", args.status))
+    if args.sales: parts.append(like_criteria("Sales_Man", args.sales))
+    if args.account_id: parts.append(eq_criteria("Account_Name.id", args.account_id))
+    if args.from_date: parts.append(ge_criteria("Created_Time", args.from_date))
+    if args.to_date: parts.append(le_criteria("Created_Time", args.to_date))
+    return parts
+
+
+def cmd_orders(args, client):
+    if args.action == "dict": return module_dict("orders")
+    if args.action == "fields": return module_fields(client, args, "orders")
+    fields = fields_arg(args.fields, ORDER_DEFAULT_FIELDS); parts = order_query_parts(args)
+    q = f"select {','.join(fields)} from Sales_Orders where {and_criteria(parts)}"
+    notes=["project filter is applied locally because Zoho COQL combinations can fail", "orders.sales is enriched from Deals.Sales_Man when Sales_Orders lacks it"]
+    if maybe_plan_or_mock(args, "Sales_Orders", f"orders.{args.action}", q, vars(args), fields, "orders", notes): return
+    data = with_aliases(client.search_sales_orders(and_criteria(parts), fields))
+    if args.project: data = [r for r in data if project_matches(r, args.project)]
+    data = enrich_order_sales(client, data, args.project)
+    if args.action == "summary":
+        group_field = FIELD_DICT["orders"].get(args.group_by, args.group_by or "Sales_Man")
+        if group_field == "Deals.Sales_Man": group_field = "Sales_Man"
+        groups=defaultdict(lambda: {"count":0,"amount":0,"records":[]})
+        for r in data:
+            key = r.get(group_field) or r.get(args.group_by) or "未填写"
+            if isinstance(key, dict): key = key.get("name") or key.get("id") or json.dumps(key, ensure_ascii=False)
+            groups[str(key)]["count"] += 1
+            try: groups[str(key)]["amount"] += float(r.get("Grand_Total") or 0)
+            except Exception: pass
+            groups[str(key)]["records"].append(r.get("Subject") or r.get("id"))
+        return envelope([{"group": k, **v} for k,v in groups.items()])
+    envelope(data)
+
+
+def cmd_events(args, client):
+    if args.action == "dict": return module_dict("events")
+    if args.action == "fields": return module_fields(client, args, "events")
+    fields=fields_arg(args.fields, EVENT_DEFAULT_FIELDS)
+    if maybe_plan_or_mock(args, "Events", f"events.{args.action}", "REST list + local filter", vars(args), fields, "events", ["Avoid Events COQL between/missing-WHERE pitfalls"]): return
+    rows = client.get_events(fields)
+    def ok(r):
+        if args.account_id:
+            what = r.get("What_Id") or {}
+            if isinstance(what, dict) and str(what.get("id")) != args.account_id: return False
+        dt = r.get("Start_DateTime") or r.get("Created_Time") or ""
+        if args.from_date and dt[:10] < args.from_date: return False
+        if args.to_date and dt[:10] > args.to_date: return False
+        return True
+    data = with_aliases([r for r in rows if ok(r)])
+    envelope({"count": len(data), "data": []} if args.action == "count" else data)
+
+
+def cmd_users(args, client):
+    if maybe_plan_or_mock(args, "users", f"users.{args.action}", "REST users", vars(args), [], "users"): return
+    users = client.get_users()
+    if args.action == "search" and args.name: users = [u for u in users if args.name in json.dumps(u, ensure_ascii=False)]
+    envelope(users)
+
+
+def cmd_account_view(args, client):
+    if maybe_plan_or_mock(args, "composite", "account-view", "accounts -> deals/orders/events", vars(args), [], "accounts"): return
+    accounts = client.search_accounts_by_field("Account_Name", args.name, ACCOUNT_DEFAULT_FIELDS)
+    ids = [str(a.get("id")) for a in accounts if a.get("id")]
+    deals=[]; orders=[]; events=[]
+    if ids:
+        id_clause=",".join(coql_quote(x) for x in ids[:200])
+        deals=client.search_deals_full(f"Account_Name.id in ({id_clause})", DEAL_DEFAULT_FIELDS)
+        orders=client.search_sales_orders(f"Account_Name.id in ({id_clause})", ORDER_DEFAULT_FIELDS)
+        all_events=client.get_events(EVENT_DEFAULT_FIELDS); events=[e for e in all_events if str((e.get("What_Id") or {}).get("id")) in ids]
+    envelope({"accounts": with_aliases(accounts), "deals": with_aliases(deals), "orders": with_aliases(enrich_order_sales(client, orders)), "events": with_aliases(events)})
+
+
+def cmd_sales_dashboard(args, client):
+    if maybe_plan_or_mock(args, "composite", "sales-dashboard", "deals + orders summary by Sales_Man", vars(args), [], "orders"): return
+    parts=[]
+    if args.sales: parts.append(like_criteria("Sales_Man", args.sales))
+    if args.from_date: parts.append(ge_criteria("Created_Time", args.from_date))
+    deals=with_aliases(client.search_deals_full(and_criteria(parts), DEAL_DEFAULT_FIELDS))
+    orders=with_aliases(client.search_sales_orders(and_criteria([ge_criteria("Created_Time", args.from_date)] if args.from_date else []), ORDER_DEFAULT_FIELDS))
+    orders=[o for o in enrich_order_sales(client, orders) if o.get("Sales_Man") == args.sales]
+    amount=sum(float(o.get("Grand_Total") or 0) for o in orders)
+    envelope({"sales": args.sales, "deal_count": len(deals), "order_count": len(orders), "order_amount": amount, "deals": deals, "orders": orders})
+
+
+def add_global(sp):
+    sp.add_argument("--dry-run", action="store_true", help="emit executable plan without calling upstream")
+    sp.add_argument("--mock", action="store_true", help="emit deterministic mock data without credentials")
+
+
+def build_parser():
+    p=argparse.ArgumentParser(prog="crm", description="Agent-callable Zoho CRM CLI")
+    p.add_argument("--version", action="store_true")
+    sub=p.add_subparsers(dest="module")
+    sub.add_parser("commands"); sub.add_parser("schema")
+    pa=sub.add_parser("accounts"); pa.add_argument("action", choices=["search","batch","get","list","fields","dict","schema"]); pa.add_argument("--name"); pa.add_argument("--names"); pa.add_argument("--ids"); pa.add_argument("--fields"); add_global(pa)
+    pc=sub.add_parser("contacts"); pc.add_argument("action", choices=["search","list","fields","dict","schema"]); pc.add_argument("--name"); pc.add_argument("--account-id"); pc.add_argument("--email"); pc.add_argument("--mobile"); pc.add_argument("--fields"); add_global(pc)
+    pd=sub.add_parser("deals"); pd.add_argument("action", choices=["list","fields","dict","schema"]); pd.add_argument("--stage"); pd.add_argument("--sales"); pd.add_argument("--account-id"); pd.add_argument("--from", dest="from_date"); pd.add_argument("--to", dest="to_date"); pd.add_argument("--fields"); add_global(pd)
+    po=sub.add_parser("orders"); po.add_argument("action", choices=["list","summary","fields","dict","schema"]); po.add_argument("--zone"); po.add_argument("--project"); po.add_argument("--stage"); po.add_argument("--status"); po.add_argument("--sales"); po.add_argument("--special-zone"); po.add_argument("--account-id"); po.add_argument("--from", dest="from_date"); po.add_argument("--to", dest="to_date"); po.add_argument("--group-by", default="sales"); po.add_argument("--fields"); add_global(po)
+    pe=sub.add_parser("events"); pe.add_argument("action", choices=["list","count","fields","dict","schema"]); pe.add_argument("--account-id"); pe.add_argument("--from", dest="from_date"); pe.add_argument("--to", dest="to_date"); pe.add_argument("--fields"); add_global(pe)
+    pu=sub.add_parser("users"); pu.add_argument("action", choices=["list","search","schema"]); pu.add_argument("--name"); add_global(pu)
+    for name in ["account-view","unified"]:
+        s=sub.add_parser(name); s.add_argument("--name", required=True); add_global(s)
+    sd=sub.add_parser("sales-dashboard"); sd.add_argument("--sales", required=True); sd.add_argument("--from", dest="from_date"); add_global(sd)
+    sim=sub.add_parser("similar"); sim.add_argument("--zone"); sim.add_argument("--project"); sim.add_argument("--stage"); add_global(sim)
+    return p
+
+
+def main():
+    args=build_parser().parse_args()
+    if args.version: return envelope({"version": VERSION})
+    if not args.module: return fail("MISSING_COMMAND", "run `crm commands` or `crm schema` to discover capabilities")
+    if args.module == "commands": return envelope(COMMANDS)
+    if args.module == "schema": return envelope({"version": VERSION, "commands": COMMANDS, "fields": FIELD_DICT, "aliases": ALIASES})
+    if getattr(args, "action", None) == "schema": return envelope({"module": args.module, "fields": FIELD_DICT.get(args.module), "commands": {k:v for k,v in COMMANDS.items() if k.startswith(args.module+'.')}})
+    def run():
+        client = None if getattr(args, "dry_run", False) or getattr(args, "mock", False) or getattr(args, "action", None)=="dict" else ZohoCrmClient()
+        if args.module == "accounts": return cmd_accounts(args, client)
+        if args.module == "contacts": return cmd_contacts(args, client)
+        if args.module == "deals": return cmd_deals(args, client)
+        if args.module == "orders": return cmd_orders(args, client)
+        if args.module == "events": return cmd_events(args, client)
+        if args.module == "users": return cmd_users(args, client)
+        if args.module in ("account-view", "unified"): return cmd_account_view(args, client)
+        if args.module == "sales-dashboard": return cmd_sales_dashboard(args, client)
+        if args.module == "similar":
+            args.action="list"; return cmd_orders(args, client)
+        fail("UNKNOWN_MODULE", args.module)
+    safe_call(run)
+
+if __name__ == "__main__": main()

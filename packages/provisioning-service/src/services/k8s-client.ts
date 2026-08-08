@@ -1,0 +1,307 @@
+/**
+ * K8s API client
+ *
+ * In-cluster: reads ServiceAccount token + CA from standard mount paths.
+ * Out-of-cluster (dev/test): falls back to dry-run mode.
+ */
+
+import fs from 'node:fs';
+
+let _k8sBaseUrl: string | null = null;
+let _k8sToken: string | null = null;
+let _k8sCa: string | null = null;
+
+function initK8s(): boolean {
+  try {
+    _k8sToken = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8');
+    _k8sCa = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt', 'utf8');
+    _k8sBaseUrl = `https://${process.env.KUBERNETES_SERVICE_HOST || 'kubernetes.default.svc'}:${process.env.KUBERNETES_SERVICE_PORT || '443'}`;
+    console.log('[k8s] in-cluster config loaded');
+    return true;
+  } catch {
+    console.log('[k8s] not in cluster — dry-run mode');
+    return false;
+  }
+}
+
+function isInCluster(): boolean {
+  if (_k8sBaseUrl === null) {
+    try { return initK8s(); } catch { return false; }
+  }
+  return _k8sToken !== null;
+}
+
+async function k8sRequest(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
+  if (!isInCluster() || !_k8sBaseUrl || !_k8sToken) {
+    return { ok: false, status: 0, body: null, error: 'not in cluster' };
+  }
+
+  const url = `${_k8sBaseUrl}${path}`;
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${_k8sToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    const resBody = await res.text().catch(() => '');
+    let parsed: unknown = resBody;
+    try { parsed = JSON.parse(resBody); } catch { /* keep as string */ }
+
+    return { ok: res.ok || res.status === 201, status: res.status, body: parsed };
+  } catch (err: any) {
+    return { ok: false, status: 0, body: null, error: err.message };
+  }
+}
+
+export interface TenantRuntimeStatus {
+  namespace: string;
+  tenantId: string;
+  deployments: Array<{
+    name: string;
+    replicas: number;
+    readyReplicas: number;
+    availableReplicas: number;
+    unavailableReplicas: number;
+  }>;
+  pods: Array<{
+    name: string;
+    phase: string;
+    ready: boolean;
+    containers: Array<{
+      name: string;
+      image: string;
+      ready: boolean;
+      restartCount: number;
+      state: string;
+    }>;
+  }>;
+}
+
+/** Read-only status for all runtime resources carrying the tenant label. */
+export async function getTenantRuntimeStatus(namespace: string, tenantId: string): Promise<TenantRuntimeStatus> {
+  const selector = encodeURIComponent(`dealclaw.io/tenant-id=${tenantId}`);
+  const [deploymentRes, podRes] = await Promise.all([
+    k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments?labelSelector=${selector}`),
+    k8sRequest('GET', `/api/v1/namespaces/${namespace}/pods?labelSelector=${selector}`),
+  ]);
+
+  if (!deploymentRes.ok) {
+    throw new Error(`list deployments failed: ${deploymentRes.status} ${JSON.stringify(deploymentRes.body)}`);
+  }
+  if (!podRes.ok) {
+    throw new Error(`list pods failed: ${podRes.status} ${JSON.stringify(podRes.body)}`);
+  }
+
+  const deploymentItems = (deploymentRes.body as any)?.items || [];
+  const podItems = (podRes.body as any)?.items || [];
+
+  return {
+    namespace,
+    tenantId,
+    deployments: deploymentItems.map((item: any) => ({
+      name: item?.metadata?.name || '',
+      replicas: item?.status?.replicas || 0,
+      readyReplicas: item?.status?.readyReplicas || 0,
+      availableReplicas: item?.status?.availableReplicas || 0,
+      unavailableReplicas: item?.status?.unavailableReplicas || 0,
+    })),
+    pods: podItems.map((item: any) => ({
+      name: item?.metadata?.name || '',
+      phase: item?.status?.phase || 'Unknown',
+      ready: item?.status?.conditions?.some((condition: any) => condition?.type === 'Ready' && condition?.status === 'True') || false,
+      containers: (item?.status?.containerStatuses || []).map((container: any) => ({
+        name: container?.name || '',
+        image: container?.image || '',
+        ready: container?.ready || false,
+        restartCount: container?.restartCount || 0,
+        state: Object.keys(container?.state || {})[0] || 'unknown',
+      })),
+    })),
+  };
+}
+
+// ── Namespace ──
+
+export async function createNamespace(name: string): Promise<void> {
+  const res = await k8sRequest('POST', '/api/v1/namespaces', {
+    apiVersion: 'v1',
+    kind: 'Namespace',
+    metadata: { name },
+  });
+  if (!res.ok) {
+    // Already exists is OK
+    if (res.status !== 409) throw new Error(`createNamespace failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] namespace created: ${name}`);
+}
+
+export async function deleteNamespace(name: string): Promise<void> {
+  const res = await k8sRequest('DELETE', `/api/v1/namespaces/${name}`);
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`deleteNamespace failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  if (res.status !== 404) {
+    console.log(`[k8s] namespace deleted: ${name}`);
+  }
+}
+
+async function deleteNamespacedResource(path: string, kind: string, namespace: string, name: string): Promise<void> {
+  const res = await k8sRequest('DELETE', `${path}/${name}`);
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`delete ${kind} ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  if (res.status !== 404) console.log(`[k8s] ${kind} deleted: ${namespace}/${name}`);
+}
+
+export async function deleteSecret(namespace: string, name: string): Promise<void> {
+  return deleteNamespacedResource(`/api/v1/namespaces/${namespace}/secrets`, 'secret', namespace, name);
+}
+
+export async function deleteDeployment(namespace: string, name: string): Promise<void> {
+  return deleteNamespacedResource(`/apis/apps/v1/namespaces/${namespace}/deployments`, 'deployment', namespace, name);
+}
+
+export async function deleteService(namespace: string, name: string): Promise<void> {
+  return deleteNamespacedResource(`/api/v1/namespaces/${namespace}/services`, 'service', namespace, name);
+}
+
+// ── Secret ──
+
+export async function createSecret(namespace: string, name: string, data: Record<string, string>): Promise<void> {
+  const res = await k8sRequest('POST', `/api/v1/namespaces/${namespace}/secrets`, {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: { name, namespace },
+    type: 'Opaque',
+    stringData: data,
+  });
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`createSecret ${name} failed: ${res.status}`);
+  }
+  console.log(`[k8s] secret created: ${namespace}/${name}`);
+}
+
+// ── Deployment ──
+
+export interface DeploymentSpec {
+  name: string;
+  namespace: string;
+  image: string;
+  port: number;
+  labels: Record<string, string>;
+  envFrom?: Array<{ secretRef: { name: string } }>;
+  env?: Array<{ name: string; value: string }>;
+  replicas?: number;
+  requests?: { cpu: string; memory: string };
+  limits?: { cpu: string; memory: string };
+  livenessPath?: string;
+  readinessPath?: string;
+  runAsUser?: number;
+  automountServiceAccountToken?: boolean;
+  imagePullSecrets?: Array<{ name: string }>;
+  securityContext?: Record<string, unknown>;
+  volumes?: Array<{ name: string; persistentVolumeClaim: { claimName: string } }>;
+  volumeMounts?: Array<{ name: string; mountPath: string }>;
+}
+
+export async function createDeployment(spec: DeploymentSpec): Promise<void> {
+  const container: Record<string, unknown> = {
+    name: spec.name,
+    image: spec.image,
+    ports: [{ containerPort: spec.port }],
+    resources: {
+      requests: spec.requests || { cpu: '100m', memory: '128Mi' },
+      limits: spec.limits || { cpu: '300m', memory: '256Mi' },
+    },
+  };
+
+  if (spec.envFrom?.length) container.envFrom = spec.envFrom;
+  if (spec.env?.length) container.env = spec.env;
+  if (spec.volumeMounts?.length) container.volumeMounts = spec.volumeMounts;
+
+  if (spec.livenessPath) {
+    container.livenessProbe = {
+      httpGet: { path: spec.livenessPath, port: spec.port },
+      initialDelaySeconds: 5,
+      periodSeconds: 15,
+    };
+  }
+  if (spec.readinessPath) {
+    container.readinessProbe = {
+      httpGet: { path: spec.readinessPath, port: spec.port },
+      initialDelaySeconds: 3,
+      periodSeconds: 10,
+    };
+  }
+
+  const podSpec: Record<string, unknown> = {
+    containers: [container],
+    automountServiceAccountToken: spec.automountServiceAccountToken ?? false,
+  };
+
+  if (spec.imagePullSecrets?.length) podSpec.imagePullSecrets = spec.imagePullSecrets;
+  if (spec.volumes?.length) podSpec.volumes = spec.volumes;
+  if (spec.runAsUser) {
+    podSpec.securityContext = {
+      runAsNonRoot: true,
+      runAsUser: spec.runAsUser,
+      runAsGroup: spec.runAsUser,
+      fsGroup: spec.runAsUser,
+      fsGroupChangePolicy: 'OnRootMismatch',
+    };
+  }
+
+  const body = {
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    metadata: {
+      name: spec.name,
+      namespace: spec.namespace,
+      labels: spec.labels,
+    },
+    spec: {
+      replicas: spec.replicas ?? 1,
+      selector: { matchLabels: spec.labels },
+      template: {
+        metadata: { labels: spec.labels },
+        spec: podSpec,
+      },
+    },
+  };
+
+  const res = await k8sRequest('POST', `/apis/apps/v1/namespaces/${spec.namespace}/deployments`, body);
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`createDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment created: ${spec.namespace}/${spec.name}`);
+}
+
+// ── Service ──
+
+export async function createService(
+  namespace: string,
+  name: string,
+  port: number,
+  labels: Record<string, string>,
+): Promise<void> {
+  const body = {
+    apiVersion: 'v1',
+    kind: 'Service',
+    metadata: { name, namespace, labels },
+    spec: {
+      selector: labels,
+      ports: [{ port, targetPort: port, name: 'http' }],
+    },
+  };
+
+  const res = await k8sRequest('POST', `/api/v1/namespaces/${namespace}/services`, body);
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`createService ${name} failed: ${res.status}`);
+  }
+  console.log(`[k8s] service created: ${namespace}/${name}`);
+}

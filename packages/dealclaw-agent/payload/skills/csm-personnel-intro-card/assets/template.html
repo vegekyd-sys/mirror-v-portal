@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>黄金服务人员卡</title>
+<style>
+/* ========== common.css utilities ========== */
+.flex-col { display: flex; flex-direction: column; }
+.flex-row { display: flex; }
+.justify-between { justify-content: space-between; }
+
+/* ========== index.css (original design CSS) ========== */
+.page {
+ background-image: linear-gradient(26deg, rgba(94, 88, 69, 1) 0, rgba(49, 48, 46, 1) 100%);
+ position: relative;
+ width: 402px;
+ height: 874px;
+ overflow: hidden;
+}
+
+.image_1 {
+ width: 193px;
+ height: 208px;
+ margin: 130px 0 0 105px;
+}
+
+.group_1 {
+ position: absolute;
+ left: 0;
+ top: 211px;
+ width: 402px;
+ height: 663px;
+ background: url(img/FigmaDDSSlicePNG8cdb2f16013ce2268c12e908a654a841.png) 100% no-repeat;
+ background-size: 100% 100%;
+}
+
+.group_3 {
+ position: relative;
+ width: 402px;
+ height: 195px;
+}
+
+.text-group_5 {
+ width: 287px;
+ height: 47px;
+ margin: 16px 0 0 58px;
+}
+
+.text_2 {
+ background-image: linear-gradient(90deg, rgba(226, 205, 169, 1) 11.057692%, rgba(252, 238, 220, 1) 50%, rgba(226, 205, 169, 1) 87.019229%);
+ width: 252px;
+ height: 22px;
+ overflow-wrap: break-word;
+ font-size: 18px;
+ font-family: Alimama ShuHeiTi-Bold;
+ font-weight: 700;
+ text-align: center;
+ white-space: nowrap;
+ line-height: 18px;
+ margin-left: 17px;
+ -webkit-background-clip: text;
+ -webkit-text-fill-color: transparent;
+}
+
+.text_3 {
+ width: 287px;
+ height: 17px;
+ overflow-wrap: break-word;
+ color: rgba(250, 238, 217, 0.6);
+ font-size: 12px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: center;
+ white-space: nowrap;
+ line-height: 12px;
+ margin-top: 8px;
+}
+
+.box_9 {
+ width: 198px;
+ height: 53px;
+ margin: 121px 0 0 102px;
+}
+
+.box_2 {
+ background-color: rgba(149, 108, 53, 0.2);
+ width: 7px;
+ height: 10px;
+ margin-top: 5px;
+}
+
+.image-text_4 {
+ width: 183px;
+ height: 53px;
+}
+
+.text-group_6 {
+ width: 168px;
+ height: 53px;
+}
+
+.text_4 {
+ width: 168px;
+ height: 20px;
+ overflow-wrap: break-word;
+ color: rgba(149, 108, 53, 1);
+ font-size: 14px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: center;
+ white-space: nowrap;
+ line-height: 14px;
+}
+
+.text_5 {
+ width: 80px;
+ height: 25px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 18px;
+ font-family: PingFang SC-Semibold;
+ font-weight: 600;
+ text-align: center;
+ white-space: nowrap;
+ line-height: 18px;
+ margin: 8px 0 0 44px;
+}
+
+.box_3 {
+ background-color: rgba(149, 108, 53, 0.2);
+ width: 7px;
+ height: 10px;
+ margin-top: 5px;
+}
+
+.box_10 {
+ width: 272px;
+ height: 17px;
+ margin: 38px 0 0 57px;
+}
+
+.box_4 {
+ background-color: rgba(149, 108, 53, 0.15);
+ border-radius: 50%;
+ width: 17px;
+ height: 17px;
+}
+
+.box_5 {
+ background-color: rgba(149, 108, 53, 0.15);
+ border-radius: 50%;
+ width: 17px;
+ height: 17px;
+ margin-left: 112px;
+}
+
+.box_6 {
+ background-color: rgba(149, 108, 53, 0.15);
+ border-radius: 50%;
+ width: 17px;
+ height: 17px;
+ margin-left: 109px;
+}
+
+.box_11 {
+ width: 342px;
+ height: 48px;
+ margin: 1px 0 21px 32px;
+}
+
+.text-wrapper_1 {
+ width: 84px;
+ height: 48px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+}
+
+.paragraph_1 {
+ width: 84px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(149, 108, 53, 1);
+ font-size: 12px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+}
+
+.text_6 {
+ width: 84px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 14px;
+ font-family: PingFang SC-Regular;
+ font-weight: 400;
+ text-align: center;
+ line-height: 24px;
+}
+
+.text-wrapper_2 {
+ width: 98px;
+ height: 48px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+ margin-left: 36px;
+}
+
+.paragraph_2 {
+ width: 98px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(149, 108, 53, 1);
+ font-size: 12px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+}
+
+.text_7 {
+ width: 98px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 14px;
+ font-family: PingFang SC-Regular;
+ font-weight: 400;
+ text-align: center;
+ line-height: 24px;
+}
+
+.text-wrapper_3 {
+ width: 92px;
+ height: 48px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+ margin-left: 32px;
+}
+
+.paragraph_3 {
+ width: 92px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(149, 108, 53, 1);
+ font-size: 12px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: center;
+ line-height: 24px;
+}
+
+.text_8 {
+ width: 92px;
+ height: 48px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 14px;
+ font-family: PingFang SC-Regular;
+ font-weight: 400;
+ text-align: center;
+ line-height: 24px;
+}
+
+.image_3 {
+ position: absolute;
+ left: 149px;
+ top: -104px;
+ width: 103px;
+ height: 104px;
+}
+
+.label_1 {
+ position: absolute;
+ left: 314px;
+ top: 94px;
+ width: 28px;
+ height: 28px;
+}
+
+.label_2 {
+ position: absolute;
+ left: 187px;
+ top: 94px;
+ width: 28px;
+ height: 28px;
+}
+
+.label_3 {
+ position: absolute;
+ left: 60px;
+ top: 94px;
+ width: 28px;
+ height: 28px;
+}
+
+.box_7 {
+ width: 354px;
+ height: 365px;
+ background: url(img/FigmaDDSSlicePNG1551f1f6bbd9d7c254f108f176a7d4b6.png) 100% no-repeat;
+ background-size: 100% 100%;
+ margin: 194px 24px 0 -378px;
+}
+
+.text_9 {
+ width: 314px;
+ height: 44px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 16px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: left;
+ margin: 16px 0 0 20px;
+}
+
+.box_8 {
+ background-color: rgba(255, 255, 255, 1);
+ border-radius: 8px;
+ height: 83px;
+ width: 322px;
+ margin: 17px 0 0 16px;
+}
+
+.group_2 {
+ background-color: rgba(255, 255, 255, 1);
+ border-radius: 8px;
+ width: 322px;
+ height: 83px;
+}
+
+.image-text_5 {
+ width: 302px;
+ height: 74px;
+ margin: -7px 0 0 20px;
+}
+
+.label_4 {
+ width: 32px;
+ height: 32px;
+ margin-top: 33px;
+}
+
+.text-group_7 {
+ position: relative;
+ width: 250px;
+ height: 74px;
+}
+
+.text_10 {
+ width: 39px;
+ height: 47px;
+ overflow-wrap: break-word;
+ color: rgba(251, 239, 221, 1);
+ font-size: 40px;
+ font-family: DIN Alternate-Bold;
+ font-weight: 700;
+ text-align: right;
+ white-space: nowrap;
+ line-height: 40px;
+ margin-left: 211px;
+}
+
+.text-wrapper_4 {
+ position: absolute;
+ left: 0;
+ top: 19px;
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+}
+
+.paragraph_4 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 16px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+}
+
+.text_11 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 0.6);
+ font-size: 12px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: left;
+}
+
+.list_2 {
+ width: 322px;
+ height: 174px;
+ justify-content: space-between;
+ margin: 8px 0 23px 16px;
+}
+
+.image-text_3-0 {
+ background-color: rgba(255, 255, 255, 1);
+ border-radius: 8px;
+ width: 322px;
+ height: 83px;
+ margin-bottom: 8px;
+}
+
+.label_5-0 {
+ width: 32px;
+ height: 32px;
+ margin: 26px 0 0 20px;
+}
+
+.text-group_8-0 {
+ width: 250px;
+ height: 74px;
+ margin: -7px 0 0 20px;
+}
+
+.text-wrapper_5-0 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+ margin-top: 19px;
+}
+
+.text_12-0 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 16px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+}
+
+.text_13-0 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 0.6);
+ font-size: 12px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: left;
+}
+
+.text_14-0 {
+ width: 39px;
+ height: 47px;
+ overflow-wrap: break-word;
+ color: rgba(251, 239, 221, 1);
+ font-size: 40px;
+ font-family: DIN Alternate-Bold;
+ font-weight: 700;
+ text-align: right;
+ white-space: nowrap;
+ line-height: 40px;
+ margin-left: -28px;
+}
+
+.image-text_3-1 {
+ background-color: rgba(255, 255, 255, 1);
+ border-radius: 8px;
+ width: 322px;
+ height: 83px;
+ margin-bottom: 8px;
+}
+
+.label_5-1 {
+ width: 32px;
+ height: 32px;
+ margin: 26px 0 0 20px;
+}
+
+.text-group_8-1 {
+ width: 250px;
+ height: 74px;
+ margin: -7px 0 0 20px;
+}
+
+.text-wrapper_5-1 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ font-size: 0;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+ margin-top: 19px;
+}
+
+.text_12-1 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 1);
+ font-size: 16px;
+ font-family: PingFang SC-Medium;
+ font-weight: 500;
+ text-align: left;
+}
+
+.text_13-1 {
+ width: 239px;
+ height: 55px;
+ overflow-wrap: break-word;
+ color: rgba(91, 53, 14, 0.6);
+ font-size: 12px;
+ font-family: PingFang SC-Regular;
+ font-weight: normal;
+ text-align: left;
+}
+
+.text_14-1 {
+ width: 39px;
+ height: 47px;
+ overflow-wrap: break-word;
+ color: rgba(251, 239, 221, 1);
+ font-size: 40px;
+ font-family: DIN Alternate-Bold;
+ font-weight: 700;
+ text-align: right;
+ white-space: nowrap;
+ line-height: 40px;
+ margin-left: -28px;
+}
+
+/* ========== FIX: skill descriptions → normal weight (not bold) ========== */
+.text_6, .text_7, .text_8 { font-weight: 400 !important; }
+
+/* ========== FIX: allow page to expand with content ========== */
+.page { overflow: visible !important; height: auto !important; min-height: 874px; }
+.group_1 { height: auto !important; min-height: 663px; flex-wrap: wrap !important; }
+
+/* ========== FIX: data text wrapping ========== */
+.text_9 { height: auto !important; min-height: 44px; white-space: normal !important; }
+.text_6, .text_7, .text_8 { height: auto !important; min-height: 48px; display: block !important; line-height: 1.2 !important; white-space: normal !important; }
+.text-wrapper_1, .text-wrapper_2, .text-wrapper_3 { font-size: inherit !important; height: auto !important; min-height: 48px; width: auto !important; }
+.text-wrapper_4, .text-wrapper_5-0, .text-wrapper_5-1 { font-size: inherit !important; height: auto !important; min-height: 55px; width: auto !important; }
+.paragraph_4, .text_11 { height: auto !important; display: block !important; white-space: normal !important; }
+.text_12-0, .text_13-0, .text_12-1, .text_13-1 { height: auto !important; display: block !important; white-space: normal !important; }
+.text_4 { white-space: normal !important; width: auto !important; }
+.text_5 { white-space: normal !important; width: auto !important; }
+.box_7 { height: auto !important; min-height: 365px; }
+.box_8 { height: auto !important; min-height: 83px; }
+.group_2 { height: auto !important; min-height: 83px; }
+.image-text_3-0, .image-text_3-1 { height: auto !important; min-height: 83px; }
+.list_2 { height: auto !important; min-height: 174px; }
+</style>
+</head>
+<body>
+<div class="page flex-col">
+ <img class="image_1" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNG690cca3bbaa996821939e9a8f58fdc44.png" />
+ <div class="group_1 flex-row">
+ <div class="group_3 flex-col">
+ <div class="text-group_5 flex-col justify-between">
+ <span class="text_2">共建您的【海外品牌运营体系】</span>
+ <span class="text_3">战略协同深度陪伴&nbsp;·&nbsp;矩阵化长线运营&nbsp;·&nbsp;VIP级优先响应</span>
+ </div>
+ <div class="box_9 flex-row justify-between">
+ <div class="box_2 flex-col"></div>
+ <div class="image-text_4 flex-row justify-between">
+ <div class="text-group_6 flex-col justify-between">
+ <span class="text_4">我是您的海外社媒运营专家</span>
+ <span class="text_5">江文婷</span>
+ </div>
+ <div class="box_3 flex-col"></div>
+ </div>
+ </div>
+ <div class="box_10 flex-row justify-between">
+ <div class="box_4 flex-col"></div>
+ <div class="box_5 flex-col"></div>
+ <div class="box_6 flex-col"></div>
+ </div>
+ <div class="box_11 flex-row">
+ <div class="text-wrapper_1">
+ <span class="paragraph_1">服务承诺<br /></span>
+ <span class="text_6">主动管家式服务跟进<br>关键节点即时同步</span>
+ </div>
+ <div class="text-wrapper_2">
+ <span class="paragraph_2">擅长领域<br /></span>
+ <span class="text_7">平台内容策略<br>与流量分发</span>
+ </div>
+ <div class="text-wrapper_3">
+ <span class="paragraph_3">服务特色<br /></span>
+ <span class="text_8">VIP级优先响应<br>做您最省心的<br>交付搭档</span>
+ </div>
+ </div>
+ <img class="image_3" referrerpolicy="no-referrer" src="photo_jiang_avatar.png" />
+ <img class="label_1" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNG725c48a21ae29aae467ac2f4a34f57ab.png" />
+ <img class="label_2" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNGec80f53b42f430f421c74339fef33b65.png" />
+ <img class="label_3" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNG59a67380461d805ee0d30dad715184d7.png" />
+ </div>
+ <div class="box_7 flex-col">
+ <span class="text_9">5年海外社媒运营经验，累计服务200+企业完成社媒账号从0到1冷启动，熟悉各平台内容特性与运营节奏。</span>
+ <div class="box_8 flex-col">
+ <div class="group_2 flex-row">
+ <div class="image-text_5 flex-row justify-between">
+ <img class="label_4" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNGcab010034f393acb1883ed53df41de23.png" />
+ <div class="text-group_7 flex-row">
+ <span class="text_10">01</span>
+ <div class="text-wrapper_4">
+ <span class="paragraph_4">主动管家式服务跟进<br>关键节点即时同步<br /></span>
+ <span class="text_11">主动关怀、定期回访，关键节点即时同步与汇报。</span>
+ </div>
+ </div>
+ </div>
+ </div>
+ </div>
+ <div class="list_2 flex-col">
+ <div class="image-text_3-0 flex-row justify-end">
+ <img class="label_5-0" referrerpolicy="no-referrer" src="img/e35c619eb688459ab6a6e65bf0f105be_mergeImage.png" />
+ <div class="text-group_8-0 flex-row">
+ <div class="text-wrapper_5-0">
+ <span class="text_12-0">内容与平台流量策略优化<br /></span>
+ <span class="text_13-0">结合平台流量策略与数据反馈，持续优化内容方向与投放节奏。</span>
+ </div>
+ <span class="text_14-0">02</span>
+ </div>
+ </div>
+ <div class="image-text_3-1 flex-row justify-end">
+ <img class="label_5-1" referrerpolicy="no-referrer" src="img/FigmaDDSSlicePNGcc2d6ea90b85514453946db872aa338f.png" />
+ <div class="text-group_8-1 flex-row">
+ <div class="text-wrapper_5-1">
+ <span class="text_12-1">月度精细化复盘<br>下一阶段规划<br /></span>
+ <span class="text_13-1">每月深度复盘运营数据，规划下阶段内容策略与执行节奏。</span>
+ </div>
+ <span class="text_14-1">03</span>
+ </div>
+ </div>
+ </div>
+ </div>
+ </div>
+</div>
+</body>
+</html>

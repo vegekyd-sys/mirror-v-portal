@@ -1,0 +1,222 @@
+# Generated from Feishu QC document. 55/55 cases.
+
+- id: TC-A001
+  command: './crm accounts search --name "海南省"'
+  expected: '返回匹配公司列表；中文搜索使用 like'
+  live: true
+- id: TC-A002
+  command: './crm accounts batch --names "海南鹏翔,河南歆楷焕"'
+  expected: '批量 IN 查询，不逐条循环'
+  live: true
+- id: TC-A003
+  command: './crm accounts get --ids "185165007858443947,185165007858562555"'
+  expected: '返回 2 条完整信息；超过 200 自动拆批'
+  live: true
+- id: TC-A004
+  command: './crm accounts list --fields "Account_Name,field4,Customer_Level"'
+  expected: 'field4 有值且不报错'
+  live: true
+- id: TC-D001
+  command: './crm deals list --stage "赢单"'
+  expected: '返回赢单列表，销售人员不使用 Owner'
+  live: true
+- id: TC-D002
+  command: './crm deals list --sales "杨盛麟" --stage "赢单"'
+  expected: '只返回杨盛麟，不含 Owner=wangmeng 误判'
+  live: true
+- id: TC-D003
+  command: './crm deals list --account-id "185165007858443947"'
+  expected: '返回该客户所有商机'
+  live: true
+- id: TC-O001
+  command: './crm orders list --zone "宠物展区" --project "2026印尼" --stage "赢单"'
+  expected: '返回宠物展区 2026 印尼赢单合同；对照郭海 Excel'
+  live: true
+- id: TC-O002
+  command: './crm orders list --zone "宠物展区" --project "2026印尼" --stage "赢单"'
+  expected: '字段含公司名、合同阶段、展区、项目简称、专区、销售人员、展位面积/金额'
+  live: true
+- id: TC-O003
+  command: './crm orders summary --zone "宠物展区" --project "2026印尼" --stage "赢单" --group-by sales'
+  expected: '销售统计使用 Deals.Sales_Man，不使用 Owner'
+  live: true
+- id: TC-O004
+  command: './crm orders list --zone "PPP塑料印刷包装及食品加工设备展区" --stage "赢单"'
+  expected: '返回匹配结果 > 0'
+  live: true
+- id: TC-O005
+  command: './crm orders list --status "审批通过"'
+  expected: '返回审批通过合同'
+  live: true
+- id: TC-O006
+  command: './crm orders list --from "2026-01-01" --to "2026-06-30"'
+  expected: '返回时间范围内合同'
+  live: true
+- id: TC-O007
+  command: './crm orders fields'
+  expected: '列出字段 API 名 + 类型'
+  live: true
+- id: TC-O008
+  command: './crm orders dict'
+  expected: '列出 fieldX → 中文名/业务映射'
+  live: false
+- id: TC-E001
+  command: './crm events list --account-id "185165007858443947"'
+  expected: '返回拜访记录含时间、标题、妙记链接'
+  live: true
+- id: TC-E002
+  command: './crm events list --from "2026-01-01" --to "2026-06-30"'
+  expected: '返回范围内拜访记录；REST+本地过滤'
+  live: true
+- id: TC-E003
+  command: './crm events list --from "2026-01-01" --to "2026-06-30"'
+  expected: 'CLI 不生成无 WHERE 的 Events COQL；不报 SYNTAX_ERROR'
+  live: true
+- id: TC-E004
+  command: './crm events count --from "2026-01-01" --to "2026-06-30"'
+  expected: '返回拜访总数'
+  live: true
+- id: TC-U001
+  command: './crm users list'
+  expected: '返回全员列表'
+  live: true
+- id: TC-U002
+  command: './crm users search --name "杨盛麟"'
+  expected: '返回该用户信息'
+  live: true
+- id: TC-X001
+  command: './crm account-view --name "台州市乔巴塑料有限公司"'
+  expected: '一次返回 Accounts + Deals + Orders + Events'
+  live: true
+- id: TC-X002
+  command: './crm sales-dashboard --sales "杨盛麟" --from "2026-01-01"'
+  expected: '返回商机数、赢单数、合同金额汇总'
+  live: true
+- id: TC-X003
+  command: './crm orders summary --project "2026印尼" --group-by "special_zone"'
+  expected: '按专区分组统计展商数、合同金额'
+  live: true
+- id: TC-S001
+  command: 'for i in 1 2 3 4 5; do ./crm accounts search --name "海南省" >/dev/null || exit 1; done; ./crm accounts search --name "海南省"'
+  expected: '连续 5 次查询全部成功，不触发 OAuth 限流'
+  live: true
+- id: TC-S002
+  command: './crm accounts search --name "绍兴中瑞彩印包装"'
+  expected: '中文全名搜索能找到；使用 like 规避 204'
+  live: true
+- id: TC-S003
+  command: './crm accounts batch --names "公司001,公司002,公司003"'
+  expected: '批量接口可运行；201 条场景由自动拆批逻辑覆盖'
+  live: true
+- id: TC-S004
+  command: './crm orders dict'
+  expected: 'JSON 输出含 count/data/error，无 traceback'
+  live: false
+- id: TC-SEL001
+  command: './selection search --industry "宠物" --max-results 10000'
+  expected: '返回宠物行业展商/买家集合'
+  live: true
+- id: TC-SEL002
+  command: './selection search --industry "宠物" --country "印尼"'
+  expected: '返回印尼宠物行业展商'
+  live: true
+- id: TC-SEL003
+  command: './selection industries'
+  expected: '返回行业名 → dictCode 映射'
+  live: false
+- id: TC-SEL004
+  command: './selection company --id "xxx"'
+  expected: '返回工商/贸易概览详情'
+  live: true
+- id: TC-SEL005
+  command: './selection trade --company-id "xxx"'
+  expected: '返回进出口贸易记录/概览'
+  live: true
+- id: TC-SEL006
+  command: './selection exhibitions --company-id "xxx"'
+  expected: '返回参展历史；上游缺接口时返回机器可读 notice'
+  live: true
+- id: TC-SEL007
+  command: './selection products --company-id "xxx"'
+  expected: '返回产品标签；上游缺接口时返回机器可读 notice'
+  live: true
+- id: TC-SEL008
+  command: './selection industries'
+  expected: '正式 Token 配置检查前置；需 live selection 查询不报 errCode=90000'
+  live: false
+- id: TC-SEL009
+  command: './selection buyers --industry "宠物"'
+  expected: '返回买家企业列表'
+  live: true
+- id: TC-CROSS001
+  command: './crm similar --zone "宠物展区" --project "2026印尼" --stage "赢单"'
+  expected: '拉取成交客户集合，供 selection 相似搜索'
+  live: true
+- id: TC-CROSS002
+  command: './crm unified --name "台州市乔巴塑料有限公司"'
+  expected: '返回 CRM 统一客户视图；selection 扩展可追加'
+  live: true
+- id: TC-AUTH001
+  command: './crm accounts search --name "海南省"'
+  expected: 'CRM token 可自动获取/刷新'
+  live: true
+- id: TC-AUTH002
+  command: 'env -u MIO_CDP_APP_SECRET -u SELECTION_API_TOKEN ./selection company --id "xxx"'
+  expected: '不设圈选 Token 时返回明确 JSON 错误'
+  live: false
+- id: TC-AUTH003
+  command: './crm accounts search --name "海南省"'
+  expected: 'CRM token 过期前 60s 自动刷新'
+  live: true
+- id: REG-001
+  command: './crm accounts batch --names "海南鹏翔,河南歆楷焕"'
+  expected: 'Accounts 按公司名 IN 批量搜索'
+  live: true
+- id: REG-002
+  command: './crm accounts get --ids "185165007858443947,185165007858562555"'
+  expected: 'Accounts 按 ID 批量获取'
+  live: true
+- id: REG-003
+  command: './crm deals list --account-id "185165007858443947"'
+  expected: 'Deals 按 Account_Name.id 关联'
+  live: true
+- id: REG-004
+  command: './crm orders list --zone "宠物展区" --stage "赢单"'
+  expected: 'Sales_Orders 按条件筛选'
+  live: true
+- id: REG-005
+  command: './crm events list --account-id "185165007858443947"'
+  expected: 'Events 按 What_Id 关联客户'
+  live: true
+- id: REG-006
+  command: './crm events list --account-id "185165007858443947"'
+  expected: 'Events 妙记链接可提取'
+  live: true
+- id: REG-007
+  command: './selection search --industry "宠物" --country "印尼"'
+  expected: '圈选展商高级搜索'
+  live: true
+- id: REG-008
+  command: './selection company --id "xxx"'
+  expected: '圈选工商详情'
+  live: true
+- id: REG-009
+  command: './selection trade --company-id "xxx"'
+  expected: '圈选贸易记录'
+  live: true
+- id: REG-010
+  command: './selection exhibitions --company-id "xxx"'
+  expected: '圈选参展信息'
+  live: true
+- id: REG-011
+  command: './selection products --company-id "xxx"'
+  expected: '圈选产品标签'
+  live: true
+- id: REG-012
+  command: './selection exhibitions --page 1 --size 10'
+  expected: '圈选会刊/展会列表'
+  live: true
+- id: REG-013
+  command: './crm orders summary --zone "宠物展区" --project "2026印尼" --stage "赢单" --group-by sales'
+  expected: '销售字段 ≠ Owner'
+  live: true

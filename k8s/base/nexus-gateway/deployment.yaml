@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-gateway
+  labels:
+    app: nexus-gateway
+    dealclaw.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-gateway
+  template:
+    metadata:
+      labels:
+        app: nexus-gateway
+        dealclaw.io/component: gateway
+    spec:
+      serviceAccountName: agent-sa
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: gateway
+        image: registry.cn-hangzhou.aliyuncs.com/dealclaw/nexus-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        - name: DEALCLAW_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: tenant-id
+        - name: DEALCLAW_PLATFORM
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: platform
+        - name: DEALCLAW_PLAN_TIER
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: plan-tier
+        - name: DEALCLAW_AGENT_URL
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: agent-url
+        - name: CREDITS_LEDGER_URL
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: credits-ledger-url
+        - name: DEALCLAW_CUSTOMER_KEY_REF
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: customer-key-ref
+        - name: DEALCLAW_BOT_CREDENTIAL_REF
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: bot-cred-ref
+        - name: DEALCLAW_CREDITS_ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: credits-account-id
+        - name: DEALCLAW_BOT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: tenant-config
+              key: bot-secret
+              optional: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        securityContext:
+          privileged: false
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-gateway
+  labels:
+    app: nexus-gateway
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: nexus-gateway

@@ -1,0 +1,21 @@
+# ============================================================
+# Agent 任务管理系统 CLI 配置文件
+# ============================================================
+# 此文件包含所有后端服务地址配置，由 CLI 工具自动读取。
+# 其他小龙虾拿到后，只需修改此文件中的地址即可使用。
+
+# Java 后端服务地址（用于获取素材库列表、语言列表等）
+java_server_url: "https://d12.ultronx.tech/api"
+
+# Python AI 模板服务地址（用于提交任务、查询进度、日志等）
+# 注意：该地址是部署在外的 Python 服务，非本地 8080 服务
+python_server_url: "https://template-api-test.ultronx.tech"
+
+# 默认账号（用于加载素材库和语言列表）
+default_account: "admin"
+
+# 默认语言
+default_language: "中文"
+
+# 默认视频数量
+default_video_count: 2

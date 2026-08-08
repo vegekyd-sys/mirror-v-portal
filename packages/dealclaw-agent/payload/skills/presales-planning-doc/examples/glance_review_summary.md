@@ -1,0 +1,1 @@
+Reference review result: original Glance draft was judged usable but below benchmark. Main gaps vs Hesheng benchmark: lacked battlefield split, hard market pages, benchmark account analysis, sharp buyer personas, commercial confidence, deliverable package definition, RACI/staffing depth, and YouTube deep trust plan.

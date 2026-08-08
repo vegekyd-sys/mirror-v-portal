@@ -1,0 +1,1 @@
+Reference example produced from this workflow: see workspace file `work/presales_skill/glance_presales_proposal_v3.md` for the accepted Markdown pattern. Key features: four market battlefields, buyer decision chain, benchmark account archetypes, four-layer funnel, keyword package, YouTube trust layer, RACI, KPI bands.

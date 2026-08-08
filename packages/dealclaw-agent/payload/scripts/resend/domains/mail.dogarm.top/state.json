@@ -1,0 +1,50 @@
+{
+  "email": "test@mail.dogarm.top",
+  "root_domain": "mail.dogarm.top",
+  "send_domain": "send.mail.dogarm.top",
+  "reply_domain": "reply.mail.dogarm.top",
+  "status": "dns_pending",
+  "updated_at": "2026-07-16T06:45:03.746Z",
+  "send_domain_id": "8998ccd7-36bc-4c91-92f1-cc2e0ee5a6ca",
+  "reply_domain_id": "8998ccd7-36bc-4c91-92f1-cc2e0ee5a6ca",
+  "send_records": [
+    {
+      "record": "DKIM",
+      "name": "resend._domainkey.send.mail",
+      "value": "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCtejwA8r4Id2IKLLtSPhtRywN1omsxA2DPBBkVdZbb6icw/mS/HScorOXJwzJdDxANoMUcQg4Yfs9rSGbaZOsnAG4deNeGwkBVfbcETdY+VG66HttOxm6aEOoCe8AA3z/jcgi9Jr+hF6MGTUA/f3NfIR0eUpzaT5iBSHSzQ85m2QIDAQAB",
+      "type": "TXT",
+      "status": "pending",
+      "ttl": "Auto"
+    },
+    {
+      "record": "SPF",
+      "name": "send.send.mail",
+      "type": "MX",
+      "ttl": "Auto",
+      "status": "not_started",
+      "value": "feedback-smtp.us-east-1.amazonses.com",
+      "priority": 10
+    },
+    {
+      "record": "SPF",
+      "name": "send.send.mail",
+      "value": "v=spf1 include:amazonses.com ~all",
+      "type": "TXT",
+      "ttl": "Auto",
+      "status": "not_started"
+    },
+    {
+      "record": "Receiving",
+      "name": "send.mail",
+      "value": "inbound-smtp.us-east-1.amazonaws.com",
+      "type": "MX",
+      "priority": 10,
+      "status": "pending",
+      "ttl": "Auto"
+    }
+  ],
+  "reply_records": [],
+  "note": "单域名双用途: send.mail.dogarm.top 同时处理发信+收信",
+  "display_name": "V Test",
+  "from_address": "V Test <test@mail.dogarm.top>"
+}

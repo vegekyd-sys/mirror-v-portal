@@ -1,0 +1,10 @@
+{
+  "name": "dealclaw-runtime-dependencies",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "imap": "0.8.17",
+    "mailparser": "3.9.14",
+    "nodemailer": "9.0.3"
+  }
+}

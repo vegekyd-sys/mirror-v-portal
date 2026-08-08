@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: central-gateway
+  labels:
+    app: central-gateway
+  annotations:
+    # Alibaba Cloud ALB Ingress annotations
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-port: "8085"
+spec:
+  ingressClassName: alb
+  rules:
+  - host: dealclaw-test.ultronx.tech
+    http:
+      paths:
+      - path: /onboard
+        pathType: Prefix
+        backend:
+          service:
+            name: central-gateway
+            port:
+              number: 8085
+      - path: /onboard/
+        pathType: Prefix
+        backend:
+          service:
+            name: central-gateway
+            port:
+              number: 8085
+      - path: /v1/agent/
+        pathType: Prefix
+        backend:
+          service:
+            name: central-gateway
+            port:
+              number: 8085
+      - path: /healthz
+        pathType: Exact
+        backend:
+          service:
+            name: central-gateway
+            port:
+              number: 8085

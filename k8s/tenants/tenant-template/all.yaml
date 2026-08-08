@@ -1,0 +1,326 @@
+# Tenant Pod Template
+# ═══════════════════════════════════════════════════════════
+# Each tenant gets their own K8s Namespace with:
+#   - nexus-gateway (auth/credits/routing)
+#   - dealclaw-agent (AI agent skills)
+# ═══════════════════════════════════════════════════════════
+# Usage: Provisioning Service creates namespace + applies this template
+# Variables: ${TENANT_ID}, ${TENANT_PLAN}, ${CREDITS_ACCOUNT_ID}, etc.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-${TENANT_ID}
+  labels:
+    app: dealclaw
+    tenant: ${TENANT_ID}
+    plan: ${TENANT_PLAN}
+    managed-by: provisioning-service
+spec: {}
+
+---
+# Tenant Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bot-credentials
+  namespace: tenant-${TENANT_ID}
+type: Opaque
+stringData:
+  DEALCLAW_BOT_SECRET: ${BOT_SECRET}
+  DEALCLAW_APP_ID: ${APP_ID}
+  DEALCLAW_APP_SECRET: ${APP_SECRET}
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: credits-config
+  namespace: tenant-${TENANT_ID}
+type: Opaque
+stringData:
+  DEALCLAW_CREDITS_ACCOUNT_ID: ${CREDITS_ACCOUNT_ID}
+  DEALCLAW_CREDITS_LEDGER_URL: http://credits-ledger.dealclaw-prod:8081
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-config
+  namespace: tenant-${TENANT_ID}
+type: Opaque
+stringData:
+  DEALCLAW_TENANT_ID: ${TENANT_ID}
+  DEALCLAW_PLAN_TIER: ${TENANT_PLAN}
+  DEALCLAW_INITIAL_CREDITS: "5000000"
+  DEALCLAW_MODEL: ${DEALCLAW_MODEL}
+  DEALCLAW_TIMEZONE: ${TENANT_TIMEZONE}
+
+---
+# Runtime provider/tool credentials are injected by the provisioning layer.
+# Values are template variables only; never commit resolved credentials.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-runtime-secrets
+  namespace: tenant-${TENANT_ID}
+type: Opaque
+stringData:
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+  APIFY_TOKEN: ${APIFY_TOKEN}
+  APIFY_API_KEY: ${APIFY_TOKEN}
+  MIO_CDP_APP_KEY: ${MIO_CDP_APP_KEY}
+  MIO_CDP_APP_SECRET: ${MIO_CDP_APP_SECRET}
+  APOLLO_API_KEY: ${APOLLO_API_KEY}
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dealclaw-runtime-data
+  namespace: tenant-${TENANT_ID}
+spec:
+  storageClassName: alibabacloud-cnfs-nas
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# Nexus Gateway — per-tenant API gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-gateway
+  namespace: tenant-${TENANT_ID}
+  labels:
+    app: nexus-gateway
+    tenant: ${TENANT_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-gateway
+      tenant: ${TENANT_ID}
+  template:
+    metadata:
+      labels:
+        app: nexus-gateway
+        tenant: ${TENANT_ID}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: nexus-gateway
+          image: ${ACR_REGISTRY}/dealclaw/nexus-gateway:${IMAGE_TAG}
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - secretRef:
+                name: bot-credentials
+            - secretRef:
+                name: credits-config
+            - secretRef:
+                name: agent-config
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: DEALCLAW_PLATFORM
+              value: feishu
+            - name: DEALCLAW_AGENT_URL
+              value: http://dealclaw-agent:18789
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-gateway
+  namespace: tenant-${TENANT_ID}
+  labels:
+    app: nexus-gateway
+    tenant: ${TENANT_ID}
+spec:
+  selector:
+    app: nexus-gateway
+    tenant: ${TENANT_ID}
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http
+
+---
+# DealClaw Agent — isolated OpenClaw Runtime + DealClaw base payload
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealclaw-agent
+  namespace: tenant-${TENANT_ID}
+  labels:
+    app: dealclaw-agent
+    tenant: ${TENANT_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dealclaw-agent
+      tenant: ${TENANT_ID}
+  template:
+    metadata:
+      labels:
+        app: dealclaw-agent
+        tenant: ${TENANT_ID}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: dealclaw-agent
+          image: ${ACR_REGISTRY}/dealclaw/dealclaw-agent:${IMAGE_TAG}
+          ports:
+            - containerPort: 18789
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - secretRef:
+                name: agent-config
+            - secretRef:
+                name: openclaw-runtime-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: OPENCLAW_STATE_DIR
+              value: /data/state
+            - name: OPENCLAW_WORKSPACE_DIR
+              value: /data/workspace
+          volumeMounts:
+            - name: agent-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 18789
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 18789
+            initialDelaySeconds: 5
+            periodSeconds: 15
+      volumes:
+        - name: agent-data
+          persistentVolumeClaim:
+            claimName: dealclaw-runtime-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dealclaw-agent
+  namespace: tenant-${TENANT_ID}
+  labels:
+    app: dealclaw-agent
+    tenant: ${TENANT_ID}
+spec:
+  selector:
+    app: dealclaw-agent
+    tenant: ${TENANT_ID}
+  ports:
+    - port: 18789
+      targetPort: 18789
+      name: http
+
+---
+# NetworkPolicy — restrict intra-namespace communication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenant-isolation
+  namespace: tenant-${TENANT_ID}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow nexus-gateway to receive from central-gateway webhook
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dealclaw-prod
+          podSelector:
+            matchLabels:
+              app: central-gateway
+      ports:
+        - port: 8081
+    # Allow within-namespace communication
+    - from:
+        - podSelector: {}
+  egress:
+    # Allow tenant-local Nexus → Agent traffic without opening other tenants.
+    - to:
+        - podSelector: {}
+    # Allow access to credits-ledger
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dealclaw-prod
+          podSelector:
+            matchLabels:
+              app: credits-ledger
+      ports:
+        - port: 8081
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # OpenClaw model providers and approved public research APIs use HTTPS.
+    # Private ranges remain blocked to prevent cross-tenant/internal probing.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP

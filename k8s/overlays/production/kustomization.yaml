@@ -1,0 +1,117 @@
+# Production Overlay
+# Applies to namespace: dealclaw-prod
+# Use: kubectl apply -k k8s/overlays/production
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: dealclaw-prod
+
+resources:
+  - ../../base/nexus-gateway
+  - ../../base/credits-ledger
+  - ../../base/provisioning-service
+  - ../../base/ops-agent
+  - ../../base/central-gateway
+  - ../../base/admin-dashboard
+
+# Production-specific config overrides
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nexus-gateway
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: nexus-gateway
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+    target:
+      kind: Deployment
+      name: nexus-gateway
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: credits-ledger
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: credits-ledger
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+    target:
+      kind: Deployment
+      name: credits-ledger
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: provisioning-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: provisioning-service
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+    target:
+      kind: Deployment
+      name: provisioning-service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: central-gateway
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: central-gateway
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+    target:
+      kind: Deployment
+      name: central-gateway
+
+# Production secrets (values set via CI or sealed-secrets)
+secretGenerator:
+  - name: dealclaw-db-prod
+    literals:
+      - DATABASE_URL=postgresql://placeholder:placeholder@dealclaw-prod-db:5432/dealclaw_prod
+    type: Opaque
+  - name: dealclaw-auth-prod
+    literals:
+      - PROVISIONING_API_TOKEN=placeholder
+      - OPS_API_TOKEN=placeholder
+      - ADMIN_API_TOKEN=placeholder
+      - PAYMENT_SERVICE_TOKEN=placeholder
+    type: Opaque

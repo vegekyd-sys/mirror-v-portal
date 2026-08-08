@@ -1,0 +1,35 @@
+import express, { type Request, type Response } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import pg from 'pg';
+import { createTenantRoutes } from './routes/tenants.js';
+import type { ProvisioningConfig } from './config.js';
+import { createAuthMiddleware } from './middleware/auth.js';
+
+export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
+  const app = express();
+
+  app.use(helmet());
+  // NB2/NB8 FIX: restrict CORS to known origins
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN || false,
+    methods: ['GET', 'POST', 'DELETE'],
+  }));
+  app.use(express.json({ limit: '1mb' }));
+
+  // Health check (no auth)
+  app.get('/healthz', (_req: Request, res: Response) => {
+    res.json({ ok: true, service: 'provisioning-service', version: '0.1.0' });
+  });
+
+  // NB2 FIX: Add Bearer token auth to all tenant routes
+  const auth = createAuthMiddleware('PROVISIONING_API_TOKEN');
+  app.use(createTenantRoutes(pool, config, auth));
+
+  // 404 fallback
+  app.use((_req: Request, res: Response) => {
+    res.status(404).json({ code: 'NOT_FOUND', message: 'Route not found' });
+  });
+
+  return app;
+}

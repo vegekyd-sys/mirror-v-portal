@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""米奥兰特圈选 CLI — Agent 命令行工具
+
+封装 121.199.25.223:8080 的 Agent API，提供数据圈选和买家搜索能力。
+Agent 无需了解 HTTP 细节，一条命令出结果。
+
+用法:
+  export SELECTION_API=http://121.199.25.223:8080   # 可选，默认值
+  selection industries
+  selection search --industry "宠物" --pageSize 5
+  selection search --industry "宠物" --country "德国"
+  selection cdp --industry "宠物" --max-results 100
+  selection company --id "91321181663286492K"
+  selection trade --company-id "91321181663286492K"
+  selection exhibitions --company-id "91321181663286492K"
+  selection products --company-id "91321181663286492K"
+  selection buyers --industry "宠物" --country "US"
+  selection buyer-stats --dimension industry
+"""
+
+import argparse
+import json
+import os
+import sys
+import urllib.request
+import urllib.parse
+
+BASE = os.environ.get("SELECTION_API", "http://121.199.25.223:8080")
+
+
+def get(path, params=None):
+    url = f"{BASE}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, quote_via=urllib.parse.quote)
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def post(path, data):
+    url = f"{BASE}{path}"
+    body = urllib.parse.urlencode({k: v for k, v in data.items() if v is not None}, quote_via=urllib.parse.quote).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="selection", description="米奥兰特数据圈选 CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    # industries
+    sub.add_parser("industries", help="获取行业枚举列表")
+
+    # search
+    sp = sub.add_parser("search", help="展商搜索（透传底层API全部参数）")
+    sp.add_argument("--keyword", help="公司名称关键词")
+    sp.add_argument("--industry", help="行业分类名称，如 宠物")
+    sp.add_argument("--country", help="展会国家，如 德国/印尼/美国")
+    sp.add_argument("--province", help="省份")
+    sp.add_argument("--city", help="城市")
+    sp.add_argument("--district", help="注册地区县")
+    sp.add_argument("--tax-number", help="统一社会信用代码")
+    sp.add_argument("--company-products", help="主营产品")
+    sp.add_argument("--reg-location", help="注册地址")
+    sp.add_argument("--reg-status", help="经营状态，如 在业")
+    sp.add_argument("--staff-size", help="人员规模")
+    sp.add_argument("--hscode", help="海关HS Code")
+    sp.add_argument("--prod-desc", help="海关产品关键字")
+    sp.add_argument("--data-type", help="数据类型")
+    sp.add_argument("--feature-label", help="资料来源/标签")
+    sp.add_argument("--tag-id", help="产品标签ID")
+    sp.add_argument("--tag-id-ali", help="阿里类目查询")
+    sp.add_argument("--trade-area", help="外贸区域")
+    sp.add_argument("--vip-type", help="VIP类型")
+    sp.add_argument("--customer-value", help="展商转化潜力指数")
+    sp.add_argument("--is-export", action="store_true", help="是否进出口企业")
+    sp.add_argument("--is-laolai", action="store_true", help="是否老赖")
+    sp.add_argument("--is-listed", action="store_true", help="是否上市")
+    sp.add_argument("--has-mobile", action="store_true", help="有手机")
+    sp.add_argument("--has-phone", action="store_true", help="有电话")
+    sp.add_argument("--has-email", action="store_true", help="有邮箱")
+    sp.add_argument("--exhibition-name", help="展会名")
+    sp.add_argument("--exhibition-time-lower", help="开展时间-下限")
+    sp.add_argument("--exhibition-time-upper", help="开展时间-上限")
+    sp.add_argument("--exh-cnt-lower", type=int, help="参展次数-下限")
+    sp.add_argument("--exh-cnt-upper", type=int, help="参展次数-上限")
+    sp.add_argument("--main-market", help="主营市场")
+    sp.add_argument("--recent-months-upper", type=int, help="近三月触碰-上限")
+    sp.add_argument("--recent-months-lower", type=int, help="近三月触碰-下限")
+    sp.add_argument("--recent-touch-lower", help="最近触碰-开始")
+    sp.add_argument("--recent-touch-upper", help="最近触碰-结束")
+    sp.add_argument("--last-visit-lower", help="最近拜访-开始")
+    sp.add_argument("--last-visit-upper", help="最近拜访-结束")
+    sp.add_argument("--last-call-lower", help="最近拨打-开始")
+    sp.add_argument("--last-call-upper", help="最近拨打-结束")
+    sp.add_argument("--cl-year-lower", type=int, help="成立年限-下限")
+    sp.add_argument("--cl-year-upper", type=int, help="成立年限-上限")
+    sp.add_argument("--reg-capital-lower", help="注册资本-下限")
+    sp.add_argument("--reg-capital-upper", help="注册资本-上限")
+    sp.add_argument("--export-amount-lower", type=float, help="出口规模-下限")
+    sp.add_argument("--export-amount-upper", type=float, help="出口规模-上限")
+    sp.add_argument("--trade-cnt-lower", type=int, help="贸易次数-下限")
+    sp.add_argument("--trade-cnt-upper", type=int, help="贸易次数-上限")
+    sp.add_argument("--found-time-lower", help="成立日期-下限")
+    sp.add_argument("--found-time-upper", help="成立日期-上限")
+    sp.add_argument("--page", type=int, default=1)
+    sp.add_argument("--pageSize", type=int, default=20)
+
+    # cdp
+    cp = sub.add_parser("cdp", help="行业圈选（自动翻页）")
+    cp.add_argument("--industry", required=True, help="行业分类名称")
+    cp.add_argument("--country", help="展会国家")
+    cp.add_argument("--max-results", type=int, default=10000, dest="maxResults")
+
+    # company
+    cmp = sub.add_parser("company", help="公司完整画像")
+    cmp.add_argument("--id", required=True, help="统一社会信用代码（税号）")
+
+    # trade
+    tr = sub.add_parser("trade", help="贸易洞察")
+    tr.add_argument("--company-id", required=True, dest="companyId", help="统一社会信用代码")
+    tr.add_argument("--start-date", dest="startDate", help="开始年月 yyyymm")
+    tr.add_argument("--end-date", dest="endDate", help="结束年月 yyyymm")
+    tr.add_argument("--country", help="贸易国家")
+
+    # exhibitions
+    ex = sub.add_parser("exhibitions", help="参展历史")
+    ex.add_argument("--company-id", required=True, dest="companyId", help="统一社会信用代码")
+    ex.add_argument("--type", type=int, default=1, help="0=国际 1=国内")
+
+    # products
+    pr = sub.add_parser("products", help="产品标签")
+    pr.add_argument("--company-id", required=True, dest="companyId", help="统一社会信用代码")
+    pr.add_argument("--page", type=int, default=1)
+    pr.add_argument("--pageSize", type=int, default=20)
+
+    # buyers
+    bp = sub.add_parser("buyers", help="买家搜索")
+    bp.add_argument("--industry", help="行业名称")
+    bp.add_argument("--country", help="国家代码 ISO-2")
+    bp.add_argument("--category-code", help="行业分类编码(T1 ID)，如 105=工业机械")
+    bp.add_argument("--keywords", help="关键词")
+    bp.add_argument("--sizeMin", type=int, help="企业规模下限")
+    bp.add_argument("--sizeMax", type=int, help="企业规模上限")
+    bp.add_argument("--page", type=int, default=1)
+    bp.add_argument("--pageSize", type=int, default=20)
+
+    # buyer-stats
+    bs = sub.add_parser("buyer-stats", help="买家统计")
+    bs.add_argument("--country", help="限定国家")
+    bs.add_argument("--industry", help="限定行业编码")
+    bs.add_argument("--dimension", default="country", help="country/industry")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    # Route to API
+    cmd_map = {
+        "industries":    ("GET",  "/api/agent/industries"),
+        "search":        ("POST", "/api/agent/search"),
+        "cdp":           ("POST", "/api/agent/cdp"),
+        "company":       ("GET",  "/api/agent/company/{id}"),
+        "trade":         ("GET",  "/api/agent/trade/{companyId}"),
+        "exhibitions":   ("GET",  "/api/agent/exhibitions/{companyId}"),
+        "products":      ("GET",  "/api/agent/products/{companyId}"),
+        "buyers":        ("POST", "/api/agent/buyers"),
+        "buyer-stats":   ("POST", "/api/agent/buyer-stats"),
+    }
+
+    method, path_template = cmd_map[args.command]
+
+    # Build params
+    params = {}
+
+    # Boolean tracking (store_true -> False when unset, should skip)
+    bool_keys = {"is_export", "is_laolai", "is_listed", "has_mobile", "has_phone", "has_email"}
+
+    for key, val in vars(args).items():
+        if key == "command" or val is None:
+            continue
+        if key in bool_keys and val is False:
+            continue
+
+        # kebab-case → camelCase mapping for API
+        param_key = {
+            "keyword": "keyword",
+            "industry": "industry",
+            "country": "country",
+            "category_code": "categoryCode",
+            "province": "province",
+            "city": "city",
+            "district": "district",
+            "tax_number": "taxNumber",
+            "company_products": "companyProducts",
+            "reg_location": "regLocation",
+            "reg_status": "regStatus",
+            "staff_size": "staffSize",
+            "hscode": "hscode",
+            "prod_desc": "prodDesc",
+            "data_type": "dataType",
+            "feature_label": "featureLabel",
+            "tag_id": "tagId",
+            "tag_id_ali": "tagIdAli",
+            "trade_area": "tradeArea",
+            "vip_type": "vipType",
+            "customer_value": "customerValue",
+            "is_export": "isExport",
+            "is_laolai": "isLaolai",
+            "is_listed": "isListed",
+            "has_mobile": "hasMobile",
+            "has_phone": "hasPhone",
+            "has_email": "hasEmail",
+            "exhibition_name": "exhibitionName",
+            "exhibition_time_lower": "exhibitionTimeLower",
+            "exhibition_time_upper": "exhibitionTimeUpper",
+            "exh_cnt_lower": "exhCntLower",
+            "exh_cnt_upper": "exhCntUpper",
+            "main_market": "mainMarket",
+            "recent_months_upper": "recentMonthsUpper",
+            "recent_months_lower": "recentMonthsLower",
+            "recent_touch_lower": "recentTouchLower",
+            "recent_touch_upper": "recentTouchUpper",
+            "last_visit_lower": "lastVisitLower",
+            "last_visit_upper": "lastVisitUpper",
+            "last_call_lower": "lastCallLower",
+            "last_call_upper": "lastCallUpper",
+            "cl_year_lower": "clYearLower",
+            "cl_year_upper": "clYearUpper",
+            "reg_capital_lower": "regCapitalLower",
+            "reg_capital_upper": "regCapitalUpper",
+            "export_amount_lower": "exportAmountLower",
+            "export_amount_upper": "exportAmountUpper",
+            "trade_cnt_lower": "tradeCntLower",
+            "trade_cnt_upper": "tradeCntUpper",
+            "found_time_lower": "foundTimeLower",
+            "found_time_upper": "foundTimeUpper",
+            "page": "page",
+            "pageSize": "pageSize",
+        }.get(key)
+
+        if param_key:
+            if key == "id" and val:
+                path_template = path_template.replace("{id}", val)
+            elif key == "companyId" and val:
+                path_template = path_template.replace("{companyId}", val)
+            else:
+                params[param_key] = val
+
+    # Special handling for path params
+    for k, v in vars(args).items():
+        if k == "id" and v:
+            path_template = path_template.replace("{id}", v)
+        if k == "companyId" and v:
+            path_template = path_template.replace("{companyId}", v)
+
+    # Additional GET path params
+    get_params = {}
+    post_data = {}
+    if method == "GET":
+        for k in ["type", "page", "pageSize", "startDate", "endDate", "country"]:
+            if k in params:
+                get_params[k] = params.pop(k, None)
+    else:
+        post_data = dict(params)
+        # Remove path params that were already substituted
+        post_data.pop("id", None)
+        post_data.pop("companyId", None)
+
+    if method == "GET":
+        get_params.pop("pageSize", None)
+        result = get(path_template, get_params)
+    else:
+        # 去除路径参数
+        post_data.pop("id", None)
+        post_data.pop("companyId", None)
+        
+        # 自动翻页：pageSize > 50 时分页拉取
+        requested_size = post_data.pop("pageSize", 20)
+        if args.command in ("search", "buyers") and requested_size > 50:
+            page = post_data.pop("page", 1)
+            per_page = 50
+            all_items = []
+            total = 0
+            current_page = page
+            
+            while len(all_items) < requested_size:
+                post_data["page"] = current_page
+                post_data["pageSize"] = per_page
+                r = post(path_template, post_data)
+                total = r.get("total", 0)
+                
+                # 确定 items 的 key (search 用 items, buyers 用 buyers)
+                items = r.get("items") or r.get("buyers") or []
+                if not items:
+                    break
+                all_items.extend(items)
+                
+                if len(items) < per_page:  # 最后一页
+                    break
+                current_page += 1
+            
+            # 重建结果
+            result = {"total": total, "page": page, "fetched": len(all_items)}
+            if r.get("items") is not None:
+                result["items"] = all_items
+            else:
+                result["buyers"] = all_items
+            
+        else:
+            post_data["pageSize"] = requested_size
+            result = post(path_template, post_data)
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
