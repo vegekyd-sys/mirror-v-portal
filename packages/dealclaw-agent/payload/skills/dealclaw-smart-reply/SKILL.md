@@ -4,7 +4,7 @@ description: "询盘处理引擎。企业画像动态读取→资料充足才自
 version: 2.1.0
 date: "2026-07-19"
 ---
-> 作者/发起人: 蔡管理员 | 实现: 田耕郡@格格
+> 作者/发起人: 蔡天懿 | 实现: 田耕郡@格格
 
 # DC-IQ: 询盘处理引擎
 
@@ -108,6 +108,16 @@ Stage5  销售跟进 — 人工接管，DC-IQ 退出
 
 每次状态迁移写入买家状态模块。买家状态模块负责「谁在什么阶段」，漏斗看板直接读取。
 
+线索池阶段/冷热列更新前，调 `get_lead_pool` 获取 bitable 信息：
+
+```bash
+cd work/mio-api
+python3 dc_company_registry.py show "<company_id>"
+# 返回 {"app_token": "...", "table_id": "tbl...", "field_map": {...}}
+```
+
+然后按 `field_map` 定位「阶段」「冷热」列的 field_id，调飞书 Bitable API `PATCH /records/{record_id}` 更新字段值。
+
 ```json
 {
   "buyer": "Osculati",
@@ -134,4 +144,4 @@ Stage5 销售跟进时，DC-IQ 完全退出。后续回复由用户自己处理�
 |---|---|---|
 | v2.1 | 2026-07-19 | 回复改为 CBIE 动态读取；英文外部线/资料不足时飞书断点通知；资料充足才自动发送。来源：田耕郡@格格 |
 | v2.0 | 2026-07-19 | 脱proposal，dc_iq_engine.py实现。意图识别+状态迁移+自动回复+dc_ls_store持久化。来源：田耕郡@格格 |
-| v1.0 | 2026-07-17 | 初始proposal。蔡管理员 |
+| v1.0 | 2026-07-17 | 初始proposal。蔡天懿 |

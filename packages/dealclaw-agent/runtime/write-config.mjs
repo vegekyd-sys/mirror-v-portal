@@ -94,8 +94,6 @@ const config = {
         workspace,
         // Auto-discover all skills from workspace skills/ directory
         skills: (() => {
-          const fs = require('node:fs');
-          const path = require('node:path');
           const skillsDir = path.join(workspace, 'skills');
           try {
             return fs.readdirSync(skillsDir).filter(name =>

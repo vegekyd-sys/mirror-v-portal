@@ -1,6 +1,6 @@
 ---
 name: "dealclaw-find-buyers"
-description: "v2: 默认搜索字段从 keyword 切换到 tag-keyword，增加 company-attributes 买家类型过滤"
+description: "v3: 关键词不替换不发散，五级逐级降级(tag→profile→keyword→类目推理→Apollo)，三字段全跑去重合并"
 ---
 
 # DC-Find-Buyers
@@ -12,10 +12,6 @@ description: "v2: 默认搜索字段从 keyword 切换到 tag-keyword，增加 c
 用户确认买家方向或选定具体公司后，才搜索联系人。用户确认消耗 Apollo 额度后，才执行邮箱 reveal。
 
 ## 必要输入
-
-### 用户上传已有买家表格（Excel/CSV）
-
-用户发送 `.csv` / `.xlsx` 文件 → V 调用 `dc_customer_import.py` 解析 → 校验必填字段（公司名/域名/国家）→ 直接写入线索池 bitable → 来源标注「用户导入」→ 气泡确认：「导入了 X 家买家，已写入线索池」+ 发 bitable 链接。
 
 ### 搜索新买家
 
@@ -34,29 +30,56 @@ description: "v2: 默认搜索字段从 keyword 切换到 tag-keyword，增加 c
 3. 执行去重，并移除已确认排除偏好。
 4. 检查关键词歧义和买家类型匹配度。
 5. 输出 Top 5–10 公司及推荐理由。
-6. 用户确认公司或方向后，再搜索联系人。
-7. Apollo 邮箱 reveal 前，先让用户确认额度消耗。
+6. 用户确认买家后，调用 `ensure_company_lead_pool` 获取企业线索池，写入 bitable。
+7. 用户确认公司或方向后，再搜索联系人。
+8. Apollo 邮箱 reveal 前，先让用户确认额度消耗。
+
+### 写入线索池
+
+买家公司确认后，必须写入企业线索池。调用方式：
+
+```bash
+cd work/mio-api
+python3 dc_company_registry.py ensure "<company_id>" "<company_name>"
+# 返回 {"app_token": "...", "table_id": "tbl...", "field_map": {...}, "created": false}
+```
+
+然后用返回的 `field_map` 按飞书 Bitable API 写 record，来源按数据源填写：
+- CDP → 「引擎搜索」
+- Apollo → 「Apollo数据库」
+- 米奥兰特的 → 「米奥数据库」
 
 ## 数据源路由
 
 按以下规则寻找公司：
 
-- 展会国 `MX/BR/ZA/VN/ID/AE/SA/IN/PL/JP/DE/TR/EG`：优先使用 CDP `searchAIV2`。
+- 展会国 `MX/BR/ZA/VN/ID/AE/SA/IN/PL/JP/DE/TR/EG`：优先使用 CDP `searchAIV2`，按 CDP 搜索字段降级规则逐级尝试。
+- CDP 全部空 → T4→T3 产品类目推理 → Apollo `--companies` 兜底。
 - 非展会国：优先使用 Apollo `--companies` 关键词碰撞搜索。
 - Apollo 联系人搜索只在用户确认公司或方向后使用。
 - web search 用于结果补足、歧义判断、公司验证和联系人全名验证。
 
+**关键词规则：** 用户说什么词就用什么词搜索，不自行替换为上位词、近义词或行业泛称。用户原词优先，结果不足时才做产品类目推理。
+
 没有实际调用的数据源，不要说已经执行。必要数据源返回 0 条时，简短说明，并继续走下一个允许步骤。
 
-## CDP 搜索字段规则（v2 — 2026-08-07 更新）
+## CDP 搜索字段规则（v3 — 2026-08-08 更新）
+
+**关键词原则：用户说什么就搜什么，不替换、不升级、不发散。**
 
 **默认搜索字段为 `--tag-keyword`**，匹配采购品类标签（英文），最贴近真实采购行为。
 
-| 搜索意图 | 字段 | 说明 |
-|---------|------|------|
-| 产品/品类词（如 water pump, vacuum flask） | `--tag-keyword` | **默认首选**。匹配采购品类英文标签，层级越深越精准 |
-| 产品/品类词（兜底） | `--profile-keyword` | 匹配公司简介，tag-keyword 召回不足时尝试 |
-| 公司/品牌名（如 Stanley, Shimizu） | `--keyword` | **仅限用户明确要搜某个公司名/品牌时使用** |
+**逐级降级规则（不可跳步，0 条才降级）：**
+
+| 级别 | 字段 | 说明 |
+|------|------|------|
+| 1 | `--tag-keyword "用户原词"` | **默认首选**。搜采购品类标签。用用户原词，不替换不发散 |
+| 2 | `--profile-keyword "用户原词"` | tag-keyword 返回 0 条时降级，搜公司简介 |
+| 3 | `--keyword "用户原词"` | 前两级均返回 0 条时兜底，搜公司名 |
+| 4 | T4→T3 产品类目推理 | 以上全空时，从更细粒度的产品类目词逐级向上尝试 |
+| 5 | Apollo `--companies` | CDP 全部空才走外部补全 |
+
+**每级必须实际执行并报告结果，不可靠猜测跳过。** 同级内三种字段各自跑完，按公司 ID 去重合并后展示。
 
 **买家类型过滤新增 `--company-attributes`：**
 
@@ -209,8 +232,11 @@ Apollo `--companies`、联系人搜索和 reveal 共用额度或 API key。3×3 
 ## CLI 参考
 
 ```bash
-# CDP 产品品类搜索（默认首选）：tag-keyword + 分销商过滤
+# 确保企业线索池存在
 cd work/mio-api
+python3 dc_company_registry.py ensure "<company_id>" "<company_name>"
+
+# CDP 产品品类搜索（默认首选）：tag-keyword + 分销商过滤
 python3 dealclaw_search.py --tag-keyword "water pump" --country ID --company-attributes 2,5 --size 10 --enterprise "<enterprise>" --user "<open_id>"
 
 # CDP 产品品类搜索（兜底）：profile-keyword

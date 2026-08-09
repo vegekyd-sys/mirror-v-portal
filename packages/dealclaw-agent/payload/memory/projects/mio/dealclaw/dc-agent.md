@@ -47,8 +47,9 @@
 | 一对一精准邮件 | dealclaw-email-founder-direct | SMTP创始人触达，日限15封 |
 | 买家回复 / 询盘处理 | dealclaw-smart-reply | 询盘分类 + 自动/建议回复 |
 | "看知识库" / 补充物料 | dealclaw-knowledge-base | 三层知识库（首页+主题页+资料层） |
-| 名片/录音/展后跟进 | dealclaw-exhibition-leads | OCR/ASR/匹配 + 展后跟进 |
+| 名片/录音/展后跟进 | dealclaw-exhibition-leads | OCR/ASR/匹配 + 展后跟进 + 写入线索池 |
 | "要去XX展会" / 展前邀约 | dealclaw-exhibition-invitation | 搜买家 + 出邀约 + 邮件发送 |
+| 上传 Excel/CSV / "导入线索" | dealclaw-lead-import | 解析→列映射→去重→写入线索池，来源「用户导入」 |
 
 ## 我不做什么
 
@@ -82,6 +83,6 @@
 - 搜索、星擎、猎采、展会等所有来源的线索统一写入同一份线索池，来源列区分，用户可筛选
 - 线索池表格列：公司名 / 官网 / 国家 / 买家类型 / 匹配产品 / 推荐理由 / 联系人 / 来源 / 冷热 / 阶段
 - 全局去重：公司名 + 域名
-- 飞书文档：`--as bot` 创建 → `--as bot` 设公开+管理员权限
+- 飞书文档：`--as bot` 创建 → `--as bot` 设公开+Tianyi权限
 - 不推荐自产自用型买家
 - 邀约不生成飞书文档，气泡预览后走邮件
