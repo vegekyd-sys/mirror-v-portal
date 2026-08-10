@@ -8,26 +8,11 @@
  */
 
 import type { GatewayConfig } from './config.js';
-
-// ── Token ──
-
-async function getTenantAccessToken(appId: string, appSecret: string) {
-  const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    return { ok: false as const, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
-  }
-  const data = await res.json() as { tenant_access_token?: string; code?: number; msg?: string };
-  if (data.tenant_access_token) {
-    return { ok: true as const, token: data.tenant_access_token };
-  }
-  return { ok: false as const, error: `Feishu API error: code=${data.code} msg=${data.msg}` };
-}
+import {
+  getTenantAccessToken,
+  replyToMessage,
+  extractAgentReplyText,
+} from './services/feishu-reply.js';
 
 // ── Helpers ──
 
@@ -121,21 +106,11 @@ export async function startWSClient(config: GatewayConfig) {
         console.warn(`[ws:${tenantId}] trace=${traceId} agent_json_parse_failed`, formatErr(err));
         return {};
       });
-      const text = reply?.result?.summary || reply?.text || reply?.content || '收到！';
+      const text = extractAgentReplyText(reply) || '收到！';
       console.log(`[ws:${tenantId}] trace=${traceId} agent_ok agent_ms=${agentT} reply_len=${String(text).length}`);
 
       // Reply via Feishu API
-      const replyOnce = async (token: string) => {
-        return fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${msgId}/reply`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ content: JSON.stringify({ text }), msg_type: 'text' }),
-          signal: AbortSignal.timeout(5000),
-        });
-      };
-
-      let sendRes = await replyOnce(currentAccessToken);
-      const feishuT = Date.now() - t0;
+      let sendRes = await replyToMessage(currentAccessToken, msgId, text);
 
       if (!sendRes.ok) {
         // Token refresh on expiry
@@ -148,18 +123,17 @@ export async function startWSClient(config: GatewayConfig) {
           if (refreshed.ok && refreshed.token) {
             currentAccessToken = refreshed.token;
             console.warn(`[ws:${tenantId}] trace=${traceId} feishu token refreshed, retrying reply`);
-            sendRes = await replyOnce(currentAccessToken);
-            if (sendRes.ok) {
-              console.log(`[ws:${tenantId}] trace=${traceId} feishu_reply_ok total_ms=${feishuT}`);
-              return;
-            }
+            sendRes = await replyToMessage(currentAccessToken, msgId, text);
           }
         }
-        console.warn(`[ws:${tenantId}] trace=${traceId} feishu reply failed: ${sendRes.status}`);
-        return;
       }
 
-      console.log(`[ws:${tenantId}] trace=${traceId} feishu_reply_ok total_ms=${feishuT}`);
+      const feishuT = Date.now() - t0;
+      if (sendRes.ok) {
+        console.log(`[ws:${tenantId}] trace=${traceId} feishu_reply_ok total_ms=${feishuT}`);
+      } else {
+        console.warn(`[ws:${tenantId}] trace=${traceId} feishu reply failed: ${sendRes.status}`);
+      }
     } catch (e) {
       console.warn(`[ws:${tenantId}] trace=${traceId} handler_failed`, formatErr(e));
     }

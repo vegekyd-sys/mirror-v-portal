@@ -6,6 +6,7 @@ import { auditMiddleware } from './middleware/audit.js';
 import { identityMiddleware, initIdentityConfig } from './middleware/identity.js';
 import { initPlanConfig, sceneMiddleware, setPlanConfig, sceneHeaders } from './middleware/scene.js';
 import { agentLimiter, globalLimiter } from './middleware/ratelimit.js';
+import { sendReply, extractAgentReplyText } from './services/feishu-reply.js';
 import { GATEWAY_HEADERS, type GatewayError, type TenantContext } from './types/index.js';
 
 export function createApp(config: GatewayConfig) {
@@ -59,6 +60,13 @@ export function createApp(config: GatewayConfig) {
     // Forward event to dealclaw-agent
     if (body?.header?.event_type) {
       try {
+        const msgId = body?.event?.message?.message_id;
+        if (!msgId) {
+          console.log('[webhook] no message_id in event, skipping');
+          res.json({ code: 0 });
+          return;
+        }
+
         const agentRes = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute`, {
           method: 'POST',
           headers: {
@@ -75,13 +83,26 @@ export function createApp(config: GatewayConfig) {
           signal: AbortSignal.timeout(25_000),
         });
 
-        const agentBody = await agentRes.text();
         if (agentRes.ok) {
-          // If agent returned a reply, send it back to Feishu
-          console.log('[webhook] agent replied, forwarding to Feishu');
-          // TODO: parse agent response and reply via Feishu API
+          // Parse agent response and reply to user via Feishu API
+          const agentBody = await agentRes.text();
+          console.log('[webhook] agent status:', agentRes.status, 'body_len:', agentBody.length);
+
+          let parsed: unknown;
+          try { parsed = JSON.parse(agentBody); } catch { parsed = { text: agentBody }; }
+
+          const replyText = extractAgentReplyText(parsed);
+          if (replyText && config.appId && config.appSecret) {
+            const replyResult = await sendReply(config.appId, config.appSecret, msgId, replyText);
+            console.log('[webhook] feishu reply:', replyResult.ok ? 'sent' : `failed(${replyResult.status})`);
+          } else if (!replyText) {
+            console.warn('[webhook] agent returned no reply text');
+          } else {
+            console.warn('[webhook] missing app credentials, cannot reply to Feishu');
+          }
+        } else {
+          console.warn('[webhook] agent forward failed, status:', agentRes.status);
         }
-        console.log('[webhook] agent status:', agentRes.status);
       } catch (err: any) {
         console.warn('[webhook] agent forward failed:', err.message);
       }
