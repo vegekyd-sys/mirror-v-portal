@@ -4,6 +4,7 @@ import pg from 'pg';
 import { scanTenants, shouldResetMonthly, getNotificationsForToday } from './services/scheduler.js';
 import { computeTransition, type TenantState } from './services/state-machine.js';
 import { runCronCycle } from './services/cron.js';
+import { runRolloutCycle } from './services/rollout.js';
 import type { OpsConfig } from './config.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 
@@ -72,8 +73,30 @@ export function createApp(pool: pg.Pool, config: OpsConfig) {
     res.json({
       service: 'ops-agent',
       cronIntervalMinutes: config.cronIntervalMinutes,
+      rolloutIntervalMinutes: config.rolloutIntervalMinutes,
       creditsLedgerUrl: config.creditsLedgerUrl,
+      provisioningServiceUrl: config.provisioningServiceUrl,
+      rolloutNexusGatewayTag: config.rolloutNexusGatewayTag || '(not set)',
+      rolloutDealclawAgentTag: config.rolloutDealclawAgentTag || '(not set)',
     });
+  });
+
+  /**
+   * POST /v1/ops/rollout — manual rollout trigger
+   * Updates nexus-gateway and/or dealclaw-agent deployments for all active tenants
+   * to the configured image tags.
+   */
+  app.post('/v1/ops/rollout', auth, async (_req, res) => {
+    try {
+      const results = await runRolloutCycle(config);
+      res.json({
+        ok: true,
+        targets: results.length,
+        results,
+      });
+    } catch (err: any) {
+      res.status(500).json({ code: 'INTERNAL', message: err.message });
+    }
   });
 
   return app;

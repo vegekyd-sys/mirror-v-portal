@@ -2,6 +2,7 @@ import pg from 'pg';
 import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { runCronCycle } from './services/cron.js';
+import { runRolloutCycle } from './services/rollout.js';
 
 async function main() {
   const config = loadConfig();
@@ -46,7 +47,7 @@ async function main() {
     }
   }, cronMs);
 
-  // Run first cycle after 30s
+  // Run first status cycle after 30s
   setTimeout(async () => {
     try {
       const result = await runCronCycle(pool, config);
@@ -59,6 +60,31 @@ async function main() {
       console.error('Initial cron error:', err);
     }
   }, 30_000);
+
+  // ── Rollout cron (separate interval from status-scan cron) ──
+  const rolloutMs = config.rolloutIntervalMinutes * 60 * 1000;
+  console.log(JSON.stringify({
+    level: 'info',
+    action: 'rollout-cron-start',
+    intervalMinutes: config.rolloutIntervalMinutes,
+    nexusGatewayTag: config.rolloutNexusGatewayTag || '(not set)',
+    dealclawAgentTag: config.rolloutDealclawAgentTag || '(not set)',
+  }));
+
+  setInterval(async () => {
+    try {
+      const results = await runRolloutCycle(config);
+      if (results.length > 0) {
+        console.log(JSON.stringify({
+          level: 'info',
+          action: 'rollout-cycle',
+          results,
+        }));
+      }
+    } catch (err) {
+      console.error('Rollout cron error:', err);
+    }
+  }, rolloutMs);
 
   // Graceful shutdown
   const shutdown = async () => {
