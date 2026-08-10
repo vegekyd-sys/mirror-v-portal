@@ -281,6 +281,42 @@ export async function createDeployment(spec: DeploymentSpec): Promise<void> {
   console.log(`[k8s] deployment created: ${spec.namespace}/${spec.name}`);
 }
 
+// ── Deployment Patch (rolling update) ──
+
+export interface PatchImageSpec {
+  namespace: string;
+  name: string;
+  image: string;
+}
+
+export async function patchDeploymentImage(spec: PatchImageSpec): Promise<void> {
+  const body = {
+    spec: {
+      template: {
+        spec: {
+          containers: [
+            {
+              name: spec.name,
+              image: spec.image,
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  const res = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${spec.namespace}/deployments/${spec.name}`,
+    body,
+  );
+
+  if (!res.ok) {
+    throw new Error(`patchDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment patched (rolling update): ${spec.namespace}/${spec.name} -> ${spec.image}`);
+}
+
 // ── Service ──
 
 export async function createService(

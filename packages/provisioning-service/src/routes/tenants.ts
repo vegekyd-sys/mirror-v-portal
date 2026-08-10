@@ -310,6 +310,103 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
 
+  // PATCH /v1/tenants/:id/deployment — rolling update deployment image
+  router.patch('/v1/tenants/:id/deployment', async (req: Request, res: Response) => {
+    try {
+      const { service, image } = req.body;
+
+      if (!service || !['dealclaw-agent', 'nexus-gateway'].includes(service)) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
+        return;
+      }
+      if (!image || typeof image !== 'string' || !image.includes(':')) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a valid docker image (name:tag)' });
+        return;
+      }
+
+      const tenantId = req.params.id;
+      const { rows } = await pool.query('SELECT k8s_namespace, status FROM tenants WHERE tenant_id = $1', [tenantId]);
+      if (!rows.length) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      if (rows[0].status === 'destroyed') {
+        res.status(400).json({ code: 'TENANT_DESTROYED', message: 'Tenant has been destroyed' });
+        return;
+      }
+
+      const { k8s_namespace: namespace } = rows[0];
+      const deploymentName = `${service}-${tenantId}`;
+
+      const { patchDeploymentImage } = await import('../services/k8s-client.js');
+      await patchDeploymentImage({ namespace, name: deploymentName, image });
+
+      await pool.query(
+        `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)`,
+        [tenantId, rows[0].status, `Deployment ${service} updated to ${image}`],
+      );
+
+      res.json({
+        ok: true,
+        tenantId,
+        service,
+        deployment: deploymentName,
+        image,
+        action: 'rolling_update',
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Patch deployment failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Deployment update failed' });
+    }
+  });
+
+  // POST /v1/tenants/batch/deployment — rolling update all active tenants
+  router.post('/v1/tenants/batch/deployment', async (req: Request, res: Response) => {
+    try {
+      const { service, image } = req.body;
+
+      if (!service || !['dealclaw-agent', 'nexus-gateway'].includes(service)) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
+        return;
+      }
+      if (!image || typeof image !== 'string' || !image.includes(':')) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a valid docker image (name:tag)' });
+        return;
+      }
+
+      const { rows } = await pool.query(
+        `SELECT tenant_id, k8s_namespace FROM tenants WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL`,
+      );
+
+      if (!rows.length) {
+        res.json({ ok: true, updated: 0, results: [] });
+        return;
+      }
+
+      const { patchDeploymentImage } = await import('../services/k8s-client.js');
+      const results: Array<{ tenantId: string; deployment: string; ok: boolean; error?: string }> = [];
+
+      for (const row of rows) {
+        const deploymentName = `${service}-${row.tenant_id}`;
+        try {
+          await patchDeploymentImage({ namespace: row.k8s_namespace, name: deploymentName, image });
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
+        } catch (err: unknown) {
+          const e = err as any;
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, error: e.message });
+        }
+      }
+
+      const successCount = results.filter(r => r.ok).length;
+      res.json({ ok: true, updated: successCount, total: rows.length, failed: rows.length - successCount, service, image, results });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Batch deployment update failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Batch update failed' });
+    }
+  });
+
   // PATCH /v1/tenants/:id/status — update tenant status
   router.patch('/v1/tenants/:id/status', async (req: Request, res: Response) => {
     try {
