@@ -26,7 +26,7 @@ export function loadConfig(): OpsConfig {
     databaseUrl: required('DATABASE_URL'),
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL ?? 'http://credits-ledger:8081',
     cronIntervalMinutes: Number(process.env.CRON_INTERVAL_MINUTES ?? 60),
-    provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8080',
+    provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8082',
     rolloutDealclawAgentTag: process.env.ROLLOUT_DEALCLAW_AGENT_TAG,
     rolloutNexusGatewayTag: process.env.ROLLOUT_NEXUS_GATEWAY_TAG,
     rolloutIntervalMinutes: Number(process.env.ROLLOUT_INTERVAL_MINUTES ?? 30),

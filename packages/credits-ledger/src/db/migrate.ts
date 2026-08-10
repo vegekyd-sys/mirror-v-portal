@@ -1,6 +1,7 @@
 import { query } from './pool.js';
 
 export async function migrate() {
+  // ── v1 tables ──
   await query(`
     CREATE TABLE IF NOT EXISTS credits_accounts (
       id                VARCHAR(64) PRIMARY KEY,
@@ -52,5 +53,93 @@ export async function migrate() {
     )
   `);
 
+  // ── v2 tables: Skill Pricing & Billing Events ──
+  await query(`
+    CREATE TABLE IF NOT EXISTS skill_prices (
+      skill_id        VARCHAR(128) PRIMARY KEY,
+      skill_name      VARCHAR(256) NOT NULL,
+      description     TEXT,
+      category        VARCHAR(64) NOT NULL,
+      credit_per_unit BIGINT NOT NULL,
+      billing_unit    VARCHAR(32) NOT NULL DEFAULT 'per_item',
+      status          VARCHAR(16) NOT NULL DEFAULT 'live',
+      sort_order      INTEGER NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_skill_prices_category ON skill_prices(category)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_skill_prices_status ON skill_prices(status)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS price_change_log (
+      id              SERIAL PRIMARY KEY,
+      skill_id        VARCHAR(128) NOT NULL,
+      old_credit      BIGINT,
+      new_credit      BIGINT NOT NULL,
+      changed_by      VARCHAR(64) NOT NULL DEFAULT 'admin',
+      reason          TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS skill_billing_events (
+      id              VARCHAR(64) PRIMARY KEY,
+      tenant_id       VARCHAR(64) NOT NULL,
+      task_id         VARCHAR(128),
+      skill_id        VARCHAR(128) NOT NULL,
+      skill_name      VARCHAR(256),
+      quantity        INTEGER NOT NULL DEFAULT 1,
+      credit_amount   BIGINT NOT NULL,
+      unit_price      BIGINT,
+      status          VARCHAR(16) NOT NULL DEFAULT 'estimated',
+      transaction_id  VARCHAR(64),
+      result_summary  TEXT,
+      metadata        JSONB DEFAULT '{}',
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_tenant ON skill_billing_events(tenant_id, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_skill ON skill_billing_events(skill_id, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_task ON skill_billing_events(task_id)`);
+
+  // ── Seed default skill prices if table is empty ──
+  const { rows: existingPrices } = await query('SELECT COUNT(*) as cnt FROM skill_prices');
+  if (Number(existingPrices[0].cnt) === 0) {
+    await seedDefaultPrices();
+  }
+
   console.log('Migrations complete');
+}
+
+async function seedDefaultPrices() {
+  const prices = [
+    // ── 一期收费 Skill（9 个）── 详见 docs/skill-pricing-v1.md
+    { skillId: 'dealclaw-find-buyers',           skillName: '搜索买家',               description: '按产品+国家+买家类型搜索匹配买家，含公司简介+官网+推荐理由',    category: 'buyer',      creditPerUnit: 300,    billingUnit: 'per_item',   sortOrder: 1 },
+    { skillId: 'dealclaw-analyze-company',        skillName: '企业画像分析',           description: '爬官网+AI分析产品线/市场定位/竞争力→写入知识库，反爬降级为访谈', category: 'insight',    creditPerUnit: 1200,   billingUnit: 'per_use',    sortOrder: 2 },
+    { skillId: 'dealclaw-market-insight',         skillName: '市场洞察报告',           description: '行业大盘+竞争格局+渠道机会+行动建议，可做整体扫描或单买家深挖',   category: 'insight',    creditPerUnit: 8000,   billingUnit: 'per_report', sortOrder: 3 },
+    { skillId: 'dealclaw-email-growth-send',      skillName: '批量开发信群发',         description: '批量生成个性化开发信→Resend群发→自动序列跟进',                  category: 'outreach',   creditPerUnit: 40,     billingUnit: 'per_email',  sortOrder: 4 },
+    { skillId: 'dealclaw-email-founder-direct',   skillName: '一对一精准开发信',       description: '深度个性化→SMTP创始人直达，日限15封',                            category: 'outreach',   creditPerUnit: 80,     billingUnit: 'per_email',  sortOrder: 5 },
+    { skillId: 'dealclaw-smart-reply',            skillName: '自动处理买家回复',       description: '监控买家回复→意图识别+询盘分类→生成建议回复/自动回复',          category: 'outreach',   creditPerUnit: 40,     billingUnit: 'per_reply',  sortOrder: 6 },
+    { skillId: 'dealclaw-exhibition-leads',       skillName: '展后线索处理',           description: '名片OCR/录音ASR→买家匹配→意向分级→展后跟进→写入线索池',        category: 'exhibition', creditPerUnit: 600,    billingUnit: 'per_person', sortOrder: 7 },
+    { skillId: 'dealclaw-exhibition-invitation',  skillName: '展会邀约',               description: '搜展会目标买家→生成个性化邀约文案→邮件发送',                    category: 'exhibition', creditPerUnit: 100,    billingUnit: 'per_person', sortOrder: 8 },
+    { skillId: 'dealclaw-lead-import',            skillName: '导入线索',               description: '上传Excel/CSV→AI列映射→去重→写入线索池，来源标记用户导入',      category: 'admin',      creditPerUnit: 100,    billingUnit: 'per_use',    sortOrder: 9 },
+
+    // ── 免费 Skill（3 个）── credit_per_unit = 0, 仅登记不扣费
+    { skillId: 'dealclaw-review',                 skillName: '画像偏好标注',           description: '用户对画像/买家标注✅❌→偏好晋升+双写知识库',                    category: 'admin',      creditPerUnit: 0,      billingUnit: 'per_use',    sortOrder: 50 },
+    { skillId: 'dealclaw-knowledge-base',         skillName: '知识库浏览',             description: '企业知识库三层浏览（首页+主题页+资料层）',                       category: 'admin',      creditPerUnit: 0,      billingUnit: 'per_use',    sortOrder: 51 },
+    { skillId: 'dealclaw-email-bindings',         skillName: '邮箱绑定',               description: '绑定代理邮箱→飞书群webhook，实现邮件通知',                       category: 'admin',      creditPerUnit: 0,      billingUnit: 'per_use',    sortOrder: 52 },
+  ];
+
+  for (const p of prices) {
+    await query(
+      `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, billing_unit, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (skill_id) DO NOTHING`,
+      [p.skillId, p.skillName, p.description, p.category, p.creditPerUnit, p.billingUnit, p.sortOrder]
+    );
+  }
+
+  console.log(`Seeded ${prices.length} default skill prices`);
 }

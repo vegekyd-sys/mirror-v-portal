@@ -3,6 +3,8 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import helmet from 'helmet';
 import { query } from './db/pool.js';
 import accountsRouter from './routes/accounts.js';
+import skillPricesRouter from './routes/skill-prices.js';
+import billingRouter from './routes/billing.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 export function createApp() {
@@ -88,6 +90,8 @@ export function createApp() {
   });
 
   app.use(accountsRouter);
+  app.use(skillPricesRouter);
+  app.use(billingRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ code: 'NOT_FOUND', message: 'Route not found' });

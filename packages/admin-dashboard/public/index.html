@@ -52,6 +52,7 @@ main { padding: 20px; max-width: 1400px; }
     <a href="#" data-page="credits">Credits</a>
     <a href="#" data-page="health">服务健康</a>
     <a href="#" data-page="audit">审计日志</a>
+    <a href="#" data-page="pricing">Skill 定价</a>
     <a href="#" data-page="orders">支付订单</a>
   </nav>
 </header>
@@ -60,6 +61,7 @@ main { padding: 20px; max-width: 1400px; }
   <div id="page-credits" class="page"></div>
   <div id="page-health" class="page"></div>
   <div id="page-audit" class="page"></div>
+  <div id="page-pricing" class="page"></div>
   <div id="page-orders" class="page"></div>
 </main>
 
@@ -158,6 +160,189 @@ async function loadAudit() {
     </tbody></table>`;
 }
 
+// Pricing
+let pricingData = null;
+let pricingFilter = '';
+
+async function loadPricing() {
+  if (!pricingData) {
+    const r = await fetch('/api/skill-prices');
+    pricingData = await r.json();
+  }
+  const { prices, summary } = pricingData;
+  const filtered = pricingFilter ? prices.filter((p: any) => p.category === pricingFilter || p.skillId.includes(pricingFilter) || p.skillName.includes(pricingFilter)) : prices;
+
+  document.getElementById('page-pricing').innerHTML = `
+    <div class="auto-refresh"><span class="refresh">🔄 每 30s 刷新</span> <button onclick="pricingData=null;loadPricing()" style="background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px">强制刷新</button></div>
+    <div class="stats">${(summary||[]).map((s: any) => `<div class="stat-card" style="cursor:pointer" onclick="pricingFilter='${s.category}';loadPricing()">
+      <div class="label">${s.category}</div>
+      <div class="value" style="font-size:20px">${s.liveCount}/${s.skillCount}</div>
+      <div style="font-size:11px;color:#8b949e">${(s.minPrice/1000).toFixed(1)}K–${(s.maxPrice/1000).toFixed(1)}K</div>
+    </div>`).join('')}
+    <div class="stat-card" style="cursor:pointer" onclick="pricingFilter='';loadPricing()">
+      <div class="label">全部 Skill</div>
+      <div class="value" style="font-size:20px">${prices.length}</div>
+    </div>
+    </div>
+    ${pricingFilter ? `<div class="filter-bar"><span style="color:#8b949e">筛选: <strong>${pricingFilter}</strong></span> <a href="#" onclick="pricingFilter='';loadPricing();return false">✕ 清除</a></div>` : ''}
+    <div class="filter-bar">
+      <input type="text" placeholder="搜索 Skill ID 或名称..." style="width:300px"
+        onkeyup="pricingFilter=this.value;loadPricing()">
+      <button onclick="showAddPriceForm()" style="background:#238636;color:#fff;border:none;padding:4px 14px;border-radius:6px;cursor:pointer;font-size:13px">+ 新增定价</button>
+    </div>
+    <div style="max-height:60vh;overflow-y:auto">
+    <table><thead><tr>
+      <th>Skill ID</th><th>名称</th><th>分类</th><th>Credit/单位</th><th>单位</th><th>状态</th><th>操作</th>
+    </tr></thead><tbody>
+    ${filtered.map((p: any) => {
+      const creditStr = p.creditPerUnit >= 10000 ? (p.creditPerUnit/1000).toFixed(0)+'K' :
+                        p.creditPerUnit >= 1000 ? (p.creditPerUnit/1000).toFixed(1)+'K' : p.creditPerUnit;
+      return `<tr>
+      <td><code style="font-size:11px">${he(p.skillId)}</code></td>
+      <td>${he(p.skillName)}</td>
+      <td><span class="badge" style="background:#1b2e3a;color:#58a6ff">${he(p.category)}</span></td>
+      <td style="font-weight:600;font-size:16px;color:${p.creditPerUnit>5000?'#f85149':p.creditPerUnit>1000?'#d29922':'#3fb950'}">${creditStr}</td>
+      <td style="font-size:11px;color:#8b949e">${he(p.billingUnit)}</td>
+      <td><span class="badge ${p.status}" style="background:${p.status==='live'?'#1b3a1b':p.status==='shadow'?'#1b2e3a':'#21262d'};color:${p.status==='live'?'#3fb950':p.status==='shadow'?'#58a6ff':'#8b949e'}">${p.status}</span></td>
+      <td>
+        <a href="#" onclick="editPrice('${p.skillId}',${p.creditPerUnit},'${p.skillName}','${p.category}','${p.billingUnit}','${p.status}','${(p.description||'').replace(/'/g,"\\'")}');return false" style="margin-right:8px">✏️</a>
+        <a href="#" onclick="viewHistory('${p.skillId}');return false">📋</a>
+      </td>
+    </tr>`}).join('')||'<tr><td colspan="7" style="text-align:center;color:#8b949e">无匹配结果</td></tr>'}
+    </tbody></table></div>`;
+}
+
+function showAddPriceForm() {
+  const form = `
+    <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:100">
+      <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px;width:480px;max-height:90vh;overflow-y:auto">
+        <h3 style="margin:0 0 16px">新增 Skill 定价</h3>
+        <div style="display:grid;gap:12px">
+          <div><label style="font-size:12px;color:#8b949e">Skill ID *</label><input id="pf_skillId" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px" placeholder="buyer.exhibition_basic"></div>
+          <div><label style="font-size:12px;color:#8b949e">名称 *</label><input id="pf_name" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px" placeholder="AI慧展基础买家推荐"></div>
+          <div><label style="font-size:12px;color:#8b949e">分类 *</label>
+            <select id="pf_category" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px">
+              <option value="buyer">buyer 买家</option><option value="content">content 内容</option><option value="outreach">outreach 触达</option>
+              <option value="video">video 视频</option><option value="insight">insight 洞察</option><option value="exhibition">exhibition 展会</option>
+              <option value="admin">admin 管理</option>
+            </select></div>
+          <div><label style="font-size:12px;color:#8b949e">Credit/单位 *</label><input id="pf_credit" type="number" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px" placeholder="100" min="0"></div>
+          <div><label style="font-size:12px;color:#8b949e">计费单位</label>
+            <select id="pf_unit" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px">
+              <option value="per_item">per_item</option><option value="per_person">per_person</option><option value="per_email">per_email</option>
+              <option value="per_report">per_report</option><option value="per_video">per_video</option><option value="per_minute">per_minute</option>
+              <option value="per_hour">per_hour</option><option value="per_month">per_month</option><option value="per_batch">per_batch</option>
+              <option value="per_use">per_use</option>
+            </select></div>
+          <div><label style="font-size:12px;color:#8b949e">描述</label><input id="pf_desc" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+          <button onclick="document.querySelector('[style*=\"position:fixed\"]').remove()" style="padding:6px 16px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;cursor:pointer">取消</button>
+          <button onclick="savePrice()" style="padding:6px 16px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer">保存</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', form);
+}
+
+async function editPrice(skillId, credit, name, cat, unit, status, desc) {
+  const form = `
+    <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:100">
+      <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px;width:480px">
+        <h3 style="margin:0 0 4px">编辑定价: ${he(name)}</h3>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:16px"><code>${he(skillId)}</code> — 当前: <strong>${credit.toLocaleString()} Credit</strong></div>
+        <div style="display:grid;gap:12px">
+          <div><label style="font-size:12px;color:#8b949e">新 Credit/单位 *</label>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+              <input id="pf_new" type="number" value="${credit}" style="flex:1;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:16px;font-weight:600" min="0">
+              <span style="font-size:11px;color:#8b949e">/${he(unit)}</span>
+            </div>
+          </div>
+          <div><label style="font-size:12px;color:#8b949e">状态</label>
+            <select id="pf_status" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px">
+              <option value="live" ${status==='live'?'selected':''}>live 启用</option>
+              <option value="shadow" ${status==='shadow'?'selected':''}>shadow 影子计费</option>
+              <option value="disabled" ${status==='disabled'?'selected':''}>disabled 禁用</option>
+            </select></div>
+          <div style="font-size:12px;color:#8b949e">差价: <span id="pf_diff" style="font-weight:600">0</span> Credit</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+          <button onclick="document.querySelector('[style*=\\"position:fixed\\"]').remove()" style="padding:6px 16px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;cursor:pointer">取消</button>
+          <button onclick="savePriceEdit('${skillId}','${name}','${cat}','${unit}')" style="padding:6px 16px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer">保存</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', form);
+  const inp = document.getElementById('pf_new') as HTMLInputElement;
+  inp.oninput = () => {
+    const diff = Number(inp.value) - credit;
+    const d = document.getElementById('pf_diff');
+    if (d) d.innerHTML = (diff>=0?'+'+(diff>=1000?(diff/1000).toFixed(1)+'K':diff):(diff<=-1000?(diff/1000).toFixed(1)+'K':String(diff))) + ' Credit';
+    if (d) d.style.color = diff>0?'#f85149':diff<0?'#3fb950':'#8b949e';
+  };
+}
+
+async function savePrice() {
+  const skillId = (document.getElementById('pf_skillId') as HTMLInputElement).value.trim();
+  const name = (document.getElementById('pf_name') as HTMLInputElement).value.trim();
+  const category = (document.getElementById('pf_category') as HTMLSelectElement).value;
+  const credit = Number((document.getElementById('pf_credit') as HTMLInputElement).value);
+  const unit = (document.getElementById('pf_unit') as HTMLSelectElement).value;
+  const desc = (document.getElementById('pf_desc') as HTMLInputElement).value.trim();
+  if (!skillId || !name || isNaN(credit)) return alert('请填写必填项');
+
+  const r = await fetch(`/api/skill-prices`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ skillId, skillName: name, category, creditPerUnit: credit, billingUnit: unit, description: desc || undefined }),
+  });
+  if (!r.ok) return alert('保存失败');
+  document.querySelector('[style*="position:fixed"]')?.remove();
+  pricingData = null;
+  loadPricing();
+}
+
+async function savePriceEdit(skillId: string, name: string, cat: string, unit: string) {
+  const credit = Number((document.getElementById('pf_new') as HTMLInputElement).value);
+  const status = (document.getElementById('pf_status') as HTMLSelectElement).value;
+  if (isNaN(credit)) return alert('请输入有效数字');
+
+  const r = await fetch(`/api/skill-prices`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ skillId, skillName: name, category: cat, creditPerUnit: credit, billingUnit: unit, status }),
+  });
+  if (!r.ok) return alert('保存失败');
+  document.querySelector('[style*="position:fixed"]')?.remove();
+  pricingData = null;
+  loadPricing();
+}
+
+async function viewHistory(skillId: string) {
+  const r = await fetch(`/api/skill-prices/${skillId}/history`);
+  const d = await r.json();
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:100';
+  overlay.innerHTML = `<div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px;width:520px;max-height:80vh;overflow-y:auto">
+    <h3 style="margin:0 0 4px">价格变更历史</h3>
+    <div style="font-size:11px;color:#8b949e;margin-bottom:16px"><code>${he(skillId)}</code></div>
+    <table><thead><tr><th>时间</th><th>旧价</th><th>新价</th><th>差价</th><th>操作人</th></tr></thead><tbody>
+    ${d.history?.map((h: any) => {
+      const diff = h.newCredit - (h.oldCredit||0);
+      return `<tr>
+        <td style="font-size:11px">${new Date(h.createdAt).toLocaleString()}</td>
+        <td>${h.oldCredit!=null?h.oldCredit.toLocaleString():'—'}</td>
+        <td style="font-weight:600">${h.newCredit.toLocaleString()}</td>
+        <td style="color:${diff>0?'#f85149':diff<0?'#3fb950':'#8b949e'}">${diff>0?'+':''}${diff.toLocaleString()}</td>
+        <td>${he(h.changedBy)}</td>
+      </tr>`}).join('')||'<tr><td colspan="5" style="color:#8b949e">暂无变更记录</td></tr>'}
+    </tbody></table>
+    <button onclick="this.closest('[style*=\"position:fixed\"]').remove()" style="margin-top:16px;padding:6px 16px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;cursor:pointer">关闭</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
 // Orders
 async function loadOrders() {
   const r = await fetch('/api/orders');
@@ -183,6 +368,7 @@ loadAll();
 setInterval(() => {
   if ($('.page.active#page-tenants')) loadTenants();
   if ($('.page.active#page-credits')) loadCredits();
+  if ($('.page.active#page-pricing')) loadPricing();
 }, 30000);
 setInterval(() => {
   if ($('.page.active#page-health')) loadHealth();

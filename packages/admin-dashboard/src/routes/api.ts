@@ -122,6 +122,51 @@ router.get('/api/audit', async (req, res) => {
   }
 });
 
+// ── Skill Pricing (proxy to credits-ledger) ──
+const CREDITS_LEDGER_URL = process.env.CREDITS_LEDGER_URL || 'http://localhost:8081';
+
+async function proxyToLedger(path: string, init?: RequestInit) {
+  const res = await fetch(`${CREDITS_LEDGER_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...init?.headers as Record<string,string> },
+    ...init,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+router.get('/api/skill-prices', async (_req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/skill-prices');
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    console.error('Proxy to credits-ledger failed:', err);
+    res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' });
+  }
+});
+
+router.get('/api/skill-prices/:skillId/history', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/skill-prices/${encodeURIComponent(req.params.skillId)}/history`);
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    console.error('Proxy to credits-ledger failed:', err);
+    res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' });
+  }
+});
+
+router.put('/api/skill-prices', async (req, res) => {
+  try {
+    const { skillId, ...rest } = req.body;
+    const result = await proxyToLedger(`/v1/skill-prices/${encodeURIComponent(skillId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(rest),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    console.error('Proxy to credits-ledger failed:', err);
+    res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' });
+  }
+});
+
 // GET /api/orders
 router.get('/api/orders', async (req, res) => {
   try {
