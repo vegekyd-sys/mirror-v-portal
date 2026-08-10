@@ -50,7 +50,7 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
   for (const target of targets) {
     const start = Date.now();
     try {
-      const body: BatchResponse = await callBatchDeploy(baseUrl, target);
+      const body: BatchResponse = await callBatchDeploy(baseUrl, target, config.provisioningApiToken);
       results.push({
         timestamp: new Date().toISOString(),
         service: target.service,
@@ -88,10 +88,13 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
   return results;
 }
 
-async function callBatchDeploy(baseUrl: string, target: RolloutTarget): Promise<BatchResponse> {
+async function callBatchDeploy(baseUrl: string, target: RolloutTarget, token: string): Promise<BatchResponse> {
   const res = await fetch(`${baseUrl}/v1/tenants/batch/deployment`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify({ service: target.service, image: target.image }),
     signal: AbortSignal.timeout(120_000),
   });

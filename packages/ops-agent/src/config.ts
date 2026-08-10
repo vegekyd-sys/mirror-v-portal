@@ -12,6 +12,8 @@ export interface OpsConfig {
   cronIntervalMinutes: number;
   /** Provisioning-service API URL for rollout */
   provisioningServiceUrl: string;
+  /** Auth token for provisioning-service API */
+  provisioningApiToken: string;
   /** Desired dealclaw-agent image tag for rollout */
   rolloutDealclawAgentTag?: string;
   /** Desired nexus-gateway image tag for rollout */
@@ -27,6 +29,7 @@ export function loadConfig(): OpsConfig {
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL ?? 'http://credits-ledger:8081',
     cronIntervalMinutes: Number(process.env.CRON_INTERVAL_MINUTES ?? 60),
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8082',
+    provisioningApiToken: required('PROVISIONING_API_TOKEN'),
     rolloutDealclawAgentTag: process.env.ROLLOUT_DEALCLAW_AGENT_TAG,
     rolloutNexusGatewayTag: process.env.ROLLOUT_NEXUS_GATEWAY_TAG,
     rolloutIntervalMinutes: Number(process.env.ROLLOUT_INTERVAL_MINUTES ?? 30),
