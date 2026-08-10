@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { listPlans, createCustomer, topupCredits, getCustomerSummary, listCustomers } from '../services/customer-admin.js';
+import { query } from '../db/pool.js';
 
 const router = Router();
 
@@ -102,6 +103,64 @@ router.post('/v1/admin/customers/:tenantId/topup', async (req, res) => {
     res.json({
       ...result,
       message: `已充值 ${amount.toLocaleString()} Credit，余额 ${result.balanceBefore?.toLocaleString()} → ${result.balanceAfter?.toLocaleString()}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// POST /v1/admin/customers/:tenantId/renew — renewal/续费 with plan-based pricing
+router.post('/v1/admin/customers/:tenantId/renew', async (req, res) => {
+  try {
+    const { creditAmount, reason } = req.body;
+    if (!creditAmount || creditAmount <= 0) {
+      res.status(400).json({ code: 'VALIDATION', message: 'creditAmount must be positive' });
+      return;
+    }
+
+    const tenantId = req.params.tenantId;
+    const accountId = `acct_${tenantId}`;
+
+    // Get customer's plan for pricing
+    const { rows } = await query(
+      'SELECT plan_id, plan_tier, id FROM credits_accounts WHERE tenant_id = $1 OR id = $2',
+      [tenantId, `acct_${tenantId}`]
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Customer not found' });
+      return;
+    }
+
+    const planId = rows[0].plan_id || 'start';
+    const planResult = await query('SELECT * FROM plan_templates WHERE plan_id = $1', [planId]);
+    const plan = planResult.rows[0];
+
+    // Calculate price
+    const blocksOf100k = creditAmount / 100000;
+    const pricePer100k = plan ? Number(plan.renewal_price_per_100k) : 1000;
+    const discount = plan ? Number(plan.renewal_discount) : 1.0;
+    const estimatedCost = Math.round(blocksOf100k * pricePer100k);
+
+    const result = await topupCredits({
+      tenantId,
+      amount: creditAmount,
+      reason: reason || `续费充值（${plan?.plan_name || planId} 套餐，${blocksOf100k.toFixed(1)} 个 100K 块）`,
+    });
+
+    if (!result.ok) {
+      res.status(404).json(result);
+      return;
+    }
+
+    res.json({
+      ...result,
+      planTier: plan?.plan_name || planId,
+      pricePer100k,
+      discount,
+      estimatedCost,
+      creditAmount,
+      message: `续费成功！¥${estimatedCost.toLocaleString()} → ${creditAmount.toLocaleString()} Credit（${plan?.plan_name || planId} 套餐 ${Math.round((1-discount)*100)}% off）`,
     });
   } catch (err) {
     console.error(err);
@@ -235,8 +294,16 @@ async function executeVCommand(command: string): Promise<{ ok: boolean; action: 
 }
 
 function nameToTenantId(name: string): string {
-  // Pinyin/simple slug: remove spaces, lowercase
-  return name.replace(/\s+/g, '_').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  // Keep alphanumeric, Chinese chars, replace spaces/special with underscore
+  const cleaned = name.replace(/\s+/g, '_').replace(/[^\w一-鿿]/g, '');
+  // If result is mostly Chinese, use first 2 chars + hash
+  if (/[一-鿿]/.test(cleaned) && cleaned.replace(/[a-z0-9_]/g, '').length > cleaned.length / 2) {
+    // Chinese name: use pinyin approximation or just hash
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash) + name.charCodeAt(i);
+    return 'client_' + Math.abs(hash).toString(36).slice(0, 8);
+  }
+  return cleaned.toLowerCase().replace(/[^a-z0-9_]/g, '') || 'client_' + Date.now().toString(36);
 }
 
 function formatCustomerCard(s: any): string {

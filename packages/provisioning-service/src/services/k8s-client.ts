@@ -31,7 +31,7 @@ function isInCluster(): boolean {
   return _k8sToken !== null;
 }
 
-async function k8sRequest(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
+async function k8sRequest(method: string, path: string, body?: unknown, contentType?: string): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
   if (!isInCluster() || !_k8sBaseUrl || !_k8sToken) {
     return { ok: false, status: 0, body: null, error: 'not in cluster' };
   }
@@ -42,7 +42,7 @@ async function k8sRequest(method: string, path: string, body?: unknown): Promise
       method,
       headers: {
         'Authorization': `Bearer ${_k8sToken}`,
-        'Content-Type': 'application/json',
+        'Content-Type': contentType ?? 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(15_000),
@@ -309,6 +309,7 @@ export async function patchDeploymentImage(spec: PatchImageSpec): Promise<void> 
     'PATCH',
     `/apis/apps/v1/namespaces/${spec.namespace}/deployments/${spec.name}`,
     body,
+    'application/strategic-merge-patch+json',
   );
 
   if (!res.ok) {

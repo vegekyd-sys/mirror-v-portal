@@ -110,11 +110,14 @@ export async function topupCredits(params: {
   amount: number;
   reason?: string;
 }): Promise<{ ok: boolean; balanceBefore?: number; balanceAfter?: number; error?: string }> {
-  const accountId = `acct_${params.tenantId}`;
-  const { rows } = await query('SELECT balance FROM credits_accounts WHERE id = $1', [accountId]);
+  const { rows } = await query(
+    'SELECT balance, id FROM credits_accounts WHERE tenant_id = $1 OR id = $2',
+    [params.tenantId, `acct_${params.tenantId}`]
+  );
   if (rows.length === 0) return { ok: false, error: 'Account not found' };
 
   const balanceBefore = Number(rows[0].balance);
+  const accountId = rows[0].id;
   const balanceAfter = balanceBefore + params.amount;
 
   await query(
@@ -136,14 +139,13 @@ export async function topupCredits(params: {
 
 /** Get customer summary with consumption stats */
 export async function getCustomerSummary(tenantId: string) {
-  const accountId = `acct_${tenantId}`;
   const { rows } = await query(
     `SELECT a.*,
             (SELECT COUNT(*) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled') as total_tasks,
             (SELECT COALESCE(SUM(credit_amount), 0) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled') as total_consumed,
             (SELECT COALESCE(SUM(credit_amount), 0) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled' AND created_at > NOW() - INTERVAL '30 days') as consumed_30d
-     FROM credits_accounts a WHERE a.id = $2`,
-    [tenantId, accountId]
+     FROM credits_accounts a WHERE a.tenant_id = $2 OR a.id = $3`,
+    [tenantId, tenantId, `acct_${tenantId}`]
   );
 
   if (rows.length === 0) return null;

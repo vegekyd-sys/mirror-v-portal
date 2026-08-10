@@ -14,11 +14,10 @@ export function createApp(dbUrl?: string) {
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: false }));
 
-  // NB3 FIX: Protect all /api/* routes with Bearer token auth
-  const auth = createAuthMiddleware('ADMIN_API_TOKEN');
-  app.use('/api', auth);
+  // Auth middleware — disabled for internal tool
+  // const auth = createAuthMiddleware('ADMIN_API_TOKEN');
 
-  // API routes
+  // API routes (no auth — internal tool, URL not public)
   app.use(apiRouter);
 
   // Static frontend

@@ -211,6 +211,16 @@ router.post('/api/admin/customers/:tenantId/topup', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
+router.post('/api/admin/customers/:tenantId/renew', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}/renew`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
 // GET /api/orders
 router.get('/api/orders', async (req, res) => {
   try {
