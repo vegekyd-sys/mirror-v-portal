@@ -21,7 +21,8 @@ interface BatchResponse {
   updated: number;
   total: number;
   failed: number;
-  results?: Array<{ tenantId: string; ok: boolean; error?: string }>;
+  skipped?: number;
+  results?: Array<{ tenantId: string; ok: boolean; skipped?: boolean; error?: string }>;
   code?: string;
   message?: string;
 }
@@ -60,6 +61,12 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
         failed: body.failed ?? 0,
         durationMs: Date.now() - start,
       });
+
+      // Log skipped tenants (deployment not found)
+      const skipped = (body.results ?? []).filter(r => r.skipped);
+      if (skipped.length > 0) {
+        console.log(`[rollout] ${target.service}: ${skipped.length} tenants skipped (deployment not present)`);
+      }
 
       // Log per-tenant results
       const failures = (body.results ?? []).filter(r => !r.ok);

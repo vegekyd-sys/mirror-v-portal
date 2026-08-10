@@ -401,7 +401,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const { patchDeploymentImage } = await import('../services/k8s-client.js');
-      const results: Array<{ tenantId: string; deployment: string; ok: boolean; error?: string }> = [];
+      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; error?: string }> = [];
 
       for (const row of rows) {
         const deploymentName = `${service}-${row.tenant_id}`;
@@ -410,12 +410,28 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
         } catch (err: unknown) {
           const e = err as any;
-          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, error: e.message });
+          const msg = e.message || String(e);
+          // 404 = deployment doesn't exist for this tenant (e.g. older tenants without nexus-gateway)
+          const skipped = /404|not found/i.test(msg);
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped, error: msg });
+          if (!skipped) {
+            console.error(`[batch-rollout] ${deploymentName}: ${msg}`);
+          }
         }
       }
 
       const successCount = results.filter(r => r.ok).length;
-      res.json({ ok: true, updated: successCount, total: rows.length, failed: rows.length - successCount, service, image: fullImage, results });
+      const skippedCount = results.filter(r => r.skipped).length;
+      res.json({
+        ok: true,
+        updated: successCount,
+        total: rows.length,
+        failed: rows.length - successCount - skippedCount,
+        skipped: skippedCount,
+        service,
+        image: fullImage,
+        results,
+      });
     } catch (err: unknown) {
       const e = err as any;
       console.error('Batch deployment update failed:', e);
