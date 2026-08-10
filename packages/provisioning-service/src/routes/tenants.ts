@@ -6,6 +6,19 @@ import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
+
+  const registry = config.imageRegistry;
+
+  /** Construct full docker image from tag-only or short references */
+  function normalizeImage(service: string, img: string): string {
+    if (img.includes('/')) return img; // already full path like registry/service:tag
+    if (img.includes(':')) {
+      // Short form like repo:tag — prepend registry/
+      return `${registry}/${service}:${img.split(':').pop()}`;
+    }
+    // Plain tag — construct full image
+    return `${registry}/${service}:${img}`;
+  }
   const router = Router();
 
   // NB2 FIX: Apply Bearer token auth to all tenant routes
@@ -319,8 +332,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
         return;
       }
-      if (!image || typeof image !== 'string' || !image.includes(':')) {
-        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a valid docker image (name:tag)' });
+      if (!image || typeof image !== 'string') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a non-empty string' });
         return;
       }
 
@@ -337,9 +350,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
 
       const { k8s_namespace: namespace } = rows[0];
       const deploymentName = `${service}-${tenantId}`;
+      const fullImage = normalizeImage(service, image);
 
       const { patchDeploymentImage } = await import('../services/k8s-client.js');
-      await patchDeploymentImage({ namespace, name: deploymentName, image });
+      await patchDeploymentImage({ namespace, name: deploymentName, image: fullImage });
 
       await pool.query(
         `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)`,
@@ -351,7 +365,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         tenantId,
         service,
         deployment: deploymentName,
-        image,
+        image: fullImage,
         action: 'rolling_update',
       });
     } catch (err: unknown) {
@@ -370,10 +384,12 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
         return;
       }
-      if (!image || typeof image !== 'string' || !image.includes(':')) {
-        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a valid docker image (name:tag)' });
+      if (!image || typeof image !== 'string') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'image must be a non-empty string' });
         return;
       }
+
+      const fullImage = normalizeImage(service, image);
 
       const { rows } = await pool.query(
         `SELECT tenant_id, k8s_namespace FROM tenants WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL`,
@@ -390,7 +406,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       for (const row of rows) {
         const deploymentName = `${service}-${row.tenant_id}`;
         try {
-          await patchDeploymentImage({ namespace: row.k8s_namespace, name: deploymentName, image });
+          await patchDeploymentImage({ namespace: row.k8s_namespace, name: deploymentName, image: fullImage });
           results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
         } catch (err: unknown) {
           const e = err as any;
@@ -399,7 +415,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const successCount = results.filter(r => r.ok).length;
-      res.json({ ok: true, updated: successCount, total: rows.length, failed: rows.length - successCount, service, image, results });
+      res.json({ ok: true, updated: successCount, total: rows.length, failed: rows.length - successCount, service, image: fullImage, results });
     } catch (err: unknown) {
       const e = err as any;
       console.error('Batch deployment update failed:', e);

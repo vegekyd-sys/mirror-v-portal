@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DealClaw Nexus Admin</title>
+<title>小元管理后台</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; font-size: 14px; }
@@ -46,7 +46,7 @@ main { padding: 20px; max-width: 1400px; }
 </head>
 <body>
 <header>
-  <h1>⚡ DealClaw Nexus</h1>
+  <h1>⚡ 小元管理后台</h1>
   <nav>
     <a href="#" data-page="tenants" class="active">租户总览</a>
     <a href="#" data-page="credits">Credits</a>
@@ -66,6 +66,44 @@ main { padding: 20px; max-width: 1400px; }
 </main>
 
 <script>
+// Auth: redirect to login if no token
+const BASE = window.location.pathname.startsWith('/admin') ? '/admin' : '';
+const TOKEN = localStorage.getItem('dealclaw_admin_token');
+if (!TOKEN) {
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,sans-serif"><div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:380px;text-align:center"><h1 style="font-size:24px;margin:0 0 8px">⚡ 小元管理后台</h1><p style="color:#8b949e;font-size:14px;margin-bottom:24px">技能定价 · 客户管理 · Credit 运营</p><input id="loginToken" type="password" placeholder="输入管理员 Token" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9;font-size:14px;margin-bottom:12px;box-sizing:border-box"><button onclick="login()" style="width:100%;padding:10px;border-radius:8px;border:none;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:14px;font-weight:600;cursor:pointer">登录</button><p id="loginError" style="color:#f85149;font-size:13px;margin-top:12px;display:none"></p></div></div>';
+}
+
+function login() {
+  const t = document.getElementById('loginToken').value.trim();
+  if (!t) return;
+  fetch(BASE + '/api/auth/verify', { headers: { Authorization: 'Bearer ' + t } })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        localStorage.setItem('dealclaw_admin_token', t);
+        location.reload();
+      } else {
+        document.getElementById('loginError').style.display = 'block';
+        document.getElementById('loginError').textContent = 'Token 错误，请重试';
+      }
+    })
+    .catch(() => {
+      document.getElementById('loginError').style.display = 'block';
+      document.getElementById('loginError').textContent = '网络错误';
+    });
+}
+
+// Wrapper for authenticated fetch
+async function authFetch(url, opts = {}) {
+  const headers = { ...opts.headers, 'Authorization': 'Bearer ' + TOKEN };
+  const res = await fetch(BASE + url, { ...opts, headers });
+  if (res.status === 401) {
+    localStorage.removeItem('dealclaw_admin_token');
+    window.location.href = BASE + '/login';
+  }
+  return res;
+}
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 
@@ -82,7 +120,7 @@ $$('nav a').forEach(a => {
 
 // Tenants
 async function loadTenants() {
-  const r = await fetch('/api/tenants');
+  const r = await authFetch('/api/tenants');
   const { tenants, stats } = await r.json();
   document.getElementById('page-tenants').innerHTML = `
     <div class="auto-refresh"><span class="refresh">🔄 每 30s 刷新</span></div>
@@ -106,7 +144,7 @@ function he(s) { return String(s||'').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'
 
 // Credits
 async function loadCredits() {
-  const r = await fetch('/api/credits/summary');
+  const r = await authFetch('/api/credits/summary');
   const d = await r.json();
   document.getElementById('page-credits').innerHTML = `
     <div class="auto-refresh"><span class="refresh">🔄 每 30s 刷新</span></div>
@@ -126,7 +164,7 @@ async function loadCredits() {
 
 // Health
 async function loadHealth() {
-  const r = await fetch('/api/health');
+  const r = await authFetch('/api/health');
   const d = await r.json();
   const dbOk = d.central?.database?.healthy;
   document.getElementById('page-health').innerHTML = `
@@ -143,7 +181,7 @@ async function loadHealth() {
 
 // Audit
 async function loadAudit() {
-  const r = await fetch('/api/audit?limit=50');
+  const r = await authFetch('/api/audit?limit=50');
   const d = await r.json();
   document.getElementById('page-audit').innerHTML = `
     <div class="stats" style="grid-template-columns:repeat(4,1fr)">
@@ -166,7 +204,7 @@ let pricingFilter = '';
 
 async function loadPricing() {
   if (!pricingData) {
-    const r = await fetch('/api/skill-prices');
+    const r = await authFetch('/api/skill-prices');
     pricingData = await r.json();
   }
   const { prices, summary } = pricingData;
@@ -345,7 +383,7 @@ async function viewHistory(skillId: string) {
 
 // Orders
 async function loadOrders() {
-  const r = await fetch('/api/orders');
+  const r = await authFetch('/api/orders');
   const d = await r.json();
   document.getElementById('page-orders').innerHTML = `
     <table><thead><tr><th>订单 ID</th><th>租户</th><th>商品</th><th>金额</th><th>状态</th><th>支付时间</th></tr></thead><tbody>

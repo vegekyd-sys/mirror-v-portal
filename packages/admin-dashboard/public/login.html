@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>DealClaw — 管理后台</title>
+<title>小元管理后台</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -59,8 +59,8 @@
 </head>
 <body>
 <div class="login-card">
-  <h1>DealClaw Admin</h1>
-  <p class="subtitle">运维管理后台</p>
+  <h1>小元管理后台</h1>
+  <p class="subtitle">技能定价 · 客户管理 · Credit 运营</p>
 
   <form id="loginForm">
     <div class="field">
@@ -75,6 +75,7 @@
 </div>
 
 <script>
+const BASE = window.location.pathname.startsWith('/admin') ? '/admin' : '';
 const form = document.getElementById('loginForm');
 const btn = document.getElementById('loginBtn');
 const errorEl = document.getElementById('errorMsg');
@@ -98,7 +99,7 @@ form.addEventListener('submit', async (e) => {
     const ok = await verifyToken(token);
     if (ok) {
       localStorage.setItem('dealclaw_admin_token', token);
-      window.location.href = '/';
+      window.location.href = (BASE || '') + '/app';
     } else {
       showError('Token 验证失败，请检查后重试');
     }
@@ -112,7 +113,8 @@ form.addEventListener('submit', async (e) => {
 
 async function verifyToken(token) {
   try {
-    const res = await fetch('/api/tenants', {
+    const BASE = window.location.pathname.startsWith('/admin') ? '/admin' : '';
+      const res = await fetch(BASE + '/api/auth/verify', {
       headers: { Authorization: 'Bearer ' + token },
       signal: AbortSignal.timeout(5000),
     });

@@ -53,6 +53,47 @@ export async function migrate() {
     )
   `);
 
+  // ── v1.5: Plan Templates ──
+  await query(`
+    CREATE TABLE IF NOT EXISTS plan_templates (
+      plan_id         VARCHAR(32) PRIMARY KEY,
+      plan_name       VARCHAR(64) NOT NULL,
+      tier            VARCHAR(16) NOT NULL,
+      annual_fee_yuan INTEGER NOT NULL,
+      initial_credit  BIGINT NOT NULL,
+      seats_min       INTEGER NOT NULL DEFAULT 1,
+      seats_max       INTEGER NOT NULL DEFAULT 3,
+      renewal_discount DECIMAL(3,2) NOT NULL DEFAULT 1.00,
+      renewal_price_per_100k INTEGER NOT NULL,
+      monthly_allowance BIGINT NOT NULL DEFAULT 0,
+      features        TEXT,
+      sort_order      INTEGER NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Seed plan templates if empty
+  const { rows: plans } = await query('SELECT COUNT(*) as cnt FROM plan_templates');
+  if (Number(plans[0].cnt) === 0) {
+    await query(`
+      INSERT INTO plan_templates (plan_id, plan_name, tier, annual_fee_yuan, initial_credit, seats_min, seats_max, renewal_discount, renewal_price_per_100k, monthly_allowance, features, sort_order)
+      VALUES
+        ('start',  'Start 启航版', 'start',  19800, 500000,   1,  3,  1.00, 1000, 0,        '标准 Skill 全量可用;基础权限;标准支持', 1),
+        ('growth', 'Growth 成长版','growth', 39800, 1500000,  4, 10,  0.90, 900,  0,        '团队协作;部门额度;基础数据/系统连接', 2),
+        ('ultra',  'Ultra 规模版', 'ultra',  88000, 5000000, 11, 30,  0.80, 800,  0,        '多级权限;预算控制;优先队列;客户成功服务', 3),
+        ('enterprise', 'Enterprise 企业版', 'enterprise', 0, 0, 30, 999, 0.75, 700, 0, '专属环境;SLA;私有化/复杂集成;按需报价', 4)
+    `);
+    console.log('Seeded 4 plan templates');
+  }
+
+  // Extend credits_accounts with customer metadata
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS company_name VARCHAR(128)`);
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS contact_name VARCHAR(64)`);
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS contact_email VARCHAR(128)`);
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMPTZ`);
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMPTZ`);
+  await query(`ALTER TABLE credits_accounts ADD COLUMN IF NOT EXISTS plan_id VARCHAR(32)`);
+
   // ── v2 tables: Skill Pricing & Billing Events ──
   await query(`
     CREATE TABLE IF NOT EXISTS skill_prices (

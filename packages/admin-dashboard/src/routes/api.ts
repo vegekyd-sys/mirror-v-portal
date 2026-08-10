@@ -167,6 +167,50 @@ router.put('/api/skill-prices', async (req, res) => {
   }
 });
 
+// ── Customer Admin (proxy to credits-ledger) ──
+
+router.get('/api/admin/plans', async (_req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/plans');
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/api/admin/customers', async (req, res) => {
+  try {
+    const status = req.query.status ? `?status=${req.query.status}` : '';
+    const result = await proxyToLedger(`/v1/admin/customers${status}`);
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/api/admin/customers/:tenantId', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}`);
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/customers', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/customers', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/customers/:tenantId/topup', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}/topup`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
 // GET /api/orders
 router.get('/api/orders', async (req, res) => {
   try {

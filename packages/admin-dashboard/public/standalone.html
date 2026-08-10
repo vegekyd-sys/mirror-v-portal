@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小元管理后台 v3</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+    min-height: 100vh; display: flex; justify-content: center; align-items: center;
+    padding: 20px; color: #e0e0e0;
+  }
+  .login-card {
+    background: rgba(255,255,255,0.06); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
+    padding: 40px 32px; max-width: 380px; width: 100%;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.4);
+  }
+  .login-card h1 {
+    text-align: center; font-size: 24px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .login-card .subtitle {
+    text-align: center; font-size: 13px; color: #666; margin-bottom: 28px;
+  }
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block; font-size: 13px; color: #999; margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%; padding: 11px 14px; border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.05); color: #e0e0e0;
+    font-size: 15px; outline: none; transition: border-color 0.2s;
+  }
+  .field input:focus { border-color: #6366f1; }
+  .field input::placeholder { color: #555; }
+  button {
+    width: 100%; padding: 12px; border-radius: 12px; border: none;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+    margin-top: 8px; transition: opacity 0.2s;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .error {
+    background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 10px; padding: 10px 14px; margin-top: 16px;
+    font-size: 13px; color: #fca5a5; display: none;
+  }
+  .error.show { display: block; }
+  .info {
+    text-align: center; font-size: 12px; color: #555; margin-top: 20px;
+  }
+</style>
+<style>
+.dashboard { display: none; }
+.dashboard.show { display: block; }
+.login-box { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #0d1117; }
+.login-box.hide { display: none; }
+#main-content { padding: 20px; max-width: 1400px; }
+</style>
+</head>
+<body>
+<div id="loginSection" class="login-box">
+  <div class="login-card">
+    <h1>⚡ 小元管理后台</h1>
+    <p class="subtitle">技能定价 · 客户管理 · Credit 运营</p>
+    <form id="loginForm">
+      <div class="field">
+        <label>管理员 Token</label>
+        <input id="token" type="password" placeholder="输入管理员 Token" autocomplete="off">
+      </div>
+      <button type="submit" id="loginBtn">登录</button>
+    </form>
+    <div class="error" id="errorMsg"></div>
+    <p class="info">仅限 DealClaw 运维团队使用</p>
+  </div>
+</div>
+
+<div id="dashboardSection" class="dashboard">
+  <header style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #21262d;background:#161b22">
+    <h1 style="font-size:20px;color:#f0f6fc">⚡ 小元管理后台</h1>
+    <nav id="tabs" style="display:flex;gap:4px">
+      <a href="#" data-page="customers" class="active">租户总览</a>
+      <a href="#" data-page="credits">Credits</a>
+      <a href="#" data-page="pricing">Skill 定价</a>
+      <a href="#" data-page="plans">套餐模板</a>
+    </nav>
+  </header>
+  <div id="main-content">
+    <div id="page-customers" class="page active"></div>
+    <div id="page-credits" class="page"></div>
+    <div id="page-pricing" class="page"></div>
+    <div id="page-plans" class="page"></div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.pathname.startsWith('/admin') ? '/admin' : '';
+let TOKEN = null;
+
+// ===== LOGIN =====
+const loginForm = document.getElementById('loginForm');
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const t = document.getElementById('token').value.trim();
+  if (!t) return;
+  document.getElementById('loginBtn').disabled = true;
+  document.getElementById('loginBtn').textContent = '验证中...';
+  try {
+    const url = BASE + '/api/auth/verify';
+    const res = await fetch(url, { headers: { Authorization: '***' + t } });
+    const data = await res.json();
+    if (data.ok) {
+      TOKEN = t;
+      document.getElementById('loginSection').classList.add('hide');
+      document.getElementById('dashboardSection').classList.add('show');
+      loadAll();
+    } else {
+      document.getElementById('errorMsg').textContent = 'Token 错误';
+      document.getElementById('errorMsg').classList.add('show');
+    }
+  } catch (e) {
+    document.getElementById('errorMsg').textContent = '网络错误: ' + (e.message || '无法连接服务器');
+    document.getElementById('errorMsg').classList.add('show');
+  }
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').textContent = '登录';
+});
+
+// ===== TABS =====
+document.querySelectorAll('#tabs a').forEach(a => {
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.querySelectorAll('#tabs a').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const page = document.getElementById('page-' + a.dataset.page);
+    if (page) page.classList.add('active');
+    if (a.dataset.page === 'customers') loadCustomers();
+    if (a.dataset.page === 'credits') loadCredits();
+    if (a.dataset.page === 'pricing') loadPricing();
+    if (a.dataset.page === 'plans') loadPlans();
+  });
+});
+
+async function af(url, opts = {}) {
+  const res = await fetch(BASE + url, { ...opts, headers: { ...opts.headers, Authorization: '***' + TOKEN } });
+  if (res.status === 401) location.reload();
+  return res;
+}
+
+// ===== CUSTOMERS =====
+async function loadCustomers() {
+  const r = await af('/api/admin/customers');
+  const d = await r.json();
+  const c = d.customers || [];
+  const s = d.stats || {};
+  document.getElementById('page-customers').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0">
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">客户数</div><div style="font-size:28px;font-weight:700;color:#58a6ff">${s.total||0}</div></div>
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">总余额</div><div style="font-size:28px;font-weight:700;color:#3fb950">${((s.totalBalance||0)/1000).toFixed(0)}K</div></div>
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">总消耗</div><div style="font-size:28px;font-weight:700">${((s.totalConsumed||0)/1000).toFixed(0)}K</div></div>
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">余额告警</div><div style="font-size:28px;font-weight:700;color:${(s.lowBalance||0)>0?'#f85149':'#3fb950'}">${s.lowBalance||0}</div></div>
+    </div>
+    <div style="margin:12px 0">
+      <button onclick="showCreateCustomer()" style="background:#238636;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">+ 创建客户</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#8b949e;font-size:13px">
+      <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">客户</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">套餐</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">余额</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">已消耗</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">状态</th>
+    </tr></thead><tbody>
+    ${c.map(x => `<tr style="border-bottom:1px solid #21262d">
+      <td style="padding:8px 12px">${x.companyName||x.tenantId}</td>
+      <td style="padding:8px 12px">${x.planTier}</td>
+      <td style="padding:8px 12px;color:${x.balance<50000?'#f85149':'#3fb950'}">${(x.balance/1000).toFixed(0)}K</td>
+      <td style="padding:8px 12px">${(x.totalConsumed/1000).toFixed(0)}K</td>
+      <td style="padding:8px 12px">${x.status==='active'?'🟢':'⏸️'}</td>
+    </tr>`).join('')||'<tr><td colspan="5" style="padding:16px;text-align:center;color:#8b949e">暂无客户，点击上方按钮创建</td></tr>'}
+    </tbody></table>`;
+}
+
+function showCreateCustomer() {
+  const html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:100">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px;width:420px">
+      <h3 style="margin:0 0 16px">创建客户</h3>
+      <div style="display:grid;gap:10px">
+        <div><label style="font-size:12px;color:#8b949e">公司名</label><input id="cf_name" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px;box-sizing:border-box"></div>
+        <div><label style="font-size:12px;color:#8b949e">套餐</label><select id="cf_plan" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;font-size:13px;margin-top:4px;box-sizing:border-box"><option value="start">Start 启航版 — 500K</option><option value="growth">Growth 成长版 — 1,500K</option><option value="ultra">Ultra 规模版 — 5,000K</option></select></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+        <button onclick="this.closest('[style*=fixed]').remove()" style="padding:6px 16px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;cursor:pointer">取消</button>
+        <button onclick="createCustomer()" style="padding:6px 16px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer">创建</button>
+      </div>
+    </div></div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function createCustomer() {
+  const name = document.getElementById('cf_name').value.trim();
+  const plan = document.getElementById('cf_plan').value;
+  if (!name) return alert('请输入公司名');
+  await af('/api/admin/customers', { method:'POST', body: JSON.stringify({ tenantId: name.toLowerCase().replace(/\s+/g,'_'), companyName: name, planId: plan }), headers:{'Content-Type':'application/json'} });
+  document.querySelector('[style*=fixed]')?.remove();
+  loadCustomers();
+}
+
+// ===== PLANS =====
+async function loadPlans() {
+  const r = await af('/api/admin/plans');
+  const d = await r.json();
+  const plans = d.plans || [];
+  document.getElementById('page-plans').innerHTML = `
+    <h2 style="margin:12px 0">套餐模板</h2>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#8b949e;font-size:13px">
+      <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">套餐</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">年费</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">初始 Credit</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">续充/100K</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">席位</th>
+    </tr></thead><tbody>
+    ${plans.map(p => `<tr style="border-bottom:1px solid #21262d">
+      <td style="padding:8px 12px;font-weight:600">${p.planName}</td>
+      <td style="padding:8px 12px">¥${p.annualFeeYuan.toLocaleString()}</td>
+      <td style="padding:8px 12px;color:#3fb950">${(p.initialCredit/1000).toFixed(0)}K</td>
+      <td style="padding:8px 12px">¥${p.renewalPricePer100k} (${Math.round((1-p.renewalDiscount)*100)}% off)</td>
+      <td style="padding:8px 12px">${p.seatsMin}-${p.seatsMax}</td>
+    </tr>`).join('')}
+    </tbody></table>`;
+}
+
+// ===== PRICING =====
+let pricingData = null;
+async function loadPricing() {
+  if (!pricingData) { const r = await af('/api/skill-prices'); pricingData = await r.json(); }
+  const prices = pricingData.prices || [];
+  const summary = pricingData.summary || [];
+  document.getElementById('page-pricing').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:16px 0">
+    ${summary.map(s => `<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px">
+      <div style="font-size:12px;color:#8b949e">${s.category}</div>
+      <div style="font-size:20px;font-weight:700">${s.liveCount}/${s.skillCount}</div>
+      <div style="font-size:11px;color:#8b949e">${(s.minPrice/1000).toFixed(1)}K-${(s.maxPrice/1000).toFixed(1)}K</div>
+    </div>`).join('')}
+    </div>
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#8b949e;font-size:13px">
+      <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">Skill ID</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">名称</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">Credit</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #21262d">状态</th>
+    </tr></thead><tbody>
+    ${prices.map(p => `<tr style="border-bottom:1px solid #21262d">
+      <td style="padding:8px 12px"><code style="font-size:11px">${p.skillId}</code></td>
+      <td style="padding:8px 12px">${p.skillName}</td>
+      <td style="padding:8px 12px;font-weight:600;color:${p.creditPerUnit>5000?'#f85149':'#3fb950'}">${p.creditPerUnit.toLocaleString()}</td>
+      <td style="padding:8px 12px"><span style="padding:2px 8px;border-radius:12px;font-size:11px;background:${p.status==='live'?'#1b3a1b':'#1b2e3a'};color:${p.status==='live'?'#3fb950':'#58a6ff'}">${p.status}</span></td>
+    </tr>`).join('')}
+    </tbody></table>`;
+}
+
+// ===== CREDITS =====
+async function loadCredits() {
+  const r = await af('/api/credits/summary');
+  const d = await r.json();
+  document.getElementById('page-credits').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0">
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">总余额</div><div style="font-size:28px;font-weight:700;color:#3fb950">${((d.totalBalance||0)/1000000).toFixed(1)}M</div></div>
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">本月消耗</div><div style="font-size:28px;font-weight:700">${((d.totalMonthlyConsumed||0)/1000).toFixed(0)}K</div></div>
+      <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px"><div style="font-size:12px;color:#8b949e">余额告警</div><div style="font-size:28px;font-weight:700;color:${(d.lowBalanceTenants||0)>0?'#f85149':'#3fb950'}">${d.lowBalanceTenants||0}</div></div>
+    </div>`;
+}
+
+function loadAll() { loadCustomers(); }
+</script>
+</body>
+</html>
