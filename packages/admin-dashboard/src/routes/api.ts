@@ -264,6 +264,45 @@ router.post('/api/admin/customers/:tenantId/unfreeze', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
+// ── Customer Credit Query (lightweight, shared-secret auth) ──
+// Used by customer-facing web page to show balance without admin login
+
+router.get('/api/public/credit/:tenantId', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const expectedToken = process.env.PUBLIC_QUERY_TOKEN || '小元-balance-check-2026';
+    if (token !== expectedToken) {
+      res.status(401).json({ code: 'UNAUTHORIZED' });
+      return;
+    }
+
+    const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}`);
+    if (result.status === 404) {
+      res.status(404).json({ code: 'NOT_FOUND', message: '租户不存在' });
+      return;
+    }
+
+    // Return a slimmed-down version for customer display
+    const d = result.body;
+    res.json({
+      companyName: d.companyName,
+      availableBalance: d.availableBalance,
+      balance: d.balance,
+      frozenCredits: d.frozenCredits,
+      frozenReason: d.frozenReason,
+      lifetimeConsumed: d.lifetimeConsumed,
+      planTier: d.planTier,
+      planName: d.planName,
+      status: d.status,
+      subscriptionEnd: d.subscriptionEnd,
+      liveConsumed: d.liveConsumed,
+      shadowConsumed: d.shadowConsumed,
+    });
+  } catch (err) {
+    res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' });
+  }
+});
+
 // GET /api/orders
 router.get('/api/orders', async (req, res) => {
   try {
