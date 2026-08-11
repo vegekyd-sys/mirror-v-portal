@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getPool, query } from '../db/pool.js';
-import { getSkillPrice, estimateCost } from './skill-pricing.js';
+import { getSkillPrice } from './skill-pricing.js';
 import { debit } from './account.js';
 
 export interface BillableAction {
@@ -18,6 +18,7 @@ export interface BillingResult {
   eventId?: string;
   estimatedCredit?: number;
   actualCredit?: number;
+  billingMode?: 'live' | 'shadow';
   skillName?: string;
   unitPrice?: number;
   isDefault?: boolean;
@@ -32,25 +33,29 @@ export interface BillingResult {
  */
 export async function estimateBilling(action: BillableAction): Promise<BillingResult> {
   try {
-    const cost = await estimateCost(action.skillId, action.quantity);
+    const price = await getSkillPrice(action.skillId);
+    if (!price) return { ok: false, error: `Unknown skill: ${action.skillId}`, code: 'UNKNOWN_SKILL' };
+
+    const totalCredit = price.creditPerUnit * action.quantity;
+    const billingMode = price.pricingStatus; // 'live' or 'shadow'
     const eventId = randomUUID();
-    const idempotencyKey = action.idempotencyKey ?? `${action.tenantId}_est_${action.skillId}_${Date.now()}`;
 
     await query(
-      `INSERT INTO skill_billing_events (id, tenant_id, task_id, skill_id, skill_name, quantity, credit_amount, unit_price, status, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'estimated', $9)
+      `INSERT INTO skill_billing_events (id, tenant_id, task_id, skill_id, skill_name, quantity, credit_amount, unit_price, status, billing_mode, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'estimated', $9, $10)
        ON CONFLICT DO NOTHING`,
-      [eventId, action.tenantId, action.taskId ?? null, action.skillId, cost.skillName,
-       action.quantity, cost.totalCredit, cost.unitPrice, JSON.stringify(action.metadata ?? {})]
+      [eventId, action.tenantId, action.taskId ?? null, action.skillId, price.skillName,
+       action.quantity, totalCredit, price.creditPerUnit, billingMode, JSON.stringify(action.metadata ?? {})]
     );
 
     return {
       ok: true,
       eventId,
-      estimatedCredit: cost.totalCredit,
-      skillName: cost.skillName,
-      unitPrice: cost.unitPrice,
-      isDefault: cost.isDefault,
+      estimatedCredit: totalCredit,
+      billingMode: billingMode,
+      skillName: price.skillName,
+      unitPrice: price.creditPerUnit,
+      isDefault: price.isDefault,
     };
   } catch (err) {
     console.error('[billing-hook] estimate failed:', err);
@@ -78,6 +83,32 @@ export async function settleBilling(action: BillableAction & {
     if (!price) return { ok: false, error: `Unknown skill: ${skillId}`, code: 'UNKNOWN_SKILL' };
 
     const totalCredit = price.creditPerUnit * quantity;
+
+    // ── Shadow billing: update event only, NO debit ──
+    if (price.pricingStatus === 'shadow') {
+      await query(
+        `UPDATE skill_billing_events
+         SET status = 'settled',
+             billing_mode = 'shadow',
+             credit_amount = $1,
+             result_summary = $2
+         WHERE id = $3`,
+        [totalCredit, resultSummary ?? null, estimatedEventId]
+      );
+
+      return {
+        ok: true,
+        eventId: estimatedEventId,
+        actualCredit: 0, // shadow — no actual charge
+        estimatedCredit: totalCredit,
+        billingMode: 'shadow',
+        skillName: price.skillName,
+        unitPrice: price.creditPerUnit,
+        isDefault: price.isDefault,
+      };
+    }
+
+    // ── Live billing: debit credits normally ──
     const idempotencyKey = action.idempotencyKey ??
       `${accountId}_settle_${estimatedEventId}`;
 
@@ -110,6 +141,7 @@ export async function settleBilling(action: BillableAction & {
       await query(
         `UPDATE skill_billing_events
          SET status = 'settled',
+             billing_mode = 'live',
              transaction_id = $1,
              result_summary = $2,
              credit_amount = $3
@@ -122,6 +154,7 @@ export async function settleBilling(action: BillableAction & {
       ok: true,
       eventId: estimatedEventId,
       actualCredit: totalCredit,
+      billingMode: 'live',
       skillName: price.skillName,
       unitPrice: price.creditPerUnit,
       isDefault: price.isDefault,
@@ -144,9 +177,17 @@ export async function canAfford(
   const price = await getSkillPrice(skillId);
   if (!price) return { canAfford: false, estimatedCredit: 0, balance: 0 };
 
+  const pool = getPool();
+
+  // Shadow-priced skills never deduct, so they're always "affordable"
+  if (price.pricingStatus === 'shadow') {
+    const { rows } = await pool.query('SELECT balance FROM credits_accounts WHERE id = $1', [accountId]);
+    const balance = rows.length > 0 ? Number(rows[0].balance) : 0;
+    return { canAfford: true, estimatedCredit: 0, balance };
+  }
+
   const estimatedCredit = price.creditPerUnit * quantity;
 
-  const pool = getPool();
   const { rows } = await pool.query(
     'SELECT balance FROM credits_accounts WHERE id = $1',
     [accountId]
@@ -194,9 +235,11 @@ export async function getBillingEvents(params: {
     skillId: r.skill_id,
     skillName: r.skill_name,
     quantity: r.quantity,
+    credit: Number(r.credit_amount),
     creditAmount: Number(r.credit_amount),
     unitPrice: r.unit_price ? Number(r.unit_price) : null,
     status: r.status,
+    billingMode: r.billing_mode || 'live',
     transactionId: r.transaction_id,
     resultSummary: r.result_summary,
     createdAt: r.created_at,
@@ -212,6 +255,8 @@ export async function getTenantBillingSummary(tenantId: string) {
        COUNT(*) as total_events,
        SUM(CASE WHEN status = 'settled' THEN credit_amount ELSE 0 END) as total_consumed,
        SUM(CASE WHEN status = 'estimated' THEN credit_amount ELSE 0 END) as total_estimated,
+       SUM(CASE WHEN status = 'settled' AND billing_mode = 'live' THEN credit_amount ELSE 0 END) as live_consumed,
+       SUM(CASE WHEN status = 'settled' AND billing_mode = 'shadow' THEN credit_amount ELSE 0 END) as shadow_consumed,
        COUNT(DISTINCT skill_id) as unique_skills
      FROM skill_billing_events
      WHERE tenant_id = $1 AND created_at > NOW() - INTERVAL '30 days'`,
@@ -224,6 +269,8 @@ export async function getTenantBillingSummary(tenantId: string) {
     totalEvents: Number(r.total_events),
     totalConsumed: Number(r.total_consumed ?? 0),
     totalEstimated: Number(r.total_estimated ?? 0),
+    liveConsumed: Number(r.live_consumed ?? 0),
+    shadowConsumed: Number(r.shadow_consumed ?? 0),
     uniqueSkills: Number(r.unique_skills),
   };
 }

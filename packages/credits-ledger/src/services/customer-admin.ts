@@ -16,7 +16,7 @@ export interface PlanTemplate {
   features: string | null;
 }
 
-function rowToPlan(r: any): PlanTemplate {
+export function rowToPlan(r: any): PlanTemplate {
   return {
     planId: r.plan_id,
     planName: r.plan_name,
@@ -167,6 +167,9 @@ export async function getCustomerSummary(tenantId: string) {
       seatsRange: `${plan.seatsMin}-${plan.seatsMax}`,
     } : null,
     balance: Number(r.balance),
+    frozenCredits: Number(r.frozen_credits ?? 0),
+    availableBalance: Number(r.balance) - Number(r.frozen_credits ?? 0),
+    frozenReason: r.frozen_reason ?? null,
     monthlyAllowance: Number(r.monthly_allowance),
     monthlyUsed: Number(r.monthly_used),
     lifetimeCredited: Number(r.lifetime_credited),
@@ -179,6 +182,52 @@ export async function getCustomerSummary(tenantId: string) {
     consumed30d: Number(r.consumed_30d),
     updatedAt: r.updated_at,
   };
+}
+
+/** Upsert a plan template */
+export async function upsertPlan(params: {
+  planId: string;
+  planName: string;
+  tier: string;
+  annualFeeYuan: number;
+  initialCredit: number;
+  seatsMin?: number;
+  seatsMax?: number;
+  renewalDiscount?: number;
+  renewalPricePer100k: number;
+  monthlyAllowance?: number;
+  features?: string;
+  sortOrder?: number;
+}): Promise<PlanTemplate> {
+  const { rows } = await query(
+    `INSERT INTO plan_templates (plan_id, plan_name, tier, annual_fee_yuan, initial_credit, seats_min, seats_max,
+       renewal_discount, renewal_price_per_100k, monthly_allowance, features, sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (plan_id) DO UPDATE SET
+       plan_name = EXCLUDED.plan_name,
+       tier = EXCLUDED.tier,
+       annual_fee_yuan = EXCLUDED.annual_fee_yuan,
+       initial_credit = EXCLUDED.initial_credit,
+       seats_min = EXCLUDED.seats_min,
+       seats_max = EXCLUDED.seats_max,
+       renewal_discount = EXCLUDED.renewal_discount,
+       renewal_price_per_100k = EXCLUDED.renewal_price_per_100k,
+       monthly_allowance = EXCLUDED.monthly_allowance,
+       features = EXCLUDED.features,
+       sort_order = EXCLUDED.sort_order
+     RETURNING *`,
+    [params.planId, params.planName, params.tier, params.annualFeeYuan, params.initialCredit,
+     params.seatsMin ?? 1, params.seatsMax ?? 3,
+     params.renewalDiscount ?? 1.0, params.renewalPricePer100k,
+     params.monthlyAllowance ?? 0, params.features ?? null, params.sortOrder ?? 0]
+  );
+  return rowToPlan(rows[0]);
+}
+
+/** Delete (disable) a plan template */
+export async function deletePlan(planId: string): Promise<boolean> {
+  const { rowCount } = await query('DELETE FROM plan_templates WHERE plan_id = $1', [planId]);
+  return (rowCount ?? 0) > 0;
 }
 
 /** List all customers */
@@ -207,6 +256,9 @@ export async function listCustomers(status?: string) {
     planTier: r.plan_tier,
     planId: r.plan_id,
     balance: Number(r.balance),
+    frozenCredits: Number(r.frozen_credits ?? 0),
+    availableBalance: Number(r.balance) - Number(r.frozen_credits ?? 0),
+    frozenReason: r.frozen_reason ?? null,
     monthlyAllowance: Number(r.monthly_allowance),
     monthlyUsed: Number(r.monthly_used),
     lifetimeConsumed: Number(r.lifetime_consumed),

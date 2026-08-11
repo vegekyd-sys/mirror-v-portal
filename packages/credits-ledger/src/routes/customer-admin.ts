@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listPlans, createCustomer, topupCredits, getCustomerSummary, listCustomers } from '../services/customer-admin.js';
+import { listPlans, upsertPlan, deletePlan, createCustomer, topupCredits, getCustomerSummary, listCustomers } from '../services/customer-admin.js';
 import { query } from '../db/pool.js';
 
 const router = Router();
@@ -17,6 +17,50 @@ router.get('/v1/admin/plans', async (_req, res) => {
   }
 });
 
+// POST /v1/admin/plans — create or update a plan
+router.post('/v1/admin/plans', async (req, res) => {
+  try {
+    const { planId, planName, tier, annualFeeYuan, initialCredit, seatsMin, seatsMax,
+            renewalDiscount, renewalPricePer100k, monthlyAllowance, features, sortOrder } = req.body;
+    if (!planId || !planName || !tier || !annualFeeYuan || !initialCredit || !renewalPricePer100k) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'planId, planName, tier, annualFeeYuan, initialCredit, renewalPricePer100k are required',
+      });
+      return;
+    }
+    const plan = await upsertPlan({
+      planId, planName, tier,
+      annualFeeYuan: Number(annualFeeYuan),
+      initialCredit: Number(initialCredit),
+      seatsMin, seatsMax,
+      renewalDiscount: renewalDiscount != null ? Number(renewalDiscount) : undefined,
+      renewalPricePer100k: Number(renewalPricePer100k),
+      monthlyAllowance: monthlyAllowance != null ? Number(monthlyAllowance) : undefined,
+      features, sortOrder,
+    });
+    res.json({ ok: true, plan });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// DELETE /v1/admin/plans/:planId — delete a plan
+router.delete('/v1/admin/plans/:planId', async (req, res) => {
+  try {
+    const ok = await deletePlan(req.params.planId);
+    if (!ok) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Plan not found' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
 // ── Customer Management ──
 
 // GET /v1/admin/customers — list all customers
@@ -25,13 +69,16 @@ router.get('/v1/admin/customers', async (req, res) => {
     const customers = await listCustomers(req.query.status as string | undefined);
     // Stats
     const stats = customers.reduce((acc: any, c) => {
-      acc[c.status] = (acc[c.status] || 0) + 1;
-      if (c.balance < 50000 && c.status === 'active') acc.lowBalance = (acc.lowBalance || 0) + 1;
+      if (c.status === 'active') {
+        acc.active = (acc.active || 0) + 1;
+        acc.totalBalance = (acc.totalBalance || 0) + c.balance;
+        acc.totalConsumed = (acc.totalConsumed || 0) + (c.lifetimeConsumed || 0);
+        if (c.balance < 50000) acc.lowBalance = (acc.lowBalance || 0) + 1;
+      }
       return acc;
     }, {});
     stats.total = customers.length;
-    stats.totalBalance = customers.reduce((s: number, c: any) => s + c.balance, 0);
-    stats.totalConsumed = customers.reduce((s: number, c: any) => s + c.totalConsumed, 0);
+    stats.closed = customers.filter(c => c.status === 'closed').length;
 
     res.json({ customers, stats });
   } catch (err) {
@@ -40,7 +87,7 @@ router.get('/v1/admin/customers', async (req, res) => {
   }
 });
 
-// GET /v1/admin/customers/:tenantId — customer detail
+// GET /v1/admin/customers/:tenantId — customer detail (full audit trail)
 router.get('/v1/admin/customers/:tenantId', async (req, res) => {
   try {
     const summary = await getCustomerSummary(req.params.tenantId);
@@ -48,7 +95,136 @@ router.get('/v1/admin/customers/:tenantId', async (req, res) => {
       res.status(404).json({ code: 'NOT_FOUND', message: 'Customer not found' });
       return;
     }
-    res.json(summary);
+
+    const accountId = `acct_${req.params.tenantId}`;
+
+    // All transactions (debit + credit + freeze + unfreeze)
+    const { rows: allTxns } = await query(
+      `SELECT id, type, amount, balance_before, balance_after, reference, description, category, created_at
+       FROM credits_transactions
+       WHERE account_id = $1
+       ORDER BY created_at DESC LIMIT 100`,
+      [accountId]
+    );
+
+    // Shadow billing events (estimated & settled, only shadow-priced skills)
+    const { rows: estEvents } = await query(
+      `SELECT id, skill_id, skill_name, credit_amount, quantity, status, billing_mode, result_summary, created_at
+       FROM skill_billing_events
+       WHERE tenant_id = $1
+       ORDER BY created_at DESC LIMIT 100`,
+      [req.params.tenantId]
+    );
+
+    // Live billing events only (for live aggregation)
+    const { rows: liveEvents } = await query(
+      `SELECT id, skill_id, skill_name, credit_amount, quantity, status, created_at
+       FROM skill_billing_events
+       WHERE tenant_id = $1 AND billing_mode = 'live'
+       ORDER BY created_at DESC LIMIT 500`,
+      [req.params.tenantId]
+    );
+
+    // Shadow billing events only (for shadow aggregation)
+    const { rows: shadowEvents } = await query(
+      `SELECT id, skill_id, skill_name, credit_amount, quantity, status, created_at
+       FROM skill_billing_events
+       WHERE tenant_id = $1 AND billing_mode = 'shadow'
+       ORDER BY created_at DESC LIMIT 500`,
+      [req.params.tenantId]
+    );
+
+    // Daily consumption aggregation (live billing only)
+    // Use AT TIME ZONE to correct UTC→Asia/Shanghai date boundaries
+    const { rows: dailyConsumption } = await query(
+      `SELECT DATE(created_at AT TIME ZONE 'Asia/Shanghai') as day,
+              COALESCE(skill_name, skill_id) as skill,
+              SUM(credit_amount) as total_credit,
+              COUNT(*) as call_count
+       FROM skill_billing_events
+       WHERE tenant_id = $1 AND status = 'settled' AND billing_mode = 'live'
+       GROUP BY DATE(created_at AT TIME ZONE 'Asia/Shanghai'), COALESCE(skill_name, skill_id)
+       ORDER BY day DESC LIMIT 60`,
+      [req.params.tenantId]
+    );
+
+    // Daily totals (for chart, live billing only)
+    const { rows: dailyTotals } = await query(
+      `SELECT DATE(created_at AT TIME ZONE 'Asia/Shanghai') as day,
+              SUM(credit_amount) as total
+       FROM skill_billing_events
+       WHERE tenant_id = $1 AND status = 'settled' AND billing_mode = 'live'
+       GROUP BY DATE(created_at AT TIME ZONE 'Asia/Shanghai')
+       ORDER BY day DESC LIMIT 30`,
+      [req.params.tenantId]
+    );
+
+    // Aggregate by skill from live billing events (settled)
+    const liveBreakdown: Record<string, number> = {};
+    for (const e of liveEvents) {
+      if (e.status !== 'settled') continue;
+      const key = e.skill_name || e.skill_id;
+      liveBreakdown[key] = (liveBreakdown[key] || 0) + Number(e.credit_amount);
+    }
+
+    // Shadow billing aggregation (shadow-priced skills only)
+    const shadowBreakdown: Record<string, number> = {};
+    for (const e of shadowEvents) {
+      if (e.status !== 'settled') continue;
+      const key = e.skill_name || e.skill_id;
+      shadowBreakdown[key] = (shadowBreakdown[key] || 0) + Number(e.credit_amount);
+    }
+
+    res.json({
+      ...summary,
+      // Full audit trail
+      auditLog: allTxns.map((t: any) => ({
+        id: t.id,
+        type: t.type,
+        amount: Number(t.amount),
+        balanceBefore: Number(t.balance_before),
+        balanceAfter: Number(t.balance_after),
+        reference: t.reference,
+        description: t.description,
+        category: t.category,
+        time: t.created_at,
+        source: 'credits_transactions (DB)',
+      })),
+      // Billing events (with billing mode)
+      billingEvents: estEvents.map((e: any) => ({
+        id: e.id,
+        skillId: e.skill_id,
+        skillName: e.skill_name,
+        credit: Number(e.credit_amount),
+        quantity: e.quantity,
+        status: e.status,
+        billingMode: e.billing_mode || 'live',
+        resultSummary: e.result_summary,
+        time: e.created_at,
+        source: 'skill_billing_events (Agent实时写入)',
+      })),
+      // Aggregations
+      liveBreakdown,       // 正式计费：settled live billing events 按 Skill 汇总
+      skillBreakdown: liveBreakdown,  // 向后兼容别名（旧前端引用）
+      shadowBreakdown,     // 影子计费：settled shadow billing events 按 Skill 汇总（不扣费）
+      liveConsumed: Object.values(liveBreakdown).reduce((s, v) => s + v, 0),
+      shadowConsumed: Object.values(shadowBreakdown).reduce((s, v) => s + v, 0),
+      dailyConsumption: dailyConsumption.map((d: any) => ({
+        day: d.day instanceof Date ? d.day.toISOString().slice(0, 10) : String(d.day).slice(0, 10),
+        skill: d.skill,
+        totalCredit: Number(d.total_credit),
+        callCount: Number(d.call_count),
+      })),
+      dailyTotals: dailyTotals.map((d: any) => ({
+        day: d.day instanceof Date ? d.day.toISOString().slice(0, 10) : String(d.day).slice(0, 10),
+        total: Number(d.total),
+      })),
+      dataSources: {
+        transactions: 'credits_transactions — 扣费/充值记录 (T+1回填)',
+        billingEvents: 'skill_billing_events — Agent Skill调用后实时写入 (~1s延迟)',
+        dailyConsumption: '按日汇总 aggregating skill_billing_events WHERE settled',
+      },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ code: 'INTERNAL' });

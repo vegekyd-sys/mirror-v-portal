@@ -8,6 +8,7 @@ export interface SkillPrice {
   creditPerUnit: number;
   billingUnit: string;
   status: 'live' | 'shadow' | 'disabled';
+  billingMode: 'live' | 'shadow' | 'disabled';
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -22,6 +23,7 @@ function rowToSkillPrice(r: any): SkillPrice {
     creditPerUnit: Number(r.credit_per_unit),
     billingUnit: r.billing_unit,
     status: r.status,
+    billingMode: r.status,
     sortOrder: Number(r.sort_order),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -48,6 +50,7 @@ export async function getSkillPrice(skillId: string): Promise<{
   creditPerUnit: number;
   billingUnit: string;
   category: string;
+  pricingStatus: 'live' | 'shadow';
   isDefault: boolean;
 } | null> {
   const { rows } = await query(
@@ -62,6 +65,7 @@ export async function getSkillPrice(skillId: string): Promise<{
       creditPerUnit: p.creditPerUnit,
       billingUnit: p.billingUnit,
       category: p.category,
+      pricingStatus: p.status === 'shadow' ? 'shadow' : 'live',
       isDefault: false,
     };
   }
@@ -76,6 +80,7 @@ export async function getSkillPrice(skillId: string): Promise<{
     creditPerUnit: defaultCredit,
     billingUnit: 'per_item',
     category,
+    pricingStatus: 'live' as const,
     isDefault: true,
   };
 }
