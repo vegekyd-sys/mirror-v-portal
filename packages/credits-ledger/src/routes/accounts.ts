@@ -1,8 +1,11 @@
 import { Router } from 'express';
 import {
   getBalance,
+  getAccountFull,
   debit,
   credit,
+  freezeCredits,
+  unfreezeCredits,
   getHistory,
   getUsage,
 } from '../services/account.js';
@@ -123,6 +126,80 @@ router.get('/v1/accounts/:accountId/history', async (req, res) => {
       to: req.query.to as string,
       limit: req.query.limit ? Number(req.query.limit) : 50,
     });
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL', message: 'Internal server error' });
+  }
+});
+
+// GET /v1/accounts/:accountId/full — includes frozen, available, lifetime stats
+router.get('/v1/accounts/:accountId/full', async (req, res) => {
+  try {
+    const result = await getAccountFull(req.params.accountId);
+    if (!result) {
+      res.status(404).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Account not found' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL', message: 'Internal server error' });
+  }
+});
+
+// POST /v1/accounts/:accountId/freeze — reserve credits for guaranteed delivery
+router.post('/v1/accounts/:accountId/freeze', async (req, res) => {
+  try {
+    const { amount, reason, reference } = req.body;
+    if (!amount || !reason) {
+      res.status(400).json({ code: 'VALIDATION', message: 'amount and reason are required' });
+      return;
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      res.status(400).json({ code: 'VALIDATION', message: 'amount must be a positive number' });
+      return;
+    }
+    const result = await freezeCredits({
+      accountId: req.params.accountId,
+      amount: Math.floor(amount),
+      reason,
+      reference: reference ?? `freeze_${Date.now()}`,
+    });
+    if (!result.ok) {
+      const status = result.code === 'INSUFFICIENT_AVAILABLE' ? 402 : 404;
+      res.status(status).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL', message: 'Internal server error' });
+  }
+});
+
+// POST /v1/accounts/:accountId/unfreeze — release reserved credits
+router.post('/v1/accounts/:accountId/unfreeze', async (req, res) => {
+  try {
+    const { amount, reason, reference } = req.body;
+    if (!amount || !reason) {
+      res.status(400).json({ code: 'VALIDATION', message: 'amount and reason are required' });
+      return;
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      res.status(400).json({ code: 'VALIDATION', message: 'amount must be a positive number' });
+      return;
+    }
+    const result = await unfreezeCredits({
+      accountId: req.params.accountId,
+      amount: Math.floor(amount),
+      reason,
+      reference: reference ?? `unfreeze_${Date.now()}`,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
     res.json(result);
   } catch (err) {
     console.error(err);

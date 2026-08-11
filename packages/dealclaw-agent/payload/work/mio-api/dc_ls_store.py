@@ -117,13 +117,13 @@ class LeadStore:
             from dc_degrade import degrade
             degrade.decide("audit_write", enterprise=enterprise)
 
-    def _learn_from_annotate(self, enterprise, lead):
+    def _learn_from_annotate(self, enterprise, lead, promote_long_term=False):
         """标注反哺买家画像"""
         if not enterprise:
             return
         try:
             from dc_customer_import import learn_from_annotate
-            learn_from_annotate(enterprise, lead)
+            learn_from_annotate(enterprise, lead, promote_long_term=promote_long_term)
         except Exception:
             pass
 
@@ -195,7 +195,8 @@ class LeadStore:
         return "created"
 
     def annotate(self, identifier: str, user_open_id: str, status: str,
-                 reason: Optional[str] = None, enterprise: str = "") -> bool:
+                 reason: Optional[str] = None, enterprise: str = "",
+                 promote_long_term: bool = False) -> bool:
         """
         标注一条线索。
         
@@ -224,12 +225,18 @@ class LeadStore:
                 if reason:
                     lead["exclude_reason"] = reason
                 self._save_leads()
-                self._update_preferences_from_lead(lead, user_open_id)
+                self._update_preferences_from_lead(
+                    lead, user_open_id, promote_long_term=promote_long_term
+                )
                 self._audit_log("lead.annotate", user_open_id, enterprise, identifier,
                                 f"{lead.get('status','?')} | 理由: {reason or '无'}",
                                 before=lead.get("status",""), after=lead.get("status",""))
                 # 反哺买家画像
-                self._learn_from_annotate(enterprise, lead)
+                self._learn_from_annotate(
+                    enterprise, lead, promote_long_term=promote_long_term
+                )
+                # ── 同步 buyer_profile_state ──
+                self._update_state_from_annotate(enterprise, user_open_id, status, lead)
                 return True
         return False
 
@@ -295,12 +302,15 @@ class LeadStore:
 
     # ── 偏好回传 ──────────────────────────────────────
 
-    def _update_preferences_from_lead(self, lead: dict, user_open_id: str):
-        """根据标注更新用户偏好"""
+    def _update_preferences_from_lead(self, lead: dict, user_open_id: str,
+                                      promote_long_term: bool = False):
+        """记录偏好证据；只有明确长期表达才晋升排除规则。"""
         if user_open_id not in self._prefs:
             self._prefs[user_open_id] = {
                 "排除国家": [],
                 "排除规则": [],
+                "排除候选": [],
+                "偏好候选": [],
                 "偏好标签": {},
                 "updated_at": None,
             }
@@ -311,30 +321,48 @@ class LeadStore:
         country = lead.get("country")
 
         if status == "我的买家":
-            if country:
+            if promote_long_term and country:
                 prefs["偏好标签"][country] = prefs["偏好标签"].get(country, 0) + 1
+            else:
+                candidate = {
+                    "type": "positive_example",
+                    "country": country,
+                    "source_company": lead.get("company_name"),
+                }
+                if candidate not in prefs.setdefault("偏好候选", []):
+                    prefs["偏好候选"].append(candidate)
 
         elif status == "不是我的买家":
             rule = {"type": reason or "其他", "source_company": lead.get("company_name")}
             if reason == "规模不匹配" and lead.get("company_size"):
                 rule["size_threshold"] = lead["company_size"]
-            if reason == "区域不覆盖" and country:
-                prefs["排除国家"].append(country)
-            prefs["排除规则"].append(rule)
+            if promote_long_term:
+                if reason == "区域不覆盖" and country and country not in prefs["排除国家"]:
+                    prefs["排除国家"].append(country)
+                if rule not in prefs["排除规则"]:
+                    prefs["排除规则"].append(rule)
+            elif rule not in prefs.setdefault("排除候选", []):
+                prefs["排除候选"].append(rule)
 
         elif status == "已有买家":
-            prefs["排除规则"].append({
+            # 这是单条线索状态，不是可泛化的长期买家偏好。
+            candidate = {
                 "type": "has_supplier",
                 "source_company": lead.get("company_name"),
                 "remind_after_months": 6,
-            })
+            }
+            if candidate not in prefs.setdefault("排除候选", []):
+                prefs["排除候选"].append(candidate)
 
         elif status == "黑名单买家":
-            prefs["排除规则"].append({
+            candidate = {
                 "type": "blacklist",
                 "domain": lead.get("domain"),
                 "source_company": lead.get("company_name"),
-            })
+            }
+            target = prefs["排除规则"] if promote_long_term else prefs.setdefault("排除候选", [])
+            if candidate not in target:
+                target.append(candidate)
         
         prefs["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._save_prefs()
@@ -344,6 +372,8 @@ class LeadStore:
         return self._prefs.get(user_open_id, {
             "排除国家": [],
             "排除规则": [],
+            "排除候选": [],
+            "偏好候选": [],
             "偏好标签": {},
             "updated_at": None,
         })
@@ -362,6 +392,53 @@ class LeadStore:
         if status:
             leads = [l for l in leads if l.get("status") == status]
         return sorted(leads, key=lambda l: l.get("annotated_at") or l.get("created_at", ""), reverse=True)
+
+    def _update_state_from_annotate(self, enterprise: str, user_open_id: str,
+                                     status: str, lead: dict):
+        """
+        标注后同步更新 buyer_profile_state。
+
+        规则:
+          - ✅ 买家 → positive_examples +1
+          - ❌ 买家 → negative_examples +1（不永久排除）
+          - ⏸️ → 暂存，不影响长期偏好
+          - 单条内部标注不推进对话轮次；自然语言整轮由 dc_feedback 结算
+        """
+        try:
+            from dc_buyer_state import BuyerState
+            bs = BuyerState()
+            domain = normalize_domain(lead.get("domain", ""))
+            country = lead.get("country", "")
+
+            if status == "我的买家":
+                bs.add_example(enterprise, user_open_id,
+                               f"{domain or lead.get('company_name','')} ({country})",
+                               positive=True)
+            elif status in ("不是我的买家", "黑名单买家"):
+                bs.add_example(enterprise, user_open_id,
+                               f"{domain or lead.get('company_name','')}",
+                               positive=False)
+                # 不直接永久排除，只写 negative_examples
+                # 排除晋升由 dc_evolution 的 repeated negatives 驱动
+                # 或用户明确说「以后不要这类」才调用 add_learned_rule
+            elif status == "排除":
+                # 跳过/暂存标注不影响长期偏好
+                pass
+
+        except Exception:
+            pass
+
+    def get_review_stats(self, enterprise: str, user_open_id: str = "") -> dict:
+        """Get cumulative annotation stats for diagnostics; not a dialogue round."""
+        ent = normalize_domain(enterprise)
+        leads = [l for l in self._leads
+                 if normalize_domain(l.get("enterprise", "")) == ent
+                 and (not user_open_id or l.get("user_open_id") == user_open_id)
+                 and l.get("status") != "待处理"]
+        total = len(leads)
+        positive = sum(1 for l in leads if l.get("status") == "我的买家")
+        negative = total - positive
+        return {"total": total, "positive": positive, "negative": negative}
 
     def get_enterprise_leads(self, enterprise: str) -> list[dict]:
         """获取某企业下的所有线索（老板隐式视角）。不需要 user_open_id。"""

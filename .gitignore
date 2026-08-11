@@ -7,3 +7,6 @@ dist/
 coverage/
 .next/
 .turbo/
+__pycache__/
+*.pyc
+**/email_gateway/data/*.sqlite3*

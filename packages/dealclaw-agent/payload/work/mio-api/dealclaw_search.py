@@ -111,6 +111,12 @@ JSON，含 summary(气泡摘要) + records(表格数据) + pagination + gate_rep
 """
 
 import argparse
+
+# Shadow billing: log credit estimation without deducting (内测期)
+try:
+    from dc_billing import billing
+except ImportError:
+    billing = None
 import hashlib
 import hmac
 import json
@@ -684,6 +690,84 @@ def split_ints(raw: Optional[str], name: str) -> Optional[list]:
         sys.exit(1)
 
 
+def _buyer_type_text(record: dict) -> str:
+    attrs = record.get("companyAttributes") or []
+    if isinstance(attrs, str):
+        attrs = [attrs]
+    return " ".join([
+        *[str(v) for v in attrs],
+        str(record.get("companyName", "")),
+        str(record.get("companyProfile", "")),
+        str(record.get("buyerIntroduce", "")),
+    ]).lower()
+
+
+def _buyer_type_aliases(label: str) -> list[str]:
+    aliases = {
+        "品牌商": ["品牌商", "品牌", "brand", "brand owner"],
+        "分销商": ["分销商", "经销商", "distributor", "distribution"],
+        "经销商": ["分销商", "经销商", "distributor", "distribution"],
+        "零售商": ["零售商", "retailer", "retail chain"],
+        "进口商": ["进口商", "importer"],
+        "批发商": ["批发商", "wholesaler", "wholesale"],
+        "制造商": ["制造商", "生产商", "manufacturer", "factory"],
+        "工程商": ["工程商", "承包商", "contractor", "project"],
+        "代理商": ["代理商", "agent"],
+        "电商": ["电商", "ecommerce", "e-commerce"],
+    }
+    return aliases.get(label.lower(), aliases.get(label, [label.lower()]))
+
+
+def apply_buyer_type_calibration(records: list[dict], plan: dict) -> tuple[list[dict], dict]:
+    """Apply current-turn avoid rules and preference ranking to search results."""
+    avoided = plan.get("avoided_buyer_types") or []
+    preferred = plan.get("preferred_buyer_types") or []
+    kept = []
+    dropped = []
+    for record in records:
+        text = _buyer_type_text(record)
+        matched_avoid = next((label for label in avoided
+                              if any(alias.lower() in text
+                                     for alias in _buyer_type_aliases(label))), None)
+        if matched_avoid:
+            dropped.append({"company": record.get("companyName", ""),
+                            "matched": matched_avoid})
+        else:
+            kept.append(record)
+
+    def preference_score(record: dict) -> int:
+        text = _buyer_type_text(record)
+        return sum(1 for label in preferred
+                   if any(alias.lower() in text for alias in _buyer_type_aliases(label)))
+
+    if preferred:
+        kept.sort(key=preference_score, reverse=True)
+    return kept, {
+        "avoided_removed": len(dropped),
+        "avoided_details": dropped[:10],
+        "preferred_reranked": bool(preferred),
+    }
+
+
+def apply_calibration_to_args(args, plan: dict):
+    """Mutate parsed search args so the stored profile changes the API request."""
+    if plan.get("countries"):
+        args.country = ",".join(plan["countries"])
+    elif plan.get("excluded_countries") and args.country:
+        requested = normalize_country(args.country) or []
+        remaining = [c for c in requested if c not in plan["excluded_countries"]]
+        if not remaining:
+            raise ValueError("当前搜索国家已被本轮画像排除，但没有替代国家")
+        args.country = ",".join(remaining)
+    if plan.get("products"):
+        args.keyword = None
+        args.tag_keyword = None
+        args.profile_keyword = plan["products"][0]
+    if plan.get("company_attributes"):
+        args.company_attributes = ",".join(str(v) for v in plan["company_attributes"])
+    return args
+
+
 def print_codes() -> None:
     print("searchAIV2 枚举参数取值（2026-08-05 生产环境探测，非官方文档）\n")
     for title, table in [("--company-attributes  买家类型", COMPANY_ATTRIBUTES),
@@ -786,11 +870,30 @@ def build_parser() -> argparse.ArgumentParser:
                    help="启用历史客户标签重排序（需先导入历史客户）")
     g.add_argument("--jsonl", action="store_true", help="JSONL 输出，每行一条记录")
 
+    g = p.add_argument_group("企业线索池（传 --enterprise 时默认自动同步）")
+    g.add_argument("--company-name", help="企业展示名；未传时使用 --enterprise")
+    g.add_argument("--chat-id", help="飞书群 chat_id；新建线索池时用于授权群成员")
+    g.add_argument("--lead-source", default="引擎搜索",
+                   help="线索来源，默认：引擎搜索")
+    g.add_argument("--no-lead-pool", action="store_true",
+                   help="仅限诊断：不把最终搜索结果同步到企业线索池")
+    g.add_argument("--ignore-calibration", action="store_true",
+                   help="仅限诊断/新任务：忽略已保存的当前搜索画像")
+
     return p
 
 
 def main():
     args = build_parser().parse_args()
+
+    # Shadow billing (内测期只记录预估，不扣费)
+    tenant = os.environ.get("DC_TENANT_ID") or os.environ.get("DEALCLAW_TENANT_ID", "")
+    if billing and tenant:
+        try:
+            billing.configure(tenant)
+            billing.estimate("dealclaw-find-buyers", quantity=1)
+        except Exception:
+            pass  # billing is best-effort in shadow mode
 
     if args.codes:
         print_codes()
@@ -865,7 +968,21 @@ def main():
         print(json.dumps({"status": "success", "data": raw}, indent=2, ensure_ascii=False))
         return
 
-    # ── 搜索模式 ──────────────────────────────────────
+    # ── 搜索模式：读取上轮纠偏形成的可执行参数 ─────────
+    calibration_plan = {}
+    if args.enterprise and args.user and not args.ignore_calibration:
+        try:
+            from dc_buyer_state import BuyerState
+            calibration_plan = BuyerState().get_search_plan(args.enterprise, args.user)
+            apply_calibration_to_args(args, calibration_plan)
+        except (ImportError, OSError, ValueError, TypeError) as exc:
+            print(json.dumps({
+                "status": "calibration_blocked",
+                "error": str(exc),
+                "hint": "请补充一个替代国家，或明确开启全新搜索任务。",
+            }, ensure_ascii=False))
+            sys.exit(2)
+
     term = args.tag_keyword or args.profile_keyword or args.keyword
     field = ("tagKeyword" if args.tag_keyword
              else "profileKeyword" if args.profile_keyword else "keyword")
@@ -905,6 +1022,15 @@ def main():
     )
 
     result = format_results(raw, term, country, field, args.require_contact)
+
+    if calibration_plan:
+        calibrated, report = apply_buyer_type_calibration(
+            result.get("records", []), calibration_plan
+        )
+        result["records"] = calibrated
+        result["calibration"] = {"plan": calibration_plan, **report}
+        if report["avoided_removed"]:
+            result["summary"] += f" (本轮画像排除 {report['avoided_removed']} 条)"
 
     # ═══ 🔒 Gate 3 后置自检 ═══
     result["gate_report"] = {
@@ -991,6 +1117,39 @@ def main():
         except ImportError:
             result["reranked"] = False
             result["summary"] += " | ⚠️ 重排序模块不可用"
+
+    # ── 企业线索池：最终展示结果自动入池，并把链接交给 Agent ──
+    if args.enterprise and not args.no_lead_pool:
+        try:
+            from dc_company_registry import sync_leads_to_pool
+            sync_result = sync_leads_to_pool(
+                company_id=args.enterprise,
+                company_name=args.company_name or args.enterprise,
+                records=result.get("records", []),
+                source=args.lead_source,
+                chat_id=args.chat_id,
+            )
+            result["lead_pool"] = sync_result
+            result["summary"] += (
+                f" | 已同步线索池 {sync_result['created'] + sync_result['updated']} 条"
+            )
+        except Exception as e:
+            # 线索搜索结果仍返回，但绝不假装已写入。
+            result["lead_pool"] = {
+                "status": "error",
+                "message": str(e)[:300],
+            }
+            result["summary"] += " | ⚠️ 线索池同步失败"
+    elif not args.enterprise:
+        result["lead_pool"] = {
+            "status": "skipped",
+            "reason": "未传 --enterprise，无法确定企业线索池",
+        }
+    else:
+        result["lead_pool"] = {
+            "status": "skipped",
+            "reason": "--no-lead-pool diagnostic mode",
+        }
 
     if args.jsonl:
         for r in result.get("records", []):

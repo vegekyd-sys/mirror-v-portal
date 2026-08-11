@@ -2,6 +2,7 @@ import pg from 'pg';
 import { fetchTenants } from '../db/query.js';
 import { enrichWithCredits } from './credits-check.js';
 import { computeTransition, type TenantState, type TransitionResult } from './state-machine.js';
+import { executeActions } from './actions.js';
 import type { OpsConfig } from '../config.js';
 
 export interface CronResult {

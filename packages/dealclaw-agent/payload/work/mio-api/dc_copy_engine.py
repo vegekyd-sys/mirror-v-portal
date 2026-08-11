@@ -460,6 +460,17 @@ class CopyEngine:
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
+
+    # Shadow billing
+    try:
+        from dc_billing import billing
+        tenant = os.environ.get("DC_TENANT_ID", "") or os.environ.get("DEALCLAW_TENANT_ID", "")
+        if tenant:
+            billing.configure(tenant)
+            billing.estimate("dealclaw-email-growth-send", quantity=1)
+    except Exception:
+        pass
+
     from dc_iq_engine import load_cbie_profile
 
     ce = CopyEngine()

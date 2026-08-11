@@ -375,6 +375,52 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
+  // PATCH /v1/tenants/:id/deployment/scale — scale deployment replicas (suspend/resume)
+  router.patch('/v1/tenants/:id/deployment/scale', async (req: Request, res: Response) => {
+    try {
+      const { service, replicas } = req.body;
+
+      if (!service || !['dealclaw-agent', 'nexus-gateway'].includes(service)) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
+        return;
+      }
+      if (typeof replicas !== 'number' || replicas < 0) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'replicas must be a non-negative integer' });
+        return;
+      }
+
+      const tenantId = req.params.id;
+      const { rows } = await pool.query('SELECT k8s_namespace, status FROM tenants WHERE tenant_id = $1', [tenantId]);
+      if (!rows.length) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+
+      const { k8s_namespace: namespace } = rows[0];
+      const deploymentName = `${service}-${tenantId}`;
+
+      const { scaleDeployment } = await import('../services/k8s-client.js');
+      await scaleDeployment({ namespace, name: deploymentName, replicas });
+
+      res.json({
+        ok: true,
+        tenantId,
+        service,
+        deployment: deploymentName,
+        replicas,
+        action: replicas === 0 ? 'suspend' : 'resume',
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Scale deployment failed:', e);
+      if (/404|not found/i.test(e.message || '')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Deployment not found' });
+        return;
+      }
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Scale failed' });
+    }
+  });
+
   // POST /v1/tenants/batch/deployment — rolling update all active tenants
   router.post('/v1/tenants/batch/deployment', async (req: Request, res: Response) => {
     try {

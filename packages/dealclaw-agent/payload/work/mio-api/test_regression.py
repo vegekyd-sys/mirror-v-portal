@@ -22,11 +22,30 @@ import os
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 
 # Workspace root: 向上两级从 work/mio-api
 WS = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 SKILLS_DIR = os.path.join(WS, "skills")
 MEMORY_DIR = os.path.join(WS, "memory", "projects", "mio", "dealclaw")
+
+# 本地开发可通过 DEALCLAW_TEST_ENV_FILE 指定凭证文件；生产运行时应由
+# Secret / systemd EnvironmentFile 直接注入进程环境。只补缺失变量，不覆盖现有环境。
+for env_path in [
+    os.environ.get("DEALCLAW_TEST_ENV_FILE", ""),
+    os.path.join(os.path.dirname(__file__), ".env"),
+    "/home/openclaw/.openclaw/.env",
+]:
+    if not env_path or not os.path.isfile(env_path):
+        continue
+    for line in Path(env_path).read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.removeprefix("export ").strip()
+        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+
 ENV = {**os.environ, "PYTHONPATH": os.path.dirname(__file__)}
 
 PASS = "✅"
@@ -61,7 +80,9 @@ def t_dirs():
     check(os.path.isdir(MEMORY_DIR), "memory/dealclaw 目录缺失")
 
 def t_files():
-    for f in ["AGENTS.md", "MODE.md", "main.md"]:
+    for f in ["AGENTS.md", "MEMORY.md", "REDLINES.md", "TOOLS.md"]:
+        check(os.path.isfile(os.path.join(WS, f)), f"缺: {f}")
+    for f in ["PERSONA.md", "REDLINES.md", "dc-agent.md"]:
         check(os.path.isfile(os.path.join(MEMORY_DIR, f)), f"缺: {f}")
 
 def t_engines_exist():
@@ -71,9 +92,12 @@ def t_engines_exist():
         check(os.path.isfile(f), f"缺引擎: {f}")
 
 def t_skills_exist():
-    names = ["dc-company-buyer-intelligence", "dc-market-insight", "dc-profile-review-confirm",
-             "dc-el", "dc-lead-search", "dc-knowledge-base", "dc-iq",
-             "dc-high-value-strategy", "dc-copy", "dc-gs", "dc-fd"]
+    names = [
+        "dealclaw-analyze-company", "dealclaw-find-buyers", "dealclaw-review",
+        "dealclaw-knowledge-base", "dealclaw-lead-import", "dealclaw-email-bindings",
+        "dealclaw-email-growth-send", "dealclaw-email-founder-direct",
+        "dealclaw-exhibition-leads", "dealclaw-exhibition-invitation",
+    ]
     for s in names:
         check(os.path.isfile(os.path.join(SKILLS_DIR, s, "SKILL.md")), f"缺: {s}")
 
@@ -84,52 +108,29 @@ test("Skill 文件齐全", t_skills_exist)
 
 
 # ═══════════════════════════════════════════════
-# 1. 版本号一致性
+# 1. Payload / Skill 路由契约
 # ═══════════════════════════════════════════════
-print("\n━━━ 1. 版本号 ━━━")
+print("\n━━━ 1. Payload / Skill 路由契约 ━━━")
 
-def t_versions():
-    with open(os.path.join(MEMORY_DIR, "AGENTS.md")) as f:
-        agents = f.read()
+def t_payload_contract():
+    agents = Path(WS, "AGENTS.md").read_text(encoding="utf-8")
+    if "dealclaw-find-buyers" not in agents:
+        agents = Path(MEMORY_DIR, "dc-agent.md").read_text(encoding="utf-8")
+    routed = [
+        "dealclaw-analyze-company", "dealclaw-find-buyers", "dealclaw-review",
+        "dealclaw-knowledge-base", "dealclaw-email-growth-send",
+        "dealclaw-email-founder-direct", "dealclaw-exhibition-leads",
+    ]
+    for skill in routed:
+        check(skill in agents, f"AGENTS.md 未路由: {skill}")
 
-    skills = {
-        "DC-CBIE": "dc-company-buyer-intelligence",
-        "DC-MI": "dc-market-insight", "DC-PRC": "dc-profile-review-confirm",
-        "DC-EL": "dc-el", "DC-LS": "dc-lead-search", "DC-KB": "dc-knowledge-base",
-        "DC-IQ": "dc-iq", "DC-OS": "dc-high-value-strategy",
-        "DC-Copy": "dc-copy", "DC-GS": "dc-gs", "DC-FD": "dc-fd",
-    }
+    manifest_path = Path(WS, "payload-manifest.json")
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        check(manifest.get("name") == "dealclaw-base", "payload manifest name 错误")
+        check(str(manifest.get("version", "")).startswith("dealclaw-base."), "payload manifest version 错误")
 
-    for name, dirname in skills.items():
-        with open(os.path.join(SKILLS_DIR, dirname, "SKILL.md")) as f:
-            skill_content = f.read()
-
-        # Extract version: frontmatter > body 版本: > description
-        skill_ver = None
-        for line in skill_content.split("\n"):
-            if line.startswith("version:"):
-                skill_ver = line.split("version:")[1].strip().replace("v", "")
-                break
-        if not skill_ver:
-            m = re.search(r'版本[:\s]*v?(\d+\.\d+(?:\.\d+)?)', skill_content)
-            if m: skill_ver = m.group(1)
-        if not skill_ver:
-            for line in skill_content.split("\n"):
-                if line.startswith("description:") and name in line:
-                    m = re.search(r'v(\d+\.\d+(?:\.\d+)?)', line)
-                    if m: skill_ver = m.group(1); break
-
-        if not skill_ver:
-            print(f"    ⚠️ {name}: 无法提取版本号")
-            continue
-
-        m = re.search(re.escape(name) + r'\s+v(\d+\.\d+(?:\.\d+)?)', agents)
-        if not m:
-            raise AssertionError(f"{name}: AGENTS.md 中未找到")
-        agents_ver = m.group(1)
-        check(agents_ver == skill_ver, f"{name}: AGENTS v{agents_ver} ≠ SKILL v{skill_ver}")
-
-test("AGENTS.md 版本号与 SKILL.md 一致", t_versions)
+test("Payload/Skill 路由契约一致", t_payload_contract)
 
 
 # ═══════════════════════════════════════════════

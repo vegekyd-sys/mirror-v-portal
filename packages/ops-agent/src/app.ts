@@ -5,6 +5,7 @@ import { scanTenants, shouldResetMonthly, getNotificationsForToday } from './ser
 import { computeTransition, type TenantState } from './services/state-machine.js';
 import { runCronCycle } from './services/cron.js';
 import { runRolloutCycle } from './services/rollout.js';
+import { executeActions } from './services/actions.js';
 import type { OpsConfig } from './config.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 

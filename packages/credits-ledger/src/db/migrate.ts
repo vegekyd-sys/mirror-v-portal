@@ -145,6 +145,10 @@ export async function migrate() {
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_skill ON skill_billing_events(skill_id, created_at DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_task ON skill_billing_events(task_id)`);
 
+  // ── v2.1: billing_mode column (live/shadow) ──
+  await query(`ALTER TABLE skill_billing_events ADD COLUMN IF NOT EXISTS billing_mode VARCHAR(8) DEFAULT 'live'`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_mode ON skill_billing_events(billing_mode, created_at DESC)`);
+
   // ── Seed default skill prices if table is empty ──
   const { rows: existingPrices } = await query('SELECT COUNT(*) as cnt FROM skill_prices');
   if (Number(existingPrices[0].cnt) === 0) {

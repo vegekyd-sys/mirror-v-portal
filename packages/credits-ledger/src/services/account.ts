@@ -323,3 +323,181 @@ export async function createAccount(params: {
     [params.id, params.tenantId, params.planTier, params.monthlyAllowance]
   );
 }
+
+/**
+ * Freeze credits for guaranteed delivery obligations (e.g. 慧展权益).
+ * Frozen credits are deducted from available balance but remain in the account.
+ */
+export async function freezeCredits(params: {
+  accountId: string;
+  amount: number;
+  reason: string;
+  reference: string;
+}): Promise<
+  | { ok: true; availableBefore: number; availableAfter: number; frozenBefore: number; frozenAfter: number }
+  | { ok: false; code: 'ACCOUNT_NOT_FOUND' | 'INSUFFICIENT_AVAILABLE'; available: number; frozen: number; required: number }
+> {
+  const { accountId, amount, reason, reference } = params;
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const lockResult = await client.query(
+      'SELECT balance, frozen_credits FROM credits_accounts WHERE id = $1 FOR UPDATE',
+      [accountId]
+    );
+    if (lockResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'ACCOUNT_NOT_FOUND', available: 0, frozen: 0, required: amount };
+    }
+
+    const balance = Number(lockResult.rows[0].balance);
+    const frozenBefore = Number(lockResult.rows[0].frozen_credits);
+    const available = balance - frozenBefore;
+
+    if (available < amount) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'INSUFFICIENT_AVAILABLE', available, frozen: frozenBefore, required: amount };
+    }
+
+    const frozenAfter = frozenBefore + amount;
+    await client.query(
+      `UPDATE credits_accounts
+       SET frozen_credits = $2, frozen_reason = $3, updated_at = NOW()
+       WHERE id = $1`,
+      [accountId, frozenAfter, reason]
+    );
+
+    // Log as a freeze transaction
+    const txnId = randomUUID();
+    await client.query(
+      `INSERT INTO credits_transactions
+       (id, account_id, type, amount, balance_before, balance_after, reference, description, category, idempotency_key)
+       VALUES ($1, $2, 'freeze', $3, $4, $5, $6, $7, 'freeze', $8)`,
+      [txnId, accountId, amount, frozenBefore, frozenAfter, reference,
+       `冻结: ${reason} (available: ${available} → ${available - amount})`,
+       `freeze_${accountId}_${Date.now()}`]
+    );
+
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      availableBefore: available,
+      availableAfter: available - amount,
+      frozenBefore,
+      frozenAfter,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Unfreeze credits (release reserved obligation).
+ */
+export async function unfreezeCredits(params: {
+  accountId: string;
+  amount: number;
+  reason: string;
+  reference: string;
+}): Promise<
+  | { ok: true; availableBefore: number; availableAfter: number; frozenBefore: number; frozenAfter: number }
+  | { ok: false; code: 'ACCOUNT_NOT_FOUND' | 'INSUFFICIENT_FROZEN'; available: number; frozen: number; requested: number }
+> {
+  const { accountId, amount, reason, reference } = params;
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const lockResult = await client.query(
+      'SELECT balance, frozen_credits FROM credits_accounts WHERE id = $1 FOR UPDATE',
+      [accountId]
+    );
+    if (lockResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'ACCOUNT_NOT_FOUND', available: 0, frozen: 0, requested: amount };
+    }
+
+    const balance = Number(lockResult.rows[0].balance);
+    const frozenBefore = Number(lockResult.rows[0].frozen_credits);
+
+    if (frozenBefore < amount) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'INSUFFICIENT_FROZEN', available: balance - frozenBefore, frozen: frozenBefore, requested: amount };
+    }
+
+    const frozenAfter = frozenBefore - amount;
+    await client.query(
+      `UPDATE credits_accounts
+       SET frozen_credits = $2, frozen_reason = CASE WHEN frozen_credits - $2 <= 0 THEN NULL ELSE frozen_reason END, updated_at = NOW()
+       WHERE id = $1`,
+      [accountId, frozenAfter]
+    );
+
+    const txnId = randomUUID();
+    await client.query(
+      `INSERT INTO credits_transactions
+       (id, account_id, type, amount, balance_before, balance_after, reference, description, category, idempotency_key)
+       VALUES ($1, $2, 'unfreeze', $3, $4, $5, $6, $7, 'unfreeze', $8)`,
+      [txnId, accountId, amount, frozenBefore, frozenAfter, reference,
+       `解冻: ${reason}`,
+       `unfreeze_${accountId}_${Date.now()}`]
+    );
+
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      availableBefore: balance - frozenBefore,
+      availableAfter: balance - frozenAfter,
+      frozenBefore,
+      frozenAfter,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get full account info including frozen credits.
+ */
+export async function getAccountFull(accountId: string): Promise<{
+  id: string;
+  balance: number;
+  frozen: number;
+  available: number;
+  lifetimeConsumed: number;
+  lifetimeCredited: number;
+  frozenReason: string | null;
+  planTier: string;
+  status: string;
+} | null> {
+  const { rows } = await query(
+    `SELECT id, balance, frozen_credits, frozen_reason, lifetime_consumed, lifetime_credited,
+            plan_tier, status
+     FROM credits_accounts WHERE id = $1`,
+    [accountId]
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  const balance = Number(r.balance);
+  const frozen = Number(r.frozen_credits);
+  return {
+    id: r.id,
+    balance,
+    frozen,
+    available: balance - frozen,
+    lifetimeConsumed: Number(r.lifetime_consumed),
+    lifetimeCredited: Number(r.lifetime_credited),
+    frozenReason: r.frozen_reason,
+    planTier: r.plan_tier,
+    status: r.status,
+  };
+}

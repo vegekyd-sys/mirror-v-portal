@@ -167,7 +167,7 @@ router.put('/api/skill-prices', async (req, res) => {
   }
 });
 
-// ── Customer Admin (proxy to credits-ledger) ──
+// ── Plan Templates (proxy to credits-ledger) ──
 
 router.get('/api/admin/plans', async (_req, res) => {
   try {
@@ -175,6 +175,27 @@ router.get('/api/admin/plans', async (_req, res) => {
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
+
+router.post('/api/admin/plans', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/plans', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.delete('/api/admin/plans/:planId', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/plans/${encodeURIComponent(req.params.planId)}`, {
+      method: 'DELETE',
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// ── Customer Admin (proxy to credits-ledger) ──
 
 router.get('/api/admin/customers', async (req, res) => {
   try {
@@ -214,6 +235,28 @@ router.post('/api/admin/customers/:tenantId/topup', async (req, res) => {
 router.post('/api/admin/customers/:tenantId/renew', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}/renew`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// ── Account Freeze / Unfreeze ──
+
+router.post('/api/admin/customers/:tenantId/freeze', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/accounts/acct_${req.params.tenantId}/freeze`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/customers/:tenantId/unfreeze', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/accounts/acct_${req.params.tenantId}/unfreeze`, {
       method: 'POST',
       body: JSON.stringify(req.body),
     });

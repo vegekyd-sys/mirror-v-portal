@@ -80,12 +80,12 @@ FEEDBACK_TYPES = {
 def record_feedback(fb_type, user_message, enterprise="", user_open_id="",
                     context=None, severity="normal"):
     """
-    记录一条用户反馈。
+    记录一条用户反馈，并同步更新 buyer_profile_state。
 
-    fb_type:   反馈类型 (intent_correct / search_bad / ...)
-    user_message: 用户原话
-    context:   上下文 ({buyer_domain, keyword, engine_output, ...})
-    severity:  low / normal / high
+    核心原则:
+      - 继续 ≠ confirmed: 不改 status/confidence
+      - 归因优先: search_bad 时先判断问题维度，能归因就 rerun
+      - 单次❌不永久排除
     """
     if fb_type not in FEEDBACK_TYPES:
         fb_type = "general"
@@ -104,7 +104,171 @@ def record_feedback(fb_type, user_message, enterprise="", user_open_id="",
     os.makedirs(str(DATA_DIR), exist_ok=True)
     with open(FEEDBACK_FILE, 'a') as f:
         f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+    # ── 同步更新 buyer_profile_state ──
+    if enterprise:
+        try:
+            from dc_buyer_state import BuyerState
+            bs = BuyerState()
+            uid = user_open_id or "default"
+
+            if fb_type == "search_bad":
+                bs.add_example(enterprise, uid, user_message[:100], positive=False)
+                # 归因优先: 判断问题维度
+                attribution = _attribute_search_bad(user_message, context or {})
+                if attribution:
+                    bs.update_state(enterprise, uid, {
+                        "buyer_profile_status": "correcting",
+                        "next_action": "rerun_with_updated_profile",
+                        "ask_before_next_search": False,
+                        "last_user_correction": attribution,
+                    })
+                else:
+                    bs.update_state(enterprise, uid, {
+                        "buyer_profile_status": "correcting",
+                        "next_action": "ask_one_clarifying_question",
+                    })
+
+            elif fb_type == "persona_wrong":
+                bs.record_correction(enterprise, uid, user_message[:200])
+
+            elif fb_type == "lead_mislabel" and context:
+                label = context.get("user_label", "")
+                if label in ("✅", "我的买家"):
+                    bs.add_example(enterprise, uid,
+                                   context.get("buyer_domain", user_message[:100]),
+                                   positive=True)
+                elif label in ("❌", "不是我的买家"):
+                    bs.add_example(enterprise, uid,
+                                   context.get("buyer_domain", user_message[:100]),
+                                   positive=False)
+                    # 单次❌只写负例，不永久排除
+        except Exception:
+            pass
+
     return entry
+
+
+def record_buyer_feedback_turn(
+    enterprise: str,
+    user_open_id: str,
+    user_message: str,
+    interpretation: dict,
+) -> dict:
+    """
+    记录一次自然语言买家画像反馈，并返回给 Agent 可读的校准摘要。
+
+    interpretation 由 Agent 基于完整语义给出；脚本不再用按钮或关键词
+    替代 Agent 判断。示例：
+
+      {
+        "assessment": "correcting",
+        "profile_patch": {"buyer_type": {"prefer": ["品牌商"],
+                                           "avoid_current": ["分销商"]}},
+        "positive_examples": ["A GmbH"],
+        "negative_examples": ["B Trading"],
+        "explicit_long_term_rules": []
+      }
+
+    assessment: continue | correcting | unclear | stable
+    """
+    if not enterprise:
+        raise ValueError("enterprise is required")
+    if not user_message or not user_message.strip():
+        raise ValueError("user_message is required")
+    if not isinstance(interpretation, dict):
+        raise ValueError("interpretation must be an object")
+
+    assessment = interpretation.get("assessment", "unclear")
+    profile_patch = interpretation.get("profile_patch") or {}
+    positives = interpretation.get("positive_examples") or []
+    negatives = interpretation.get("negative_examples") or []
+    long_term_rules = interpretation.get("explicit_long_term_rules") or []
+
+    entry = {
+        "_ts": _now(),
+        "type": "buyer_feedback_turn",
+        "user_message": user_message[:500],
+        "enterprise": enterprise,
+        "user_open_id": user_open_id or "default",
+        "interpretation": {
+            "assessment": assessment,
+            "profile_patch": profile_patch,
+            "positive_examples": positives,
+            "negative_examples": negatives,
+            "explicit_long_term_rules": long_term_rules,
+        },
+        "applied": True,
+        "applied_at": _now(),
+    }
+    os.makedirs(str(DATA_DIR), exist_ok=True)
+    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    from dc_buyer_state import BuyerState
+    state = BuyerState().record_feedback_turn(
+        enterprise,
+        user_open_id or "default",
+        assessment=assessment,
+        profile_patch=profile_patch,
+        positive_examples=positives,
+        negative_examples=negatives,
+        explicit_long_term_rules=long_term_rules,
+        user_message=user_message,
+    )
+
+    return {
+        "assessment": assessment,
+        "current_round": state.get("current_round", 0),
+        "current_search_profile": state.get("current_search_profile", {}),
+        "confirmed": state.get("buyer_profile_status") == "confirmed",
+        "ask_one_question": state.get("next_action") == "ask_one_clarifying_question",
+        "recommended_action": state.get("next_action"),
+        "should_auto_search": BuyerState().should_auto_search(
+            enterprise, user_open_id or "default"
+        ),
+    }
+
+
+def _attribute_search_bad(user_message: str, context: dict) -> str:
+    """
+    归因 ❌ 搜索反馈的根因。返回归因描述或空字符串。
+
+    检查维度: 国家、买家类型、产品/工艺、规模、渠道角色、信息不足
+    """
+    msg = user_message.lower()
+    ctx_keys = " ".join(context.keys()).lower() if context else ""
+
+    # 国家归因
+    country_keywords = ["国家", "country", "市场", "market", "巴西", "美国", "德国", "欧洲"]
+    if any(kw in msg for kw in country_keywords):
+        return "国家/市场偏好需要调整"
+
+    # 买家类型归因
+    type_keywords = ["分销", "distributor", "零售商", "retailer", "品牌", "brand",
+                     "批发", "wholesale", "进口商", "importer"]
+    if any(kw in msg for kw in type_keywords):
+        return "买家类型偏好需要调整"
+
+    # 产品/工艺归因
+    product_keywords = ["产品", "product", "材质", "material", "工艺", "craft",
+                        "品类", "category", "不对", "不匹配", "mismatch"]
+    if any(kw in msg for kw in product_keywords):
+        return "产品/工艺匹配度需要调整"
+
+    # 规模归因
+    scale_keywords = ["太大", "太小", "size", "规模", "scale", "500", "1000",
+                      "人数", "员工", "employee"]
+    if any(kw in msg for kw in scale_keywords):
+        return "公司规模偏好需要调整"
+
+    # 渠道角色
+    channel_keywords = ["渠道", "channel", "工程", "project", "安装", "install"]
+    if any(kw in msg for kw in channel_keywords):
+        return "渠道角色偏好需要调整"
+
+    # 无法归因
+    return ""
 
 
 def pending_feedback(fb_type=None, enterprise=None):
@@ -356,12 +520,24 @@ def feedback_stats(enterprise=None, days=30):
 # ── CLI ──
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("dc_feedback.py record|pending|apply|stats [enterprise]")
+        print("dc_feedback.py buyer-turn|record|pending|apply|stats")
         sys.exit(1)
 
     cmd = sys.argv[1]
 
-    if cmd == "record":
+    if cmd == "buyer-turn":
+        if len(sys.argv) < 6:
+            print("用法: buyer-turn <enterprise> <user_open_id> <message> '<interpretation_json>'")
+            sys.exit(1)
+        result = record_buyer_feedback_turn(
+            enterprise=sys.argv[2],
+            user_open_id=sys.argv[3],
+            user_message=sys.argv[4],
+            interpretation=json.loads(sys.argv[5]),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    elif cmd == "record":
         if len(sys.argv) < 4:
             print("用法: record <type> <message> [enterprise]")
             sys.exit(1)

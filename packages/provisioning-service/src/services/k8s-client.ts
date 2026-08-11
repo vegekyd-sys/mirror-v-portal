@@ -318,6 +318,30 @@ export async function patchDeploymentImage(spec: PatchImageSpec): Promise<void> 
   console.log(`[k8s] deployment patched (rolling update): ${spec.namespace}/${spec.name} -> ${spec.image}`);
 }
 
+// ── Deployment Scale ──
+
+export interface ScaleSpec {
+  namespace: string;
+  name: string;
+  replicas: number;
+}
+
+export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
+  const body = { spec: { replicas: spec.replicas } };
+
+  const res = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${spec.namespace}/deployments/${spec.name}`,
+    body,
+    'application/strategic-merge-patch+json',
+  );
+
+  if (!res.ok) {
+    throw new Error(`scaleDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment scaled: ${spec.namespace}/${spec.name} -> ${spec.replicas}`);
+}
+
 // ── Service ──
 
 export async function createService(

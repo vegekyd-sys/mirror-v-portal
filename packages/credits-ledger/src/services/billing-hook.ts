@@ -112,6 +112,48 @@ export async function settleBilling(action: BillableAction & {
     const idempotencyKey = action.idempotencyKey ??
       `${accountId}_settle_${estimatedEventId}`;
 
+    // Check subscription expiration and monthly allowance before debiting
+    const pool = getPool();
+    const { rows: acctRows } = await pool.query(
+      `SELECT status, subscription_end, monthly_allowance, monthly_used FROM credits_accounts WHERE id = $1`,
+      [accountId]
+    );
+    if (acctRows.length === 0) {
+      return { ok: false, code: 'ACCOUNT_NOT_FOUND', error: 'Account not found' };
+    }
+    const acct = acctRows[0];
+
+    if (acct.status === 'suspended' || acct.status === 'closed') {
+      return {
+        ok: false,
+        code: 'ACCOUNT_SUSPENDED',
+        error: `Account is ${acct.status}`,
+        estimatedCredit: totalCredit,
+      };
+    }
+
+    if (acct.subscription_end) {
+      const now = new Date();
+      const endDate = new Date(acct.subscription_end);
+      if (endDate < now) {
+        return {
+          ok: false,
+          code: 'SUBSCRIPTION_EXPIRED',
+          error: `Subscription expired on ${endDate.toLocaleDateString('zh-CN')}`,
+          estimatedCredit: totalCredit,
+        };
+      }
+    }
+
+    if (acct.monthly_allowance > 0 && Number(acct.monthly_used) >= Number(acct.monthly_allowance)) {
+      return {
+        ok: false,
+        code: 'MONTHLY_LIMIT_EXCEEDED',
+        error: `Monthly allowance of ${Number(acct.monthly_allowance).toLocaleString()} exhausted`,
+        estimatedCredit: totalCredit,
+      };
+    }
+
     // Atomic debit from credits account
     const debitResult = await debit({
       accountId,
@@ -168,34 +210,58 @@ export async function settleBilling(action: BillableAction & {
 
 /**
  * Quick check: does this tenant have enough credits for this skill?
+ * Also checks subscription expiration.
  */
 export async function canAfford(
   accountId: string,
   skillId: string,
   quantity: number
-): Promise<{ canAfford: boolean; estimatedCredit: number; balance: number }> {
+): Promise<{ canAfford: boolean; estimatedCredit: number; balance: number; reason?: string }> {
   const price = await getSkillPrice(skillId);
-  if (!price) return { canAfford: false, estimatedCredit: 0, balance: 0 };
+  if (!price) return { canAfford: false, estimatedCredit: 0, balance: 0, reason: 'Unknown skill' };
 
   const pool = getPool();
 
+  // Check subscription expiration
+  const { rows: acctRows } = await pool.query(
+    `SELECT balance, status, subscription_end, monthly_allowance, monthly_used FROM credits_accounts WHERE id = $1`,
+    [accountId]
+  );
+  if (acctRows.length === 0) return { canAfford: false, estimatedCredit: 0, balance: 0, reason: 'Account not found' };
+
+  const acct = acctRows[0];
+
+  if (acct.status === 'suspended' || acct.status === 'closed') {
+    return { canAfford: false, estimatedCredit: 0, balance: Number(acct.balance), reason: `Account is ${acct.status}` };
+  }
+
+  if (acct.subscription_end) {
+    const now = new Date();
+    const endDate = new Date(acct.subscription_end);
+    if (endDate < now) {
+      return { canAfford: false, estimatedCredit: 0, balance: Number(acct.balance), reason: 'Subscription expired' };
+    }
+  }
+
+  // Monthly allowance check
+  if (acct.monthly_allowance > 0) {
+    const used = Number(acct.monthly_used);
+    const allowance = Number(acct.monthly_allowance);
+    if (used >= allowance) {
+      return { canAfford: false, estimatedCredit: 0, balance: Number(acct.balance), reason: 'Monthly allowance exhausted' };
+    }
+  }
+
   // Shadow-priced skills never deduct, so they're always "affordable"
   if (price.pricingStatus === 'shadow') {
-    const { rows } = await pool.query('SELECT balance FROM credits_accounts WHERE id = $1', [accountId]);
-    const balance = rows.length > 0 ? Number(rows[0].balance) : 0;
+    const balance = Number(acct.balance);
     return { canAfford: true, estimatedCredit: 0, balance };
   }
 
   const estimatedCredit = price.creditPerUnit * quantity;
+  const balance = Number(acct.balance);
 
-  const { rows } = await pool.query(
-    'SELECT balance FROM credits_accounts WHERE id = $1',
-    [accountId]
-  );
-  if (rows.length === 0) return { canAfford: false, estimatedCredit, balance: 0 };
-
-  const balance = Number(rows[0].balance);
-  return { canAfford: balance >= estimatedCredit, estimatedCredit, balance };
+  return { canAfford: balance >= estimatedCredit, estimatedCredit, balance, reason: balance < estimatedCredit ? 'Insufficient credits' : undefined };
 }
 
 /**

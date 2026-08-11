@@ -20,32 +20,14 @@ export function createApp(dbUrl?: string) {
   // API routes (no auth — internal tool, URL not public)
   app.use(apiRouter);
 
-  // Static frontend
+  // Static frontend (assets, og.png, etc.)
   app.use(express.static(join(__dirname, '..', 'public')));
 
-  // Single-page app — login + dashboard in one file
-  app.get('/standalone', (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    res.sendFile(join(__dirname, '..', 'public', 'standalone.html'));
-  });
-
-  // Login page — default entry
-  app.get('/login', (_req, res) => {
-    res.sendFile(join(__dirname, '..', 'public', 'login.html'));
-  });
-
-  // Dashboard — after login
-  app.get('/app', (_req, res) => {
-    res.sendFile(join(__dirname, '..', 'public', 'index.html'));
-  });
-
-  // Default: show login page
-  app.get('/', (_req, res) => {
-    res.sendFile(join(__dirname, '..', 'public', 'login.html'));
-  });
-
+  // SPA catch-all — single index.html handles all client-side routing
+  // (login, dashboard, customer detail, skill prices, packages)
   app.get('*', (_req, res) => {
-    res.sendFile(join(__dirname, '..', 'public', 'login.html'));
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(join(__dirname, '..', 'public', 'index.html'));
   });
 
   return app;

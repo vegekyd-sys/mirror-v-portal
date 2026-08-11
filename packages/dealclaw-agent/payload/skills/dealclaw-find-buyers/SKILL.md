@@ -1,274 +1,142 @@
 ---
 name: "dealclaw-find-buyers"
-description: "v3: 关键词不替换不发散，五级逐级降级(tag→profile→keyword→类目推理→Apollo)，三字段全跑去重合并"
+description: "找买家结果自动写入企业唯一线索池；≤5条逐条气泡并附链接，>5条总结并附链接。"
 ---
 
-# DC-Find-Buyers
+# DealClaw Find Buyers
 
-## 核心规则
+## 目标
 
-先找买家公司，再找联系人或解锁邮箱。
+先找买家公司，再找联系人。最终展示给用户的买家公司必须先自动同步到企业唯一线索池；这是低风险内部动作，不等待二次确认。
 
-用户确认买家方向或选定具体公司后，才搜索联系人。用户确认消耗 Apollo 额度后，才执行邮箱 reveal。
+联系人搜索、Apollo 邮箱 reveal、邮件发送属于后续动作：联系人搜索需用户确认公司或方向，Apollo reveal 和外部发送需用户确认。
 
 ## 必要输入
 
-### 搜索新买家
+搜索前需要：产品/品类、目标国家、买家类型。
 
-执行公司搜索前，必须确认三项信息：
+优先从企业画像、当前搜索画像和对话上下文读取。只有缺失项会实质改变结果时，才问一个简短问题；不要重复询问已经知道的信息。默认展示 Top 5。
 
-- 目标国家：国家名或 ISO 码。传给搜索脚本前统一转成大写 ISO 码，例如 `AE`，不要传 `ae`。
-- 买家类型：制造商、经销商、品牌商、零售商、平台、项目采购方，或不限。
-- 产品/品类：用户要找的产品、品类或行业词。**默认走 `--tag-keyword`（采购品类标签匹配），只有用户明确说搜公司/品牌名时才用 `--keyword`。**
+## 搜索字段判断
 
-如果缺少任意一项，只问一个简短追问。默认输出 Top 10 买家公司。
+- 已知公司名/品牌名 → 公司名字段。
+- 产品/品类 → 采购标签字段；标签未知时用公司简介字段。
+- 产品词不能放进公司名字段。
+- 采购标签只认英文。
+- 一次只传一个搜索概念或完整短语，不堆多个同义词。
+- 国家统一为大写 ISO2。
 
-## 执行流程
-
-1. 确认搜索参数。
-2. 按正确字段建立公司候选池。
-3. 执行去重，并移除已确认排除偏好。
-4. 检查关键词歧义和买家类型匹配度。
-5. 输出 Top 5–10 公司及推荐理由。
-6. 用户确认买家后，调用 `ensure_company_lead_pool` 获取企业线索池，写入 bitable。
-7. 用户确认公司或方向后，再搜索联系人。
-8. Apollo 邮箱 reveal 前，先让用户确认额度消耗。
-
-### 写入线索池
-
-买家公司确认后，必须写入企业线索池。调用方式：
-
-```bash
-cd work/mio-api
-python3 dc_company_registry.py ensure "<company_id>" "<company_name>"
-# 返回 {"app_token": "...", "table_id": "tbl...", "field_map": {...}, "created": false}
-```
-
-然后用返回的 `field_map` 按飞书 Bitable API 写 record，来源按数据源填写：
-- CDP → 「引擎搜索」
-- Apollo → 「Apollo数据库」
-- 米奥兰特的 → 「米奥数据库」
+搜索结果为 0 时，先检查字段、语言和参数，不直接得出“该市场没有买家”。
 
 ## 数据源路由
 
-按以下规则寻找公司：
+- 目标国家有 upcoming 米奥展会 → 优先 CDP；结果不足再走 Apollo。
+- 无 upcoming 展会记录 → Apollo 公司搜索优先，CDP 可补足。
+- Apollo 公司搜索需要从产品推断买家行业、渠道和类型。
+- Web 搜索只用于补足、歧义判断和公司验证。
+- 未实际调用的数据源，不要声称已经执行。
 
-- 展会国 `MX/BR/ZA/VN/ID/AE/SA/IN/PL/JP/DE/TR/EG`：优先使用 CDP `searchAIV2`，按 CDP 搜索字段降级规则逐级尝试。
-- CDP 全部空 → T4→T3 产品类目推理 → Apollo `--companies` 兜底。
-- 非展会国：优先使用 Apollo `--companies` 关键词碰撞搜索。
-- Apollo 联系人搜索只在用户确认公司或方向后使用。
-- web search 用于结果补足、歧义判断、公司验证和联系人全名验证。
+## 执行流程
 
-**关键词规则：** 用户说什么词就用什么词搜索，不自行替换为上位词、近义词或行业泛称。用户原词优先，结果不足时才做产品类目推理。
+1. 从用户原话、企业画像和当前校准摘要提取搜索参数。
+2. 建立候选池。
+3. 抽查公司名、简介、主营和采购信号，剔除明显不相关或自产自用型公司。
+4. 按公司名 + 官网域名去重；应用已确认的长期排除规则，不把单次负反馈当永久过滤器。
+5. 按产品匹配、买家类型、采购可能性、渠道价值、触达可行性排序；分数只用于内部排序。
+6. 将最终展示结果自动同步到企业唯一线索池，取得 `lead_pool.bitable_url`。
+7. 按数量交付：
+   - ≤5 条：逐条气泡展示；整批末尾附线索池链接。
+   - >5 条：气泡总结；附线索池链接。
+8. 用户用自然语言评价结果后，交给 `dealclaw-review` 归因并修改下一批搜索画像。
+9. 用户确认公司或方向后，再搜索联系人。
+10. Apollo 邮箱 reveal 前确认额度；邮件发送前再次确认。
 
-没有实际调用的数据源，不要说已经执行。必要数据源返回 0 条时，简短说明，并继续走下一个允许步骤。
+## 强制调用方式
 
-## CDP 搜索字段规则（v3 — 2026-08-08 更新）
-
-**关键词原则：用户说什么就搜什么，不替换、不升级、不发散。**
-
-**默认搜索字段为 `--tag-keyword`**，匹配采购品类标签（英文），最贴近真实采购行为。
-
-**逐级降级规则（不可跳步，0 条才降级）：**
-
-| 级别 | 字段 | 说明 |
-|------|------|------|
-| 1 | `--tag-keyword "用户原词"` | **默认首选**。搜采购品类标签。用用户原词，不替换不发散 |
-| 2 | `--profile-keyword "用户原词"` | tag-keyword 返回 0 条时降级，搜公司简介 |
-| 3 | `--keyword "用户原词"` | 前两级均返回 0 条时兜底，搜公司名 |
-| 4 | T4→T3 产品类目推理 | 以上全空时，从更细粒度的产品类目词逐级向上尝试 |
-| 5 | Apollo `--companies` | CDP 全部空才走外部补全 |
-
-**每级必须实际执行并报告结果，不可靠猜测跳过。** 同级内三种字段各自跑完，按公司 ID 去重合并后展示。
-
-**买家类型过滤新增 `--company-attributes`：**
+搜索时必须传企业和用户标识，让脚本完成去重和自动入池；尽量传企业名和群 ID：
 
 ```bash
-# 编码对照
-1=制造商  2=分销商  3=零售商  4=电商  5=代理商
-6=物流    7=媒体    8=咨询    9=大型商超
-
-# 找经销商/分销商
---company-attributes 2,5
-# 找经销商+零售商+大型商超（排除制造商）
---company-attributes 2,3,5,9
+cd work/mio-api
+python3 dealclaw_search.py <搜索参数> \
+  --enterprise "<company_id>" \
+  --user "<user_open_id>" \
+  --company-name "<company_name>" \
+  --chat-id "<chat_id>"
 ```
 
-正确示例：
+默认会读取该企业/用户的 `current_search_profile`：国家和可映射买家类型会进入服务端搜索参数，`avoid_current` 会在本地过滤，`prefer` 会重排结果。正常请求不得使用 `--ignore-calibration`；它只用于诊断或用户明确开启了一个全新搜索任务。
 
-```bash
-# ✅ 产品品类词 → --tag-keyword（默认首选）
-python3 dealclaw_search.py --tag-keyword "water pump" --country ID --size 10 --enterprise "<enterprise>" --user "<open_id>"
+脚本必须返回：
 
-# ✅ 限定买家类型为分销商
-python3 dealclaw_search.py --tag-keyword "water pump" --country ID --company-attributes 2,5 --size 10
-
-# ✅ 兜底：tag-keyword 召回不足时用 profile-keyword
-python3 dealclaw_search.py --profile-keyword "water pump" --country ID --size 10
-
-# ✅ 公司名搜索（仅限用户明确要搜某公司）
-python3 dealclaw_search.py --keyword "Shimizu" --country ID --size 5
+```json
+{
+  "records": [],
+  "lead_pool": {
+    "created": 0,
+    "updated": 0,
+    "bitable_url": "https://..."
+  }
+}
 ```
 
-错误示例：
+`lead_pool.status=error` 时，仍可展示搜索结果，但必须说清线索池同步失败；不能声称已入池。`--no-lead-pool` 仅限诊断，不用于正常用户请求。
 
-```bash
-# ❌ 产品品类词放进 --keyword，只能匹配公司名，搜不到或全是噪声
-python3 dealclaw_search.py --keyword "water pump" --country ID --size 10
+发生过纠偏时，返回结果还必须包含 `calibration.plan`。缺少该字段说明画像没有真正进入搜索，先修复参数链路，不要用旧画像重跑。
 
-# ❌ 多产品词堆在一次调用里——OR 逻辑只会累加噪声
-python3 dealclaw_search.py --tag-keyword "drinkware bottle flask tumbler" --country AE --size 10
+## 企业线索池字段
 
-# ❌ tag-keyword 传中文——接口只认英文标签，中文返回 0 条
-python3 dealclaw_search.py --tag-keyword "水泵" --country ID --size 10
-```
+统一字段：公司名、官网、国家、买家类型、匹配产品、推荐理由、联系人、来源、冷热、阶段。
 
-## Apollo 关键词碰撞
+来源：引擎搜索、星擎线索、猎采线索、米奥数据库、Apollo数据库、展会线索、用户导入。
 
-非展会国搜索时，生成 3×3 关键词矩阵：
-
-- 产品词：用户原词、品类泛称、行业术语。
-- 渠道词：用户指定买家类型、行业分销词、零售/渠道词。
-
-逐个用 Apollo `--companies` 搜索产品词和渠道词组合，合并结果，去重，最多保留 20 个内部公司候选。默认只向用户展示最优 5 个。
-
-Apollo `--companies`、联系人搜索和 reveal 共用额度或 API key。3×3 矩阵最多会产生 9 次公司搜索，结果够用时不要继续扩词。
-
-## 内部评分
-
-内部评分只用于排序，不向用户展示分数。
-
-基础权重：
-
-- 行业/产品匹配度：30%。
-- 买家类型匹配度：20%。
-- 采购可能性：20%。
-- 渠道价值和客单价潜力：15%。
-- 触达可行性：10%。
-- 风险和准入难度：5%。
-
-评分依据优先级：
-
-- 公司简介、官网品类、产品目录、进口/采购信号。
-- 目标国家和买家类型是否匹配。
-- 联系人、职位、公开业务动态。
-- 数据不足时标注 `[待验证]`，不要自由脑补。
-
-把判断转成简洁的业务化推荐理由，不输出维度分和计算过程。
-
-## 去重规则
-
-展示结果前必须去重。去重键为标准化公司名加官网域名。
-
-如果使用 `dealclaw_search.py`，必须带上 `--enterprise` 和 `--user`，否则企业/用户级去重可能不会执行。
-
-去重失败或无法确认去重状态时，明确标注 `[去重待验证]`，不要承诺"已去重"。
-
-## 歧义处理
-
-如果搜索词或结果存在多义，先暂停并让用户选择方向。
-
-示例：
-
-- `coupling`：管件联轴器 vs 情侣产品。
-- `pump`：工业泵 vs 美妆泵头瓶。
-- `insulation`：保温建材 vs 保温杯/保温容器语义误伤。
-- `brand`：品牌方 vs 品牌营销公司。
-
-用户确认排除方向后，用 `dc_ls_store.py exclude` 持久化到当前企业偏好。
+新线索默认：冷热=❄️冷，阶段=待触达。已存在记录按公司名/官网幂等更新，不重复创建，不覆盖已有联系人成果和销售阶段。
 
 ## 输出格式
 
-默认使用聊天气泡，不使用卡片。
+### ≤5 条
 
-5 条以内买家，按以下格式逐条输出：
-
-`1. 公司名` - `[官网域名](https://domain.com)`
-
-关键信号：一句话。
-
-推荐理由：一句话。
-
-建议下一步：一句话。
-
-超过 5 条买家，或用户要求查询全部线索库时，输出简短气泡总结 + 飞书多维表格链接。
-
-## 线索池统一格式（v4）
-
-所有来源的线索统一写入同一份飞书多维表格，列结构：
-
-| 列 | 类型 | 说明 |
-|------|------|------|
-| 公司名 | 文本 | — |
-| 官网 | 链接 | 可点击跳转 |
-| 国家 | 文本 | 🇬🇧🇧🇷等国旗emoji |
-| 买家类型 | 单选 | 品牌商/制造商/经销商/工程商 |
-| 匹配产品 | 多选 | 硼硅灯罩/吹制定制/压制玻璃/光学平板/钢化面板 |
-| 推荐理由 | 文本 | 标签+判断合一，≤30字 |
-| 联系人 | 文本 | `姓名 \| 职位 \| 邮箱`，多人换行。待Apollo解锁标「待Apollo解锁」 |
-| 来源 | 单选 | 引擎搜索/星擎线索/猎采线索/米奥数据库/Apollo数据库/展会线索/用户导入 |
-| 冷热 | 单选 | 🔥热/❄️冷 |
-| 阶段 | 单选 | 待触达/已触达/已回复/报价中/成交/停止触达 |
-
-搜索、星擎、猎采、展会所有来源统一入此表，来源列区分，用户自行筛选。
-
-用户标注结果好坏后，如果 `dc-review` 可用，则写入决策历史并更新偏好计数。同一排除维度被标记 3 次负向后，建议晋升为排除规则；没有可用工具时，不要声称已写入。
-
-## 联系人与邮箱解锁
-
-联系人搜索和邮箱解锁独立于公司发现流程。
-
-1. 用 Apollo 搜索联系人：`--sourcing`、`--brand` 或 `--contacts`。
-2. 如果 Apollo 返回 `has_email=True` 且姓名被混淆，用公司、职位、名和混淆姓氏通过 web search 验证完整姓名。
-3. Apollo 邮箱 reveal 前，先让用户确认是否消耗额度。
-4. 用户确认后，用已验证完整姓名执行 `--reveal`。
-
-重要规则：
-
-- `has_email=True` 且 `email=—` 表示邮箱可能可解锁，不代表没有邮箱。
-- `has_email=True` 不保证 reveal 一定成功。失败时说明具体原因，例如缺少完整姓名、Apollo 额度不足、API 错误或未找到 verified email。
-- 不为用户未确认的公司解锁邮箱。
-
-## CLI 参考
-
-```bash
-# 确保企业线索池存在
-cd work/mio-api
-python3 dc_company_registry.py ensure "<company_id>" "<company_name>"
-
-# CDP 产品品类搜索（默认首选）：tag-keyword + 分销商过滤
-python3 dealclaw_search.py --tag-keyword "water pump" --country ID --company-attributes 2,5 --size 10 --enterprise "<enterprise>" --user "<open_id>"
-
-# CDP 产品品类搜索（兜底）：profile-keyword
-python3 dealclaw_search.py --profile-keyword "vacuum flask" --country AE --size 10 --enterprise "<enterprise>" --user "<open_id>"
-
-# CDP 公司名搜索：只有用户明确搜公司/品牌名时才用 keyword
-python3 dealclaw_search.py --keyword "Stanley" --country AE --size 5
-
-# Apollo 公司搜索：非展会国。
-python3 apollo_client.py --companies "smart glasses" --country US --employees "51,200" --size 10
-
-# Apollo 联系人搜索。
-python3 apollo_client.py <domain> --sourcing
-python3 apollo_client.py <domain> --brand
-python3 apollo_client.py <domain> --contacts
-
-# Apollo 邮箱 reveal：完成全名验证并获得用户确认后执行。
-python3 apollo_client.py <domain> --reveal "FirstName LastName"
-
-# 持久化排除偏好。
-python3 dc_ls_store.py exclude <enterprise> <open_id> --keywords "..." --industries "..." --reason "..."
+```text
+1. 公司名 — 官网
+关键信号：一句话
+推荐理由：一句话
 ```
+
+逐条展示后追加：
+
+```text
+已同步到企业线索池：<bitable_url>
+```
+
+### >5 条
+
+```text
+找到 X 家符合方向的买家，已完成筛选和去重。
+企业线索池：<bitable_url>
+```
+
+气泡不内嵌表格，不使用按钮完成校准。用户直接用自然语言评价这一批。
+
+## 自然语言反馈衔接
+
+用户说“这几家不对”“我要品牌商，不要分销商”“第2和第4家不错”等时：
+
+- 把整句反馈连同本批结果交给 `dealclaw-review`；
+- 一次用户回复只算一轮；
+- 提取具体 profile patch，而不是只写“买家类型需要调整”；
+- 下一批必须实际使用修改后的搜索画像。
+
+## 联系人和邮箱
+
+- CDP 结果有 companyCdpId → 优先用 CDP 联系人接口，不消耗 Apollo reveal 额度。
+- Apollo 结果只有域名 → 先搜联系人；reveal 前确认额度。
+- 不为用户未确认的公司解锁邮箱。
+- 接口失败不等于没有联系人，须如实说明失败。
 
 ## 边界
 
-- 不脑补缺失的国家、买家类型或产品/品类词。
-- 未经用户确认，不搜索联系人，不调用 Apollo 邮箱 reveal。
-- 不使用未授权付费源或私有 CRM 联系方式。Apollo reveal 仅在已配置且用户确认后允许使用。
-- 不推荐自产自用型公司，除非它对用户产品有明确渠道采购可能。
-- 不确定的信息标注 `[待验证]`。
-- 未实际执行去重时，不承诺已去重。
-- CDP 只覆盖上文列出的展会国；名单如脚本已有常量，以脚本为准。
-- Apollo 公司搜索依赖标签覆盖，可能漏掉冷门或细分公司。
-- web search 用于验证和补足，不保证完整覆盖。
-- 去重使用公司名加官网域名；同集团不同子公司仍可能需要人工复核。
+- 不编造公司、联系人、邮箱、采购事实或市场数据。
+- 不输出内部评分。
+- CRM 私有联系人信息不外显；公网公开信息可展示。
+- 不使用未授权付费源。
+- 外部发送、报价、承诺交期必须确认。
+- 搜索结果交付前必须完成最小质检和企业级去重。

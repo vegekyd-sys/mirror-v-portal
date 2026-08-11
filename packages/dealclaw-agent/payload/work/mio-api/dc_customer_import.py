@@ -538,7 +538,7 @@ def load_tags(enterprise):
 #  标注反哺 — dc_ls_store.annotate() 调此方法
 # ═══════════════════════════════════════════════════════════
 
-def learn_from_annotate(enterprise, lead):
+def learn_from_annotate(enterprise, lead, promote_long_term=False):
     """
     从单次标注中学习，增量更新画像。
     lead: {"company_name": str, "domain": str, "country": str, "status": str, "exclude_reason": str}
@@ -552,14 +552,14 @@ def learn_from_annotate(enterprise, lead):
     keywords = extract_keywords(company)
     kw_dict = {k: 1.0 for k in keywords} if keywords else {}
 
-    if status == "我的买家":
+    if status == "我的买家" and promote_long_term:
         incoming["country"] = {country: 1.0} if country else {}
         incoming["keywords"] = kw_dict
         label = "标注为买家"
-    elif status == "不是我的买家" and reason:
+    elif status == "不是我的买家" and reason and promote_long_term:
         incoming["exclude_reasons"] = [reason]
         label = f"排除: {reason}"
-    elif status == "黑名单买家":
+    elif status == "黑名单买家" and promote_long_term:
         incoming["exclude_reasons"] = ["黑名单"]
         label = "加入黑名单"
     else:
@@ -583,6 +583,16 @@ def learn_from_annotate(enterprise, lead):
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # Shadow billing
+    try:
+        from dc_billing import billing
+        tenant = os.environ.get("DC_TENANT_ID", "") or os.environ.get("DEALCLAW_TENANT_ID", "")
+        if tenant:
+            billing.configure(tenant)
+            billing.estimate("dealclaw-lead-import", quantity=1)
+    except Exception:
+        pass
+
     if len(sys.argv) < 2:
         print("用法:")
         print("  python3 dc_customer_import.py import <enterprise> <file.csv>")

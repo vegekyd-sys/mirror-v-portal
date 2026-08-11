@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    key: str
+    label: str
+    imap_host: str
+    imap_port: int
+    smtp_host: str
+    smtp_port: int
+    smtp_mode: str = "ssl"  # ssl | starttls
+    recommended_auth: str = "app_password"
+    imap_id_required: bool = False
+
+
+PROVIDERS: dict[str, ProviderConfig] = {
+    "netease_163": ProviderConfig(
+        key="netease_163",
+        label="网易163邮箱",
+        imap_host="imap.163.com",
+        imap_port=993,
+        smtp_host="smtp.163.com",
+        smtp_port=465,
+        imap_id_required=True,
+    ),
+    "tencent_exmail": ProviderConfig(
+        key="tencent_exmail",
+        label="腾讯企业邮箱",
+        imap_host="imap.exmail.qq.com",
+        imap_port=993,
+        smtp_host="smtp.exmail.qq.com",
+        smtp_port=465,
+    ),
+    "gmail": ProviderConfig(
+        key="gmail",
+        label="Gmail / Google Workspace",
+        imap_host="imap.gmail.com",
+        imap_port=993,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        recommended_auth="oauth2_or_app_password",
+    ),
+    "resend": ProviderConfig(
+        key="resend",
+        label="Resend Email API",
+        imap_host="",  # no standard IMAP — replies route through Resend webhook
+        imap_port=0,
+        smtp_host="api.resend.com",
+        smtp_port=443,
+        smtp_mode="ssl",
+        recommended_auth="api_key",
+    ),
+}
+
+
+def get_provider(key: str) -> ProviderConfig:
+    try:
+        return PROVIDERS[key]
+    except KeyError as exc:
+        valid = ", ".join(sorted(PROVIDERS))
+        raise ValueError(f"unknown provider {key!r}; expected one of: {valid}") from exc

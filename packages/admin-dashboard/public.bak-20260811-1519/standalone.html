@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>小元管理后台</title>
+<style>
+:root{--bg:#f8f9fb;--card:#fff;--border:#e9ecf0;--text:#1a1d28;--muted:#6b7280;--accent:#5b5af7;--green:#10b981;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:200px;background:#fff;border-right:1px solid var(--border);padding:20px 0;z-index:10}
+.sidebar .logo{padding:0 20px 24px;font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.sidebar .logo span{font-size:11px;font-weight:500;color:var(--muted);background:#f3f4f6;padding:2px 8px;border-radius:6px}
+.sidebar nav a{display:flex;align-items:center;gap:8px;padding:10px 20px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;margin:0 8px;border-radius:8px}
+.sidebar nav a:hover,.sidebar nav a.active{color:var(--accent);background:#f5f3ff}
+.sidebar .footer{padding:16px 20px;font-size:11px;color:var(--muted);position:absolute;bottom:0}
+main{margin-left:200px;padding:24px 32px}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.page-header h2{font-size:20px;font-weight:700}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:var(--card);border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.stat-card .label{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.5px}
+.stat-card .value{font-size:32px;font-weight:700;margin:4px 0}
+.stat-card .trend{font-size:12px;color:var(--muted)}
+.data-card{background:var(--card);border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.04);overflow:hidden}
+.toolbar{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border)}
+.toolbar input,.toolbar select{padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.toolbar input:focus,.toolbar select:focus{border-color:var(--accent)}
+.toolbar input{width:220px}
+.btn{padding:6px 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;border:none;transition:.12s}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{opacity:.9}
+.btn-secondary{background:#f3f4f6;color:var(--text)}.btn-secondary:hover{background:#e5e7eb}
+.btn-sm{padding:3px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+thead th{padding:10px 16px;text-align:left;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;border-bottom:1px solid var(--border);background:#fafbfc;cursor:pointer;user-select:none;white-space:nowrap}
+thead th:hover{color:var(--text)}
+tbody td{padding:12px 16px;border-bottom:1px solid #f3f4f6;font-size:13px}
+tbody tr{cursor:pointer;transition:.1s}
+tbody tr:hover td{background:#fafbff}
+tbody tr.expanded td{background:#f0efff;border-bottom:none}
+.progress-bar{height:5px;border-radius:3px;background:#f3f4f6;overflow:hidden;margin-top:3px}
+.progress-fill{height:100%;border-radius:3px}
+.badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600}
+.badge.start{background:#eff6ff;color:var(--blue)}
+.badge.growth{background:#fef3c7;color:#92400e}
+.badge.ultra{background:#fce7f3;color:#9d174d}
+.badge.live{background:#d1fae5;color:#065f46}
+.badge.shadow{background:#e0e7ff;color:#3730a3}
+.alert{background:#fffbeb}
+.detail-row td{background:#fafbff;padding:16px 24px;border-bottom:2px solid var(--accent)}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}
+.mono{font-family:"SF Mono","Fira Code",monospace;font-size:12px}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:#fff;border-radius:16px;padding:32px;width:460px;max-height:85vh;overflow-y:auto;box-shadow:0 25px 50px rgba(0,0,0,.15)}
+.modal h3{font-size:16px;font-weight:700;margin-bottom:16px}
+.form-row{margin-bottom:12px}
+.form-row label{display:block;font-size:12px;color:var(--muted);font-weight:500;margin-bottom:4px}
+.form-row input,.form-row select{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px}
+.form-row input:focus,.form-row select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,90,247,.1)}
+.form-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+.page{display:none}.page.active{display:block}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <div class="logo">⚡ 小元管理后台 <span>内测</span></div>
+  <nav>
+    <a href="#" data-page="customers" class="active">📊 客户管理</a>
+    <a href="#" data-page="pricing">💰 Skill 定价</a>
+    <a href="#" data-page="plans">📋 套餐模板</a>
+  </nav>
+  <div class="footer">DealClaw · 2026</div>
+</div>
+<main>
+  <div id="page-customers" class="page active"></div>
+  <div id="page-pricing" class="page"></div>
+  <div id="page-plans" class="page"></div>
+</main>
+<script>
+var BASE = window.location.pathname.startsWith('/admin')?'/admin':'';
+var skillNames = {
+  'dealclaw-find-buyers':'搜索买家','dealclaw-analyze-company':'企业画像',
+  'dealclaw-market-insight':'市场报告','dealclaw-email-growth-send':'批量开发信',
+  'dealclaw-email-founder-direct':'精准开发信','dealclaw-smart-reply':'自动回复',
+  'dealclaw-exhibition-leads':'展后线索','dealclaw-exhibition-invitation':'展会邀约',
+  'dealclaw-lead-import':'导入线索'
+};
+var custData=[],openTid=null,filterText='',filterPlan='',sortBy='';
+
+function toast(msg){
+  var t=document.createElement('div');
+  t.style.cssText='position:fixed;bottom:24px;right:24px;background:#1a1d28;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:200';
+  t.textContent=msg;document.body.appendChild(t);setTimeout(function(){t.remove()},2000);
+}
+
+async function api(url,opts){
+  opts=opts||{};
+  opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
+  var r=await fetch(BASE+url,opts);
+  if(!r.ok)throw new Error(r.status);
+  return r.json();
+}
+
+// NAV
+document.querySelectorAll('.sidebar nav a').forEach(function(a){
+  a.addEventListener('click',function(e){
+    e.preventDefault();
+    document.querySelectorAll('.sidebar nav a').forEach(function(x){x.classList.remove('active')});
+    a.classList.add('active');
+    document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
+    document.getElementById('page-'+a.dataset.page).classList.add('active');
+    if(a.dataset.page==='customers')loadCustomers();
+    if(a.dataset.page==='pricing')loadPricing();
+    if(a.dataset.page==='plans')loadPlans();
+  });
+});
+
+// ===== CUSTOMERS =====
+async function loadCustomers(){
+  var d=await api('/api/admin/customers');
+  custData=(d.customers||[]).filter(function(c){return c.status==='active'});
+  var s=d.stats||{};
+  openTid=null;
+  document.getElementById('page-customers').innerHTML=
+    '<div class="page-header"><h2>客户管理</h2><button class="btn btn-primary" onclick="showCreate()">+ 创建客户</button></div>'+
+    '<div class="stats-grid">'+
+    '<div class="stat-card"><div class="label">活跃客户</div><div class="value" style="color:var(--accent)">'+custData.length+'</div></div>'+
+    '<div class="stat-card"><div class="label">总余额</div><div class="value" style="color:var(--green)">'+((s.totalBalance||0)/1000).toFixed(0)+'K</div><div class="trend">Credit</div></div>'+
+    '<div class="stat-card"><div class="label">总消耗</div><div class="value">'+((s.totalConsumed||0)/1000).toFixed(0)+'K</div><div class="trend">Credit</div></div>'+
+    '<div class="stat-card"><div class="label">冻结/预留</div><div class="value" style="color:var(--blue)">'+(custData.reduce(function(a,c){return a+(c.frozenCredits||0);},0)/1000).toFixed(0)+'K</div><div class="trend">慧展权益保障</div></div>'+
+    '</div>'+
+    '<div class="data-card">'+
+    '<div class="toolbar">'+
+    '<input type="text" placeholder="搜索客户..." oninput="filterText=this.value;renderTable()">'+
+    '<select onchange="filterPlan=this.value;renderTable()"><option value="">全部套餐</option><option value="start">Start</option><option value="growth">Growth</option><option value="ultra">Ultra</option></select>'+
+    '<select onchange="sortBy=this.value;renderTable()"><option value="">默认排序</option><option value="consumed">消耗从高到低</option><option value="consumed-asc">消耗从低到高</option><option value="balance-asc">余额从低到高</option><option value="name">按名称</option></select>'+
+    '<button class="btn btn-secondary btn-sm" onclick="loadCustomers()">刷新</button>'+
+    '</div>'+
+    '<table><thead><tr>'+
+    '<th onclick="sortTh(\'name\')">客户</th>'+
+    '<th onclick="sortTh(\'plan\')">套餐</th>'+
+    '<th onclick="sortTh(\'balance\')">余额</th>'+
+    '<th onclick="sortTh(\'consumed\')">已消耗</th>'+
+    '<th>冻结</th>'+
+    '<th>占比</th>'+
+    '<th style="width:80px">操作</th>'+
+    '</tr></thead><tbody id="ct"></tbody></table></div>';
+  renderTable();
+}
+
+function sortTh(col){
+  if(sortBy===col||sortBy===col+'-desc') sortBy=col+'-asc';
+  else if(sortBy===col+'-asc') sortBy=col+'-desc';
+  else sortBy=col+'-desc';
+  renderTable();
+}
+
+function renderTable(){
+  var data=custData.slice();
+  if(filterText){
+    var f=filterText.toLowerCase();
+    data=data.filter(function(c){return(c.companyName||'').toLowerCase().indexOf(f)>=0;});
+  }
+  if(filterPlan) data=data.filter(function(c){return c.planTier===filterPlan;});
+  if(sortBy==='consumed'||sortBy==='consumed-desc') data.sort(function(a,b){return(b.lifetimeConsumed||0)-(a.lifetimeConsumed||0);});
+  else if(sortBy==='consumed-asc') data.sort(function(a,b){return(a.lifetimeConsumed||0)-(b.lifetimeConsumed||0);});
+  else if(sortBy==='balance-desc') data.sort(function(a,b){return(b.balance||0)-(a.balance||0);});
+  else if(sortBy==='balance-asc') data.sort(function(a,b){return(a.balance||0)-(b.balance||0);});
+  else if(sortBy==='name') data.sort(function(a,b){return(a.companyName||'').localeCompare(b.companyName||'');});
+  
+  document.getElementById('ct').innerHTML=data.map(function(c){
+    var consumed=c.lifetimeConsumed||(500000-(c.balance||0));
+    var frozen=c.frozenCredits||0;
+    var avail=c.availableBalance!=null?c.availableBalance:((c.balance||0)-(c.frozenCredits||0));
+    var pct=consumed/5000;
+    var color=pct>30?'var(--red)':pct>15?'var(--amber)':'var(--green)';
+    var tid=c.tenantId||'';
+    return '<tr class="'+(openTid===tid?'expanded ':'')+(c.balance<50000?'alert':'')+'" onclick="toggleDetail(\''+tid+'\')">'+
+    '<td style="font-weight:500"><a href="customer.html?tid='+tid+'" onclick="event.stopPropagation()" style="color:var(--accent);text-decoration:none">'+c.companyName+'</a> <span class="mono" style="color:var(--muted)">'+tid+'</span></td>'+
+    '<td><span class="badge '+c.planTier+'">'+c.planTier+'</span></td>'+
+    '<td style="font-weight:600;color:'+(c.balance<50000?'var(--red)':'var(--green)')+'">'+(c.balance/1000).toFixed(0)+'K'+(frozen>0?' <span style="font-size:10px;color:var(--muted)">可用 '+(avail/1000).toFixed(0)+'K</span>':'')+'</td>'+
+    '<td style="font-weight:600">'+(consumed/1000).toFixed(0)+'K</td>'+
+    '<td style="color:'+(frozen>0?'var(--blue)':'var(--muted)')+'">'+(frozen>0?(frozen/1000).toFixed(0)+'K':'—')+'</td>'+
+    '<td><div class="progress-bar"><div class="progress-fill" style="width:'+pct+'%;background:'+color+'"></div></div><div style="font-size:11px;color:var(--muted)">'+pct.toFixed(1)+'%</div></td>'+
+    '<td><button class="btn btn-primary btn-sm" onclick="event.stopPropagation();showRenew(\''+tid+'\',\''+(c.companyName||'')+'\','+c.balance+',\''+c.planTier+'\')">续费</button></td>'+
+    '</tr>'+
+    (openTid===tid?renderDetail(tid):'');
+  }).join('')||'<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted)">暂无客户</td></tr>';
+}
+
+function renderDetail(tid){
+  var c=custData.find(function(x){return x.tenantId===tid});
+  if(!c||!(c.lifetimeConsumed||0)>0) return '<tr class="detail-row"><td colspan="7" style="color:var(--muted);text-align:center">暂无消耗数据</td></tr>';
+  return '<tr class="detail-row"><td colspan="7" style="color:var(--muted)">加载中...</td></tr>';
+}
+
+async function toggleDetail(tid){
+  if(openTid===tid){
+    openTid=null;
+    renderTable();
+    return;
+  }
+  openTid=tid;
+  renderTable();
+  // Now load real data
+  try{
+    var d=await api('/api/admin/customers/'+encodeURIComponent(tid));
+    var bd=d.skillBreakdown||{};
+    var sd=d.shadowBreakdown||{};
+    var total=0;Object.keys(bd).forEach(function(k){total+=bd[k]});
+    var detailRow=document.querySelector('.detail-row');
+    if(!detailRow) return;
+    
+    if(total>0 || Object.keys(sd).length>0){
+      var frozen=d.frozenCredits||0;
+      var avail=d.availableBalance||0;
+      var frozStr='';
+      if(frozen>0) frozStr='<div style="background:#eff6ff;border-left:3px solid var(--blue);padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px"><span style="color:var(--muted)">冻结/预留: </span><span style="font-weight:700;color:var(--blue)">'+(frozen/1000).toFixed(0)+'K</span><span style="color:var(--muted)"> · 可用 '+(avail/1000).toFixed(0)+'K · '+(d.frozenReason||'')+'</span></div>';
+      var html='<div style="font-weight:700;margin-bottom:8px">已结算消耗</div>'+frozStr;
+      if(total>0){
+        html+='<div class="detail-grid">';
+        Object.keys(bd).forEach(function(k){
+          var pct=Math.round(bd[k]/total*100);
+          html+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f3f4f6;font-size:13px"><span style="color:var(--muted)">'+(skillNames[k]||k)+'</span><span style="font-weight:600">'+(bd[k]/1000).toFixed(1)+'K ('+pct+'%)</span></div>';
+        });
+        html+='</div>';
+      }else{
+        html+='<div style="color:var(--muted);font-size:12px;padding:4px 0">暂无已结算消耗</div>';
+      }
+      // Shadow billing (内测预估)
+      if(Object.keys(sd).length>0){
+        html+='<div style="font-weight:700;margin:12px 0 8px;color:var(--muted)">内测预估 (Shadow)</div><div class="detail-grid">';
+        var stotal=0;Object.keys(sd).forEach(function(k){stotal+=sd[k]});
+        Object.keys(sd).forEach(function(k){
+          var pct=Math.round(sd[k]/stotal*100);
+          html+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f3f4f6;font-size:13px"><span style="color:var(--blue)">'+(skillNames[k]||k)+'</span><span style="font-weight:600;color:var(--blue)">'+(sd[k]/1000).toFixed(1)+'K ('+pct+'%)</span></div>';
+        });
+        html+='</div>';
+      }
+      detailRow.innerHTML='<td colspan="7">'+html+'</td>';
+    }else{
+      detailRow.innerHTML='<td colspan="7" style="color:var(--muted);text-align:center;padding:16px">暂无 Skill 消耗记录</td></tr>';
+    }
+  }catch(e){
+    var detailRow=document.querySelector('.detail-row');
+    if(detailRow) detailRow.innerHTML='<td colspan="7" style="color:var(--red)">加载失败</td>';
+  }
+}
+
+// ===== RENEW =====
+function showRenew(tid,name,balance,plan){
+  var disc=plan==='ultra'?0.8:plan==='growth'?0.9:1.0;
+  var blocks=[{c:100000,l:'100K',p:Math.round(1000*disc)},{c:200000,l:'200K',p:Math.round(2000*disc)},{c:500000,l:'500K',p:Math.round(5000*disc)}];
+  var h='<div class="modal-overlay" onclick="if(event.target===this)this.remove()"><div class="modal"><h3>续费 - '+name+'</h3>';
+  h+='<p style="color:var(--muted);font-size:13px;margin-bottom:16px">余额 '+(balance/1000).toFixed(0)+'K · '+plan+(disc<1?' ('+Math.round((1-disc)*100)+'% off)':'')+'</p>';
+  blocks.forEach(function(b){
+    h+='<div style="padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;cursor:pointer" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'" onclick="doRenew(\''+tid+'\','+b.c+')"><div style="font-weight:600">'+b.l+' Credit</div><div style="font-size:12px;color:var(--muted)">¥'+b.p.toLocaleString()+''+(disc<1?' <span style=color:var(--green)>('+Math.round((1-disc)*100)+'% off)</span>':'')+'</div></div>';
+  });
+  h+='<div class="form-actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">取消</button></div></div></div>';
+  document.body.insertAdjacentHTML('beforeend',h);
+}
+async function doRenew(tid,credit){
+  var d=await api('/api/admin/customers/'+encodeURIComponent(tid)+'/renew',{method:'POST',body:JSON.stringify({creditAmount:credit})});
+  document.querySelector('.modal-overlay').remove();
+  toast(d.message||'续费成功');loadCustomers();
+}
+
+// ===== CREATE =====
+function showCreate(){
+  document.body.insertAdjacentHTML('beforeend',
+    '<div class="modal-overlay" onclick="if(event.target===this)this.remove()"><div class="modal"><h3>创建客户</h3>'+
+    '<p style="color:var(--amber);font-size:12px;background:#fffbeb;padding:8px 12px;border-radius:8px;margin-bottom:16px">确认客户已通过内测授权后创建，将自动开通 Credit 额度。</p>'+
+    '<div class="form-row"><label>公司名称 *</label><input id="cf_name" placeholder="小元内测-张三"></div>'+
+    '<div class="form-row"><label>套餐</label><select id="cf_plan"><option value="start">Start 启航版 - 500K</option><option value="growth">Growth - 1,500K</option><option value="ultra">Ultra - 5,000K</option></select></div>'+
+    '<div class="form-actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">取消</button><button class="btn btn-primary" onclick="doCreate()">确认</button></div></div></div>');
+}
+async function doCreate(){
+  var name=document.getElementById('cf_name').value.trim();
+  if(!name)return toast('请输入公司名称');
+  var plan=document.getElementById('cf_plan').value;
+  var tid='xiaoyuan-'+name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g,'').slice(0,20);
+  await api('/api/admin/customers',{method:'POST',body:JSON.stringify({tenantId:tid,companyName:name,planId:plan})});
+  document.querySelector('.modal-overlay').remove();
+  toast('已创建');loadCustomers();
+}
+
+// ===== PRICING =====
+async function loadPricing(){
+  var d=await api('/api/skill-prices');
+  var prices=(d.prices||[]).filter(function(p){return p.status!=='disabled'});
+  var costMap={'dealclaw-find-buyers':0.63,'dealclaw-analyze-company':0.36,'dealclaw-market-insight':1.15,'dealclaw-email-growth-send':0.14,'dealclaw-email-founder-direct':0.17,'dealclaw-smart-reply':0.05,'dealclaw-exhibition-leads':0.99,'dealclaw-exhibition-invitation':0.27,'dealclaw-lead-import':0.06};
+  document.getElementById('page-pricing').innerHTML=
+    '<div class="page-header"><h2>Skill 定价管理</h2></div>'+
+    '<div class="data-card"><table><thead><tr><th>Skill ID</th><th>名称</th><th>Credit</th><th>成本 ¥</th><th>毛利率</th><th>状态</th></tr></thead><tbody>'+
+    prices.map(function(p){
+      var cost=costMap[p.skillId]||0;
+      var margin=p.creditPerUnit>0?Math.round((1-cost/(p.creditPerUnit*0.01))*100):0;
+      var mc=margin>80?'var(--green)':margin>50?'var(--amber)':'var(--red)';
+      return '<tr onclick="editPrice(\''+p.skillId+'\','+p.creditPerUnit+',\''+p.skillName+'\',\''+p.category+'\',\''+(p.billingUnit||'per_item')+'\',\''+p.status+'\')">'+
+      '<td class="mono">'+p.skillId+'</td><td style="font-weight:500">'+p.skillName+'</td>'+
+      '<td style="font-weight:700;color:var(--accent)">'+p.creditPerUnit.toLocaleString()+'</td>'+
+      '<td style="color:var(--muted)">¥'+cost.toFixed(2)+'</td>'+
+      '<td><span style="color:'+mc+';font-weight:600">'+margin+'%</span></td>'+
+      '<td><span class="badge '+p.status+'">'+p.status+'</span></td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+function editPrice(skillId,current,name,cat,unit,status){
+  var val=prompt(name+' 新 Credit:',current);
+  if(!val)return;
+  var v=parseInt(val);if(isNaN(v)||v<0)return toast('无效数字');
+  api('/api/skill-prices',{method:'PUT',body:JSON.stringify({skillId:skillId,skillName:name,category:cat,creditPerUnit:v,billingUnit:unit,status:status})}).then(function(d){
+    if(d.ok){toast(name+': '+current+' \u2192 '+v);loadPricing();}else toast('失败');
+  });
+}
+
+// ===== PLANS =====
+async function loadPlans(){
+  var d=await api('/api/admin/plans');
+  document.getElementById('page-plans').innerHTML=
+    '<div class="page-header"><h2>套餐模板</h2></div>'+
+    '<div class="data-card"><table><thead><tr><th>套餐</th><th>年费</th><th>初始 Credit</th><th>续充/100K</th><th>折扣</th><th>席位</th></tr></thead><tbody>'+
+    (d.plans||[]).map(function(p){
+      return '<tr><td style="font-weight:700">'+p.planName+'</td><td>¥'+p.annualFeeYuan.toLocaleString()+'</td>'+
+      '<td style="color:var(--green);font-weight:700">'+(p.initialCredit/1000).toFixed(0)+'K</td>'+
+      '<td>¥'+p.renewalPricePer100k.toLocaleString()+'</td>'+
+      '<td>'+(Number(p.renewalDiscount)<1?Math.round((1-p.renewalDiscount)*100)+'% off':'原价')+'</td>'+
+      '<td>'+p.seatsMin+'\u2013'+p.seatsMax+' 人</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+
+loadCustomers();
+</script>
+</body>
+</html>

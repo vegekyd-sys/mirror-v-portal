@@ -12,10 +12,16 @@ if (existsSync(CP)) {
   try { known = JSON.parse(readFileSync(CP,'utf8')).uids || []; } catch(_) {}
 }
 
+const imapUser = process.env.FOUNDER_IMAP_USER;
+const imapPassword = process.env.FOUNDER_IMAP_PASSWORD;
+if (!imapUser || !imapPassword) {
+  throw new Error('FOUNDER_IMAP_USER / FOUNDER_IMAP_PASSWORD 未配置');
+}
+
 const imap = new Imap({
-  user: 'tiangengjun@meorient.com', password: 'qnVNXRrnbwUPeqZL',
+  user: imapUser, password: imapPassword,
   host: 'imap.exmail.qq.com', port: 993, tls: true,
-  tlsOptions: { rejectUnauthorized: false },
+  tlsOptions: { rejectUnauthorized: true },
   connTimeout: 15000, authTimeout: 15000,
 });
 

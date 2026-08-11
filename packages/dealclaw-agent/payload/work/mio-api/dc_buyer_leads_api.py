@@ -154,6 +154,17 @@ def search_buyers(
 # ── CLI ──
 if __name__ == "__main__":
     import argparse
+
+    # Shadow billing
+    try:
+        from dc_billing import billing
+        tenant = os.environ.get("DC_TENANT_ID", "") or os.environ.get("DEALCLAW_TENANT_ID", "")
+        if tenant:
+            billing.configure(tenant)
+            billing.estimate("dealclaw-exhibition-leads", quantity=1)
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser(description="TradeChina 买家线索广场搜索")
     ap.add_argument("keyword", help="产品关键词（英文）")
     ap.add_argument("--country", "-c", default="", help="国家 ID")
