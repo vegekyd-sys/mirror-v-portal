@@ -118,9 +118,11 @@ export function createApp(config: GatewayConfig) {
     attachKeyConfig(config),
     sceneMiddleware,
     creditsCheckMiddleware(config),
+    billingEstimateMiddleware(config),
     async (req: Request, res: Response) => {
       const tenant = (req as Request & { tenantContext: TenantContext }).tenantContext;
       const creditsCheck = (req as Request & { creditsCheck: { remaining: number; required: number; accountId: string } }).creditsCheck;
+      const billing = (req as Request & { billing: BillingContext }).billing;
 
       // Cache scene list (N2 FIX)
       const scenes = sceneHeaders(config.planTier);
@@ -144,27 +146,38 @@ export function createApp(config: GatewayConfig) {
 
         const body = await response.text();
 
-        // B3 FIX: call credits-ledger API for debit instead of in-memory
-        if (response.ok && creditsCheck.required > 0) {
-          const idempotencyKey = `gw:${config.tenantId}:${Date.now()}:${Math.random().toString(36).slice(2, 9)}`;
+        // B3→v2.2: Use billing-hook estimate→settle instead of direct debit.
+        // This creates skill_billing_events, supports shadow billing,
+        // subscription expiry checks, and monthly allowance enforcement.
+        if (response.ok && billing.estimatedEventId && billing.required > 0) {
           try {
-            await fetch(
-              `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/accounts/${creditsCheck.accountId}/debit`,
+            const settleResp = await fetch(
+              `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/billing/settle`,
               {
                 method: 'POST',
                 signal: AbortSignal.timeout(5_000),
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  amount: creditsCheck.required,
-                  reference: `req_${config.tenantId}_${Date.now()}`,
-                  idempotencyKey,
+                  tenantId: billing.tenantId,
+                  accountId: billing.accountId,
+                  skillId: billing.skillId,
+                  quantity: 1,
+                  estimatedEventId: billing.estimatedEventId,
+                  resultSummary: 'agent_success',
+                  metadata: { agentStatus: response.status, intentKind: billing.intentKind },
                 }),
               }
             );
-          } catch (debitErr: any) {
-            console.error('Credits debit failed after agent success:', debitErr.code || debitErr.message);
+            if (!settleResp.ok) {
+              console.error('Billing settle failed:', settleResp.status, await settleResp.text().catch(() => ''));
+            }
+          } catch (settleErr: any) {
+            console.error('Billing settle error:', settleErr.code || settleErr.message);
             // Log but don't block the response — credits correction can happen async
           }
+        } else if (!response.ok && billing.estimatedEventId) {
+          // Agent failed: log but don't settle (billing_event stays as 'estimated')
+          console.warn(`Agent returned ${response.status}, billing event ${billing.estimatedEventId} not settled`);
         }
 
         res.status(response.status);
@@ -251,6 +264,126 @@ function creditsCheckMiddleware(config: GatewayConfig) {
       }
       res.status(503).json({ code: 'SERVICE_UNAVAILABLE', message: 'Credits service temporarily unavailable. Please try again.' });
       return;
+    }
+  };
+}
+
+// ── Billing Hook v2.2: estimate→settle context ──
+interface BillingContext {
+  estimatedEventId: string | null;
+  required: number;
+  accountId: string;
+  tenantId: string;
+  skillId: string;
+  intentKind: string;
+}
+
+function resolveSkillId(intentKind?: string): string {
+  if (intentKind && intentKind in CREDIT_COSTS) {
+    return `gateway.${intentKind}`;
+  }
+  return 'gateway.default';
+}
+
+/**
+ * B3→v2.2: Call billing-hook estimate before forwarding to agent.
+ * Creates a skill_billing_events record with status='estimated' and
+ * validates balance/subscription/monthly-allowance through canAfford().
+ * The billing context (estimatedEventId) is used by the execute handler
+ * to settle the billing after agent success.
+ */
+function billingEstimateMiddleware(config: GatewayConfig) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const intentKind: string | undefined = req.body?.intent?.kind;
+    const skillId = resolveSkillId(intentKind);
+    const cost = intentKind ? (CREDIT_COSTS[intentKind] ?? DEFAULT_COST) : DEFAULT_COST;
+
+    if (cost === 0) {
+      (req as any).billing = {
+        estimatedEventId: null,
+        required: 0,
+        accountId: config.keyConfig.creditsAccountId,
+        tenantId: config.tenantId,
+        skillId,
+        intentKind: intentKind ?? 'unknown',
+      } as BillingContext;
+      next();
+      return;
+    }
+
+    try {
+      const taskId = `gw:${config.tenantId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const estimateResp = await fetch(
+        `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/billing/estimate`,
+        {
+          method: 'POST',
+          signal: AbortSignal.timeout(5_000),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenantId: config.tenantId,
+            accountId: config.keyConfig.creditsAccountId,
+            taskId,
+            skillId,
+            quantity: 1,
+            metadata: { intentKind, source: 'nexus-gateway' },
+          }),
+        }
+      );
+
+      if (!estimateResp.ok) {
+        const errBody = await estimateResp.json().catch(() => ({})) as Record<string, unknown>;
+        const code = errBody.code as string | undefined;
+        const message = (errBody.error as string) || (errBody.message as string) || 'Billing estimate failed';
+
+        if (code === 'INSUFFICIENT_CREDITS') {
+          res.status(402).json({ code: 'INSUFFICIENT_CREDITS', message: 'Insufficient credits. Please top up.' });
+          return;
+        }
+        if (code === 'SUBSCRIPTION_EXPIRED') {
+          res.status(402).json({ code: 'SUBSCRIPTION_EXPIRED', message: 'Your subscription has expired. Please renew.' });
+          return;
+        }
+        if (code === 'ACCOUNT_SUSPENDED' || code === 'ACCOUNT_CLOSED') {
+          res.status(402).json({ code: 'ACCOUNT_SUSPENDED', message: `Account ${code === 'ACCOUNT_CLOSED' ? 'closed' : 'suspended'}. Contact support.` });
+          return;
+        }
+        if (code === 'MONTHLY_LIMIT_EXCEEDED') {
+          res.status(402).json({ code: 'MONTHLY_LIMIT_EXCEEDED', message: 'Monthly credit allowance exceeded. Contact support.' });
+          return;
+        }
+
+        console.error('Billing estimate failed:', estimateResp.status, errBody);
+        if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
+          console.warn('[billing] FAIL-OPEN: estimate returned', estimateResp.status, '— allowing without billing event');
+          (req as any).billing = { estimatedEventId: null, required: cost, accountId: config.keyConfig.creditsAccountId, tenantId: config.tenantId, skillId, intentKind } as BillingContext;
+          next();
+          return;
+        }
+        res.status(503).json({ code: 'SERVICE_UNAVAILABLE', message: 'Billing service temporarily unavailable.' });
+        return;
+      }
+
+      const estimateData = await estimateResp.json() as { ok: boolean; eventId: string; estimatedCredit: number; billingMode?: string };
+      (req as any).billing = {
+        estimatedEventId: estimateData.eventId,
+        required: estimateData.estimatedCredit ?? cost,
+        accountId: config.keyConfig.creditsAccountId,
+        tenantId: config.tenantId,
+        skillId,
+        intentKind: intentKind ?? 'unknown',
+      } as BillingContext;
+
+      console.log(`[billing] estimated ${estimateData.estimatedCredit} credits for ${skillId} (mode: ${estimateData.billingMode ?? 'live'}, event: ${estimateData.eventId})`);
+      next();
+    } catch (err: any) {
+      console.error('Billing estimate error:', err.code || err.message);
+      if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
+        console.warn('[billing] FAIL-OPEN: credits-ledger unreachable — allowing without billing event');
+        (req as any).billing = { estimatedEventId: null, required: cost, accountId: config.keyConfig.creditsAccountId, tenantId: config.tenantId, skillId, intentKind } as BillingContext;
+        next();
+        return;
+      }
+      res.status(503).json({ code: 'SERVICE_UNAVAILABLE', message: 'Billing service temporarily unavailable.' });
     }
   };
 }

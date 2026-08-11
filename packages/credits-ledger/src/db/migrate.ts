@@ -155,6 +155,9 @@ export async function migrate() {
     await seedDefaultPrices();
   }
 
+  // ── v2.2: Gateway agent billing entries (nexus-gateway estimate→settle) ──
+  await seedGatewayPrices();
+
   console.log('Migrations complete');
 }
 
@@ -187,4 +190,30 @@ async function seedDefaultPrices() {
   }
 
   console.log(`Seeded ${prices.length} default skill prices`);
+}
+
+/**
+ * Seed gateway agent billing entries so nexus-gateway can use
+ * the estimate→settle billing-hook flow instead of direct debit.
+ * Uses ON CONFLICT to safely add to existing tables.
+ */
+async function seedGatewayPrices() {
+  const gatewayPrices = [
+    { skillId: 'gateway.chat',    skillName: '网关-对话',   description: 'Nexus Gateway agent 对话请求（免费）',  category: 'gateway', creditPerUnit: 0,    billingUnit: 'per_call', sortOrder: 100 },
+    { skillId: 'gateway.command', skillName: '网关-命令',   description: 'Nexus Gateway agent 命令执行',           category: 'gateway', creditPerUnit: 5000, billingUnit: 'per_call', sortOrder: 101 },
+    { skillId: 'gateway.query',   skillName: '网关-查询',   description: 'Nexus Gateway agent 数据查询',           category: 'gateway', creditPerUnit: 2000, billingUnit: 'per_call', sortOrder: 102 },
+    { skillId: 'gateway.action',  skillName: '网关-动作',   description: 'Nexus Gateway agent 写操作/动作',        category: 'gateway', creditPerUnit: 8000, billingUnit: 'per_call', sortOrder: 103 },
+    { skillId: 'gateway.default', skillName: '网关-默认',   description: 'Nexus Gateway agent 未识别意图回退',       category: 'gateway', creditPerUnit: 2000, billingUnit: 'per_call', sortOrder: 104 },
+  ];
+
+  for (const p of gatewayPrices) {
+    await query(
+      `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, billing_unit, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (skill_id) DO NOTHING`,
+      [p.skillId, p.skillName, p.description, p.category, p.creditPerUnit, p.billingUnit, p.sortOrder]
+    );
+  }
+
+  console.log(`Seeded ${gatewayPrices.length} gateway skill prices`);
 }
