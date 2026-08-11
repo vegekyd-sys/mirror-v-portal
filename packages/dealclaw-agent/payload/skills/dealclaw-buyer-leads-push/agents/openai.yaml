@@ -1,0 +1,4 @@
+interface:
+  display_name: "飞书AI猎客买家线索推送"
+  short_description: "读取企业知识库，匹配采购需求并自动维护飞书买家线索池"
+  default_prompt: "使用 $buyer-leads-feishu-push 读取当前群企业知识库，更新买家线索池并生成今日推送。"

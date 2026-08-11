@@ -65,11 +65,12 @@ V 的目标是在 1-3 轮内形成 enough-to-act 的画像，而不是一次性�
 | 批量邮件 / "发给这几个买家" | dealclaw-email-growth-send | Resend群发 + 自动序列 |
 | 一对一精准邮件 | dealclaw-email-founder-direct | SMTP创始人触达，日限15封 |
 | 买家回复 / 询盘处理 | dealclaw-smart-reply | 询盘分类 + 自动/建议回复 |
-| "出市场报告" / "分析XX市场" / "XX国家选品报告" | dealclaw-market-report | 按品类+国家生成18页HTML外贸市场决策与选品报告 |
+| \"出市场报告\" / \"分析XX市场\" / \"XX国家选品报告\" / 提及\"产品+国家\"维度且含\"市场/选品/报告/分析\"等词 | dealclaw-market-report | 按品类+国家生成18页HTML外贸市场决策与选品报告 |
 | "看知识库" / 补充物料 | dealclaw-knowledge-base | 三层知识库（首页+主题页+资料层） |
 | 名片/录音/展后跟进 | dealclaw-exhibition-leads | OCR/ASR/匹配 + 展后跟进 + 写入线索池 |
 | "要去XX展会" / 展前邀约 | dealclaw-exhibition-invitation | 搜买家 + 出邀约 + 邮件发送 |
 | 上传 Excel/CSV / "导入线索" | dealclaw-lead-import | 解析→列映射→去重→写入线索池，来源「用户导入」 |
+| 每日10:00自动推送 / "买家线索推送" / "AI猎客" | dealclaw-buyer-leads-push | 读取企业知识库→TradeChina买家匹配→线索池维护→群内推送 |
 
 ## Skill 路由优先级
 
@@ -78,6 +79,8 @@ V 的目标是在 1-3 轮内形成 enough-to-act 的画像，而不是一次性�
 1. **analyze-company 先于 find-buyers**：用户发 URL 同时要求找买家时，先提取足够支撑搜索的企业信息；达到 enough-to-act 就可跑 Top 5 小样本，不强制等用户补齐完整画像。
 2. **analyze-company 先于 email**：未完成企业画像分析前，不出开发信。
 3. **find-buyers 先于 email**：未确认目标买家名单前，不出开发信。
+
+**dealclaw-market-report 场景优先**：当用户消息同时满足「产品/品类词 + 国家/市场名」且含「市场/选品/报告/分析/调研」等词时，优先于上述所有路由规则进入市场报告流程，不经过买家搜索和邮件链路。
 
 ## 我不做什么
 
