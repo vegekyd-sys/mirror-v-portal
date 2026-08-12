@@ -9,7 +9,10 @@ export interface SkillPrice {
   billingUnit: string;
   status: 'live' | 'shadow' | 'disabled';
   billingMode: 'live' | 'shadow' | 'disabled';
+  activationStatus: 'approved' | 'pending' | 'rejected';
   responsiblePerson: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -25,7 +28,10 @@ function rowToSkillPrice(r: any): SkillPrice {
     billingUnit: r.billing_unit,
     status: r.status,
     billingMode: r.status,
+    activationStatus: r.activation_status ?? 'approved',
     responsiblePerson: r.responsible_person ?? null,
+    approvedBy: r.approved_by ?? null,
+    approvedAt: r.approved_at ?? null,
     sortOrder: Number(r.sort_order),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -52,7 +58,7 @@ export async function getSkillPrice(skillId: string): Promise<{
   creditPerUnit: number;
   billingUnit: string;
   category: string;
-  pricingStatus: 'live' | 'shadow';
+  pricingStatus: 'live' | 'shadow' | 'unapproved';
   isDefault: boolean;
 } | null> {
   const { rows } = await query(
@@ -61,13 +67,25 @@ export async function getSkillPrice(skillId: string): Promise<{
   );
   if (rows.length > 0) {
     const p = rowToSkillPrice(rows[0]);
+
+    // Pricing status depends on activation_status:
+    // - approved → live (charge credits)
+    // - pending / rejected → unapproved (shadow mode, no charge)
+    // - ALSO: if status='shadow' in DB → shadow (backward compat)
+    let pricingStatus: 'live' | 'shadow' | 'unapproved' = 'live';
+    if (p.status === 'shadow') {
+      pricingStatus = 'shadow';
+    } else if (p.activationStatus !== 'approved') {
+      pricingStatus = 'unapproved';
+    }
+
     return {
       skillId: p.skillId,
       skillName: p.skillName,
       creditPerUnit: p.creditPerUnit,
       billingUnit: p.billingUnit,
       category: p.category,
-      pricingStatus: p.status === 'shadow' ? 'shadow' : 'live',
+      pricingStatus,
       isDefault: false,
     };
   }

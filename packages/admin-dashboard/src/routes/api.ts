@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request as ExpressRequest } from 'express';
 import { query } from './db.js';
 
 const router = Router();
@@ -125,10 +125,23 @@ router.get('/api/audit', async (req, res) => {
 // ── Skill Pricing (proxy to credits-ledger) ──
 const CREDITS_LEDGER_URL = process.env.CREDITS_LEDGER_URL || 'http://localhost:8081';
 
-async function proxyToLedger(path: string, init?: RequestInit) {
+async function proxyToLedger(path: string, init?: RequestInit & { authReq?: ExpressRequest }) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> || {}),
+  };
+
+  // Forward the JWT token from the incoming request to credits-ledger
+  if (init?.authReq) {
+    const authHeader = init.authReq.header('authorization');
+    if (authHeader) headers['Authorization'] = authHeader;
+  }
+
+  const { authReq: _, ...fetchInit } = init || {};
   const res = await fetch(`${CREDITS_LEDGER_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers as Record<string,string> },
-    ...init,
+    method: fetchInit.method || 'GET',
+    headers,
+    body: fetchInit.body,
   });
   return { status: res.status, body: await res.json() };
 }
@@ -318,6 +331,115 @@ router.get('/api/orders', async (req, res) => {
     // payment_orders may not exist yet in M0
     res.json({ orders: [] });
   }
+});
+
+// ── Admin Auth ──
+
+router.post('/api/admin/auth/login', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/api/admin/auth/me', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/auth/me', { authReq: req });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// ── Admin Users ──
+
+router.get('/api/admin/users', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/users', { authReq: req });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/users', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/users/:userId/token/deactivate', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/users/${req.params.userId}/token/deactivate`, {
+      method: 'POST',
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/users/:userId/token/activate', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/users/${req.params.userId}/token/activate`, {
+      method: 'POST',
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// ── Admin Skills ──
+
+router.post('/api/admin/skills/sync', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/skills/sync', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/skills/:skillId/activate', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/activate`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.post('/api/admin/skills/:skillId/reject', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/api/admin/skills/pending', async (req, res) => {
+  try {
+    const result = await proxyToLedger('/v1/admin/skills/pending', { authReq: req });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/api/admin/skills', async (req, res) => {
+  try {
+    const query = new URLSearchParams(req.query as Record<string,string>).toString();
+    const result = await proxyToLedger(`/v1/admin/skills${query ? '?' + query : ''}`, { authReq: req });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
 export default router;

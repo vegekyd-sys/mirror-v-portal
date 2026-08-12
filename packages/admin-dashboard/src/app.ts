@@ -1,9 +1,10 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import apiRouter from './routes/api.js';
-import { createAuthMiddleware } from './middleware/auth.js';
+import { requireAdmin, optionalAuth } from './middleware/auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -13,19 +14,43 @@ export function createApp(dbUrl?: string) {
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(cookieParser());
+  app.use(express.json({ limit: '1mb' }));
 
-  // Auth middleware — disabled for internal tool
-  // const auth = createAuthMiddleware('ADMIN_API_TOKEN');
+  // ── Health check (no auth) ──
+  app.get('/healthz', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
 
-  // API routes (no auth — internal tool, URL not public)
-  app.use(apiRouter);
+  // ── Auth endpoints (no auth required) ──
+  // Login page
+  app.get('/login', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(join(__dirname, '..', 'public', 'login.html'));
+  });
 
-  // Static frontend (assets, og.png, etc.)
+  // ── Protected HTML pages ──
+  app.get('/admin/skills', requireAdmin, (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(join(__dirname, '..', 'public', 'admin-skills.html'));
+  });
+
+  // ── Protected API routes ──
+  app.use('/api', requireAdmin, apiRouter);
+
+  // ── Static frontend (assets, og.png, etc.) ──
   app.use(express.static(join(__dirname, '..', 'public')));
 
-  // SPA catch-all — single index.html handles all client-side routing
-  // (login, dashboard, customer detail, skill prices, packages)
-  app.get('*', (_req, res) => {
+  // ── SPA catch-all — require auth, redirect to login if not ──
+  app.get('*', optionalAuth, (req, res) => {
+    const user = (req as any).adminUser;
+    if (!user) {
+      // Not logged in → redirect to login page
+      res.redirect('/login');
+      return;
+    }
+
+    // Logged in → serve SPA
     res.set('Cache-Control', 'no-store');
     res.sendFile(join(__dirname, '..', 'public', 'index.html'));
   });

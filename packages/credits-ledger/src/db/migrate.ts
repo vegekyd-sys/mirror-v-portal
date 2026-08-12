@@ -119,6 +119,12 @@ export async function migrate() {
   // v2.4: responsible_person for skill ownership tracking
   await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS responsible_person VARCHAR(64)`);
 
+  // v2.5: activation workflow — approval gate before billing
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS activation_status VARCHAR(16) DEFAULT 'approved'`);
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS approved_by VARCHAR(64)`);
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_skill_prices_activation ON skill_prices(activation_status)`);
+
   await query(`
     CREATE TABLE IF NOT EXISTS price_change_log (
       id              SERIAL PRIMARY KEY,
@@ -156,6 +162,23 @@ export async function migrate() {
   await query(`ALTER TABLE skill_billing_events ADD COLUMN IF NOT EXISTS billing_mode VARCHAR(8) DEFAULT 'live'`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_mode ON skill_billing_events(billing_mode, created_at DESC)`);
 
+  // ── v2.5: Admin Users — JWT token-based auth ──
+  await query(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id              VARCHAR(36) PRIMARY KEY,
+      username        VARCHAR(64) NOT NULL UNIQUE,
+      display_name    VARCHAR(128) NOT NULL,
+      token_hash      VARCHAR(64) NOT NULL UNIQUE,
+      role            VARCHAR(16) NOT NULL DEFAULT 'admin',
+      is_active       BOOLEAN NOT NULL DEFAULT true,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_login_at   TIMESTAMPTZ,
+      created_by      VARCHAR(64)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users(is_active)`);
+
   // ── Seed default skill prices if table is empty ──
   const { rows: existingPrices } = await query('SELECT COUNT(*) as cnt FROM skill_prices');
   if (Number(existingPrices[0].cnt) === 0) {
@@ -164,6 +187,9 @@ export async function migrate() {
 
   // ── v2.2: Gateway agent billing entries (nexus-gateway estimate→settle) ──
   await seedGatewayPrices();
+
+  // ── v2.5: Seed initial admin user ──
+  await seedInitialAdmin();
 
   console.log('Migrations complete');
 }
@@ -223,4 +249,41 @@ async function seedGatewayPrices() {
   }
 
   console.log(`Seeded ${gatewayPrices.length} gateway skill prices`);
+}
+
+/**
+ * Seed initial admin user (马晴) if admin_users table is empty.
+ * The login token is printed to console — save it before deploying!
+ */
+async function seedInitialAdmin() {
+  const { rows } = await query('SELECT COUNT(*) as cnt FROM admin_users');
+  if (Number(rows[0].cnt) > 0) {
+    console.log('Admin users already exist, skip seed');
+    return;
+  }
+
+  // Import dynamically to avoid circular deps
+  const { generateLoginToken } = await import('../services/admin-auth.js');
+  const { createHmac } = await import('node:crypto');
+
+  const loginToken = generateLoginToken();
+  const JWT_SECRET = process.env.ADMIN_JWT_SECRET || 'changeme-in-production';
+  const tokenHash = createHmac('sha256', JWT_SECRET).update(loginToken).digest('hex');
+
+  await query(
+    `INSERT INTO admin_users (id, username, display_name, token_hash, role, created_by)
+     VALUES ('adm_seed_001', 'maqing', '马晴', $1, 'admin', 'system')`,
+    [tokenHash]
+  );
+
+  console.log('');
+  console.log('══════════════════════════════════════════════');
+  console.log('  管理员账号已创建');
+  console.log('  用户名: maqing');
+  console.log('  显示名: 马晴');
+  console.log('  角色: admin');
+  console.log(`  登录口令: ${loginToken}`);
+  console.log('  ⚠️  请立即保存此口令！不会再次显示！');
+  console.log('══════════════════════════════════════════════');
+  console.log('');
 }

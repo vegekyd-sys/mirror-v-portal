@@ -6,6 +6,8 @@ import accountsRouter from './routes/accounts.js';
 import skillPricesRouter from './routes/skill-prices.js';
 import billingRouter from './routes/billing.js';
 import customerAdminRouter from './routes/customer-admin.js';
+import adminAuthRouter, { requireAdmin } from './routes/admin-auth.js';
+import adminSkillsRouter from './routes/admin-skills.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 export function createApp() {
@@ -26,25 +28,20 @@ export function createApp() {
     }
   });
 
-  // Admin endpoint: trigger monthly usage reset
-  app.post('/v1/admin/monthly-reset', async (req: Request, res: Response) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const expectedToken = process.env.ADMIN_API_TOKEN;
+  // ── Public routes (no auth required) ──
+  app.use(accountsRouter);
+  app.use(skillPricesRouter);
+  app.use(billingRouter);
+  app.use(customerAdminRouter);
 
-    if (!token) {
-      res.status(401).json({ code: 'UNAUTHORIZED', message: 'Missing authorization token' });
-      return;
-    }
-    if (!expectedToken) {
-      console.error('ADMIN_API_TOKEN is not configured');
-      res.status(503).json({ code: 'SERVICE_UNAVAILABLE', message: 'Admin token not configured' });
-      return;
-    }
-    if (token !== expectedToken) {
-      res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid admin token' });
-      return;
-    }
+  // ── Auth routes (login doesn't require auth, others do) ──
+  app.use(adminAuthRouter);
 
+  // ── Admin-only routes (JWT protected) ──
+  app.use('/v1/admin', requireAdmin, adminSkillsRouter);
+
+  // Monthly reset (admin only)
+  app.post('/v1/admin/monthly-reset', requireAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await runMonthlyReset();
       res.json({
@@ -58,22 +55,7 @@ export function createApp() {
     }
   });
 
-  app.get('/v1/admin/monthly-reset/status', async (req: Request, res: Response) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const expectedToken = process.env.ADMIN_API_TOKEN;
-    if (!token) {
-      res.status(401).json({ code: 'UNAUTHORIZED', message: 'Missing authorization token' });
-      return;
-    }
-    if (!expectedToken) {
-      res.status(503).json({ code: 'SERVICE_UNAVAILABLE', message: 'Admin token not configured' });
-      return;
-    }
-    if (token !== expectedToken) {
-      res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid admin token' });
-      return;
-    }
-
+  app.get('/v1/admin/monthly-reset/status', requireAdmin, async (_req: Request, res: Response) => {
     try {
       const { rows } = await query(
         `SELECT COUNT(*) as total,
@@ -89,11 +71,6 @@ export function createApp() {
       res.status(500).json({ code: 'INTERNAL', message: 'Status check failed' });
     }
   });
-
-  app.use(accountsRouter);
-  app.use(skillPricesRouter);
-  app.use(billingRouter);
-  app.use(customerAdminRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ code: 'NOT_FOUND', message: 'Route not found' });

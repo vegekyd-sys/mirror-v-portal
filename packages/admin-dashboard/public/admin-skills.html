@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skill 管理 — DealClaw Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f1a; color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .header {
+      background: #1a1a2e; border-bottom: 1px solid #2a2a4a;
+      padding: 16px 24px; display: flex; align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 18px; color: #fff; }
+    .header .user { font-size: 13px; color: #888; }
+    .header a { color: #6366f1; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .header a:hover { color: #818cf8; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .section-title { font-size: 16px; color: #fff; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #2a2a4a; }
+    .action-bar { display: flex; gap: 12px; margin-bottom: 20px; }
+    button {
+      padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
+      border: none; font-weight: 600; transition: background 0.2s;
+    }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover { background: #5558e6; }
+    .btn-primary:disabled { background: #444; cursor: not-allowed; }
+    .btn-success { background: #059669; color: #fff; }
+    .btn-success:hover { background: #047857; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-secondary { background: #374151; color: #ccc; }
+    .btn-secondary:hover { background: #4b5563; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a4a; }
+    th { color: #888; font-weight: 600; white-space: nowrap; }
+    td { color: #ccc; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge-pending { background: #92400e; color: #fbbf24; }
+    .badge-approved { background: #065f46; color: #6ee7b7; }
+    .badge-rejected { background: #7f1d1d; color: #fca5a5; }
+    .badge-shadow { background: #1e3a5f; color: #93c5fd; }
+    .card { border-collapse: separate; }
+    .msg { font-size: 13px; padding: 10px; border-radius: 6px; margin-bottom: 12px; display: none; }
+    .msg-ok { background: #065f46; color: #6ee7b7; border: 1px solid #059669; display: block; }
+    .msg-err { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; display: block; }
+    .price-edit { width: 80px; background: #0f0f1a; border: 1px solid #333; color: #fff;
+      padding: 4px 8px; border-radius: 4px; font-size: 12px; text-align: right; }
+    .price-edit:focus { border-color: #6366f1; outline: none; }
+    .empty { color: #666; font-size: 13px; padding: 20px 0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ DealClaw Admin — Skill 管理</h1>
+    <div>
+      <span class="user" id="user-display">加载中...</span>
+      <a href="/">← 管理后台首页</a>
+      <a href="#" id="logout-link">退出</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="msg" class="msg"></div>
+
+    <div class="section-title">🆕 待审核 Skill（新注册）</div>
+    <div class="action-bar">
+      <button class="btn-primary" id="btn-sync" onclick="syncSkills()">🔍 扫描 SKILL.md 注册新 Skill</button>
+    </div>
+    <div id="pending-skills"><span class="empty">加载中...</span></div>
+
+    <div class="section-title">✅ 全部 Skill</div>
+    <div id="all-skills"><span class="empty">加载中...</span></div>
+
+    <div class="section-title">⚙️ 操作日志</div>
+    <div id="log-area" style="font-size:12px; color:#666; max-height:200px; overflow-y:auto;"></div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN = localStorage.getItem('admin_jwt') || '';
+
+    function checkAuth() {
+      if (!AUTH_TOKEN) { window.location.href = '/login'; return false; }
+      return true;
+    }
+
+    function userInfo() {
+      try {
+        const u = JSON.parse(localStorage.getItem('admin_user') || '{}');
+        document.getElementById('user-display').textContent = u.displayName || u.username || 'Admin';
+      } catch(e) {}
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem('admin_jwt');
+      localStorage.removeItem('admin_user');
+      document.cookie = 'auth_token=; path=/; max-age=0';
+      window.location.href = '/login';
+    });
+
+    function showMsg(text, ok=true) {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+      setTimeout(() => { el.className = 'msg'; el.textContent = ''; }, 5000);
+    }
+
+    function log(msg, isErr=false) {
+      const el = document.getElementById('log-area');
+      const t = new Date().toLocaleTimeString();
+      const line = `[${t}] ${msg}`;
+      el.innerHTML = `<div style="color:${isErr?'#f87171':'#888'}">${line}</div>` + el.innerHTML;
+    }
+
+    async function api(path, opts={}) {
+      const res = await fetch(path, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${AUTH_TOKEN}`,
+          ...opts.headers,
+        },
+        ...opts,
+      });
+      return { status: res.status, body: await res.json() };
+    }
+
+    async function loadPending() {
+      if (!checkAuth()) return;
+      const { body } = await api('/api/admin/skills/pending');
+      const el = document.getElementById('pending-skills');
+      if (!body?.skills?.length) {
+        el.innerHTML = '<div class="empty">暂无待审核 Skill</div>';
+        return;
+      }
+      el.innerHTML = renderTable(body.skills, true);
+    }
+
+    async function loadAll() {
+      if (!checkAuth()) return;
+      const { body } = await api('/api/admin/skills');
+      const el = document.getElementById('all-skills');
+      if (!body?.skills?.length) {
+        el.innerHTML = '<div class="empty">暂无已注册 Skill</div>';
+        return;
+      }
+      el.innerHTML = renderTable(body.skills, false);
+    }
+
+    function renderTable(skills, isPending) {
+      let html = `<table><thead><tr>
+        <th>Skill ID</th><th>名称</th><th>分类</th><th>单价(credits)</th><th>状态</th>
+        <th>负责人</th><th>审批人</th>
+        <th style="width:140px">操作</th>
+      </tr></thead><tbody>`;
+
+      for (const s of skills) {
+        let statusBadge = '';
+        if (s.activationStatus === 'pending') statusBadge = '<span class="badge badge-pending">待审核</span>';
+        else if (s.activationStatus === 'approved') statusBadge = '<span class="badge badge-approved">已激活</span>';
+        else if (s.activationStatus === 'rejected') statusBadge = '<span class="badge badge-rejected">已拒绝</span>';
+        if (s.status === 'shadow') statusBadge += ' <span class="badge badge-shadow">Shadow</span>';
+
+        let actions = '';
+        if (isPending) {
+          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">✅ 激活</button>
+                     <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="rejectSkill('${s.skillId}')">❌ 拒绝</button>`;
+        } else if (s.activationStatus === 'approved') {
+          actions = `<button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="rejectSkill('${s.skillId}')">停用</button>`;
+        } else if (s.activationStatus === 'rejected') {
+          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">重新激活</button>`;
+        }
+
+        html += `<tr>
+          <td style="font-family:monospace;font-size:11px">${s.skillId}</td>
+          <td>${s.skillName}</td>
+          <td>${s.category}</td>
+          <td style="text-align:right">${s.creditPerUnit}</td>
+          <td>${statusBadge}</td>
+          <td>${s.responsiblePerson || '-'}</td>
+          <td>${s.approvedBy || '-'}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      return html;
+    }
+
+    async function syncSkills() {
+      if (!checkAuth()) return;
+      document.getElementById('btn-sync').disabled = true;
+      document.getElementById('btn-sync').textContent = '正在扫描...';
+      log('开始扫描 SKILL.md...');
+
+      try {
+        const { status, body } = await api('/api/admin/skills/sync', { method: 'POST' });
+        if (status === 200) {
+          showMsg(body.message || '扫描完成');
+          log(`同步完成：${body.created} new, ${body.updated} updated, ${body.skipped} skipped`);
+        } else {
+          showMsg(body.message || '扫描失败', false);
+          log(`扫描失败: ${JSON.stringify(body)}`, true);
+        }
+      } catch(e) {
+        showMsg('网络错误', false);
+        log(`网络错误: ${e}`, true);
+      }
+
+      document.getElementById('btn-sync').disabled = false;
+      document.getElementById('btn-sync').textContent = '🔍 扫描 SKILL.md 注册新 Skill';
+      loadPending();
+      loadAll();
+    }
+
+    async function activateSkill(skillId) {
+      if (!checkAuth()) return;
+      if (!confirm(`确认激活 "${skillId}" 并正式收费？`)) return;
+
+      try {
+        const { status, body } = await api(`/api/admin/skills/${encodeURIComponent(skillId)}/activate`, { method: 'POST' });
+        if (status === 200) {
+          showMsg(`"${skillId}" 已激活，正式收费`);
+          log(`激活: ${skillId}`);
+        } else {
+          showMsg(body.message || '激活失败', false);
+        }
+      } catch(e) { showMsg('网络错误', false); }
+
+      loadPending();
+      loadAll();
+    }
+
+    async function rejectSkill(skillId) {
+      if (!checkAuth()) return;
+      const reason = prompt(`拒绝 "${skillId}" 的原因（可选）：`);
+      if (reason === null) return; // cancelled
+
+      try {
+        const { status, body } = await api(`/api/admin/skills/${encodeURIComponent(skillId)}/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason || undefined }),
+        });
+        if (status === 200) {
+          showMsg(`"${skillId}" 已拒绝`);
+          log(`拒绝: ${skillId}`);
+        } else {
+          showMsg(body.message || '操作失败', false);
+        }
+      } catch(e) { showMsg('网络错误', false); }
+
+      loadPending();
+      loadAll();
+    }
+
+    // Init
+    userInfo();
+    loadPending();
+    loadAll();
+  </script>
+</body>
+</html>

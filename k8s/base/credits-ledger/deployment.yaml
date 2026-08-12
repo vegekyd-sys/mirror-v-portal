@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: credits-ledger
+  labels:
+    app: credits-ledger
+    dealclaw.io/component: ledger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: credits-ledger
+  template:
+    metadata:
+      labels:
+        app: credits-ledger
+        dealclaw.io/component: ledger
+    spec:
+      containers:
+      - name: credits-ledger
+        image: registry.cn-hangzhou.aliyuncs.com/dealclaw/credits-ledger:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "8081"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: dealclaw-db
+              key: DATABASE_URL
+              optional: true
+        - name: ADMIN_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: dealclaw-auth
+              key: ADMIN_JWT_SECRET
+              optional: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        securityContext:
+          privileged: false
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: credits-ledger
+  labels:
+    app: credits-ledger
+spec:
+  selector:
+    app: credits-ledger
+  ports:
+  - port: 8081
+    targetPort: 8081
+    name: http

@@ -18,7 +18,7 @@ export interface BillingResult {
   eventId?: string;
   estimatedCredit?: number;
   actualCredit?: number;
-  billingMode?: 'live' | 'shadow';
+  billingMode?: 'live' | 'shadow' | 'unapproved';
   skillName?: string;
   unitPrice?: number;
   isDefault?: boolean;
@@ -84,8 +84,8 @@ export async function settleBilling(action: BillableAction & {
 
     const totalCredit = price.creditPerUnit * quantity;
 
-    // ── Shadow billing: update event only, NO debit ──
-    if (price.pricingStatus === 'shadow') {
+    // ── Shadow / unapproved billing: update event only, NO debit ──
+    if (price.pricingStatus === 'shadow' || price.pricingStatus === 'unapproved') {
       await query(
         `UPDATE skill_billing_events
          SET status = 'settled',
@@ -252,8 +252,8 @@ export async function canAfford(
     }
   }
 
-  // Shadow-priced skills never deduct, so they're always "affordable"
-  if (price.pricingStatus === 'shadow') {
+  // Shadow-priced or unapproved skills never deduct, so they're always "affordable"
+  if (price.pricingStatus === 'shadow' || price.pricingStatus === 'unapproved') {
     const balance = Number(acct.balance);
     return { canAfford: true, estimatedCredit: 0, balance };
   }
