@@ -17,6 +17,17 @@ export function createApp(dbUrl?: string) {
   app.use(cookieParser());
   app.use(express.json({ limit: '1mb' }));
 
+  // ── Strip /admin prefix if nginx/ALB didn't already strip it ──
+  // Some deployments (e.g. 43.156.232.2 nginx) pass /admin/* without
+  // stripping; ALB Ingress (dealclaw-test) already strips it.
+  // This middleware is idempotent: if /admin was already stripped, it's a no-op.
+  app.use((req, _res, next) => {
+    if (req.path.startsWith('/admin')) {
+      req.url = req.url.replace(/^\/admin/, '') || '/';
+    }
+    next();
+  });
+
   // ── Health check (no auth) ──
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok' });

@@ -19,12 +19,28 @@ BUYERS_URL = (
     "https://micro.tradechina.com/blade-purchaser/"
     "api/buyerLeadsPlaza/page"
 )
-SUPPLIER_ID = "1234"
 VALID_DAYS = {3, 7, 15, 30}
 
 
 class ContractError(RuntimeError):
     """Raised when the remote response does not match the approved contract."""
+
+
+class RecordRejected(ContractError):
+    """Raised when one buyer record cannot produce a safe unique lead."""
+
+
+def require_supplier_id(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        raise ContractError("TradeChina supplierId is required from the current chat_id binding")
+    if any(marker in candidate for marker in ("<", ">")) or candidate.casefold() in {
+        "changeme",
+        "placeholder",
+        "your-supplier-id",
+    }:
+        raise ContractError("TradeChina supplierId is still a placeholder")
+    return candidate
 
 
 def post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> Any:
@@ -46,7 +62,7 @@ def post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> Any:
         raise ContractError(f"HTTP {exc.code} from TradeChina API") from exc
     except urllib.error.URLError as exc:
         raise ContractError("Unable to reach TradeChina API") from exc
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ContractError("TradeChina API returned invalid JSON") from exc
 
 
@@ -67,9 +83,15 @@ def get_countries() -> list[dict[str, Any]]:
     for item in data:
         if not isinstance(item, dict):
             continue
+        country_id = item.get("countryId")
+        if not isinstance(country_id, (str, int)) or isinstance(country_id, bool):
+            continue
+        country_id_text = str(country_id).strip()
+        if not country_id_text:
+            continue
         approved.append(
             {
-                "countryId": item.get("countryId"),
+                "countryId": country_id_text,
                 "enName": item.get("enName") if isinstance(item.get("enName"), str) else "",
                 "cnName": item.get("cnName") if isinstance(item.get("cnName"), str) else "",
             }
@@ -122,12 +144,11 @@ def sanitize_record(record: Any) -> dict[str, Any]:
     if type(register_flag) is int and register_flag == 1 and exhibition_name.strip():
         exhibition = exhibition_name
     lead_id = record.get("id")
-    if lead_id is None:
-        lead_id_text = ""
-    elif isinstance(lead_id, (str, int)) and not isinstance(lead_id, bool):
-        lead_id_text = str(lead_id)
-    else:
-        lead_id_text = ""
+    if not isinstance(lead_id, (str, int)) or isinstance(lead_id, bool):
+        raise RecordRejected("Buyer record is missing a usable lead ID")
+    lead_id_text = str(lead_id).strip()
+    if not lead_id_text:
+        raise RecordRejected("Buyer record is missing a usable lead ID")
     return {
         "线索ID": lead_id_text,
         "买家CDPID": approved_text(record.get("companyCdpId")),
@@ -139,6 +160,7 @@ def sanitize_record(record: Any) -> dict[str, Any]:
         "产品类别T2": approved_text(record.get("t2")),
         "需求意向": approved_text(record.get("recentTrend")),
         "关注产品": format_products(record.get("productList")),
+        "买家类型": approved_text(record.get("buyerType")),
         "买家特征": approved_text(record.get("buyerTag")),
         "报名参展展会": exhibition,
         "需求时间": approved_text(record.get("lastConsolidatedTime")),
@@ -146,12 +168,14 @@ def sanitize_record(record: Any) -> dict[str, Any]:
 
 
 def fetch_buyers(
+    supplier_id: str | None,
     country_id: str,
     product_keyword: str,
     days: int = 7,
     limit: int = 20,
     max_pages: int = 5,
 ) -> dict[str, Any]:
+    supplier_id = require_supplier_id(supplier_id)
     if days not in VALID_DAYS:
         raise ContractError("consolidatedDays must be 3, 7, 15, or 30")
     if not country_id.strip() or not product_keyword.strip():
@@ -164,9 +188,10 @@ def fetch_buyers(
     total = 0
     pages_reported = 0
     pages_fetched = 0
+    rejected_missing_lead_id = 0
     for page in range(1, max_pages + 1):
         request_body = {
-            "supplierId": SUPPLIER_ID,
+            "supplierId": supplier_id,
             "consolidatedDays": days,
             "countryId": country_id,
             "productKeyword": product_keyword,
@@ -184,27 +209,38 @@ def fetch_buyers(
         pages_reported = data.get("pages") if isinstance(data.get("pages"), int) else pages_reported
         pages_fetched += 1
         for raw_record in records:
-            record = sanitize_record(raw_record)
+            try:
+                record = sanitize_record(raw_record)
+            except RecordRejected:
+                rejected_missing_lead_id += 1
+                continue
             lead_id = record["线索ID"]
-            dedupe_key = lead_id if lead_id else json.dumps(record, ensure_ascii=False, sort_keys=True)
-            if dedupe_key not in seen_ids:
-                seen_ids.add(dedupe_key)
+            if lead_id not in seen_ids:
+                seen_ids.add(lead_id)
                 sanitized.append(record)
         if not records or (pages_reported and page >= pages_reported):
             break
     return {
-        "supplierId": SUPPLIER_ID,
+        "supplierIdConfigured": True,
         "countryId": country_id,
         "productKeyword": product_keyword,
         "consolidatedDays": days,
         "pagesFetched": pages_fetched,
         "pagesReported": pages_reported,
         "totalReported": total,
+        "rejectedMissingLeadId": rejected_missing_lead_id,
         "records": sanitized,
     }
 
 
-def contract_check() -> dict[str, Any]:
+def contract_check(
+    supplier_id: str | None,
+    country_id: str,
+    product_keyword: str,
+) -> dict[str, Any]:
+    supplier_id = require_supplier_id(supplier_id)
+    if not country_id.strip() or not product_keyword.strip():
+        raise ContractError("countryId and productKeyword are required for contract-check")
     countries_envelope = require_success_envelope(post_json(COUNTRIES_URL, {}))
     countries = countries_envelope.get("data")
     country_keys: list[str] = []
@@ -214,7 +250,14 @@ def contract_check() -> dict[str, Any]:
     buyers_envelope = require_success_envelope(
         post_json(
             BUYERS_URL,
-            {"supplierId": SUPPLIER_ID, "consolidatedDays": 30, "page": 1, "limit": 100},
+            {
+                "supplierId": supplier_id,
+                "consolidatedDays": 7,
+                "countryId": country_id,
+                "productKeyword": product_keyword,
+                "page": 1,
+                "limit": 1,
+            },
         )
     )
     data = buyers_envelope.get("data")
@@ -252,8 +295,10 @@ def contract_check() -> dict[str, Any]:
         "buyersOk": isinstance(records, list),
         "recordCount": len(records) if isinstance(records, list) else 0,
         "requiredBuyerKeysPresent": required_record_keys.issubset(record_keys),
+        "buyerTypeFieldPresent": "buyerType" in record_keys,
         "productItemKeys": product_item_keys,
-        "supplierId": SUPPLIER_ID,
+        "supplierIdConfigured": True,
+        "queryFiltersApplied": True,
     }
 
 
@@ -279,7 +324,7 @@ def self_test() -> dict[str, Any]:
         "email": "forbidden@example.com",
         "phone": "+000000",
         "website": "https://forbidden.example",
-        "buyerType": "forbidden",
+        "buyerType": "分销商",
     }
     sanitized = sanitize_record(raw)
     expected_keys = {
@@ -293,25 +338,105 @@ def self_test() -> dict[str, Any]:
         "产品类别T2",
         "需求意向",
         "关注产品",
+        "买家类型",
         "买家特征",
         "报名参展展会",
         "需求时间",
     }
     assert set(sanitized) == expected_keys
     assert sanitized["报名参展展会"] == "Example Expo"
+    assert sanitized["买家类型"] == "分销商"
     assert "forbidden" not in json.dumps(sanitized, ensure_ascii=False).casefold()
+
+    missing_type = dict(raw, buyerType=None, buyerTag="分销商")
+    assert sanitize_record(missing_type)["买家类型"] == ""
+
+    for missing_id in (None, "", "   ", True, {}, []):
+        invalid = dict(raw)
+        invalid["id"] = missing_id
+        try:
+            sanitize_record(invalid)
+        except RecordRejected:
+            pass
+        else:
+            raise AssertionError("Missing or invalid lead ID was not rejected")
 
     raw["hasHomeLifeRegisterLog"] = 0
     assert sanitize_record(raw)["报名参展展会"] == ""
     raw["hasHomeLifeRegisterLog"] = 1
     raw["exhibitionName"] = ""
     assert sanitize_record(raw)["报名参展展会"] == ""
+
+    assert require_supplier_id("explicit-supplier") == "explicit-supplier"
+    try:
+        require_supplier_id("<supplier-id>")
+    except ContractError:
+        pass
+    else:
+        raise AssertionError("Placeholder supplier ID was not rejected")
+
+    original_post_json = globals()["post_json"]
+
+    def fake_post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> Any:
+        del timeout
+        if url == COUNTRIES_URL:
+            return {
+                "success": True,
+                "data": [
+                    {"countryId": "country-1", "cnName": "示例国", "enName": "Example"},
+                    {"countryId": None, "cnName": "无效国", "enName": "Invalid"},
+                ],
+            }
+        assert payload["supplierId"] == "explicit-supplier"
+        assert payload["countryId"] == "country-1"
+        assert payload["productKeyword"] == "示例产品"
+        return {
+            "success": True,
+            "data": {
+                "records": [raw, dict(raw), dict(raw, id="")],
+                "total": 3,
+                "pages": 1,
+            },
+        }
+
+    try:
+        globals()["post_json"] = fake_post_json
+        countries = get_countries()
+        assert len(countries) == 1
+        assert resolve_country("示例国", countries)["countryId"] == "country-1"
+        fetched = fetch_buyers(
+            supplier_id="explicit-supplier",
+            country_id="country-1",
+            product_keyword="示例产品",
+            max_pages=1,
+        )
+        assert len(fetched["records"]) == 1
+        assert fetched["rejectedMissingLeadId"] == 1
+        assert fetched["supplierIdConfigured"] is True
+        checked = contract_check(
+            supplier_id="explicit-supplier",
+            country_id="country-1",
+            product_keyword="示例产品",
+        )
+        assert checked["queryFiltersApplied"] is True
+        assert checked["requiredBuyerKeysPresent"] is True
+        assert checked["buyerTypeFieldPresent"] is True
+    finally:
+        globals()["post_json"] = original_post_json
+
     return {
         "ok": True,
         "approvedFields": sorted(expected_keys),
         "contactFieldsExcluded": True,
         "exhibitionRuleChecked": True,
-        "supplierId": SUPPLIER_ID,
+        "missingLeadIdRejected": True,
+        "supplierIdRequiredFromChatBinding": True,
+        "globalSupplierFallbackDisabled": True,
+        "filteredContractCheckTested": True,
+        "duplicateLeadIdTested": True,
+        "invalidCountryIdRejected": True,
+        "buyerTypeWhitelisted": True,
+        "buyerTypeNotInferredFromTag": True,
     }
 
 
@@ -328,13 +453,19 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--name", required=True)
 
     buyers = subparsers.add_parser("buyers", help="Return sanitized buyer records")
+    buyers.add_argument("--supplier-id", required=True, help="Must come from the current chat_id binding")
     buyers.add_argument("--country-id", required=True)
     buyers.add_argument("--product-keyword", required=True)
     buyers.add_argument("--days", type=int, default=7, choices=sorted(VALID_DAYS))
     buyers.add_argument("--limit", type=int, default=20)
     buyers.add_argument("--max-pages", type=int, default=5)
 
-    subparsers.add_parser("contract-check", help="Check live response shapes without buyer values")
+    contract = subparsers.add_parser(
+        "contract-check", help="Check filtered live response shapes without buyer values"
+    )
+    contract.add_argument("--supplier-id", required=True, help="Must come from the current chat_id binding")
+    contract.add_argument("--country-id", required=True)
+    contract.add_argument("--product-keyword", required=True)
     subparsers.add_parser("self-test", help="Run offline whitelist and privacy checks")
     return parser
 
@@ -348,6 +479,7 @@ def main() -> int:
             result = resolve_country(args.name, get_countries())
         elif args.command == "buyers":
             result = fetch_buyers(
+                supplier_id=args.supplier_id,
                 country_id=args.country_id,
                 product_keyword=args.product_keyword,
                 days=args.days,
@@ -355,7 +487,11 @@ def main() -> int:
                 max_pages=args.max_pages,
             )
         elif args.command == "contract-check":
-            result = contract_check()
+            result = contract_check(
+                supplier_id=args.supplier_id,
+                country_id=args.country_id,
+                product_keyword=args.product_keyword,
+            )
         else:
             result = self_test()
         print_json(result)

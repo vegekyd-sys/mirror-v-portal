@@ -1,0 +1,106 @@
+skillId	中文名	category	creditPerUnit	responsiblePerson	描述
+11	挖需11问（星擎）	insight	8000	待确认	从飞书妙记/转写文本抽取挖需11问，生成需求调研文档并写回多维表
+3d-asset-ar-showcase	3D资产AR展示页	content	3000	待确认	创建3D资产（GLB/USDZ）的移动端展示页，含动画轨道+移动AR QA
+auto-pipeline-skill	AutoFlow Pipeline（已废弃）	internal	100	待确认	已废弃：禁止触发，AutoFlow统一路由到autoflow-pipeline
+account-list-doc	客户账号清单文档	action	200	待确认	查客户账号→生成飞书文档清单（序号/客户/国家/昵称/密码/邮箱等）
+aochuang-leads	奥创线索客户画像	buyer	500	待确认	线索质量分析+API公司匹配+CSM行动建议，遵循report-web设计
+aochuang-metro	奥创服务进度地铁图	customer	500	待确认	企业服务阶段跟踪+关键节点触达，列表页+企业详情页
+aochuang-standard-solution	奥创标准解决方案模板	planning	1500	待确认	7章+6模块全callout气泡格式，基于杰尔古格方案
+ai-video-generator	AI视频生成管理系统	content	3000	待确认	封装AI视频批量生成系统的全部HTTP API，替代Web UI和CLI工具
+auto-travel-vlog	自动旅行Vlog	content	3000	待确认	ZIP旅行视频→自动剪辑成片：解包→抽帧理解→AI选段→ffmpeg合成竖版vlog
+aochuang-review-report	奥创TikTok营销复盘报告	insight	5000	待确认	7章结构+分析框架+数据采集，遵循report-web设计，含构建/部署/验证
+autoflow-pipeline	AutoFlow Pipeline	content	8000	待确认	DAM项目管理+Remix批量+视频生成全流程，含项目生命周期管理
+background-worker-contract	后台工作契约	internal	100	待确认	父/子契约：长任务在隔离worker中运行，保持交互通道响应
+b2b-tiktok-half-year-planning	B2B TikTok半年策划案	planning	1500	待确认	输入半年包需求表→输出矩阵策划案（纯实拍，引导评论区/私信转化）
+b2b-tiktok-quarter-planning	B2B TikTok季度策划案	planning	1500	待确认	输入需求表→输出3个月策划案（纯实拍，评论区/私信转化）
+creative-production-orchestrator	创意生产编排器	internal	100	待确认	Creative Production 技能集编排：根据创意流程阶段路由到explore/moodboard/positioning/offer等子技能
+csm-mobile-service-progress-card	CSM服务进度地铁图	customer	500	待确认	当前阶段置顶高亮+历史沉底+飞书数据，Playwright截图生成
+csm-personnel-intro-card	CSM人员简介卡	customer	500	待确认	飞书表格→人员简介卡(402px)，钻石/铂金/黄金三级，HTML+chrome截图
+csm-premium-marketing-poster	CSM高端营销海报	customer	500	待确认	主题主图强相关，默认3:5比例，Makaron底图+HTML/CSS叠加
+customer-health-score	客户健康度评分	insight	800	待确认	15子项+100分制，埋点接入client_login+3个补充指标，report-web设计输出
+corporate-video-script	企业宣传片脚本v2.0	content	3000	待确认	行业调研→风格决策→弹性结构→10列分镜（中英双语），适配多行业
+content-creation-workflow	内容创作全流程	content	8000	莫惠琴	B端内容创作全流程：需求理解→素材梳理→选题→框架→成稿→核验→迭代→排版
+dealclaw-find-buyers	搜索买家	buyer	1500	王羽灵	按产品+国家+买家类型搜索匹配买家，含公司简介+官网+推荐理由
+dealclaw-analyze-company	企业画像分析	buyer	800	王羽灵	爬官网+AI分析产品线/市场定位/竞争力→写入知识库
+dealclaw-market-report	市场洞察报告	insight	8000	王羽灵	行业大盘+竞争格局+渠道机会+行动建议，可做整体扫描或单买家深挖
+dealclaw-review	画像偏好标注	buyer	500	王羽灵	用户对画像/买家标注✅❌→偏好晋升+双写知识库
+dealclaw-lead-import	线索导入	action	300	王羽灵	上传Excel/CSV→AI列映射→去重→写入线索池，来源标记用户导入
+dealclaw-exhibition-invitation	展会邀约	action	300	王羽灵	搜展会目标买家→生成个性化邀约文案→邮件发送
+dealclaw-exhibition-leads	展会线索处理	buyer	500	王羽灵	展中OCR/ASR/匹配→展后跟进→写入线索池
+dealclaw-email-bindings	邮箱绑定管理	action	200	王羽灵	管理代理邮箱→飞书群绑定关系，含upsert/list/delete/test全操作
+dealclaw-email-founder-direct	一对一精准开发信	action	200	王羽灵	SMTP发送、个性化内容、日量控制，首封不直接约会
+dealclaw-email-growth-send	批量开发信群发	action	200	王羽灵	Resend发送、自动序列、预热控制、知识库素材检查
+dealclaw-knowledge-base	知识库浏览	action	500	王羽灵	三层知识库：首页+主题页+资料层，V自主写入+用户上传双路径
+dealclaw-buyer-leads-push	买家线索飞书推送	buyer	500	王羽灵	一企一群买家线索工作流：绑定→确认→正式化→每日推送→线索池维护
+data-selection	米奥兰特数据圈选	action	300	待确认	米奥兰特数据圈选API：环境变量SELECTION_API指向部署服务
+d12-video-tool-test	D12视频工具测试服	content	3000	待确认	DAM+AutoFlow测试服：素材查询→大纲→文案→TTS→模板调用→导出
+expo-industrial-video-bg	工业展会视频背景	content	3000	待确认	Makaron底图+HTML/CSS文字叠加，触发词：展会背景/工业展视频底图
+feishu-standalone-deliver-link-guidance	飞书链接交付指引	internal	100	待确认	将非Makaron最终链接通过deliver-link以原生卡片+open_url按钮交付
+fcloud-api	FCloud API	action	200	待确认	FCloud认证、账号/视频分页、全量拉取含重试、Bitable交付
+finished-video-brief	视频制作简报	content	200	待确认	将策划案/脚本/素材转为每条视频的生产合约，统一Makaron和AutoFlow的创意语义
+feishu-group-avatar	飞书群头像编辑	action	300	待确认	基于参考图添加群主题元素→编辑→上传→设置群头像，不从零生成
+figma-reference-replication	Figma参考复刻	content	500	待确认	使用Figma MCP引用本地重建布局驱动的图像
+fcloud-video-review	FCloud视频数据复盘	insight	800	待确认	FCloud全量拉取→数据完整性验证→vision+ASR复盘→飞书表格输出
+geelark-cloud-phone	GeeLark云手机自动化	account	500	待确认	通过官方CLI安全操作云手机，覆盖TikTok登录+预热+发布全流程
+html-poster-design	HTML海报设计	content	500	待确认	HTML/Remotion海报设计，含web字体的排版QC
+image-production-routing-qc	图片生产路由+QC	internal	100	待确认	路由图片任务避免PIL优先路径，交付前强制视觉QC检查
+image-search-apify-first	图片搜索-Apify优先	action	200	待确认	Apify优先的社交视觉发现；通用图片搜索仍走DDG
+lark-cli-permission-issue-troubleshooting	Lark权限问题排查	internal	100	待确认	lark-cli权限/共享报错标准排查流程：版本升级→member-add→验证
+landing-page-enterprise-onboarding	企业入驻落地页	action	500	待确认	企业落地页全流程：接收资料→提取信息→生成落地页→部署→知识库登记→线索闭环
+lead-customer-profile	线索客户画像报告	insight	800	待确认	批量为主，米奥贸易API逐条查→统一HTML报告，含6图表+排序表
+makaron-app-artifact-semantics	Makaron产物语义规则	internal	100	待确认	Makaron.app产物终态判断与sidecar语义规则，非普通用户面技能
+makaron-app-daily-evidence-collector	Makaron每日证据收集器	internal	100	待确认	Makaron.app每日自迭代证据只读收集器方案
+makaron-app-workflow-contract	Makaron工作流合约	internal	100	待确认	Makaron.app模板到增长/广告闭环工作流
+makaron-intermediate-continuation	Makaron中间态续传	internal	100	待确认	Makaron中间资产续传模式，防止飞书长连接超时/僵尸会话
+material-verification	素材验真	action	200	待确认	DAM素材ID存在性+originUrl可访问性+数量一致性，轻量gate放行到混剪脚本
+mio-data-selection-api	CRM会议妙记转写	action	300	待确认	补充CRM会议妙记转写查询流程
+mio-zoho-minutes-transcript	Zoho妙记转录	action	300	待确认	从Zoho CRM会议模块获取飞书妙记链接，调用转录API获取完整转写
+monthly-service-review-card	月度服务复盘卡	customer	300	待确认	CSM提到月度复盘即触发，聊天提供内容后生成看板型卡片
+makaron-remotion-materialize	Makaron Remotion转MP4	content	500	待确认	Makaron Remotion JSON→MP4流程，将动画设计转为客户可用的视频文件
+miao-b2b-tiktok-planning-doc	米奥B2B TikTok策划案v3	planning	1500	待确认	纯实拍+单日拍摄+Denovi式内容方向+后台异步生成
+miao-b2b-exhibition-planning-doc	米奥B2B展会策划案	planning	1500	待确认	新增展会时间轴+展前倒计时+展中即时+展后复盘，支持多展会
+max-qijian-planning-doc	Max旗舰版策划案	planning	1500	待确认	12个月AI短视频策划案：需求表→12章文档→季度内容→矩阵账号规划→迭代交付
+mio-customer-visit-analysis	米奥客户拜访分析	insight	5000	待确认	Zoho查Account→Events→妙记链接→转录API→完整转写分析
+montage-script-writer	混剪脚本/选片单	content	8000	待确认	策划案方向+DAM素材→每条视频的Hook/素材引用/镜头/CTA→飞书文档
+overseas-buyer-search	海外采购商搜索(Obs)	buyer	500	待确认	海外采购商搜索：自动触发+多维表格存储
+overseas-buyer-lead-search	海外采购商线索搜索	buyer	500	待确认	按国家+产品+数量产出企业名称/官网/介绍/采购产品/规模的结构化名单
+overseas-textile-buyer-search	海外纺织采购商搜索	buyer	500	待确认	海外采购商批量搜索→飞书表格，按国家×行业搜B2B目录，全行业通用
+proactive-agent	Proactive Agent	internal	100	halthelobster	将AI从任务跟随者转型为主动伙伴，含WAL协议/工作缓冲/自主Cron等模式
+ppt-master-integration	PPT母版集成	action	500	待确认	触发关键词→收集素材需求→委托Codex执行ppt-master工作流→返回.pptx
+presales-planning-doc	售前策划案v5.3	planning	1500	待确认	修正📸格式+callout结构，对齐杰尔古格基准文档
+qcc-company-lookup	企查查企业查询	action	200	待确认	通过qcc CLI查工商/风险/经营/知产/历史/董监高，支持模糊搜索
+qiancean-factory	前策案制作	planning	1500	待确认	快速生成制造业客户前策案报告（线上资产审计+竞品对标+TikTok出海案例），输出Word
+requirement-form-questions	需求表提问库	action	500	待确认	输入需求表→输出客户提问清单（4大类，不含拍摄细节）
+skill-creation-coach	Skill创建教练	internal	100	待确认	帮助创建和修订OpenClaw技能，强化模型判断而非僵化流程执行
+social-search-apify-first	社交搜索-Apify优先	action	200	待确认	Apify优先社交搜索，含视频号账号发现/下载，TikTok/XHS/抖音/B站
+survey-alert	调研问卷预警	action	200	待确认	奥创直营销售部调研问卷预警：按部门到人，每日4次扫描
+service-perception-card-maker	服务感知卡生成	customer	500	待确认	9:16竖版+hero+双模式+节点文案+QC+渲染
+sop-service-perception-card	服务感知卡规则	customer	500	待确认	先查Base成品图→有则直接下发→无则按规范生成
+star-engine-create-account	星擎工单创建账号	account	500	待确认	输入客户公司名→浏览器自动登入星擎后台创建企业账号
+shooting-checklist-builder	拍摄清单生成	action	500	待确认	拍摄脚本→标准化工厂拍摄清单飞书文档，含准备/执行/签字三部分
+shooting-checklist-v2	工厂拍摄清单v3	planning	800	待确认	主线勾选+镜头参考、工厂负责人打勾确认列、优先级P0/P1/P2、人物融入场景
+s2-win-analysis	S2赢单客户分析	insight	5000	待确认	CRM全量抽查→多维画像→可复制规律→飞书文档，含OCR纠错+标签交叉验证
+scene-cli	Scene CLI素材检索	content	8000	待确认	CLI优先的客户素材检索：搜索精确镜头→构建素材包→导出MP4供剪辑
+tencentcloud-infra	腾讯云基础设施	account	500	待确认	统一腾讯云操作技能：Lighthouse/CVM/CBS/COS/VPC/DNSPod/SSL等，通过tccli
+tiktok-account-report	TikTok账号深度洞察	insight	800	待确认	TK主页URL→数据采集→下载Top视频→vision+ASR→8维度飞书文档报告
+tron-openmontage-kling-video	Tron+Kling视频生产	content	8000	待确认	通过OpenMontage pipeline调用Kling API做图和视频
+ultron-star-products-sales-knowledge	Ultron星产品销售知识库	action	500	待确认	星擎/星知/星声/星韵/星帆销售与交付知识库
+volcano-voice-clone-workflow	火山语音克隆工作流	content	500	待确认	授权语音克隆与飞书语音交付工作流
+video-review-analysis	优质内容复盘分析	insight	800	待确认	下载优质视频→vision+ASR理解→结构化复盘→飞书输出，拆解钩子/结构/信任链/CTA
+viral-absurd-demo-video	荒诞物理流爆款视频	content	3000	待确认	反常识视觉奇观+无厘头梗+最后3秒软着陆的爆款产品视频
+viral-extreme-product-demo	极端产品力演示视频	content	3000	待确认	真实功能在极端场景中视觉化展示的爆款产品视频
+viral-impossible-test-video	不可能测试爆款视频	content	3000	待确认	极端场景+产品当英雄+黄金3秒钩子的爆款产品视频
+wechatpay-payment-routing-wrapper	支付路由包装器	internal	100	待确认	安全路由支付宝支付流与微信支付商户集成，区分两种支付轨道
+xingqing-service-stage-notification	星擎服务阶段通知	action	200	待确认	星擎服务阶段变更通知：识别策划/制作/交付/复盘并发送客户可见更新
+xiaoao-zcrm-v1-api	小傲ZCRM V1 API	action	200	待确认	小傲ZCRM V1 API接口（无SKILL.md，需确认）
+xingqing-dashboard-refresh	星擎数据看板刷新	action	300	待确认	刷新星擎数据看板：拉取track事件+企业名→生成数据→部署
+xingqing-tracking-dashboard	星擎埋点看板	action	300	待确认	星擎埋点看板：含云机durationMs异常值过滤规则（>2h视为埋点bug）
+xingqing-lead-ingestion	星擎线索摄入	buyer	500	待确认	收到线索Excel→自动解析字段→识别企业→质量过滤→批量入库
+xingqing-sales-visit-scripts	星擎销售话术	action	500	待确认	首访邀约→线上拜访→调研表→V方案→线下二访签约，含各场景标准话术
+xingqing-account-bootstrapper	星擎账号自动开通	account	500	康浩源	自动拉取交付权益表未开通企业，生成星擎账号并二次确认后开通
+xingqing-ai-customer-profile-report	星擎AI客户画像报告	insight	800	待确认	多源取数、画像维度、模板与触发规则，为星擎/米奥/小龙虾服务场景
+xingqing-hot-product-insights	星擎热品洞察	insight	800	待确认	从群聊、社媒、竞品与客户输入生成可入库洞察报告
+xingqing-s2-data-analysis	S2定金客户数据分析	insight	800	待确认	CRM/圈选API多源合并→口径对齐→分布统计→圈选规则反推→飞书文档
+xingqing-sales-trainer	星擎销售培训师	action	800	待确认	四段式培训框架+4份教材，含试点销售培训1.0(60min)快捷触发
+xingqing-ops-allocation-workload	星擎运营负载分配	action	800	待确认	负载指标、阈值、分流决策与升级规则，决定任务分配/升级
+yitu-quanjie	一图全解	content	8000	待确认	展会推广海报批量生成：收集国家+产品+PPT模版→自动替换内容→生成PPTX

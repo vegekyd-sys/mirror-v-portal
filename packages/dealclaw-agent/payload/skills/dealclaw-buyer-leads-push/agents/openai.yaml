@@ -1,4 +1,4 @@
 interface:
   display_name: "飞书AI猎客买家线索推送"
-  short_description: "读取企业知识库，匹配采购需求并自动维护飞书买家线索池"
-  default_prompt: "使用 $buyer-leads-feishu-push 读取当前群企业知识库，更新买家线索池并生成今日推送。"
+  short_description: "按群隔离权限和画像，以飞书卡片推送匹配买家线索"
+  default_prompt: "使用 $dealclaw-buyer-leads-push 处理当前飞书群。只使用本群绑定的知识库、Base 和 supplierId；关闭公开链接并验证 openchat 群编辑权限；通过受控管道检索评分，再用确定性飞书互动卡片展示买家公司、分数、需求、产品、特征、参展信息和推荐理由，附商机池链接、按钮及反馈引导。任一群ID、token、权限证明、画像哈希或状态不一致时停止。"
