@@ -72,7 +72,7 @@ router.get('/v1/skill-prices/:skillId/history', async (req, res) => {
 // PUT /v1/skill-prices/:skillId — create or update a price
 router.put('/v1/skill-prices/:skillId', async (req, res) => {
   try {
-    const { skillName, description, category, creditPerUnit, billingUnit, status, sortOrder, changedBy } = req.body;
+    const { skillName, description, category, creditPerUnit, billingUnit, status, responsiblePerson, sortOrder, changedBy } = req.body;
     if (!skillName || !category || typeof creditPerUnit !== 'number' || creditPerUnit < 0) {
       res.status(400).json({
         code: 'VALIDATION',
@@ -89,6 +89,7 @@ router.put('/v1/skill-prices/:skillId', async (req, res) => {
       creditPerUnit: Math.floor(creditPerUnit),
       billingUnit,
       status,
+      responsiblePerson: responsiblePerson ?? null,
       sortOrder,
       changedBy: changedBy ?? 'admin',
     });

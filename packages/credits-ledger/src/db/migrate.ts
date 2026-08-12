@@ -116,6 +116,9 @@ export async function migrate() {
   await query(`CREATE INDEX IF NOT EXISTS idx_skill_prices_category ON skill_prices(category)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_skill_prices_status ON skill_prices(status)`);
 
+  // v2.4: responsible_person for skill ownership tracking
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS responsible_person VARCHAR(64)`);
+
   await query(`
     CREATE TABLE IF NOT EXISTS price_change_log (
       id              SERIAL PRIMARY KEY,

@@ -9,6 +9,7 @@ export interface SkillPrice {
   billingUnit: string;
   status: 'live' | 'shadow' | 'disabled';
   billingMode: 'live' | 'shadow' | 'disabled';
+  responsiblePerson: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -24,6 +25,7 @@ function rowToSkillPrice(r: any): SkillPrice {
     billingUnit: r.billing_unit,
     status: r.status,
     billingMode: r.status,
+    responsiblePerson: r.responsible_person ?? null,
     sortOrder: Number(r.sort_order),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -132,6 +134,7 @@ export async function upsertPrice(params: {
   creditPerUnit: number;
   billingUnit?: string;
   status?: string;
+  responsiblePerson?: string;
   sortOrder?: number;
   changedBy?: string;
 }): Promise<{ price: SkillPrice; logId?: number }> {
@@ -143,8 +146,8 @@ export async function upsertPrice(params: {
   const oldCredit = oldRows.length > 0 ? Number(oldRows[0].credit_per_unit) : null;
 
   const { rows } = await query(
-    `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, billing_unit, status, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, billing_unit, status, responsible_person, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (skill_id) DO UPDATE SET
        skill_name = EXCLUDED.skill_name,
        description = EXCLUDED.description,
@@ -152,6 +155,7 @@ export async function upsertPrice(params: {
        credit_per_unit = EXCLUDED.credit_per_unit,
        billing_unit = EXCLUDED.billing_unit,
        status = EXCLUDED.status,
+       responsible_person = EXCLUDED.responsible_person,
        sort_order = EXCLUDED.sort_order,
        updated_at = NOW()
      RETURNING *`,
@@ -163,6 +167,7 @@ export async function upsertPrice(params: {
       params.creditPerUnit,
       params.billingUnit ?? 'per_item',
       params.status ?? 'live',
+      params.responsiblePerson ?? null,
       params.sortOrder ?? 0,
     ]
   );
