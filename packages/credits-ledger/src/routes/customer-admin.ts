@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listPlans, upsertPlan, deletePlan, createCustomer, topupCredits, getCustomerSummary, listCustomers } from '../services/customer-admin.js';
+import { listPlans, getPlan, upsertPlan, deletePlan, createCustomer, topupCredits, getCustomerSummary, listCustomers } from '../services/customer-admin.js';
 import { query } from '../db/pool.js';
 
 const router = Router();
@@ -55,6 +55,88 @@ router.delete('/v1/admin/plans/:planId', async (req, res) => {
       return;
     }
     res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// POST /v1/admin/plans/:planId/freeze — freeze a plan (prevent new subscriptions)
+router.post('/v1/admin/plans/:planId/freeze', async (req, res) => {
+  try {
+    const plan = await getPlan(req.params.planId);
+    if (!plan) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Plan not found' });
+      return;
+    }
+    // Mark plan as disabled (prevent new signups, existing accounts unaffected)
+    await upsertPlan({
+      planId: plan.planId,
+      planName: plan.planName,
+      tier: plan.tier,
+      annualFeeYuan: plan.annualFeeYuan,
+      initialCredit: plan.initialCredit,
+      renewalPricePer100k: plan.renewalPricePer100k,
+      monthlyAllowance: plan.monthlyAllowance,
+      features: plan.features ?? undefined,
+      sortOrder: -1, // move to bottom when frozen
+    });
+    // Add status column update via direct query
+    await query('UPDATE plan_templates SET status = $1, updated_at = NOW() WHERE plan_id = $2',
+      ['frozen', req.params.planId]);
+    res.json({ ok: true, message: `Plan ${plan.planName} frozen` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// POST /v1/admin/plans/:planId/unfreeze — unfreeze a plan
+router.post('/v1/admin/plans/:planId/unfreeze', async (req, res) => {
+  try {
+    const plan = await getPlan(req.params.planId);
+    if (!plan) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Plan not found' });
+      return;
+    }
+    await query('UPDATE plan_templates SET status = $1, updated_at = NOW() WHERE plan_id = $2',
+      ['active', req.params.planId]);
+    res.json({ ok: true, message: `Plan ${plan.planName} unfrozen` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// POST /v1/admin/plans/:planId/freeze-customers — freeze/unfreeze all customers on a plan
+router.post('/v1/admin/plans/:planId/freeze-customers', async (req, res) => {
+  try {
+    const { action } = req.body; // 'freeze' or 'unfreeze'
+    if (action !== 'freeze' && action !== 'unfreeze') {
+      res.status(400).json({ code: 'VALIDATION', message: 'action must be "freeze" or "unfreeze"' });
+      return;
+    }
+
+    const plan = await getPlan(req.params.planId);
+    if (!plan) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Plan not found' });
+      return;
+    }
+
+    const newStatus = action === 'freeze' ? 'suspended' : 'active';
+    const result = await query(
+      'UPDATE credits_accounts SET status = $1, updated_at = NOW() WHERE plan_id = $2 AND status != $3 RETURNING id, company_name',
+      [newStatus, req.params.planId, newStatus]
+    );
+
+    const affected = result.rows.map((r: any) => ({ accountId: r.id, companyName: r.company_name }));
+    res.json({
+      ok: true,
+      action,
+      planName: plan.planName,
+      affectedCount: affected.length,
+      affected,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ code: 'INTERNAL' });

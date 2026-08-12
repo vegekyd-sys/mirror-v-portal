@@ -57,34 +57,50 @@ export async function createCustomer(params: {
   balance?: number;
   planName?: string;
   error?: string;
+  code?: string;
 }> {
   const plan = await getPlan(params.planId);
-  if (!plan) return { ok: false, error: `Unknown plan: ${params.planId}` };
+  if (!plan) return { ok: false, error: `Unknown plan: ${params.planId}`, code: 'UNKNOWN_PLAN' };
 
   const accountId = `acct_${params.tenantId}`;
+
+  // Check for duplicate — prevent balance stacking bug
+  const { rows: existingRows } = await query(
+    'SELECT id, balance, plan_tier, company_name, status FROM credits_accounts WHERE tenant_id = $1 OR id = $2',
+    [params.tenantId, accountId]
+  );
+  if (existingRows.length > 0) {
+    const existing = existingRows[0];
+    // Re-activate if the customer is suspended/closed
+    if (existing.status !== 'active') {
+      await query(
+        'UPDATE credits_accounts SET status = $1, updated_at = NOW() WHERE id = $2',
+        ['active', existing.id]
+      );
+      return {
+        ok: true,
+        accountId: existing.id,
+        balance: Number(existing.balance),
+        planName: plan.planName,
+      };
+    }
+    return {
+      ok: false,
+      code: 'DUPLICATE',
+      error: `Customer already exists: ${existing.company_name || params.tenantId} (account: ${existing.id}, plan: ${existing.plan_tier})`,
+    };
+  }
+
   const now = new Date();
   const yearLater = new Date(now);
   yearLater.setFullYear(yearLater.getFullYear() + 1);
 
   try {
-    // Create or update the account
+    // Create the account
     await query(
       `INSERT INTO credits_accounts (id, tenant_id, plan_tier, balance, monthly_allowance, month_reset_at,
          company_name, contact_name, contact_email, subscription_start, subscription_end, plan_id, lifetime_credited)
-       VALUES ($1, $2, $3, $4, $5, date_trunc('month', NOW()) + INTERVAL '1 month', $6, $7, $8, $9, $10, $11, $12)
-       ON CONFLICT (id) DO UPDATE SET
-         plan_tier = EXCLUDED.plan_tier,
-         balance = credits_accounts.balance + EXCLUDED.balance,
-         monthly_allowance = EXCLUDED.monthly_allowance,
-         company_name = COALESCE(EXCLUDED.company_name, credits_accounts.company_name),
-         contact_name = COALESCE(EXCLUDED.contact_name, credits_accounts.contact_name),
-         contact_email = COALESCE(EXCLUDED.contact_email, credits_accounts.contact_email),
-         subscription_start = EXCLUDED.subscription_start,
-         subscription_end = EXCLUDED.subscription_end,
-         plan_id = EXCLUDED.plan_id,
-         lifetime_credited = credits_accounts.lifetime_credited + EXCLUDED.lifetime_credited,
-         status = 'active',
-         updated_at = NOW()`,
+       VALUES ($1, $2, $3, $4, $5, date_trunc('month', NOW()) + INTERVAL '1 month', $6, $7, $8, $9, $10, $11, $12)`,
       [
         accountId, params.tenantId, plan.tier, plan.initialCredit, plan.monthlyAllowance,
         params.companyName ?? null, params.contactName ?? null, params.contactEmail ?? null,

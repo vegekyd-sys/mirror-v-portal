@@ -10,11 +10,18 @@ import {
 
 const router = Router();
 
-// GET /v1/skill-prices — list all prices, optional ?category= filter
+// GET /v1/skill-prices — list all prices, optional ?category= / ?skillId= filter
 router.get('/v1/skill-prices', async (req, res) => {
   try {
     const category = req.query.category as string | undefined;
-    const prices = await listPrices(category);
+    const skillId = req.query.skillId as string | undefined;
+    const allPrices = await listPrices(category);
+
+    // Filter by skillId if provided (exact match)
+    const prices = skillId
+      ? allPrices.filter(p => p.skillId === skillId)
+      : allPrices;
+
     const summary = await getCategorySummary();
     res.json({ prices, summary });
   } catch (err) {

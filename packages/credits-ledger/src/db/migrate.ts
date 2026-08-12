@@ -72,6 +72,10 @@ export async function migrate() {
     )
   `);
 
+  // v2.3: Plan management — status tracking + updated_at
+  await query(`ALTER TABLE plan_templates ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'active'`);
+  await query(`ALTER TABLE plan_templates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
   // Seed plan templates if empty
   const { rows: plans } = await query('SELECT COUNT(*) as cnt FROM plan_templates');
   if (Number(plans[0].cnt) === 0) {
