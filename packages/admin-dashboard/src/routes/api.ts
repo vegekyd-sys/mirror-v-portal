@@ -4,13 +4,13 @@ import { query } from './db.js';
 const router = Router();
 
 // GET /api/auth/verify — verify admin token and return session info
-router.get('/api/auth/verify', async (_req, res) => {
+router.get('/auth/verify', async (_req, res) => {
   // Auth middleware already validated the token
   res.json({ ok: true, role: 'admin' });
 });
 
 // GET /api/tenants
-router.get('/api/tenants', async (req, res) => {
+router.get('/tenants', async (req, res) => {
   try {
     const status = req.query.status as string | undefined;
     let q = 'SELECT tenant_id, company_name, plan_tier, status, subscription_end, created_at FROM tenants';
@@ -36,7 +36,7 @@ router.get('/api/tenants', async (req, res) => {
 });
 
 // GET /api/credits/summary
-router.get('/api/credits/summary', async (req, res) => {
+router.get('/credits/summary', async (req, res) => {
   try {
     const { rows: accts } = await query(
       'SELECT * FROM credits_accounts ORDER BY balance DESC'
@@ -71,7 +71,7 @@ router.get('/api/credits/summary', async (req, res) => {
 });
 
 // GET /api/health
-router.get('/api/health', async (req, res) => {
+router.get('/health', async (req, res) => {
   try {
     // Collect health info from db query
     const { rows: tenants } = await query(
@@ -94,7 +94,7 @@ router.get('/api/health', async (req, res) => {
 });
 
 // GET /api/audit
-router.get('/api/audit', async (req, res) => {
+router.get('/audit', async (req, res) => {
   try {
     const tenantId = req.query.tenantId as string;
     const conditions = ['1=1'];
@@ -146,7 +146,7 @@ async function proxyToLedger(path: string, init?: RequestInit & { authReq?: Expr
   return { status: res.status, body: await res.json() };
 }
 
-router.get('/api/skill-prices', async (_req, res) => {
+router.get('/skill-prices', async (_req, res) => {
   try {
     const result = await proxyToLedger('/v1/skill-prices');
     res.status(result.status).json(result.body);
@@ -156,7 +156,7 @@ router.get('/api/skill-prices', async (_req, res) => {
   }
 });
 
-router.get('/api/skill-prices/:skillId/history', async (req, res) => {
+router.get('/skill-prices/:skillId/history', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/skill-prices/${encodeURIComponent(req.params.skillId)}/history`);
     res.status(result.status).json(result.body);
@@ -166,7 +166,7 @@ router.get('/api/skill-prices/:skillId/history', async (req, res) => {
   }
 });
 
-router.put('/api/skill-prices', async (req, res) => {
+router.put('/skill-prices', async (req, res) => {
   try {
     const { skillId, ...rest } = req.body;
     const result = await proxyToLedger(`/v1/skill-prices/${encodeURIComponent(skillId)}`, {
@@ -182,14 +182,14 @@ router.put('/api/skill-prices', async (req, res) => {
 
 // ── Plan Templates (proxy to credits-ledger) ──
 
-router.get('/api/admin/plans', async (_req, res) => {
+router.get('/admin/plans', async (_req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/plans');
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/plans', async (req, res) => {
+router.post('/admin/plans', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/plans', {
       method: 'POST',
@@ -199,7 +199,7 @@ router.post('/api/admin/plans', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.delete('/api/admin/plans/:planId', async (req, res) => {
+router.delete('/admin/plans/:planId', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/plans/${encodeURIComponent(req.params.planId)}`, {
       method: 'DELETE',
@@ -210,7 +210,7 @@ router.delete('/api/admin/plans/:planId', async (req, res) => {
 
 // ── Customer Admin (proxy to credits-ledger) ──
 
-router.get('/api/admin/customers', async (req, res) => {
+router.get('/admin/customers', async (req, res) => {
   try {
     const status = req.query.status ? `?status=${req.query.status}` : '';
     const result = await proxyToLedger(`/v1/admin/customers${status}`);
@@ -218,14 +218,14 @@ router.get('/api/admin/customers', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.get('/api/admin/customers/:tenantId', async (req, res) => {
+router.get('/admin/customers/:tenantId', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}`);
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/customers', async (req, res) => {
+router.post('/admin/customers', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/customers', {
       method: 'POST',
@@ -235,7 +235,7 @@ router.post('/api/admin/customers', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/customers/:tenantId/topup', async (req, res) => {
+router.post('/admin/customers/:tenantId/topup', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}/topup`, {
       method: 'POST',
@@ -245,7 +245,7 @@ router.post('/api/admin/customers/:tenantId/topup', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/customers/:tenantId/renew', async (req, res) => {
+router.post('/admin/customers/:tenantId/renew', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/customers/${req.params.tenantId}/renew`, {
       method: 'POST',
@@ -257,7 +257,7 @@ router.post('/api/admin/customers/:tenantId/renew', async (req, res) => {
 
 // ── Account Freeze / Unfreeze ──
 
-router.post('/api/admin/customers/:tenantId/freeze', async (req, res) => {
+router.post('/admin/customers/:tenantId/freeze', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/accounts/acct_${req.params.tenantId}/freeze`, {
       method: 'POST',
@@ -267,7 +267,7 @@ router.post('/api/admin/customers/:tenantId/freeze', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/customers/:tenantId/unfreeze', async (req, res) => {
+router.post('/admin/customers/:tenantId/unfreeze', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/accounts/acct_${req.params.tenantId}/unfreeze`, {
       method: 'POST',
@@ -280,7 +280,7 @@ router.post('/api/admin/customers/:tenantId/unfreeze', async (req, res) => {
 // ── Customer Credit Query (lightweight, shared-secret auth) ──
 // Used by customer-facing web page to show balance without admin login
 
-router.get('/api/public/credit/:tenantId', async (req, res) => {
+router.get('/public/credit/:tenantId', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     const expectedToken = process.env.PUBLIC_QUERY_TOKEN || '小元-balance-check-2026';
@@ -317,7 +317,7 @@ router.get('/api/public/credit/:tenantId', async (req, res) => {
 });
 
 // GET /api/orders
-router.get('/api/orders', async (req, res) => {
+router.get('/orders', async (req, res) => {
   try {
     const status = req.query.status as string;
     let q = 'SELECT * FROM payment_orders';
@@ -335,7 +335,7 @@ router.get('/api/orders', async (req, res) => {
 
 // ── Admin Auth ──
 
-router.post('/api/admin/auth/login', async (req, res) => {
+router.post('/admin/auth/login', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/auth/login', {
       method: 'POST',
@@ -345,7 +345,7 @@ router.post('/api/admin/auth/login', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.get('/api/admin/auth/me', async (req, res) => {
+router.get('/admin/auth/me', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/auth/me', { authReq: req });
     res.status(result.status).json(result.body);
@@ -354,14 +354,14 @@ router.get('/api/admin/auth/me', async (req, res) => {
 
 // ── Admin Users ──
 
-router.get('/api/admin/users', async (req, res) => {
+router.get('/admin/users', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/users', { authReq: req });
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/users', async (req, res) => {
+router.post('/admin/users', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/users', {
       method: 'POST',
@@ -372,7 +372,7 @@ router.post('/api/admin/users', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/users/:userId/token/deactivate', async (req, res) => {
+router.post('/admin/users/:userId/token/deactivate', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/users/${req.params.userId}/token/deactivate`, {
       method: 'POST',
@@ -382,7 +382,7 @@ router.post('/api/admin/users/:userId/token/deactivate', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/users/:userId/token/activate', async (req, res) => {
+router.post('/admin/users/:userId/token/activate', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/users/${req.params.userId}/token/activate`, {
       method: 'POST',
@@ -394,7 +394,7 @@ router.post('/api/admin/users/:userId/token/activate', async (req, res) => {
 
 // ── Admin Skills ──
 
-router.post('/api/admin/skills/sync', async (req, res) => {
+router.post('/admin/skills/sync', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/skills/sync', {
       method: 'POST',
@@ -405,7 +405,7 @@ router.post('/api/admin/skills/sync', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/skills/:skillId/activate', async (req, res) => {
+router.post('/admin/skills/:skillId/activate', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/activate`, {
       method: 'POST',
@@ -416,7 +416,7 @@ router.post('/api/admin/skills/:skillId/activate', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.post('/api/admin/skills/:skillId/reject', async (req, res) => {
+router.post('/admin/skills/:skillId/reject', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/reject`, {
       method: 'POST',
@@ -427,14 +427,14 @@ router.post('/api/admin/skills/:skillId/reject', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.get('/api/admin/skills/pending', async (req, res) => {
+router.get('/admin/skills/pending', async (req, res) => {
   try {
     const result = await proxyToLedger('/v1/admin/skills/pending', { authReq: req });
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
-router.get('/api/admin/skills', async (req, res) => {
+router.get('/admin/skills', async (req, res) => {
   try {
     const query = new URLSearchParams(req.query as Record<string,string>).toString();
     const result = await proxyToLedger(`/v1/admin/skills${query ? '?' + query : ''}`, { authReq: req });

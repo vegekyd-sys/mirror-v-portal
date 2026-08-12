@@ -1,12 +1,32 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { TestContext } from 'vitest';
 import request from 'supertest';
+import { createHmac } from 'node:crypto';
 import { createApp } from '../app.js';
 import { query } from '../routes/db.js';
 
 const app = createApp('postgresql://postgres:***@localhost:5432/dealclaw_test');
 
 let dbAvailable = false;
+
+/** Create a valid HMAC-SHA256 JWT for test admin auth */
+function createTestToken(): string {
+  const secret = process.env.ADMIN_JWT_SECRET || 'changeme-in-production';
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({
+    sub: 'test-admin',
+    username: 'testadmin',
+    displayName: 'Test Admin',
+    role: 'admin',
+    iat: now,
+    exp: now + 3600,
+  })).toString('base64url');
+  const sig = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+  return `${header}.${payload}.${sig}`;
+}
+
+let testToken: string;
 
 // Helper: skip test gracefully when DB is unavailable (CI/gate check)
 const dbIt = (name: string, fn: (ctx: TestContext) => Promise<void> | void) => {
@@ -17,8 +37,7 @@ const dbIt = (name: string, fn: (ctx: TestContext) => Promise<void> | void) => {
 };
 
 beforeAll(async () => {
-  // NB FIX: Set admin API token for test auth
-  process.env.ADMIN_API_TOKEN = 'test-token';
+  testToken = createTestToken();
 
   // Probe DB availability before running heavy setup
   try {
@@ -82,7 +101,7 @@ describe('GET /api/tenants', () => {
   dbIt('returns tenant list with stats', async () => {
     const res = await request(app)
       .get('/api/tenants')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body.tenants.length).toBeGreaterThanOrEqual(1);
     expect(res.body.tenants[0].tenant_id).toBe('cust-001');
@@ -93,7 +112,7 @@ describe('GET /api/tenants', () => {
   dbIt('filters by status', async () => {
     const res = await request(app)
       .get('/api/tenants?status=active')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body.tenants.every((t: any) => t.status === 'active')).toBe(true);
   });
@@ -103,7 +122,7 @@ describe('GET /api/credits/summary', () => {
   dbIt('returns credits summary', async () => {
     const res = await request(app)
       .get('/api/credits/summary')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body.totalBalance).toBeGreaterThan(0);
     expect(res.body.topConsumers.length).toBeGreaterThanOrEqual(1);
@@ -115,7 +134,7 @@ describe('GET /api/health', () => {
   dbIt('returns health status', async () => {
     const res = await request(app)
       .get('/api/health')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body.central.database.healthy).toBe(true);
   });
@@ -125,7 +144,7 @@ describe('GET /api/audit', () => {
   dbIt('returns empty gracefully when no audit_log table', async () => {
     const res = await request(app)
       .get('/api/audit')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('entries');
   });
@@ -135,7 +154,7 @@ describe('GET /api/orders', () => {
   dbIt('returns empty gracefully when no payment_orders table', async () => {
     const res = await request(app)
       .get('/api/orders')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', `Bearer ${testToken}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('orders');
   });
@@ -146,6 +165,6 @@ describe('Frontend static', () => {
     const res = await request(app).get('/');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
-    expect(res.text).toContain('DealClaw Nexus');
+    expect(res.text).toContain('小元 · 管理后台');
   });
 });
