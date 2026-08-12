@@ -338,6 +338,63 @@ router.post('/v1/admin/customers', async (req, res) => {
   }
 });
 
+// PATCH /v1/admin/customers/:tenantId — update customer fields
+router.patch('/v1/admin/customers/:tenantId', async (req, res) => {
+  try {
+    const { companyName, contactName, contactEmail, subscriptionEnd, status, monthlyAllowance } = req.body;
+    const updates: string[] = [];
+    const values: unknown[] = [];
+
+    if (companyName !== undefined) {
+      updates.push(`company_name = $${updates.length + 1}`);
+      values.push(companyName);
+    }
+    if (contactName !== undefined) {
+      updates.push(`contact_name = $${updates.length + 1}`);
+      values.push(contactName);
+    }
+    if (contactEmail !== undefined) {
+      updates.push(`contact_email = $${updates.length + 1}`);
+      values.push(contactEmail);
+    }
+    if (subscriptionEnd !== undefined) {
+      updates.push(`subscription_end = $${updates.length + 1}`);
+      values.push(subscriptionEnd);
+    }
+    if (status !== undefined) {
+      updates.push(`status = $${updates.length + 1}`);
+      values.push(status);
+    }
+    if (monthlyAllowance !== undefined) {
+      updates.push(`monthly_allowance = $${updates.length + 1}`);
+      values.push(Number(monthlyAllowance));
+    }
+
+    if (updates.length === 0) {
+      res.status(400).json({ code: 'VALIDATION', message: 'No fields to update' });
+      return;
+    }
+
+    updates.push('updated_at = NOW()');
+    values.push(req.params.tenantId);
+
+    const { rowCount, rows } = await query(
+      `UPDATE credits_accounts SET ${updates.join(', ')} WHERE tenant_id = $${values.length} OR id = $${values.length} RETURNING id, tenant_id, company_name, status, subscription_end, monthly_allowance, balance`,
+      values
+    );
+
+    if ((rowCount ?? 0) === 0) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Customer not found' });
+      return;
+    }
+
+    res.json({ ok: true, customer: rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
 // POST /v1/admin/customers/:tenantId/topup — top-up credits
 router.post('/v1/admin/customers/:tenantId/topup', async (req, res) => {
   try {

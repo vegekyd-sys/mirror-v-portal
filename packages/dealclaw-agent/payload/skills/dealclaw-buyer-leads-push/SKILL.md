@@ -10,7 +10,7 @@ Run a one-company-per-group buyer-lead workflow without inventing buyer facts. T
 ## Fixed rules
 
 - Use the document title pattern `企业名称｜企业知识库`.
-- Use the Base title pattern `企业名称｜AI猎客买家线索池`.
+- Use the Base title pattern `企业名称｜AI猎客商机池`.
 - **Group isolation**: Each Feishu group has exactly one knowledge document and one Base. The company name extracted from the knowledge doc title is the isolation key. Never write leads from one group's knowledge doc into another group's Base. Never search globally for Bases without `chat_id` scoping.
 - **Base table**: Only the `买家线索` table should exist. Delete any auto-created default tables immediately after Base creation.
 - Run daily at `10:00` in `Asia/Shanghai` when invoked by a host scheduler.
@@ -37,13 +37,13 @@ The Skill does not create its own scheduler. Use the host cron/heartbeat mechani
 2. Search documents visible in that group for `企业知识库`. Select exactly one title matching `^.+｜企业知识库$`. Stop and report a configuration error when zero or multiple documents match.
 3. Extract the company name from the title prefix and retain the returned document token. Read table-aware document blocks, not screenshots or OCR, and parse the current company profile and market sections.
 4. Compare a hash of the normalized profile with the previous hash when state is available. Refresh the cached profile when changed. Continue the buyer query even when unchanged.
-5. Find the exact Base title `企业名称｜AI猎客买家线索池` using `feishu-bitable` Skill. Create it only when no exact match exists (use `--as user` for creation so the resulting bitable is editable in Feishu client). Stop on multiple matches. After creation, immediately delete the default "数据表" that Feishu auto-creates — all operations should use only the `买家线索` table. Build the schema and views from [references/base-schema.md](references/base-schema.md).
+5. Find the exact Base title `企业名称｜AI猎客商机池` using `feishu-bitable` Skill.
 6. Read feedback records changed since the previous run. Read `是否匹配`, `不匹配原因`, and `反馈说明`. Use feedback to adjust matching preferences: if ≥3 leads with the same product/country/buyer-type are marked `❌ 不匹配`, reduce new leads matching that pattern by 20 points. Never rewrite interface-returned buyer fields or automatically edit the company knowledge document.
 7. Read [references/api-contract.md](references/api-contract.md). Resolve each target country through the country endpoint and query each target-country/product combination. First resolve the installed Skill directory and run the script by absolute path. Prefer `<skill-root>/tradechina_buyer_leads.py`; the implementation remains under `<skill-root>/scripts/tradechina_buyer_leads.py`. Never assume the current working directory is the Skill directory. If the host does not expose bundled files or Python, use its generic HTTPS request capability to call the endpoints directly according to the API contract. Do not make up a country ID when exact Chinese or English matching fails.
 8. Use only the sanitized output of the bundled script. Never pass the raw buyer response into a model, log, group message, or Base write.
 9. Read [references/profile-and-matching.md](references/profile-and-matching.md). Score the sanitized records against explicit company profile facts, deduplicate on `chat_id + 线索ID`, and keep AI conclusions only in the AI fields.
 10. Upsert eligible records into the lead pool. Write scores 65–79 without notifying the group; write and notify scores at least 80. Do not add records below 65 to the normal lead-pool view.
-11. Read [references/message-template.md](references/message-template.md). Group previously unpushed high-score records by the exact interface-returned `买家国家`, then send at most 5 records in total to the originating group. Use the exact title `【AI猎客 - 来自{买家国家}买家的采购机会】`. Include a link to the lead pool or record when the host provides one. Record the message ID and delivery timestamps.
+11. Push results to the group as a Feishu card (see [references/message-template.md](references/message-template.md)).
 
 ## Interface commands
 

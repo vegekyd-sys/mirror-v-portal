@@ -19,8 +19,11 @@ description: "找买家结果自动写入企业唯一线索池；≤5条逐条�
 
 ## 搜索字段判断
 
-- 已知公司名/品牌名 → 公司名字段。
-- 产品/品类 → 采购标签字段；标签未知时用公司简介字段。
+**强制优先级：tag-keyword > profile-keyword > keyword（公司名）**
+
+- 产品词 → **必须先用 `--tag-keyword`**。不得跳过标签直接上 profile-keyword。
+- 标签无结果时，才降级为 `--profile-keyword`（公司简介匹配）。
+- 公司名/品牌名 → `--keyword`。
 - 产品词不能放进公司名字段。
 - 采购标签只认英文。
 - 一次只传一个搜索概念或完整短语，不堆多个同义词。
@@ -56,12 +59,15 @@ description: "找买家结果自动写入企业唯一线索池；≤5条逐条�
 搜索时必须传企业和用户标识，让脚本完成去重和自动入池；尽量传企业名和群 ID：
 
 ```bash
-cd work/mio-api
-python3 dealclaw_search.py <搜索参数> \
-  --enterprise "<company_id>" \
-  --user "<user_open_id>" \
-  --company-name "<company_name>" \
-  --chat-id "<chat_id>"
+cd skills/dealclaw-find-buyers/scripts
+python3 search_aiv2.py \
+  --tag-keyword "<product_tag>" \
+  --countries-json '["<ISO2>"]' \
+  --page-size 20
+
+# 联系人：
+python3 get_cdp_contact.py \
+  --company-cdp-ids-json '["<cdp_id>",...]'
 ```
 
 默认会读取该企业/用户的 `current_search_profile`：国家和可映射买家类型会进入服务端搜索参数，`avoid_current` 会在本地过滤，`prefer` 会重排结果。正常请求不得使用 `--ignore-calibration`；它只用于诊断或用户明确开启了一个全新搜索任务。
