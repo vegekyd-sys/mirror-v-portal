@@ -168,7 +168,6 @@ def auto_register():
         "dc_degrade": ("dc_degrade.py", "降级决策矩阵", ["dc_error_log"], "1.0"),
         "dc_error_log": ("dc_error_log.py", "结构化错误日志", [], "1.0"),
         "dc_health": ("dc_health.py", "系统健康检查", [], "1.0"),
-        "dc_morning_report": ("dc_morning_report.py", "每日早报+漏斗", ["dc_ls_store", "dc_send_log", "dc_audit"], "1.0"),
         "dc_registry": ("dc_registry.py", "引擎/技能注册表", [], "1.0"),
     }
 

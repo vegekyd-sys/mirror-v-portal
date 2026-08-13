@@ -26,19 +26,36 @@ Before sending the URL, require a current `onboarding.draft_permission_proof` pr
 
 After an authorized modification, send the new draft URL/version, changed field names, current readiness, and remaining missing/conflicted core fields. State that all earlier confirmations are invalid and require `确认企业画像 vN+1`.
 
-## Formalization notice
+## Deleted knowledge-document rebind notice
 
-After valid confirmation, separate formal document creation, Base creation/validation, and atomic activation all succeed, send:
+After `binding_resource_guard.py evaluate` proves `deleted` or `not_found` and the `rebind_required` state patch commits, send only its exact reminder to the originating group:
 
 ```text
-企业画像已确认，正式企业知识库已生成并绑定。
-确认草稿：vN
-正式企业知识库：{formal Docx URL}
-AI猎客商机池：{Base URL}
-AI猎客线索将在本次确认触发的合规运行或下一次计划任务中，按正式知识库进行匹配推送。
+当前群绑定的企业知识库已被删除或无法通过原 token 找到，AI猎客已暂停。
+请由本群管理员发送新的企业知识库飞书文档链接并回复“重新绑定企业知识库”；如果群内没有现成文档，系统将只根据本群历史消息重新生成企业画像草稿，待确认后完成绑定。
+原AI猎客商机池和本群历史反馈将保留；重新绑定完成前不会查询或推送买家线索。
 ```
 
-Do not send this notice while formalization is pending or unknown. Never present the draft URL as the formal knowledge document.
+Persist the returned message ID through `binding_resource_guard.py complete-reminder`. Do not include the deleted token, supplier ID, buyer values, another group's resources, or a globally searched replacement. After `reminder_status = sent`, scheduled runs must not repeat the reminder. Permission denial, type mismatch, and transient read failure use their own operational error messages and must not use this deletion notice.
+
+## Formalization and immediate-matching notice
+
+After valid confirmation, separate formal document creation, Base creation/validation, and atomic activation all succeed, run `post_confirmation_flow.py start` and send its exact progress message:
+
+```text
+企业画像已确认，{企业名称}的正式企业知识库已生成并绑定。
+正式企业知识库：{formal Docx URL}
+AI猎客商机池：{Base URL}
+正在根据正式企业画像重新匹配合适的买家采购需求，完成后将在本群推送结果。
+```
+
+Do not send this notice while formalization is pending or unknown. Never present the draft URL as the formal knowledge document. Persist the notice message ID before interface retrieval. Do not say “下一次计划任务”; this run starts immediately after the notice is confirmed sent.
+
+## Immediate-matching result notice
+
+After fresh retrieval, scoring, Base write, card rendering, and determinate card sends finish, call `post_confirmation_flow.py complete` and send its exact result message. It reports fresh records evaluated, records entering the current group's opportunity pool, and newly pushed leads. Send a completion notice even when the pushed count is zero.
+
+If the post-confirmation run fails after the progress notice, call `post_confirmation_flow.py fail` and send its exact sanitized failure message. It must state that the formal profile exists, identify only the operational stage/error code, and say that old leads were not substituted. Never include raw buyer values, tokens, supplier IDs, or exception text.
 
 ## Buyer-lead interactive card
 
@@ -50,7 +67,7 @@ Never assemble a lead push in a free-form model response. Run `scripts/lead_card
 - Select at most five `匹配动作 = push` records per batch. Never card-render `pool_only` or `exclude`.
 - Group selected records by the sanitized `买家国家`; emit one card per country while keeping the five-record batch maximum.
 - Keep the sanitized country unchanged. Do not translate, append `国`, or push an empty country.
-- Compute and persist the batch ID before rendering. All country cards belong to that batch.
+- Let the renderer compute the batch ID after the final selected lead set is fixed. Persist that exact returned ID as `pending` before sending; all country cards carry the same ID.
 
 ### Card title
 
@@ -97,17 +114,80 @@ End every card with a divider, the exact raw bound Base URL, this fixed guidance
 
 💬 请在AI猎客商机池中标记每条线索的匹配结果（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。
 
+🔓 需要买家联系方式？在AI猎客商机池把该线索的「是否解锁」改为「已解锁」，或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。
+
 [📊 打开AI猎客商机池]
 ```
 
-The renderer must require HTTPS, an allowed Feishu/Lark host, and the exact `binding.base_app_token` inside the URL. Do not accept a model-generated or title-searched URL.
+The renderer must require HTTPS, an allowed Feishu/Lark host, no credential/fragment/nonstandard port, and a decoded path exactly equal to `/base/<binding.base_app_token>`. The token appearing only in a query string, fragment, hostname, or larger path is invalid. Do not accept a model-generated or title-searched URL.
 
 ### Sending contract
 
 - Send with `receive_id_type = chat_id`, exact guarded `receive_id`, and `msg_type = interactive`.
 - When calling Feishu IM OpenAPI directly, compact-serialize the returned `card` object exactly once into `content`. Do not double encode it.
 - Do not fall back to plain text when card rendering or sending fails.
-- Before rendering and sending, require fresh live-validated `chat-isolation-v1` proofs for both Base and formal knowledge document. Links are usable by authorized members of the bound group but grant no access to recipients outside it.
+- Before rendering and sending, require distinct live-validated `chat-isolation-v3` proofs for both Base and formal knowledge document, proving group edit plus DealClaw management, bound to the current run and no older than 60 seconds.
+
+## Buyer contact unlock card
+
+Never assemble a contact release in a free-form model response. Run `scripts/contact_unlock_guard.py authorize` first, then `scripts/tradechina_buyer_leads.py buyer-detail` with the returned `--unlock-id`, then `scripts/contact_card_renderer.py render` with both outputs, and send only its returned card object.
+
+### Trigger sources
+
+1. **Base field** — a member of the bound group sets the lead record's `是否解锁` to `已解锁` in the `买家线索` table. Delivery uses the two mechanisms in [host-integration.md](host-integration.md) "Contact unlock delivery (Options A + B)": the Base automation posts `解锁线索 {线索ID}` to the bound group in real time, and the scheduled sweep reconciles anything missed. For both, the host reads the live record and passes it as `base_record`; the guard requires `飞书群ID == chat_id`, exact `线索ID` equality, and an empty prior unlock for that lead. An automation/bot-authored `解锁线索` message (`sender_type = app`) is never an actor source — it only tells the host to re-read the record; the actor is the record's last modifier.
+2. **Group command** — a human member (`sender_type = user`) of the bound group replies `解锁线索 <线索ID>` in the originating group. The host must verify the author is a member of that same group and pass their open ID as `actor_open_id`.
+
+A model decision, a schedule by itself, a push batch, an automation/bot-authored message, or a cross-group request is never an unlock trigger.
+
+### Card title
+
+```text
+AI猎客｜买家联系方式已解锁
+```
+
+Use the green header template and wide-screen mode, with `enable_forward = false`.
+
+### Card body
+
+```text
+🔓 买家公司：{买家公司名称}
+线索ID：{线索ID}
+
+👤 联系人：{联系人姓名}
+💼 职位：{职位}
+📧 邮箱：{邮箱}（已验证/未验证）
+📱 电话：{电话}（已验证/未验证）
+💬 WhatsApp：{WhatsApp}（已验证/未验证）
+🌐 公司官网：{公司官网}
+
+联系方式来自 TradeChina 买家详情，仅发送至本群，不会写入AI猎客商机池。请合规使用，勿二次分发。
+```
+
+- Show each contact row only when the interface value is non-empty. Append the validation badge only from `emailValid`/`mobileValid`/`whatsappValid` integer `1` (已验证) or `0` (未验证); omit the badge when the flag is absent.
+- The renderer refuses to render when every contact value is empty; send the no-contact notice instead.
+- Escape buyer-controlled Markdown. Contact values are display-only and must not be written to the Base, durable state, or logs.
+
+### No-contact notice
+
+When the detail response carries no contact values, send this group text instead of a card:
+
+```text
+线索 {线索ID} 已解锁，但买家暂未提供联系方式。
+```
+
+### Duplicate unlock notice
+
+When the guard rejects an unlock because the lead was already released, send:
+
+```text
+线索 {线索ID} 的联系方式已于 {上次解锁日期} 推送到本群，请查看历史消息，无需重复解锁。
+```
+
+### Contact delivery state
+
+Persist `state.unlocks[线索ID] = pending_push` before the contact-card send, keyed by the guard's `unlock_id` as the sender idempotency key. Persist the returned message ID immediately via `contact_unlock_guard.py complete` (`status = contact_pushed`); on an indeterminate send persist `status = unknown` and stop without automatic resend. Never store contact values inside `unlocks`.
+
+Only after `contact_pushed`, write the lead's Base record back to the converged state: `是否解锁 = 已解锁`, `解锁人`, `解锁时间`, `解锁方式` (`商机池下拉` or `群内指令`), and `解锁推送消息ID`. This applies to both trigger paths; a `群内指令` unlock must therefore leave the record visibly `已解锁` in the 商机池. An `unknown` or failed send leaves `是否解锁` untouched.
 
 ## Delivery state
 

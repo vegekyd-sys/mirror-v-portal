@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import apiRouter from './routes/api.js';
-import { requireAdmin, optionalAuth } from './middleware/auth.js';
+import { requireAdmin } from './middleware/auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,22 +46,20 @@ export function createApp(dbUrl?: string) {
     res.sendFile(join(__dirname, '..', 'public', 'admin-skills.html'));
   });
 
-  // ── Protected API routes ──
-  app.use('/api', requireAdmin, apiRouter);
+  // ── Protected API routes (auth bypass for login + public endpoints) ──
+  app.use('/api', (req, res, next) => {
+    // Skip auth for login, public credit queries, and health
+    if (req.path === '/admin/auth/login' || req.path.startsWith('/public/') || req.path === '/health') {
+      return next();
+    }
+    return requireAdmin(req, res, next);
+  }, apiRouter);
 
   // ── Static frontend (assets, og.png, etc.) ──
   app.use(express.static(join(__dirname, '..', 'public')));
 
-  // ── SPA catch-all — require auth, redirect to login if not ──
-  app.get('*', optionalAuth, (req, res) => {
-    const user = (req as any).adminUser;
-    if (!user) {
-      // Not logged in → redirect to login page
-      res.redirect('/login');
-      return;
-    }
-
-    // Logged in → serve SPA
+  // ── SPA catch-all — serve the React SPA; it handles auth client-side ──
+  app.get('*', (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.sendFile(join(__dirname, '..', 'public', 'index.html'));
   });

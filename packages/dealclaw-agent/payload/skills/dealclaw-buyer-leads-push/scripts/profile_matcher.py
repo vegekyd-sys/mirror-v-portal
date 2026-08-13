@@ -12,6 +12,23 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
+def load_zone(name: str) -> "ZoneInfo":
+    """Resolve an IANA timezone, falling back to fixed UTC+8 for Asia/Shanghai.
+
+    Windows hosts without the tzdata package cannot resolve IANA names; the
+    business schedule is pinned to Asia/Shanghai, which has used a fixed
+    UTC+8 offset since 1991, so the fallback is exact. Other names still
+    raise MatchError so genuinely unknown timezones are rejected.
+    """
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        if name == "Asia/Shanghai":
+            from datetime import timedelta, timezone as _tz
+            return _tz(timedelta(hours=8), "Asia/Shanghai")
+        raise
+
+
 WEIGHTS = {
     "product_name": 32,
     "product_category": 24,
@@ -290,11 +307,11 @@ def evidence(parts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     labels = {
         "product_name": "产品名称",
         "product_category": "产品类别",
-        "buyer_type": "买家类别",
+        "buyer_type": "买家类型",
         "country": "买家国家",
         "moq": "MOQ",
         "buyer_tag": "买家标签",
-        "company_profile": "买家企业简介",
+        "company_profile": "企业简介",
         "intent": "需求意向",
         "recency": "线索时间",
     }
@@ -316,7 +333,7 @@ def score_envelope(payload: Any) -> dict[str, Any]:
     reject_extra_keys(payload, {"chat_id", "run_at", "source_timezone", "profile", "records", "penalty_rules"}, "input")
     chat_id = require_text(payload.get("chat_id"), "chat_id")
     try:
-        timezone = ZoneInfo(require_text(payload.get("source_timezone"), "source_timezone"))
+        timezone = load_zone(require_text(payload.get("source_timezone"), "source_timezone"))
     except ZoneInfoNotFoundError as exc:
         raise MatchError("source_timezone is unknown") from exc
     run_at = parse_time(payload.get("run_at"), timezone)
@@ -388,7 +405,7 @@ def score_envelope(payload: Any) -> dict[str, Any]:
         core_pass = all(parts[name]["points"] == WEIGHTS[name] for name in CORE_DIMENSIONS)
         penalty, applied = apply_penalties(parts, rules)
         final_score = max(0, min(100, raw_score - penalty))
-        if final_score >= 80 and core_pass:
+        if final_score >= 70 and core_pass:
             level, action = "高", "push"
         elif final_score >= 65:
             level, action = "中", "pool_only"
@@ -414,7 +431,7 @@ def score_envelope(payload: Any) -> dict[str, Any]:
     output.sort(key=lambda item: (-item["AI匹配分"], -item["AI原始分"], -item["_demand_epoch"], item["线索ID"]))
     for item in output:
         item.pop("_demand_epoch", None)
-    return {"chat_id": chat_id, "weight_version": "v7-32-24-18-10-6-4-2-2-2", "records": output}
+    return {"chat_id": chat_id, "weight_version": "v10-32-24-18-10-6-4-2-2-2", "records": output}
 
 
 def fixture() -> dict[str, Any]:

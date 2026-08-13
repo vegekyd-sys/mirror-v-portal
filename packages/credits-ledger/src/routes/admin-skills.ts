@@ -42,11 +42,34 @@ const CATEGORY_BASE: Record<string, number> = {
 function extractCategory(skillId: string, content: string): string {
   // Try to extract from SKILL.md content
   const catMatch = content.match(/category[：:]\s*(\w+)/i);
-  if (catMatch) return catMatch[1].toLowerCase();
+  const raw = catMatch ? catMatch[1].toLowerCase() : (skillId.split('-')[0] || 'other');
+  return canonicalizeCategory(skillId, raw);
+}
 
-  // Fall back to prefix-based
-  const prefix = skillId.split('-')[0];
-  return prefix || 'other';
+// 分类收敛：只允许 4 业务类 + other。业务 skill 按 skill_id 精确映射，其余一律 other。
+const CANONICAL_CATEGORIES = new Set(['buyer', 'insight', 'outreach', 'exhibition', 'other']);
+const SKILL_CATEGORY_MAP: Record<string, string> = {
+  // buyer — 买家开发
+  'dealclaw-find-buyers': 'buyer', 'dealclaw-lead-import': 'buyer', 'dealclaw-buyer-leads-push': 'buyer',
+  'overseas-buyer-lead-search': 'buyer', 'overseas-buyer-search': 'buyer', 'overseas-textile-buyer-search': 'buyer',
+  'lead-customer-profile': 'buyer', 'data-selection': 'buyer', 'mio-data-selection-api': 'buyer',
+  'aochuang-leads': 'buyer', 'qcc-company-lookup': 'buyer', 'qiancean-factory': 'buyer',
+  // insight — 市场洞察
+  'dealclaw-analyze-company': 'insight', 'dealclaw-market-insight': 'insight', 'dealclaw-market-report': 'insight',
+  'mio-customer-visit-analysis': 'insight', 'customer-health-score': 'insight', 's2-win-analysis': 'insight',
+  // outreach — 营销触达
+  'dealclaw-email-founder-direct': 'outreach', 'dealclaw-email-growth-send': 'outreach', 'dealclaw-email-bindings': 'outreach',
+  'dealclaw-smart-reply': 'outreach', 'dealclaw-review': 'outreach',
+  // exhibition — 展会获客
+  'dealclaw-exhibition-leads': 'exhibition', 'dealclaw-exhibition-invitation': 'exhibition',
+  'aochuang-metro': 'exhibition', 'aochuang-review-report': 'exhibition', 'aochuang-standard-solution': 'exhibition',
+  'miao-b2b-exhibition-planning-doc': 'exhibition',
+};
+function canonicalizeCategory(skillId: string, raw: string): string {
+  const c = raw.toLowerCase().trim();
+  if (SKILL_CATEGORY_MAP[skillId]) return SKILL_CATEGORY_MAP[skillId];
+  if (CANONICAL_CATEGORIES.has(c)) return c;
+  return 'other';
 }
 
 function extractChineseName(content: string): string {
@@ -62,9 +85,15 @@ function extractDescription(content: string): string {
 }
 
 function extractResponsiblePerson(content: string): string | null {
-  const personMatch = content.match(/(?:负责人|responsible|owner)[：:]\s*(.+)/i);
-  if (personMatch) return personMatch[1].trim().slice(0, 64);
-  return null;
+  // Person marks: 作者 / author / Owner / 负责人 / responsible — stop at pipe or newline.
+  let m = content.match(/(?:作者|负责人|responsible|owner|author)[：:]\s*([^|\n]+)/i);
+  // 来源 is ambiguous (usually a data-source list). Only treat as author when it looks
+  // like a person, i.e. contains "@" (e.g. 来源：田耕郡@格格).
+  if (!m) m = content.match(/来源[：:]\s*([^\s|，,\n]*@[^\s|，,\n]+)/i);
+  if (!m) return null;
+  const v = m[1].trim().replace(/[|,，].*$/, '').trim();
+  if (!v || v === '...' || v === '…') return null;
+  return v.slice(0, 64);
 }
 
 function autoPrice(category: string, skillId: string, content: string): number {
@@ -89,8 +118,10 @@ function autoPrice(category: string, skillId: string, content: string): number {
 
 // ── Sync route ──
 
-router.post('/v1/admin/skills/sync', requireAdmin, requireRole('admin'), async (_req: Request, res: Response) => {
-  const skillsDir = _req.body?.skillsDir || join(process.cwd(), '..', 'dealclaw-agent', 'payload', 'skills');
+router.post('/skills/sync', requireAdmin, requireRole('admin'), async (_req: Request, res: Response) => {
+  // Default to dealclaw-agent skills in the monorepo
+  const defaultSkillsDir = join(process.cwd(), '..', '..', 'dealclaw-agent', 'payload', 'skills');
+  const skillsDir = _req.body?.skillsDir || defaultSkillsDir;
   const results = { registered: [] as any[], skipped: 0, errors: [] as string[] };
 
   if (!existsSync(skillsDir)) {
@@ -153,7 +184,7 @@ router.post('/v1/admin/skills/sync', requireAdmin, requireRole('admin'), async (
 
 // ── Activate: set activation_status = 'approved' ──
 
-router.post('/v1/admin/skills/:skillId/activate', requireAdmin, requireRole('admin'), async (req: Request, res: Response) => {
+router.post('/skills/:skillId/activate', requireAdmin, requireRole('admin'), async (req: Request, res: Response) => {
   const { skillId } = req.params;
   const { finalPrice } = req.body ?? {};
   const approvedBy = (req as any).adminUser.username;
@@ -167,7 +198,8 @@ router.post('/v1/admin/skills/:skillId/activate', requireAdmin, requireRole('adm
     updates.push(`approved_by = $${paramIdx++}`);
     params.push(approvedBy);
     updates.push(`approved_at = NOW()`);
-    updates.push(`status = 'live'`); // change from shadow to live
+    // 审核通过 → 影子计费（记录不扣费）。正式上线（launch）才转 live。
+    updates.push(`status = 'shadow'`);
 
     if (typeof finalPrice === 'number' && finalPrice > 0) {
       updates.push(`credit_per_unit = $${paramIdx++}`);
@@ -193,9 +225,37 @@ router.post('/v1/admin/skills/:skillId/activate', requireAdmin, requireRole('adm
   }
 });
 
+// ── Launch: 正式上线 — shadow → live（正式计费）──
+// 只有 Tianyi 明确指示「上线」时才调用。上线 = 审核通过 + 正式扣费。
+
+router.post('/skills/:skillId/launch', requireAdmin, requireRole('admin'), async (req: Request, res: Response) => {
+  const { skillId } = req.params;
+  const approvedBy = (req as any).adminUser.username;
+
+  try {
+    const { rowCount } = await query(
+      `UPDATE skill_prices
+       SET activation_status = 'approved', status = 'live',
+           approved_by = $1, approved_at = NOW(), updated_at = NOW()
+       WHERE skill_id = $2`,
+      [approvedBy, skillId]
+    );
+
+    if ((rowCount ?? 0) === 0) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Skill 不存在' });
+      return;
+    }
+
+    res.json({ ok: true, skillId, status: 'launched' });
+  } catch (err: any) {
+    console.error('[admin-skills] launch error:', err);
+    res.status(500).json({ code: 'INTERNAL', message: err.message });
+  }
+});
+
 // ── Reject: set activation_status = 'rejected' ──
 
-router.post('/v1/admin/skills/:skillId/reject', requireAdmin, requireRole('admin'), async (req: Request, res: Response) => {
+router.post('/skills/:skillId/reject', requireAdmin, requireRole('admin'), async (req: Request, res: Response) => {
   const { skillId } = req.params;
   const approvedBy = (req as any).adminUser.username;
 
@@ -221,10 +281,10 @@ router.post('/v1/admin/skills/:skillId/reject', requireAdmin, requireRole('admin
 
 // ── GET /v1/admin/skills/pending — list pending skills ──
 
-router.get('/v1/admin/skills/pending', requireAdmin, async (req: Request, res: Response) => {
+router.get('/skills/pending', requireAdmin, async (req: Request, res: Response) => {
   try {
     const { rows } = await query(
-      `SELECT skill_id, skill_name, description, category, credit_per_unit,
+      `SELECT skill_id, skill_name, description, category, credit_per_unit, cost,
               activation_status, responsible_person, status, created_at
        FROM skill_prices
        WHERE activation_status = 'pending'
@@ -240,6 +300,7 @@ router.get('/v1/admin/skills/pending', requireAdmin, async (req: Request, res: R
         description: r.description,
         category: r.category,
         creditPerUnit: Number(r.credit_per_unit),
+        cost: r.cost != null ? Number(r.cost) : null,
         activationStatus: r.activation_status,
         responsiblePerson: r.responsible_person,
         status: r.status,
@@ -254,7 +315,7 @@ router.get('/v1/admin/skills/pending', requireAdmin, async (req: Request, res: R
 
 // ── GET /v1/admin/skills — list ALL skills with activation status ──
 
-router.get('/v1/admin/skills', requireAdmin, async (req: Request, res: Response) => {
+router.get('/skills', requireAdmin, async (req: Request, res: Response) => {
   try {
     const status = req.query.status as string | undefined;
     let where = '';
@@ -266,7 +327,7 @@ router.get('/v1/admin/skills', requireAdmin, async (req: Request, res: Response)
     }
 
     const { rows } = await query(
-      `SELECT skill_id, skill_name, description, category, credit_per_unit,
+      `SELECT skill_id, skill_name, description, category, credit_per_unit, cost,
               activation_status, responsible_person, status, approved_by, approved_at,
               created_at, updated_at, sort_order
        FROM skill_prices
@@ -292,6 +353,7 @@ router.get('/v1/admin/skills', requireAdmin, async (req: Request, res: Response)
         description: r.description,
         category: r.category,
         creditPerUnit: Number(r.credit_per_unit),
+        cost: r.cost != null ? Number(r.cost) : null,
         activationStatus: r.activation_status,
         responsiblePerson: r.responsible_person,
         status: r.status,

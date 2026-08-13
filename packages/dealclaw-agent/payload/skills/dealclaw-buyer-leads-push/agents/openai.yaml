@@ -1,4 +1,4 @@
 interface:
   display_name: "飞书AI猎客买家线索推送"
-  short_description: "按群隔离权限和画像，以飞书卡片推送匹配买家线索"
-  default_prompt: "使用 $dealclaw-buyer-leads-push 处理当前飞书群。只使用本群绑定的知识库、Base 和 supplierId；关闭公开链接并验证 openchat 群编辑权限；通过受控管道检索评分，再用确定性飞书互动卡片展示买家公司、分数、需求、产品、特征、参展信息和推荐理由，附商机池链接、按钮及反馈引导。任一群ID、token、权限证明、画像哈希或状态不一致时停止。"
+  short_description: "按群隔离画像；处理知识库重绑并推送买家线索"
+  default_prompt: "使用 $dealclaw-buyer-leads-push 处理当前飞书群。按chat_id隔离企业画像、权限和线索；Skill生成的文档和Base必须用当前群授权用户身份创建，并在发链接前完成当前群openchat编辑授权、DealClaw管理授权和chat-isolation-v3回读证明；若绑定知识库被删除，暂停推送并提醒管理员重新走绑定流程。"

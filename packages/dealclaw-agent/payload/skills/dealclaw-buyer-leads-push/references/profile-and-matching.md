@@ -136,8 +136,8 @@ Calculate the raw score as the sum of the nine dimensions, then subtract same-gr
 
 Set `核心匹配通过` only when product name = 32, product category = 24, and target-market country = 18 before penalties. Buyer type is not part of the gate.
 
-- Final score at least 80 **and** core gate passes: upsert and consider for push.
-- Final score 65–79, or score at least 80 with a failed core gate: upsert without push.
+- Final score at least 70 **and** core gate passes: upsert and consider for push.
+- Final score 65–69, or score at least 70 with a failed core gate: upsert without push.
 - Final score below 65: do not upsert.
 
 This prevents auxiliary evidence from replacing a missing core product/type match. Sort by final score descending, raw score descending, valid demand time descending, then lead ID ascending.
@@ -160,3 +160,5 @@ Read feedback only from this `chat_id`'s bound table. After at least 3 rejected 
 | Purchase intent | 1 |
 
 Do not learn a recency penalty. Apply each rule at most once per lead. Use rule keys `chat_id + dimension + normalized canonical profile value`, retain source record IDs for audit, and never copy rules across groups. Feedback changes the final score but does not change whether the three core fields originally matched.
+
+Run `feedback_rule_builder.py build` rather than constructing rules in a model prompt. Query only these projected fields after the persisted cursor: record ID, `飞书群ID`, `线索ID`, `是否匹配`, `不匹配原因`, `反馈时间`, and authoritative `评分明细`. Count unique lead IDs, not edits or duplicate records. A rule activates only after three distinct same-group rejected leads identify the same explicit reason and the same normalized `画像依据`. Generic reasons such as expired demand, low quality, duplicate, or other do not create a dimension penalty. Persist the returned cursor, matcher rules, and evidence together with compare-and-set; replaying the same cursor range must be idempotent.

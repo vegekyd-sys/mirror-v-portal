@@ -416,6 +416,17 @@ router.post('/admin/skills/:skillId/activate', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
+router.post('/admin/skills/:skillId/launch', async (req, res) => {
+  try {
+    const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/launch`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+      authReq: req,
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
 router.post('/admin/skills/:skillId/reject', async (req, res) => {
   try {
     const result = await proxyToLedger(`/v1/admin/skills/${req.params.skillId}/reject`, {

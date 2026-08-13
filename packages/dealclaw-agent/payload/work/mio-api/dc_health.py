@@ -27,7 +27,7 @@ ENGINE_DIR = Path(__file__).resolve().parent
 ENGINES = [
     "dc_ls_store", "dc_iq_engine", "dc_kb_engine", "dc_send_log",
     "dc_copy_engine", "dc_audit", "dc_customer_import", "dc_dashboard",
-    "dc_dashboard_sync", "dc_morning_report",
+    "dc_dashboard_sync",
 ]
 
 DATA_FILES = [

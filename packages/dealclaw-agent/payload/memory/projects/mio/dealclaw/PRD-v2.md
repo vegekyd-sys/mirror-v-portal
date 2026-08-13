@@ -119,7 +119,7 @@ CBIE企业画像 → 搜索买家 → 开发信 → GS/FD/WA发送
 |------|------|------|
 | 核心业务 | dc_ls_store, dc_iq_engine, dc_copy_engine, dc_kb_engine, dc_send_log, dc_wa | 搜索/回复/开发信/知识库/发送/WhatsApp |
 | 学习进化 | dc_customer_import, dc_evolution, dc_feedback | 历史导入/进化回路/用户纠错 |
-| 仪表看板 | dc_dashboard, dc_morning_report, dc_audit | 漏斗/早报/审计 |
+| 仪表看板 | dc_dashboard, dc_audit | 漏斗/审计 |
 | 系统运维 | dc_health, dc_degrade, dc_circuit, dc_error_log, dc_registry | 健康检查/降级/熔断/错误日志/注册表 |
 | 文档发布 | dc_kb_publish, dc_kb_server | 飞书文档生成/在线编辑 |
 

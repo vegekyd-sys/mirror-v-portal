@@ -27,7 +27,6 @@ Resolve a knowledge-document market name by exact trimmed, case-insensitive matc
 ### Buyer leads
 
 `https://micro.tradechina.com/blade-purchaser/api/buyerLeadsPlaza/page`
-
 Minimum normal request:
 
 ```json
@@ -46,6 +45,44 @@ Require `supplierId` from the current `chat_id` binding's `tradechina_supplier_i
 Run `contract-check` with the current test group's bound supplier ID, one resolved country ID, and one explicit profile product. It sends `limit: 1` and returns schema keys only; it must not issue an unfiltered buyer query. Never test with a shared global supplier ID.
 
 Expected pagination keys under `data`: `records`, `total`, `size`, `current`, `searchCount`, `pages`.
+
+### Buyer lead detail
+
+`https://micro.tradechina.com/blade-purchaser/api/buyerLeadsPlaza/detail`
+
+Request body:
+
+```json
+{
+  "supplierId": "<configured supplier ID>",
+  "trendId": "<线索ID from the 买家线索 record>"
+}
+```
+
+Call this endpoint only inside the contact-unlock flow with a `--unlock-id` issued by `contact_unlock_guard.py authorize`. Always send the binding's `supplierId` even though the live service currently tolerates its absence. The response `data` must echo the requested `trendId` as `id`; a mismatch is terminal.
+
+Verified response `data` keys: `id`, `exhibitionId`, `exhibitionName`, `purchaserId`, `purchaserContactId`, `chatGroupId`, `countryId`, `expoCountryId`, `buyerCompany`, `buyerCountry`, `companyProfile`, `t1Id`, `t2Id`, `t1`, `t2`, `buyerTag`, `companyWebsite`, `contactName`, `jobTitle`, `buyerEmail`, `buyerMobile`, `buyerWhatsapp`, `unlockStatus`, `recentTrend`, `emailValid`, `mobileValid`, `whatsappValid`, `productList`, `hasHomeLifeRegisterLog`, `companyCdpId`, `videoDirect`, `videoApplyStatus`.
+
+`unlockStatus` integer `-1` means the platform UI treats the contact as locked. Live probing shows the service currently returns unmasked contact values even when `unlockStatus = -1`; server-side enforcement must not be assumed. The Skill-side guard is therefore the only release gate until TradeChina ships a server-side unlock API; when that API exists, call it between guard authorization and this detail retrieval, and re-verify `unlockStatus` semantics. Non-`-1` values currently observed semantics are unconfirmed; treat them per the guard decision, not per interface inference.
+
+## Approved contact field mapping (unlock-gated)
+
+Release these fields only through `tradechina_buyer_leads.py buyer-detail` with a valid guard `unlock_id`, only into `contact_card_renderer.py`, and only to the originating group:
+
+| Display field | Interface source | Rule |
+|---|---|---|
+| 联系人姓名 | `contactName` | Preserve the returned string. |
+| 职位 | `jobTitle` | Preserve the returned string. |
+| 邮箱 | `buyerEmail` | Preserve the returned string. |
+| 电话 | `buyerMobile` | Preserve the returned string. |
+| WhatsApp | `buyerWhatsapp` | Preserve the returned string. |
+| 公司官网 | `companyWebsite` | Preserve the returned string. |
+| 邮箱有效 | `emailValid` | Integer `1` → 已验证, `0` → 未验证, otherwise no badge. |
+| 电话有效 | `mobileValid` | Same badge rule. |
+| WhatsApp有效 | `whatsappValid` | Same badge rule. |
+| 解锁状态 | `unlockStatus` | `-1` → `locked`; absent → `unknown`; other integer → `unlocked`. Never use this field as the release decision. |
+
+Without a guard `unlock_id`, `buyer-detail` returns only the locked projection (`线索ID`, `买家公司名称`, `unlockStatus`, `解锁状态`) and strips every contact field.
 
 ## Approved buyer field mapping
 
@@ -74,7 +111,7 @@ Only output these fields:
 
 - Do not output any other response field.
 - Do not output raw response records to logs.
-- Do not store or pass contact fields to a model, even if a later interface version adds them.
+- Contact fields (`contactName`, `jobTitle`, `buyerEmail`, `buyerMobile`, `buyerWhatsapp`, `companyWebsite`, and their validity flags) flow only along the unlock path: `contact_unlock_guard.py authorize` → `buyer-detail --unlock-id` → `contact_card_renderer.py` → the originating group. Never store them in the Base, durable state (including `unlocks`), profile data, history evidence, matcher input, or logs, and never echo them in free-form model messages. Outside this path they remain forbidden, even though the detail interface currently returns them.
 - Do not infer buyer type when `buyerType` is absent. Do not infer region, website, purchase quantity, budget, deadline, or any unreturned fact.
 - Do not convert an absent value into a buyer fact. Leave it empty or omit it from a group message.
 - Count rejected missing-ID records only as `rejectedMissingLeadId`; never include their raw values or derive an alternate ID.

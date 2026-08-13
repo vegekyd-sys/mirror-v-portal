@@ -33,7 +33,11 @@ PROFILE_SCORE_KEYS = {
     "buyer_profile_keywords",
     "intent_keywords",
 }
-PERMISSION_POLICY_VERSION = "chat-isolation-v1"
+STATE_SCHEMA_VERSION = 10
+PERMISSION_POLICY_VERSION = "chat-isolation-v3"
+MAX_PRODUCTS = 20
+MAX_TARGET_COUNTRIES = 20
+MAX_QUERY_JOBS = 100
 PERMISSION_PROOF_KEYS = {
     "status",
     "policy_version",
@@ -43,7 +47,17 @@ PERMISSION_PROOF_KEYS = {
     "external_access_entity",
     "link_share_entity",
     "group_permission",
+    "observed_at",
     "verified_at",
+    "expires_at",
+    "verification_context_id",
+    "observation_id",
+    "owner_fingerprint",
+    "permission_actor_fingerprint",
+    "permission_actor_role",
+    "permission_credential_type",
+    "automation_principal_fingerprint",
+    "automation_role",
 }
 
 
@@ -100,6 +114,14 @@ def validate_permission_proof(
         raise RunGuardError(f"{field} permits external or link access")
     if proof.get("group_permission") != "edit":
         raise RunGuardError(f"{field} does not grant the bound group edit permission")
+    for key in ("owner_fingerprint", "permission_actor_fingerprint", "automation_principal_fingerprint"):
+        require_text(proof.get(key), f"{field}.{key}")
+    if proof.get("permission_actor_role") not in {"owner", "full_access"}:
+        raise RunGuardError(f"{field} lacks a verified permission actor role")
+    if proof.get("permission_credential_type") not in {"user_access_token", "tenant_access_token"}:
+        raise RunGuardError(f"{field} lacks a verified permission credential type")
+    if proof.get("automation_role") not in {"owner", "full_access"}:
+        raise RunGuardError(f"{field} does not prove DealClaw management access")
     require_text(proof.get("verified_at"), f"{field}.verified_at")
     return proof
 
@@ -116,16 +138,26 @@ def list_of_text(value: Any, field: str) -> list[str]:
     return [output[key] for key in sorted(output)]
 
 
-def profile_items(value: Any, field: str, require_categories: bool) -> list[dict[str, Any]]:
+def profile_items(
+    value: Any, field: str, require_categories: bool, maximum: int | None = None
+) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not value:
         raise RunGuardError(f"profile.{field} must be a non-empty array")
+    if maximum is not None and len(value) > maximum:
+        raise RunGuardError(f"profile.{field} exceeds the maximum of {maximum}")
     output = []
+    seen_names = set()
     for index, item in enumerate(value):
         item = require_object(item, f"profile.{field}[{index}]")
         allowed = {"name", "aliases", "categories"} if require_categories else {"name", "aliases"}
         reject_extra(item, allowed, f"profile.{field}[{index}]")
+        name = require_text(item.get("name"), f"profile.{field}[{index}].name")
+        name_key = normalized(name)
+        if name_key in seen_names:
+            raise RunGuardError(f"profile.{field} contains duplicate names")
+        seen_names.add(name_key)
         result = {
-            "name": require_text(item.get("name"), f"profile.{field}[{index}].name"),
+            "name": name,
             "aliases": list_of_text(item.get("aliases", []), f"profile.{field}[{index}].aliases"),
         }
         if require_categories:
@@ -141,10 +173,12 @@ def profile_items(value: Any, field: str, require_categories: bool) -> list[dict
 def scoring_profile(profile: dict[str, Any], chat_id: str) -> dict[str, Any]:
     if require_text(profile.get("source_chat_id"), "profile.source_chat_id") != chat_id:
         raise RunGuardError("Profile crosses the invocation chat_id boundary")
-    products = profile_items(profile.get("products"), "products", True)
+    products = profile_items(profile.get("products"), "products", True, MAX_PRODUCTS)
     buyer_types_raw = profile.get("buyer_types", [])
     buyer_types = [] if buyer_types_raw == [] else profile_items(buyer_types_raw, "buyer_types", False)
-    countries = profile_items(profile.get("target_countries"), "target_countries", False)
+    countries = profile_items(
+        profile.get("target_countries"), "target_countries", False, MAX_TARGET_COUNTRIES
+    )
     moq = profile.get("moq")
     if moq is not None:
         moq = require_object(moq, "profile.moq")
@@ -175,11 +209,11 @@ def validate_context(payload: Any) -> dict[str, Any]:
     state = require_object(payload.get("state"), "state")
     reject_extra(
         state,
-        {"schema_version", "revision", "status", "chat_id", "binding", "resource_permissions", "profile", "onboarding", "generation", "feedback", "run", "push"},
+        {"schema_version", "revision", "status", "chat_id", "binding", "binding_recovery", "resource_permissions", "profile", "onboarding", "generation", "feedback", "run", "push", "migration", "post_confirmation"},
         "state",
     )
-    if require_integer(state.get("schema_version"), "state.schema_version") != 7:
-        raise RunGuardError("State schema_version must be 7; migrate and rebind before running")
+    if require_integer(state.get("schema_version"), "state.schema_version") != STATE_SCHEMA_VERSION:
+        raise RunGuardError("State schema_version must be 10; run the bundled state migration before running")
     revision = require_integer(state.get("revision"), "state.revision")
     if revision < 1:
         raise RunGuardError("state.revision must be positive")
@@ -301,6 +335,8 @@ def validate_context(payload: Any) -> dict[str, Any]:
     ]
     if not jobs:
         raise RunGuardError("The formal profile produced no country/product query jobs")
+    if len(jobs) > MAX_QUERY_JOBS:
+        raise RunGuardError(f"Formal profile produces more than {MAX_QUERY_JOBS} country/product query jobs")
     context_material = "\n".join(
         [chat_id, str(revision), company, doc_token, base_token, table_id, supplier_id, profile_hash, run_at]
     )
@@ -356,7 +392,7 @@ def fixture() -> dict[str, Any]:
         "source_timezone": "Asia/Shanghai",
         "formal_document": {"token": "docx_formal_a", "title": "真实企业｜企业知识库", "profile_hash": "sha256:profile-a"},
         "state": {
-            "schema_version": 7,
+            "schema_version": 10,
             "revision": 8,
             "status": "active",
             "chat_id": "oc_a",
@@ -372,29 +408,49 @@ def fixture() -> dict[str, Any]:
                 "bound_by": "ou_admin",
             },
             "resource_permissions": {
-                "policy_version": "chat-isolation-v1",
+                "policy_version": "chat-isolation-v3",
                 "permission_chat_id": "oc_a",
                 "formal_document": {
                     "status": "verified",
-                    "policy_version": "chat-isolation-v1",
+                    "policy_version": "chat-isolation-v3",
                     "permission_chat_id": "oc_a",
                     "resource_type": "docx",
                     "token_fingerprint": fingerprint("docx_formal_a"),
                     "external_access_entity": "closed",
                     "link_share_entity": "closed",
                     "group_permission": "edit",
+                    "observed_at": "2026-08-12T09:29:45+08:00",
                     "verified_at": "2026-08-12T09:30:00+08:00",
+                    "expires_at": "2026-08-12T09:30:45+08:00",
+                    "verification_context_id": "binding:oc_a:8",
+                    "observation_id": "perm-docx-8",
+                    "owner_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_role": "owner",
+                    "permission_credential_type": "user_access_token",
+                    "automation_principal_fingerprint": fingerprint("ou_dealclaw_app"),
+                    "automation_role": "full_access",
                 },
                 "base": {
                     "status": "verified",
-                    "policy_version": "chat-isolation-v1",
+                    "policy_version": "chat-isolation-v3",
                     "permission_chat_id": "oc_a",
                     "resource_type": "bitable",
                     "token_fingerprint": fingerprint("base_a"),
                     "external_access_entity": "closed",
                     "link_share_entity": "closed",
                     "group_permission": "edit",
+                    "observed_at": "2026-08-12T09:29:46+08:00",
                     "verified_at": "2026-08-12T09:30:00+08:00",
+                    "expires_at": "2026-08-12T09:30:46+08:00",
+                    "verification_context_id": "binding:oc_a:8",
+                    "observation_id": "perm-base-8",
+                    "owner_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_role": "owner",
+                    "permission_credential_type": "user_access_token",
+                    "automation_principal_fingerprint": fingerprint("ou_dealclaw_app"),
+                    "automation_role": "full_access",
                 },
             },
             "profile": {
@@ -446,6 +502,23 @@ def self_test() -> None:
     wrong_permission_chat = fixture()
     wrong_permission_chat["state"]["resource_permissions"]["base"]["permission_chat_id"] = "oc_b"
     invalid.append(wrong_permission_chat)
+    query_explosion = fixture()
+    query_explosion["state"]["profile"]["products"] = [
+        {"name": f"产品{index}", "aliases": [], "categories": ["分类"]}
+        for index in range(MAX_PRODUCTS + 1)
+    ]
+    invalid.append(query_explosion)
+    rebind_required = fixture()
+    rebind_required["state"]["status"] = "rebind_required"
+    rebind_required["state"]["binding_recovery"] = {
+        "reason": "knowledge_document_deleted",
+        "failed_token_fingerprint": fingerprint("docx_formal_a"),
+        "detected_at": "2026-08-13T10:00:00+08:00",
+        "reminder_status": "sent",
+        "reminder_message_id": "om_rebind_1",
+        "reminded_at": "2026-08-13T10:00:05+08:00",
+    }
+    invalid.append(rebind_required)
     for payload in invalid:
         try:
             validate_context(payload)

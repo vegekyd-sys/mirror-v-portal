@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -19,7 +20,12 @@ BUYERS_URL = (
     "https://micro.tradechina.com/blade-purchaser/"
     "api/buyerLeadsPlaza/page"
 )
+DETAIL_URL = (
+    "https://micro.tradechina.com/blade-purchaser/"
+    "api/buyerLeadsPlaza/detail"
+)
 VALID_DAYS = {3, 7, 15, 30}
+UNLOCK_ID_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ContractError(RuntimeError):
@@ -167,11 +173,107 @@ def sanitize_record(record: Any) -> dict[str, Any]:
     }
 
 
+def approved_flag(value: Any) -> int | None:
+    return value if type(value) is int and value in (0, 1) else None
+
+
+def sanitize_detail(record: Any) -> dict[str, Any]:
+    """Project one buyerLeadsPlaza/detail record onto approved contact fields.
+
+    The contact fields are contact-gated output: they may leave this script
+    only through ``fetch_buyer_detail`` with a valid ``unlock_id`` issued by
+    ``contact_unlock_guard.py``. They must never enter the Base, durable
+    state, the matcher, profile data, logs, or free-form model messages.
+    """
+    if not isinstance(record, dict):
+        raise ContractError("Buyer detail must be an object")
+    lead_id = record.get("id")
+    if not isinstance(lead_id, (str, int)) or isinstance(lead_id, bool):
+        raise RecordRejected("Buyer detail is missing a usable lead ID")
+    lead_id_text = str(lead_id).strip()
+    if not lead_id_text:
+        raise RecordRejected("Buyer detail is missing a usable lead ID")
+    unlock_status = record.get("unlockStatus")
+    if not isinstance(unlock_status, int) or isinstance(unlock_status, bool):
+        unlock_status = None
+    if unlock_status == -1:
+        unlock_state = "locked"
+    elif unlock_status is None:
+        unlock_state = "unknown"
+    else:
+        unlock_state = "unlocked"
+    return {
+        "线索ID": lead_id_text,
+        "买家公司名称": approved_text(record.get("buyerCompany")),
+        "联系人姓名": approved_text(record.get("contactName")),
+        "职位": approved_text(record.get("jobTitle")),
+        "邮箱": approved_text(record.get("buyerEmail")),
+        "电话": approved_text(record.get("buyerMobile")),
+        "WhatsApp": approved_text(record.get("buyerWhatsapp")),
+        "公司官网": approved_text(record.get("companyWebsite")),
+        "邮箱有效": approved_flag(record.get("emailValid")),
+        "电话有效": approved_flag(record.get("mobileValid")),
+        "WhatsApp有效": approved_flag(record.get("whatsappValid")),
+        "unlockStatus": unlock_status,
+        "解锁状态": unlock_state,
+    }
+
+
+CONTACT_KEYS = ("联系人姓名", "职位", "邮箱", "电话", "WhatsApp", "公司官网",
+                "邮箱有效", "电话有效", "WhatsApp有效")
+
+
+def locked_projection(detail: dict[str, Any]) -> dict[str, Any]:
+    """Return only the lock-state projection, stripping every contact field."""
+    return {
+        "线索ID": detail["线索ID"],
+        "买家公司名称": detail["买家公司名称"],
+        "unlockStatus": detail["unlockStatus"],
+        "解锁状态": detail["解锁状态"],
+        "contactFieldsReleased": False,
+    }
+
+
+def require_unlock_id(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if not UNLOCK_ID_PATTERN.fullmatch(candidate):
+        raise ContractError(
+            "A valid --unlock-id from contact_unlock_guard.py authorize is "
+            "required before any contact field may be released")
+    return candidate
+
+
+def fetch_buyer_detail(
+    supplier_id: str | None,
+    trend_id: str,
+    unlock_id: str | None = None,
+) -> dict[str, Any]:
+    supplier_id = require_supplier_id(supplier_id)
+    trend_id_text = trend_id.strip()
+    if not trend_id_text:
+        raise ContractError("trendId (线索ID) is required")
+    envelope = require_success_envelope(
+        post_json(DETAIL_URL, {"supplierId": supplier_id, "trendId": trend_id_text})
+    )
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise ContractError("Buyer detail response data must be an object")
+    detail = sanitize_detail(data)
+    if detail["线索ID"] != trend_id_text:
+        raise ContractError("Buyer detail returned a different lead ID than requested")
+    if unlock_id is None:
+        return locked_projection(detail)
+    detail["unlock_id"] = require_unlock_id(unlock_id)
+    detail["contactFieldsReleased"] = True
+    detail["supplierIdConfigured"] = True
+    return detail
+
+
 def fetch_buyers(
     supplier_id: str | None,
     country_id: str,
     product_keyword: str,
-    days: int = 7,
+    days: int = 30,
     limit: int = 20,
     max_pages: int = 5,
 ) -> dict[str, Any]:
@@ -377,6 +479,21 @@ def self_test() -> dict[str, Any]:
 
     original_post_json = globals()["post_json"]
 
+    detail_raw = {
+        "id": "lead-9",
+        "buyerCompany": "Locked Buyer Co",
+        "contactName": "Ana Example",
+        "jobTitle": "Buyer",
+        "buyerEmail": "ana@example.com",
+        "buyerMobile": "+5511900000000",
+        "buyerWhatsapp": "+5511900000000",
+        "companyWebsite": "www.example.com",
+        "emailValid": 1,
+        "mobileValid": 0,
+        "whatsappValid": 1,
+        "unlockStatus": -1,
+    }
+
     def fake_post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> Any:
         del timeout
         if url == COUNTRIES_URL:
@@ -387,6 +504,12 @@ def self_test() -> dict[str, Any]:
                     {"countryId": None, "cnName": "无效国", "enName": "Invalid"},
                 ],
             }
+        if url == DETAIL_URL:
+            assert payload["supplierId"] == "explicit-supplier"
+            assert set(payload) == {"supplierId", "trendId"}
+            if payload["trendId"] != "lead-9":
+                return {"success": True, "data": dict(detail_raw, id="other")}
+            return {"success": True, "data": dict(detail_raw)}
         assert payload["supplierId"] == "explicit-supplier"
         assert payload["countryId"] == "country-1"
         assert payload["productKeyword"] == "示例产品"
@@ -421,6 +544,61 @@ def self_test() -> dict[str, Any]:
         assert checked["queryFiltersApplied"] is True
         assert checked["requiredBuyerKeysPresent"] is True
         assert checked["buyerTypeFieldPresent"] is True
+
+        # Detail: without a guard-issued unlock ID, every contact field is stripped.
+        locked = fetch_buyer_detail(supplier_id="explicit-supplier", trend_id="lead-9")
+        assert locked["contactFieldsReleased"] is False
+        assert locked["解锁状态"] == "locked"
+        serialized_locked = json.dumps(locked, ensure_ascii=False)
+        for marker in ("ana@example.com", "5511900000000", "Ana Example", "example.com"):
+            assert marker not in serialized_locked, f"contact data leaked without unlock: {marker}"
+        assert set(locked) == {"线索ID", "买家公司名称", "unlockStatus", "解锁状态",
+                               "contactFieldsReleased"}
+
+        # Detail: a valid guard-issued unlock ID releases the approved contact fields.
+        unlock_id = "sha256:" + "a" * 64
+        released = fetch_buyer_detail(
+            supplier_id="explicit-supplier", trend_id="lead-9", unlock_id=unlock_id)
+        assert released["contactFieldsReleased"] is True
+        assert released["unlock_id"] == unlock_id
+        assert released["邮箱"] == "ana@example.com"
+        assert released["邮箱有效"] == 1 and released["电话有效"] == 0
+        assert released["解锁状态"] == "locked"  # interface state preserved, gate is the guard
+
+        unlocked_raw = dict(detail_raw, unlockStatus=1)
+
+        def fake_unlocked(url, payload, timeout=30):
+            if url == DETAIL_URL:
+                return {"success": True, "data": dict(unlocked_raw)}
+            return fake_post_json(url, payload, timeout)
+
+        globals()["post_json"] = fake_unlocked
+        assert fetch_buyer_detail(supplier_id="explicit-supplier", trend_id="lead-9",
+                                  unlock_id=unlock_id)["解锁状态"] == "unlocked"
+        globals()["post_json"] = fake_post_json
+
+        for bad_unlock in (None, "", "plain-token", "sha256:xyz"):
+            if bad_unlock is None:
+                continue  # covered by the locked projection above
+            try:
+                fetch_buyer_detail(supplier_id="explicit-supplier", trend_id="lead-9",
+                                   unlock_id=bad_unlock)
+            except ContractError:
+                pass
+            else:
+                raise AssertionError(f"invalid unlock id was not rejected: {bad_unlock!r}")
+        try:
+            fetch_buyer_detail(supplier_id="explicit-supplier", trend_id="different")
+        except ContractError:
+            pass
+        else:
+            raise AssertionError("mismatched returned lead ID was not rejected")
+        try:
+            fetch_buyer_detail(supplier_id="explicit-supplier", trend_id="  ")
+        except ContractError:
+            pass
+        else:
+            raise AssertionError("empty trendId was not rejected")
     finally:
         globals()["post_json"] = original_post_json
 
@@ -437,6 +615,9 @@ def self_test() -> dict[str, Any]:
         "invalidCountryIdRejected": True,
         "buyerTypeWhitelisted": True,
         "buyerTypeNotInferredFromTag": True,
+        "detailLockedProjectionStripsContacts": True,
+        "detailUnlockIdRequired": True,
+        "detailLeadIdEchoChecked": True,
     }
 
 
@@ -456,7 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
     buyers.add_argument("--supplier-id", required=True, help="Must come from the current chat_id binding")
     buyers.add_argument("--country-id", required=True)
     buyers.add_argument("--product-keyword", required=True)
-    buyers.add_argument("--days", type=int, default=7, choices=sorted(VALID_DAYS))
+    buyers.add_argument("--days", type=int, default=30, choices=sorted(VALID_DAYS))
     buyers.add_argument("--limit", type=int, default=20)
     buyers.add_argument("--max-pages", type=int, default=5)
 
@@ -466,6 +647,15 @@ def build_parser() -> argparse.ArgumentParser:
     contract.add_argument("--supplier-id", required=True, help="Must come from the current chat_id binding")
     contract.add_argument("--country-id", required=True)
     contract.add_argument("--product-keyword", required=True)
+
+    detail = subparsers.add_parser(
+        "buyer-detail",
+        help="Return one lead's detail; contact fields only with a guard-issued --unlock-id",
+    )
+    detail.add_argument("--supplier-id", required=True, help="Must come from the current chat_id binding")
+    detail.add_argument("--trend-id", required=True, help="The lead ID (线索ID) from the 买家线索 record")
+    detail.add_argument("--unlock-id", default=None,
+                        help="sha256 authorization from contact_unlock_guard.py authorize")
     subparsers.add_parser("self-test", help="Run offline whitelist and privacy checks")
     return parser
 
@@ -491,6 +681,12 @@ def main() -> int:
                 supplier_id=args.supplier_id,
                 country_id=args.country_id,
                 product_keyword=args.product_keyword,
+            )
+        elif args.command == "buyer-detail":
+            result = fetch_buyer_detail(
+                supplier_id=args.supplier_id,
+                trend_id=args.trend_id,
+                unlock_id=args.unlock_id,
             )
         else:
             result = self_test()

@@ -51,7 +51,7 @@ export async function runCronCycle(
         transitions.push(result);
 
         // Execute actions (notifications, pod operations)
-        const actionResults = await executeActions(tenant.id, result);
+        const actionResults = await executeActions(tenant.id, result.actions, config);
 
         // Write back status change to DB
         if (result.from !== result.to) {
@@ -130,51 +130,4 @@ async function writeTenantStatus(
     to: transition.to,
     reason: transition.reason,
   }));
-}
-
-/**
- * Execute transition actions and return action result labels for DB logging.
- * Currently logs actions; M1+ will actually send notifications / call K8s API.
- */
-async function executeActions(tenantId: string, transition: TransitionResult): Promise<string[]> {
-  const results: string[] = [];
-  for (const action of transition.actions) {
-    switch (action.type) {
-      case 'notify':
-        console.log(JSON.stringify({
-          level: 'info',
-          action: 'notify',
-          tenantId,
-          channel: action.channel,
-          message: action.message?.slice(0, 100),
-        }));
-        results.push(`notify:${action.channel}`);
-        break;
-      case 'suspend_pod':
-      case 'resume_pod':
-      case 'destroy_pod':
-      case 'backup_data':
-      case 'archive_data':
-      case 'revoke_tokens':
-      case 'trigger_monthly_reset':
-        console.log(JSON.stringify({
-          level: 'info',
-          action: action.type,
-          tenantId,
-        }));
-        results.push(action.type);
-        break;
-      default: {
-        // Future action types — cast needed because TS narrows to never after exhaustive check
-        const a = action as { type: string };
-        console.log(JSON.stringify({
-          level: 'info',
-          action: a.type,
-          tenantId,
-        }));
-        results.push(a.type);
-      }
-    }
-  }
-  return results;
 }

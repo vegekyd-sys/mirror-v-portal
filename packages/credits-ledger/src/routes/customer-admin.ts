@@ -189,22 +189,27 @@ router.get('/v1/admin/customers/:tenantId', async (req, res) => {
       [accountId]
     );
 
-    // Shadow billing events (estimated & settled, only shadow-priced skills)
+    // Non-settled / shadow billing events. Settled live events are excluded
+    // here because their authoritative debit already lives in credits_transactions
+    // (see settledTxns below); including them would double-count the same call.
     const { rows: estEvents } = await query(
       `SELECT id, skill_id, skill_name, credit_amount, quantity, status, billing_mode, result_summary, created_at
        FROM skill_billing_events
-       WHERE tenant_id = $1
+       WHERE tenant_id = $1 AND (billing_mode = 'shadow' OR status = 'estimated')
        ORDER BY created_at DESC LIMIT 100`,
       [req.params.tenantId]
     );
 
-    // Live billing events only (for live aggregation)
-    const { rows: liveEvents } = await query(
-      `SELECT id, skill_id, skill_name, credit_amount, quantity, status, created_at
-       FROM skill_billing_events
-       WHERE tenant_id = $1 AND billing_mode = 'live'
+    // Settled consumption from credits_transactions (authoritative).
+    // skill_billing_events is the Agent's real-time call log and can be
+    // incomplete (E2E tests / manual writes bypass it). Actual deduction
+    // happens here: type='debit' AND reference LIKE 'skill:%'.
+    const { rows: settledTxns } = await query(
+      `SELECT id, reference, description, amount, category, created_at
+       FROM credits_transactions
+       WHERE account_id = $1 AND type = 'debit' AND reference LIKE 'skill:%'
        ORDER BY created_at DESC LIMIT 500`,
-      [req.params.tenantId]
+      [accountId]
     );
 
     // Shadow billing events only (for shadow aggregation)
@@ -216,38 +221,75 @@ router.get('/v1/admin/customers/:tenantId', async (req, res) => {
       [req.params.tenantId]
     );
 
-    // Daily consumption aggregation (live billing only)
+    // Daily consumption aggregation (settled debits only)
     // Use AT TIME ZONE to correct UTC→Asia/Shanghai date boundaries
     const { rows: dailyConsumption } = await query(
-      `SELECT DATE(created_at AT TIME ZONE 'Asia/Shanghai') as day,
-              COALESCE(skill_name, skill_id) as skill,
-              SUM(credit_amount) as total_credit,
+      `SELECT to_char(DATE(created_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') as day,
+              split_part(description, ' × ', 1) as skill,
+              SUM(amount) as total_credit,
               COUNT(*) as call_count
-       FROM skill_billing_events
-       WHERE tenant_id = $1 AND status = 'settled' AND billing_mode = 'live'
-       GROUP BY DATE(created_at AT TIME ZONE 'Asia/Shanghai'), COALESCE(skill_name, skill_id)
+       FROM credits_transactions
+       WHERE account_id = $1 AND type = 'debit' AND reference LIKE 'skill:%'
+       GROUP BY DATE(created_at AT TIME ZONE 'Asia/Shanghai'), split_part(description, ' × ', 1)
        ORDER BY day DESC LIMIT 60`,
-      [req.params.tenantId]
+      [accountId]
     );
 
-    // Daily totals (for chart, live billing only)
+    // Daily totals (for chart, settled debits only)
     const { rows: dailyTotals } = await query(
-      `SELECT DATE(created_at AT TIME ZONE 'Asia/Shanghai') as day,
-              SUM(credit_amount) as total
-       FROM skill_billing_events
-       WHERE tenant_id = $1 AND status = 'settled' AND billing_mode = 'live'
+      `SELECT to_char(DATE(created_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') as day,
+              SUM(amount) as total
+       FROM credits_transactions
+       WHERE account_id = $1 AND type = 'debit' AND reference LIKE 'skill:%'
        GROUP BY DATE(created_at AT TIME ZONE 'Asia/Shanghai')
        ORDER BY day DESC LIMIT 30`,
-      [req.params.tenantId]
+      [accountId]
     );
 
-    // Aggregate by skill from live billing events (settled)
+    // Aggregate settled consumption by skill name from transactions
     const liveBreakdown: Record<string, number> = {};
-    for (const e of liveEvents) {
-      if (e.status !== 'settled') continue;
-      const key = e.skill_name || e.skill_id;
-      liveBreakdown[key] = (liveBreakdown[key] || 0) + Number(e.credit_amount);
+    for (const t of settledTxns) {
+      const skillId = String(t.reference || '').replace(/^skill:/, '').split('|')[0];
+      const skillName = String(t.description || '').split(' × ')[0] || skillId;
+      liveBreakdown[skillName] = (liveBreakdown[skillName] || 0) + Number(t.amount);
     }
+
+    // Build the complete "Skill 调用日志": authoritative settled debits from
+    // credits_transactions (includes E2E/direct writes that bypassed the call log),
+    // plus shadow + estimated events from skill_billing_events (never deducted).
+    const skillDebitEvents = settledTxns.map((t: any) => {
+      const skillId = String(t.reference || '').replace(/^skill:/, '').split('|')[0];
+      const desc = String(t.description || '');
+      const parts = desc.split(' × ');
+      const qty = parts.length > 1 ? (parseInt(parts[1]) || 1) : 1;
+      return {
+        id: t.id,
+        skillId,
+        skillName: parts[0] || skillId,
+        credit: Number(t.amount),
+        quantity: qty,
+        status: 'settled',
+        billingMode: 'live',
+        resultSummary: null,
+        time: t.created_at,
+        source: 'credits_transactions',
+      };
+    });
+    const nonSettledEvents = estEvents.map((e: any) => ({
+      id: e.id,
+      skillId: e.skill_id,
+      skillName: e.skill_name,
+      credit: Number(e.credit_amount),
+      quantity: e.quantity,
+      status: e.status,
+      billingMode: e.billing_mode || 'live',
+      resultSummary: e.result_summary,
+      time: e.created_at,
+      source: 'skill_billing_events',
+    }));
+    const billingEvents = [...skillDebitEvents, ...nonSettledEvents].sort(
+      (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()
+    );
 
     // Shadow billing aggregation (shadow-priced skills only)
     const shadowBreakdown: Record<string, number> = {};
@@ -272,21 +314,10 @@ router.get('/v1/admin/customers/:tenantId', async (req, res) => {
         time: t.created_at,
         source: 'credits_transactions (DB)',
       })),
-      // Billing events (with billing mode)
-      billingEvents: estEvents.map((e: any) => ({
-        id: e.id,
-        skillId: e.skill_id,
-        skillName: e.skill_name,
-        credit: Number(e.credit_amount),
-        quantity: e.quantity,
-        status: e.status,
-        billingMode: e.billing_mode || 'live',
-        resultSummary: e.result_summary,
-        time: e.created_at,
-        source: 'skill_billing_events (Agent实时写入)',
-      })),
+      // Billing events — merged: settled debits (authoritative) + shadow/estimated events
+      billingEvents,
       // Aggregations
-      liveBreakdown,       // 正式计费：settled live billing events 按 Skill 汇总
+      liveBreakdown,       // 正式计费：credits_transactions debit (skill:*) 按 Skill 汇总
       skillBreakdown: liveBreakdown,  // 向后兼容别名（旧前端引用）
       shadowBreakdown,     // 影子计费：settled shadow billing events 按 Skill 汇总（不扣费）
       liveConsumed: Object.values(liveBreakdown).reduce((s, v) => s + v, 0),
@@ -302,9 +333,9 @@ router.get('/v1/admin/customers/:tenantId', async (req, res) => {
         total: Number(d.total),
       })),
       dataSources: {
-        transactions: 'credits_transactions — 扣费/充值记录 (T+1回填)',
-        billingEvents: 'skill_billing_events — Agent Skill调用后实时写入 (~1s延迟)',
-        dailyConsumption: '按日汇总 aggregating skill_billing_events WHERE settled',
+        transactions: 'credits_transactions — 扣费/充值记录（权威结算源）',
+        billingEvents: 'skill_billing_events — Agent Skill调用实时日志（可能不完整）',
+        dailyConsumption: '按日汇总 aggregating credits_transactions WHERE type=debit AND reference LIKE skill:%',
       },
     });
   } catch (err) {

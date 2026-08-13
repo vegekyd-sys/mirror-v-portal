@@ -6,11 +6,13 @@ export interface SkillPrice {
   description: string | null;
   category: string;
   creditPerUnit: number;
+  cost: number | null;
   billingUnit: string;
   status: 'live' | 'shadow' | 'disabled';
   billingMode: 'live' | 'shadow' | 'disabled';
   activationStatus: 'approved' | 'pending' | 'rejected';
   responsiblePerson: string | null;
+  serviceLine: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   sortOrder: number;
@@ -25,11 +27,13 @@ function rowToSkillPrice(r: any): SkillPrice {
     description: r.description,
     category: r.category,
     creditPerUnit: Number(r.credit_per_unit),
+    cost: r.cost != null ? Number(r.cost) : null,
     billingUnit: r.billing_unit,
     status: r.status,
     billingMode: r.status,
     activationStatus: r.activation_status ?? 'approved',
     responsiblePerson: r.responsible_person ?? null,
+    serviceLine: r.service_line ?? null,
     approvedBy: r.approved_by ?? null,
     approvedAt: r.approved_at ?? null,
     sortOrder: Number(r.sort_order),
@@ -94,13 +98,15 @@ export async function getSkillPrice(skillId: string): Promise<{
   const category = skillId.split('.')[0] ?? 'other';
   const defaultCredit = CATEGORY_DEFAULTS[category] ?? GLOBAL_DEFAULT;
 
+  // Unknown/unregistered skill → shadow (record consumption only, never charge).
+  // Prevents garbage skill_ids (e.g. '1') from debiting credits via default pricing.
   return {
     skillId,
     skillName: `${skillId} (默认定价)`,
     creditPerUnit: defaultCredit,
     billingUnit: 'per_item',
     category,
-    pricingStatus: 'live' as const,
+    pricingStatus: 'shadow' as const,
     isDefault: true,
   };
 }
@@ -150,9 +156,11 @@ export async function upsertPrice(params: {
   description?: string;
   category: string;
   creditPerUnit: number;
+  cost?: number | null;
   billingUnit?: string;
   status?: string;
   responsiblePerson?: string;
+  serviceLine?: string | null;
   sortOrder?: number;
   changedBy?: string;
 }): Promise<{ price: SkillPrice; logId?: number }> {
@@ -164,16 +172,18 @@ export async function upsertPrice(params: {
   const oldCredit = oldRows.length > 0 ? Number(oldRows[0].credit_per_unit) : null;
 
   const { rows } = await query(
-    `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, billing_unit, status, responsible_person, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO skill_prices (skill_id, skill_name, description, category, credit_per_unit, cost, billing_unit, status, responsible_person, service_line, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (skill_id) DO UPDATE SET
        skill_name = EXCLUDED.skill_name,
        description = EXCLUDED.description,
        category = EXCLUDED.category,
        credit_per_unit = EXCLUDED.credit_per_unit,
+       cost = EXCLUDED.cost,
        billing_unit = EXCLUDED.billing_unit,
        status = EXCLUDED.status,
        responsible_person = EXCLUDED.responsible_person,
+       service_line = EXCLUDED.service_line,
        sort_order = EXCLUDED.sort_order,
        updated_at = NOW()
      RETURNING *`,
@@ -183,9 +193,11 @@ export async function upsertPrice(params: {
       params.description ?? null,
       params.category,
       params.creditPerUnit,
+      params.cost ?? null,
       params.billingUnit ?? 'per_item',
-      params.status ?? 'live',
+      params.status ?? 'shadow',
       params.responsiblePerson ?? null,
+      params.serviceLine ?? null,
       params.sortOrder ?? 0,
     ]
   );

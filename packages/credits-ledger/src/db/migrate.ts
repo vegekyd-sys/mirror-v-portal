@@ -119,6 +119,12 @@ export async function migrate() {
   // v2.4: responsible_person for skill ownership tracking
   await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS responsible_person VARCHAR(64)`);
 
+  // cost (元/单位) — direct cost per billing unit (token + external API)
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS cost NUMERIC`);
+
+  // v2.6: service_line — business-line grouping (dealclaw / aochuang / xingqing / mio / csm / creative / internal / gateway)
+  await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS service_line VARCHAR(64)`);
+
   // v2.5: activation workflow — approval gate before billing
   await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS activation_status VARCHAR(16) DEFAULT 'approved'`);
   await query(`ALTER TABLE skill_prices ADD COLUMN IF NOT EXISTS approved_by VARCHAR(64)`);

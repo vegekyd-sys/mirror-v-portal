@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+from datetime import datetime
 from typing import Any
 
 
@@ -14,7 +15,9 @@ class DeliveryGuardError(RuntimeError):
     """Raised when pipeline output or delivery target is stale or cross-tenant."""
 
 
-PERMISSION_POLICY_VERSION = "chat-isolation-v1"
+STATE_SCHEMA_VERSION = 10
+PERMISSION_POLICY_VERSION = "chat-isolation-v3"
+MAX_LIVE_PROOF_AGE_SECONDS = 60
 
 
 def text(value: Any, field: str) -> str:
@@ -40,7 +43,27 @@ def fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def permission_proof(value: Any, field: str, chat_id: str, resource_type: str, token: str) -> None:
+def instant(value: Any, field: str) -> datetime:
+    raw = text(value, field)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise DeliveryGuardError(f"{field} must be an ISO-8601 datetime") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise DeliveryGuardError(f"{field} must include a timezone offset")
+    return parsed
+
+
+def permission_proof(
+    value: Any,
+    field: str,
+    chat_id: str,
+    resource_type: str,
+    token: str,
+    *,
+    run_context_id: str | None = None,
+    delivery_at: datetime | None = None,
+) -> str:
     proof = obj(value, field)
     if proof.get("status") != "verified" or proof.get("policy_version") != PERMISSION_POLICY_VERSION:
         raise DeliveryGuardError(f"{field} is not verified")
@@ -50,8 +73,33 @@ def permission_proof(value: Any, field: str, chat_id: str, resource_type: str, t
         raise DeliveryGuardError(f"{field} differs from the current binding")
     if proof.get("external_access_entity") != "closed" or proof.get("link_share_entity") != "closed":
         raise DeliveryGuardError(f"{field} permits external or link access")
-    if proof.get("group_permission") != "edit" or not isinstance(proof.get("verified_at"), str):
+    if proof.get("group_permission") != "edit":
         raise DeliveryGuardError(f"{field} lacks the required group edit proof")
+    if proof.get("permission_actor_role") not in {"owner", "full_access"}:
+        raise DeliveryGuardError(f"{field} lacks a permission-management actor")
+    if proof.get("permission_credential_type") not in {"user_access_token", "tenant_access_token"}:
+        raise DeliveryGuardError(f"{field} has an unsupported permission credential")
+    if proof.get("automation_role") not in {"owner", "full_access"}:
+        raise DeliveryGuardError(f"{field} does not prove DealClaw can manage the resource")
+    for key in ("owner_fingerprint", "permission_actor_fingerprint", "automation_principal_fingerprint"):
+        text(proof.get(key), f"{field}.{key}")
+    observed_at = instant(proof.get("observed_at"), f"{field}.observed_at")
+    verified_at = instant(proof.get("verified_at"), f"{field}.verified_at")
+    expires_at = instant(proof.get("expires_at"), f"{field}.expires_at")
+    observation_id = text(proof.get("observation_id"), f"{field}.observation_id")
+    text(proof.get("verification_context_id"), f"{field}.verification_context_id")
+    if observed_at > verified_at or verified_at > expires_at:
+        raise DeliveryGuardError(f"{field} has an invalid proof time interval")
+    if run_context_id is not None:
+        if delivery_at is None:
+            raise DeliveryGuardError("Internal error: delivery_at is required for a live proof")
+        if proof.get("verification_context_id") != run_context_id:
+            raise DeliveryGuardError(f"{field} was not collected for this run context")
+        if not (observed_at <= verified_at <= delivery_at <= expires_at):
+            raise DeliveryGuardError(f"{field} is stale or was collected after delivery")
+        if (delivery_at - observed_at).total_seconds() > MAX_LIVE_PROOF_AGE_SECONDS:
+            raise DeliveryGuardError(f"{field} is older than {MAX_LIVE_PROOF_AGE_SECONDS} seconds")
+    return observation_id
 
 
 def validate(payload: Any) -> dict[str, Any]:
@@ -62,15 +110,16 @@ def validate(payload: Any) -> dict[str, Any]:
         "delivery_target",
         "pipeline_result",
         "live_permission_proofs",
+        "delivery_at",
     }:
         raise DeliveryGuardError(
             "input must contain only invocation_chat_id, current_state, delivery_target, "
-            "pipeline_result, and live_permission_proofs"
+            "pipeline_result, live_permission_proofs, and delivery_at"
         )
     chat_id = text(payload.get("invocation_chat_id"), "invocation_chat_id")
     state = obj(payload.get("current_state"), "current_state")
-    if integer(state.get("schema_version"), "current_state.schema_version") != 7:
-        raise DeliveryGuardError("Current state is not v7")
+    if integer(state.get("schema_version"), "current_state.schema_version") != STATE_SCHEMA_VERSION:
+        raise DeliveryGuardError("Current state is not v10")
     revision = integer(state.get("revision"), "current_state.revision")
     if state.get("status") != "active" or state.get("chat_id") != chat_id:
         raise DeliveryGuardError("Current state is inactive or cross-group")
@@ -85,24 +134,6 @@ def validate(payload: Any) -> dict[str, Any]:
         raise DeliveryGuardError("Current resource permission policy is missing or cross-group")
     permission_proof(permissions.get("formal_document"), "formal_document permission", chat_id, "docx", doc_token)
     permission_proof(permissions.get("base"), "Base permission", chat_id, "bitable", base_token)
-    live_permissions = obj(payload.get("live_permission_proofs"), "live_permission_proofs")
-    if set(live_permissions) != {"formal_document", "base"}:
-        raise DeliveryGuardError("live_permission_proofs must contain only formal_document and base")
-    permission_proof(
-        live_permissions.get("formal_document"),
-        "live formal_document permission",
-        chat_id,
-        "docx",
-        doc_token,
-    )
-    permission_proof(
-        live_permissions.get("base"),
-        "live Base permission",
-        chat_id,
-        "bitable",
-        base_token,
-    )
-
     target = obj(payload.get("delivery_target"), "delivery_target")
     if set(target) != {"chat_id", "base_app_token", "base_table_id"}:
         raise DeliveryGuardError("delivery_target contains unsupported fields")
@@ -123,6 +154,30 @@ def validate(payload: Any) -> dict[str, Any]:
         raise DeliveryGuardError("Pipeline enterprise name differs from the current binding")
     if profile_hash != profile.get("normalized_hash"):
         raise DeliveryGuardError("Pipeline profile hash differs from the current profile")
+    live_permissions = obj(payload.get("live_permission_proofs"), "live_permission_proofs")
+    if set(live_permissions) != {"formal_document", "base"}:
+        raise DeliveryGuardError("live_permission_proofs must contain only formal_document and base")
+    delivery_at = instant(payload.get("delivery_at"), "delivery_at")
+    formal_observation_id = permission_proof(
+        live_permissions.get("formal_document"),
+        "live formal_document permission",
+        chat_id,
+        "docx",
+        doc_token,
+        run_context_id=run_context_id,
+        delivery_at=delivery_at,
+    )
+    base_observation_id = permission_proof(
+        live_permissions.get("base"),
+        "live Base permission",
+        chat_id,
+        "bitable",
+        base_token,
+        run_context_id=run_context_id,
+        delivery_at=delivery_at,
+    )
+    if formal_observation_id == base_observation_id:
+        raise DeliveryGuardError("Live Docx and Base proofs must come from distinct permission readbacks")
     records = result.get("records")
     if not isinstance(records, list):
         raise DeliveryGuardError("pipeline_result.records must be an array")
@@ -148,6 +203,7 @@ def validate(payload: Any) -> dict[str, Any]:
         "company_name": company,
         "profile_hash": profile_hash,
         "run_context_id": run_context_id,
+        "delivery_at": delivery_at.isoformat(),
         "record_counts": counts,
         "delivery_id": "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest(),
     }
@@ -166,7 +222,7 @@ def fixture() -> dict[str, Any]:
     payload = {
         "invocation_chat_id": "oc_a",
         "current_state": {
-            "schema_version": 7,
+            "schema_version": 10,
             "revision": 8,
             "status": "active",
             "chat_id": "oc_a",
@@ -178,34 +234,55 @@ def fixture() -> dict[str, Any]:
                 "base_table_id": "table-a",
             },
             "resource_permissions": {
-                "policy_version": "chat-isolation-v1",
+                "policy_version": "chat-isolation-v3",
                 "permission_chat_id": "oc_a",
                 "formal_document": {
                     "status": "verified",
-                    "policy_version": "chat-isolation-v1",
+                    "policy_version": "chat-isolation-v3",
                     "permission_chat_id": "oc_a",
                     "resource_type": "docx",
                     "token_fingerprint": fingerprint("docx-a"),
                     "external_access_entity": "closed",
                     "link_share_entity": "closed",
                     "group_permission": "edit",
+                    "observed_at": "2026-08-12T09:29:40+08:00",
                     "verified_at": "2026-08-12T09:30:00+08:00",
+                    "expires_at": "2026-08-12T09:30:40+08:00",
+                    "verification_context_id": "binding:oc_a:8",
+                    "observation_id": "stored-docx-8",
+                    "owner_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_role": "owner",
+                    "permission_credential_type": "user_access_token",
+                    "automation_principal_fingerprint": fingerprint("ou_dealclaw_app"),
+                    "automation_role": "full_access",
                 },
                 "base": {
                     "status": "verified",
-                    "policy_version": "chat-isolation-v1",
+                    "policy_version": "chat-isolation-v3",
                     "permission_chat_id": "oc_a",
                     "resource_type": "bitable",
                     "token_fingerprint": fingerprint("base-a"),
                     "external_access_entity": "closed",
                     "link_share_entity": "closed",
                     "group_permission": "edit",
+                    "observed_at": "2026-08-12T09:29:41+08:00",
                     "verified_at": "2026-08-12T09:30:00+08:00",
+                    "expires_at": "2026-08-12T09:30:41+08:00",
+                    "verification_context_id": "binding:oc_a:8",
+                    "observation_id": "stored-base-8",
+                    "owner_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_fingerprint": fingerprint("ou_creator"),
+                    "permission_actor_role": "owner",
+                    "permission_credential_type": "user_access_token",
+                    "automation_principal_fingerprint": fingerprint("ou_dealclaw_app"),
+                    "automation_role": "full_access",
                 },
             },
             "profile": {"source_chat_id": "oc_a", "normalized_hash": "sha256:profile-a"},
         },
         "delivery_target": {"chat_id": "oc_a", "base_app_token": "base-a", "base_table_id": "table-a"},
+        "delivery_at": "2026-08-12T10:00:30+08:00",
         "live_permission_proofs": {},
         "pipeline_result": {
             "chat_id": "oc_a",
@@ -216,15 +293,32 @@ def fixture() -> dict[str, Any]:
             "records": [record],
         },
     }
-    payload["live_permission_proofs"] = json.loads(
-        json.dumps(
-            {
-                "formal_document": payload["current_state"]["resource_permissions"]["formal_document"],
-                "base": payload["current_state"]["resource_permissions"]["base"],
-            },
-            ensure_ascii=False,
-        )
-    )
+    payload["live_permission_proofs"] = {}
+    for key, resource_type, token, observation_id in (
+        ("formal_document", "docx", "docx-a", "live-docx-1"),
+        ("base", "bitable", "base-a", "live-base-1"),
+    ):
+        payload["live_permission_proofs"][key] = {
+            "status": "verified",
+            "policy_version": "chat-isolation-v3",
+            "permission_chat_id": "oc_a",
+            "resource_type": resource_type,
+            "token_fingerprint": fingerprint(token),
+            "external_access_entity": "closed",
+            "link_share_entity": "closed",
+            "group_permission": "edit",
+            "observed_at": "2026-08-12T10:00:00+08:00",
+            "verified_at": "2026-08-12T10:00:05+08:00",
+            "expires_at": "2026-08-12T10:01:00+08:00",
+            "verification_context_id": "sha256:run-a",
+            "observation_id": observation_id,
+            "owner_fingerprint": fingerprint("ou_creator"),
+            "permission_actor_fingerprint": fingerprint("ou_dealclaw_app"),
+            "permission_actor_role": "full_access",
+            "permission_credential_type": "tenant_access_token",
+            "automation_principal_fingerprint": fingerprint("ou_dealclaw_app"),
+            "automation_role": "full_access",
+        }
     return payload
 
 
@@ -247,6 +341,12 @@ def self_test() -> None:
     live_public_resource = json.loads(json.dumps(payload, ensure_ascii=False))
     live_public_resource["live_permission_proofs"]["formal_document"]["link_share_entity"] = "anyone_readable"
     invalid.append(live_public_resource)
+    stale_live_resource = json.loads(json.dumps(payload, ensure_ascii=False))
+    stale_live_resource["live_permission_proofs"]["base"]["expires_at"] = "2026-08-12T10:00:10+08:00"
+    invalid.append(stale_live_resource)
+    wrong_context = json.loads(json.dumps(payload, ensure_ascii=False))
+    wrong_context["live_permission_proofs"]["base"]["verification_context_id"] = "sha256:other-run"
+    invalid.append(wrong_context)
     for item in invalid:
         try:
             validate(item)

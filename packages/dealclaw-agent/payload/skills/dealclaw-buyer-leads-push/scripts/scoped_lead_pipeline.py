@@ -10,12 +10,18 @@ import sys
 from typing import Any, Callable
 
 import profile_matcher
+import post_confirmation_flow
 import tenant_run_guard
 import tradechina_buyer_leads
 
 
 class PipelineError(RuntimeError):
     """Raised when a scoped lead run cannot be completed safely."""
+
+
+MAX_QUERY_JOBS = 100
+MAX_PAGES_PER_JOB = 10
+MAX_TOTAL_PAGE_REQUESTS = 500
 
 
 MATCHER_RECORD_FIELDS = {
@@ -48,15 +54,38 @@ def run_pipeline(
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise PipelineError("input must be an object")
-    extra = sorted(set(payload) - {"context", "days", "limit", "max_pages"})
+    extra = sorted(set(payload) - {"context", "days", "limit", "max_pages", "post_confirmation_authorization"})
     if extra:
         raise PipelineError(f"input contains disallowed fields: {', '.join(extra)}")
-    days = payload.get("days", 7)
+    days = payload.get("days", 30)
     if days not in tradechina_buyer_leads.VALID_DAYS:
         raise PipelineError("days must be 3, 7, 15, or 30")
     limit = positive_integer(payload.get("limit"), 20, 200, "limit")
-    max_pages = positive_integer(payload.get("max_pages"), 5, 50, "max_pages")
+    max_pages = positive_integer(payload.get("max_pages"), 5, MAX_PAGES_PER_JOB, "max_pages")
     context = tenant_run_guard.validate_context(payload.get("context"))
+    post_confirmation_execution = None
+    authorization = payload.get("post_confirmation_authorization")
+    if authorization is not None:
+        try:
+            authorization = post_confirmation_flow.validate_authorization(
+                authorization, payload.get("context"), context
+            )
+        except post_confirmation_flow.PostConfirmationError as exc:
+            raise PipelineError(str(exc)) from exc
+        post_confirmation_execution = {
+            "operation_id": authorization["operation_id"],
+            "formalization_id": authorization["formalization_id"],
+            "interface_call_id": authorization["interface_call_id"],
+            "fresh_interface_call": True,
+            "pre_confirmation_candidates_reused": False,
+        }
+    jobs = context.get("query_jobs")
+    if not isinstance(jobs, list) or not jobs or len(jobs) > MAX_QUERY_JOBS:
+        raise PipelineError(f"query_jobs must contain 1 to {MAX_QUERY_JOBS} guarded jobs")
+    if len(jobs) * max_pages > MAX_TOTAL_PAGE_REQUESTS:
+        raise PipelineError(
+            f"Guarded query plan exceeds {MAX_TOTAL_PAGE_REQUESTS} possible page requests"
+        )
 
     countries = get_countries_fn()
     profile = copy.deepcopy(context["profile"])
@@ -73,7 +102,7 @@ def run_pipeline(
 
     records_by_id: dict[str, dict[str, Any]] = {}
     query_audit = []
-    for job in context["query_jobs"]:
+    for job in jobs:
         resolved = country_by_key[tenant_run_guard.normalized(job["country_name"])]
         result = fetch_buyers_fn(
             supplier_id=context["supplier_id"],
@@ -135,7 +164,7 @@ def run_pipeline(
         raise PipelineError("Matcher output lead IDs differ from sanitized input")
 
     plan = tenant_run_guard.public_plan(context)
-    return {
+    result = {
         "chat_id": context["chat_id"],
         "state_revision": context["state_revision"],
         "company_name": context["company_name"],
@@ -148,6 +177,9 @@ def run_pipeline(
         "query_audit": query_audit,
         "records": output,
     }
+    if post_confirmation_execution is not None:
+        result["post_confirmation_execution"] = post_confirmation_execution
+    return result
 
 
 def self_test() -> None:
@@ -190,6 +222,45 @@ def self_test() -> None:
     assert result["records"][0]["买家公司名称"] == "巴西买家有限公司"
     assert result["records"][0]["核心匹配通过"] is True
     assert "supplier_id" not in result
+
+    post_context = tenant_run_guard.fixture()
+    post_context["state"]["onboarding"]["formalization_id"] = "sha256:formalize-a"
+    post_context["state"]["post_confirmation"] = {
+        "flow_version": "post-confirmation-v1",
+        "operation_id": "sha256:operation-a",
+        "formalization_id": "sha256:formalize-a",
+        "status": "progress_notified",
+        "started_at": "2026-08-12T09:59:00+08:00",
+        "progress_message_id": "om-progress",
+    }
+    authorization = post_confirmation_flow.authorize(
+        {
+            "chat_id": "oc_a",
+            "current_state": post_context["state"],
+            "operation_id": "sha256:operation-a",
+            "run_at": post_context["run_at"],
+        }
+    )
+    post_result = run_pipeline(
+        {"context": post_context, "post_confirmation_authorization": authorization},
+        fake_countries,
+        fake_fetch,
+    )
+    assert post_result["post_confirmation_execution"]["fresh_interface_call"] is True
+    assert post_result["post_confirmation_execution"]["pre_confirmation_candidates_reused"] is False
+
+    stale_authorization = json.loads(json.dumps(authorization, ensure_ascii=False))
+    stale_authorization["profile_hash"] = "sha256:stale-profile"
+    try:
+        run_pipeline(
+            {"context": post_context, "post_confirmation_authorization": stale_authorization},
+            fake_countries,
+            fake_fetch,
+        )
+    except PipelineError:
+        pass
+    else:
+        raise AssertionError("Stale post-confirmation authorization was not rejected")
 
     bad = tenant_run_guard.fixture()
     bad["formal_document"]["title"] = "错误固定企业｜企业知识库"

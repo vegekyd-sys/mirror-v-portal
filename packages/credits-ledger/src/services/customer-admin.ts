@@ -157,11 +157,11 @@ export async function topupCredits(params: {
 export async function getCustomerSummary(tenantId: string) {
   const { rows } = await query(
     `SELECT a.*,
-            (SELECT COUNT(*) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled') as total_tasks,
-            (SELECT COALESCE(SUM(credit_amount), 0) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled') as total_consumed,
-            (SELECT COALESCE(SUM(credit_amount), 0) FROM skill_billing_events WHERE tenant_id = $1 AND status = 'settled' AND created_at > NOW() - INTERVAL '30 days') as consumed_30d
-     FROM credits_accounts a WHERE a.tenant_id = $2 OR a.id = $3`,
-    [tenantId, tenantId, `acct_${tenantId}`]
+            (SELECT COUNT(*) FROM credits_transactions WHERE account_id = a.id AND type = 'debit' AND reference LIKE 'skill:%') as total_tasks,
+            (SELECT COALESCE(SUM(amount), 0) FROM credits_transactions WHERE account_id = a.id AND type = 'debit' AND reference LIKE 'skill:%') as total_consumed,
+            (SELECT COALESCE(SUM(amount), 0) FROM credits_transactions WHERE account_id = a.id AND type = 'debit' AND reference LIKE 'skill:%' AND created_at > NOW() - INTERVAL '30 days') as consumed_30d
+     FROM credits_accounts a WHERE a.tenant_id = $1 OR a.id = $2`,
+    [tenantId, `acct_${tenantId}`]
   );
 
   if (rows.length === 0) return null;
@@ -259,8 +259,8 @@ export async function listCustomers(status?: string) {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await query(
     `SELECT a.*,
-            (SELECT COALESCE(SUM(credit_amount), 0) FROM skill_billing_events WHERE tenant_id = a.tenant_id AND status = 'settled') as total_consumed,
-            (SELECT COUNT(*) FROM skill_billing_events WHERE tenant_id = a.tenant_id AND status = 'settled') as total_tasks
+            (SELECT COALESCE(SUM(amount), 0) FROM credits_transactions WHERE account_id = a.id AND type = 'debit' AND reference LIKE 'skill:%') as total_consumed,
+            (SELECT COUNT(*) FROM credits_transactions WHERE account_id = a.id AND type = 'debit' AND reference LIKE 'skill:%') as total_tasks
      FROM credits_accounts a ${where} ORDER BY a.created_at DESC`,
     params
   );

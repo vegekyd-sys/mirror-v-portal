@@ -49,7 +49,7 @@
     <div class="sub">管理后台 — 请使用管理员口令登录</div>
     <form id="login-form">
       <label for="token-input">管理员口令</label>
-      <input type="password" id="token-input" placeholder="输入 32 位登录口令" maxlength="64" autofocus>
+      <input type="password" id="token-input" placeholder="输入登录口令" maxlength="64" autofocus>
       <button type="submit" id="login-btn">登 录</button>
       <div class="error" id="error-msg"></div>
     </form>
@@ -87,12 +87,12 @@
         }
 
         // Store JWT in localStorage AND as cookie (for SPA API calls)
-        localStorage.setItem('admin_jwt', data.token);
+        localStorage.setItem('admin_jwt', data.jwt);
         localStorage.setItem('admin_user', JSON.stringify(data.user));
-        document.cookie = `auth_token=${data.token}; path=/; max-age=86400; SameSite=Lax`;
+        document.cookie = `auth_token=${data.jwt}; path=/; max-age=86400; SameSite=Lax`;
 
-        // Redirect to admin SPA
-        window.location.href = '/';
+        // Redirect to admin SPA (relative, so it works under /admin/ prefix)
+        window.location.href = './';
       } catch (ex) {
         err.textContent = '无法连接到服务器';
         err.classList.add('show');

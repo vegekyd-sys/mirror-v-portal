@@ -45,6 +45,7 @@
     .badge-approved { background: #065f46; color: #6ee7b7; }
     .badge-rejected { background: #7f1d1d; color: #fca5a5; }
     .badge-shadow { background: #1e3a5f; color: #93c5fd; }
+    .badge-live { background: #3b0a2a; color: #f472b6; }
     .card { border-collapse: separate; }
     .msg { font-size: 13px; padding: 10px; border-radius: 6px; margin-bottom: 12px; display: none; }
     .msg-ok { background: #065f46; color: #6ee7b7; border: 1px solid #059669; display: block; }
@@ -162,18 +163,22 @@
       for (const s of skills) {
         let statusBadge = '';
         if (s.activationStatus === 'pending') statusBadge = '<span class="badge badge-pending">待审核</span>';
-        else if (s.activationStatus === 'approved') statusBadge = '<span class="badge badge-approved">已激活</span>';
+        else if (s.activationStatus === 'approved') statusBadge = '<span class="badge badge-approved">已审核</span>';
         else if (s.activationStatus === 'rejected') statusBadge = '<span class="badge badge-rejected">已拒绝</span>';
-        if (s.status === 'shadow') statusBadge += ' <span class="badge badge-shadow">Shadow</span>';
+        if (s.status === 'live') statusBadge += ' <span class="badge badge-live">正式计费</span>';
+        else if (s.status === 'shadow') statusBadge += ' <span class="badge badge-shadow">影子计费</span>';
 
         let actions = '';
         if (isPending) {
-          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">✅ 激活</button>
+          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">✅ 审核通过</button>
                      <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="rejectSkill('${s.skillId}')">❌ 拒绝</button>`;
-        } else if (s.activationStatus === 'approved') {
+        } else if (s.activationStatus === 'approved' && s.status !== 'live') {
+          actions = `<button class="btn-primary" style="padding:4px 10px;font-size:12px" onclick="launchSkill('${s.skillId}')">🚀 上线计费</button>
+                     <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="rejectSkill('${s.skillId}')">停用</button>`;
+        } else if (s.activationStatus === 'approved' && s.status === 'live') {
           actions = `<button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="rejectSkill('${s.skillId}')">停用</button>`;
         } else if (s.activationStatus === 'rejected') {
-          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">重新激活</button>`;
+          actions = `<button class="btn-success" style="padding:4px 10px;font-size:12px" onclick="activateSkill('${s.skillId}')">重新审核</button>`;
         }
 
         html += `<tr>
@@ -219,15 +224,33 @@
 
     async function activateSkill(skillId) {
       if (!checkAuth()) return;
-      if (!confirm(`确认激活 "${skillId}" 并正式收费？`)) return;
+      if (!confirm(`确认审核通过 "${skillId}"？（转为影子计费，只记录不扣费）`)) return;
 
       try {
         const { status, body } = await api(`/api/admin/skills/${encodeURIComponent(skillId)}/activate`, { method: 'POST' });
         if (status === 200) {
-          showMsg(`"${skillId}" 已激活，正式收费`);
-          log(`激活: ${skillId}`);
+          showMsg(`"${skillId}" 已审核通过，转为影子计费`);
+          log(`审核通过: ${skillId}`);
         } else {
-          showMsg(body.message || '激活失败', false);
+          showMsg(body.message || '审核失败', false);
+        }
+      } catch(e) { showMsg('网络错误', false); }
+
+      loadPending();
+      loadAll();
+    }
+
+    async function launchSkill(skillId) {
+      if (!checkAuth()) return;
+      if (!confirm(`确认正式上线 "${skillId}" 并开始正式计费（扣费）？`)) return;
+
+      try {
+        const { status, body } = await api(`/api/admin/skills/${encodeURIComponent(skillId)}/launch`, { method: 'POST' });
+        if (status === 200) {
+          showMsg(`"${skillId}" 已正式上线，开始计费`);
+          log(`上线计费: ${skillId}`);
+        } else {
+          showMsg(body.message || '上线失败', false);
         }
       } catch(e) { showMsg('网络错误', false); }
 

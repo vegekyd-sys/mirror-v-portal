@@ -4,13 +4,29 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import delivery_guard
+
+
+def push_timezone():
+    """Resolve the fixed push timezone with a Windows-safe fallback.
+
+    Hosts without the tzdata package cannot resolve IANA names; Asia/Shanghai
+    has used a fixed UTC+8 offset since 1991, so the fallback is exact.
+    """
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except ZoneInfoNotFoundError:
+        from datetime import timedelta, timezone as _tz
+        return _tz(timedelta(hours=8), "Asia/Shanghai")
 
 
 class CardRenderError(RuntimeError):
@@ -37,6 +53,17 @@ REASON_DIMENSION_ORDER = (
     "需求意向",
     "线索时间",
 )
+DIMENSION_WEIGHTS = {
+    "产品名称": 32,
+    "产品类别": 24,
+    "买家国家": 18,
+    "买家类型": 10,
+    "MOQ": 6,
+    "买家标签": 4,
+    "企业简介": 2,
+    "需求意向": 2,
+    "线索时间": 2,
+}
 
 
 def require_text(value: Any, field: str) -> str:
@@ -77,8 +104,14 @@ def validate_url(value: Any, field: str, token: str) -> str:
         raise CardRenderError(f"{field} contains unsafe URL characters")
     if not (host == "feishu.cn" or host.endswith(".feishu.cn") or host == "larksuite.com" or host.endswith(".larksuite.com")):
         raise CardRenderError(f"{field} host is not an allowed Feishu/Lark domain")
-    if token not in url:
-        raise CardRenderError(f"{field} does not contain the exact bound resource token")
+    if parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.fragment:
+        raise CardRenderError(f"{field} contains unsupported authority, port, or fragment data")
+    raw_segments = [segment for segment in parsed.path.split("/") if segment]
+    segments = [unquote(segment) for segment in raw_segments]
+    if len(segments) != 2 or segments[0] != "base" or segments[1] != token:
+        raise CardRenderError(f"{field} path must be exactly /base/<bound base_app_token>")
+    if raw_segments[1] != token:
+        raise CardRenderError(f"{field} must not encode or transform the bound token")
     return url
 
 
@@ -130,7 +163,48 @@ def recommendation_reason(record: dict[str, Any]) -> str:
     return reason + "。"
 
 
+def validate_score_consistency(record: dict[str, Any]) -> None:
+    details = record.get("评分明细")
+    if not isinstance(details, list) or len(details) != len(DIMENSION_WEIGHTS):
+        raise CardRenderError("评分明细 must contain exactly nine dimensions")
+    points_by_dimension: dict[str, int] = {}
+    for index, detail in enumerate(details):
+        if not isinstance(detail, dict):
+            raise CardRenderError(f"评分明细[{index}] must be an object")
+        dimension = require_text(detail.get("维度"), f"评分明细[{index}].维度")
+        if dimension not in DIMENSION_WEIGHTS or dimension in points_by_dimension:
+            raise CardRenderError("评分明细 contains an unknown or duplicate dimension")
+        value = detail.get("得分")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise CardRenderError(f"评分明细[{index}].得分 must be numeric")
+        rounded = int(round(value))
+        if rounded != value or not 0 <= rounded <= DIMENSION_WEIGHTS[dimension]:
+            raise CardRenderError(f"评分明细[{index}].得分 exceeds its approved weight")
+        points_by_dimension[dimension] = rounded
+    if set(points_by_dimension) != set(DIMENSION_WEIGHTS):
+        raise CardRenderError("评分明细 dimensions do not match the approved policy")
+    raw_score = sum(points_by_dimension.values())
+    if record.get("AI原始分") != raw_score:
+        raise CardRenderError("AI原始分 does not equal the nine-dimension score sum")
+    penalty = record.get("反馈扣分", 0)
+    if not isinstance(penalty, int) or isinstance(penalty, bool) or penalty < 0:
+        raise CardRenderError("反馈扣分 must be a non-negative integer")
+    final_score = max(0, min(100, raw_score - penalty))
+    if record.get("AI匹配分") != final_score:
+        raise CardRenderError("AI匹配分 is inconsistent with raw score and feedback penalty")
+    core_pass = all(
+        points_by_dimension[name] == DIMENSION_WEIGHTS[name]
+        for name in ("产品名称", "产品类别", "买家国家")
+    )
+    if record.get("核心匹配通过") is not core_pass:
+        raise CardRenderError("核心匹配通过 is inconsistent with the three core dimensions")
+    expected_action = "push" if final_score >= 70 and core_pass else "pool_only" if final_score >= 65 else "exclude"
+    if record.get("匹配动作") != expected_action:
+        raise CardRenderError("匹配动作 is inconsistent with the approved score and core gate")
+
+
 def lead_block(record: dict[str, Any], rank: int) -> dict[str, Any]:
+    validate_score_consistency(record)
     company = display_text(record.get("买家公司名称"), "买家公司名称")
     if not company:
         raise CardRenderError("A pushed lead has no buyer company name")
@@ -184,6 +258,14 @@ def render(payload: Any) -> dict[str, Any]:
             raise CardRenderError("A pushed lead has no buyer country")
         chosen.append((country, record))
 
+    try:
+        delivery_at = datetime.fromisoformat(proof["delivery_at"].replace("Z", "+00:00"))
+        batch_date = delivery_at.astimezone(push_timezone()).date().isoformat()
+    except (ValueError, KeyError) as exc:
+        raise CardRenderError("Guarded delivery time is invalid") from exc
+    batch_material = "\n".join([proof["chat_id"], batch_date, *sorted(selected_ids)])
+    batch_id = "sha256:" + hashlib.sha256(batch_material.encode("utf-8")).hexdigest()
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     country_order = []
     for country, record in chosen:
@@ -212,7 +294,9 @@ def render(payload: Any) -> dict[str, Any]:
                             "📊 **AI猎客商机池：**\n"
                             f"[{base_url}]({base_url})\n\n"
                             "💬 请在AI猎客商机池中标记每条线索的匹配结果"
-                            "（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。"
+                            "（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。\n\n"
+                            "🔓 需要买家联系方式？在AI猎客商机池把该线索的「是否解锁」改为「已解锁」，"
+                            "或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。"
                         ),
                     },
                 },
@@ -247,11 +331,14 @@ def render(payload: Any) -> dict[str, Any]:
                 "msg_type": "interactive",
                 "card": card,
                 "lead_ids": [record["线索ID"] for record in country_records],
+                "batch_id": batch_id,
             }
         )
     return {
         "chat_id": proof["chat_id"],
         "delivery_id": proof["delivery_id"],
+        "batch_id": batch_id,
+        "batch_date": batch_date,
         "message_count": len(messages),
         "lead_count": len(chosen),
         "messages": messages,
@@ -265,6 +352,8 @@ def fixture() -> dict[str, Any]:
         {
             "买家公司名称": "巴西优质家居进口商",
             "AI匹配分": 91,
+            "AI原始分": 91,
+            "核心匹配通过": True,
             "需求意向": "寻找绗缝被供应商",
             "关注产品": "绗缝被",
             "买家特征": "连锁零售买家",
@@ -294,6 +383,7 @@ def fixture() -> dict[str, Any]:
 def self_test() -> None:
     result = render(fixture())
     assert result["message_count"] == 1 and result["lead_count"] == 1
+    assert result["batch_id"].startswith("sha256:")
     message = result["messages"][0]
     assert message["msg_type"] == "interactive" and message["receive_id"] == "oc_a"
     encoded = json.dumps(message["card"], ensure_ascii=False)
@@ -307,6 +397,8 @@ def self_test() -> None:
         "推荐理由",
         "打开AI猎客商机池",
         "待确认/✅匹配/❌不匹配",
+        "是否解锁",
+        "解锁线索",
         "https://example.feishu.cn/base/base-a",
     ):
         assert expected in encoded
@@ -314,6 +406,20 @@ def self_test() -> None:
     no_exhibition = fixture()
     no_exhibition["delivery"]["pipeline_result"]["records"][0]["报名参展展会"] = ""
     assert "报名参展" not in json.dumps(render(no_exhibition)["messages"][0]["card"], ensure_ascii=False)
+
+    two_leads = fixture()
+    second = json.loads(json.dumps(two_leads["delivery"]["pipeline_result"]["records"][0], ensure_ascii=False))
+    second["线索ID"] = "lead-2"
+    second["买家公司名称"] = "第二家巴西买家"
+    two_leads["delivery"]["pipeline_result"]["records"].append(second)
+    two_leads["selected_lead_ids"] = ["lead-1", "lead-2"]
+    forward = render(two_leads)
+    reverse = json.loads(json.dumps(two_leads, ensure_ascii=False))
+    reverse["selected_lead_ids"] = ["lead-2", "lead-1"]
+    assert render(reverse)["batch_id"] == forward["batch_id"]
+    only_second = json.loads(json.dumps(two_leads, ensure_ascii=False))
+    only_second["selected_lead_ids"] = ["lead-2"]
+    assert render(only_second)["batch_id"] != result["batch_id"]
 
     unsafe = []
     wrong_url = fixture()
@@ -325,6 +431,12 @@ def self_test() -> None:
     crossed = fixture()
     crossed["delivery"]["current_state"]["resource_permissions"]["base"]["permission_chat_id"] = "oc_b"
     unsafe.append(crossed)
+    token_in_query = fixture()
+    token_in_query["base_url"] = "https://example.feishu.cn/base/wrong?token=base-a"
+    unsafe.append(token_in_query)
+    inconsistent_score = fixture()
+    inconsistent_score["delivery"]["pipeline_result"]["records"][0]["AI匹配分"] = 0
+    unsafe.append(inconsistent_score)
     for item in unsafe:
         try:
             render(item)

@@ -337,8 +337,7 @@ if __name__ == "__main__":
         )
         print("  ✅ pending-replies")
 
-        print("\n运行心跳验证:")
-        os.system("python3 scripts/daily_growth_heartbeat.py --slot morning")
+        print("\n[test] 数据写入函数验证完成（提醒脚本已移除）")
 
     elif cmd == "init":
         init_company_profile(

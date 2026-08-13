@@ -3,7 +3,7 @@
 Use `chat_id` as the tenant key. Store state under:
 
 ```text
-dealclaw-buyer-leads-push/v7/<chat_id>
+dealclaw-buyer-leads-push/v10/<chat_id>
 ```
 
 The state store must survive process restarts, encrypt data at rest, restrict access to this automation, and support revision-based compare-and-set updates. Serialize initialization and daily runs by `chat_id`.
@@ -12,7 +12,7 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 10,
   "revision": 1,
   "status": "active",
   "chat_id": "oc_xxx",
@@ -27,30 +27,51 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
     "bound_by": "ou_xxx",
     "document_origin": "formalized_from_group_history"
   },
+  "binding_recovery": null,
   "resource_permissions": {
-    "policy_version": "chat-isolation-v1",
+    "policy_version": "chat-isolation-v3",
     "permission_chat_id": "oc_xxx",
     "formal_document": {
       "status": "verified",
-      "policy_version": "chat-isolation-v1",
+      "policy_version": "chat-isolation-v3",
       "permission_chat_id": "oc_xxx",
       "resource_type": "docx",
       "token_fingerprint": "0123456789ab",
       "external_access_entity": "closed",
       "link_share_entity": "closed",
       "group_permission": "edit",
-      "verified_at": "2026-08-12T10:00:00+08:00"
+      "observed_at": "2026-08-12T09:59:40+08:00",
+      "verified_at": "2026-08-12T10:00:00+08:00",
+      "expires_at": "2026-08-12T10:00:40+08:00",
+      "verification_context_id": "binding:oc_xxx:1",
+      "observation_id": "permission-read-docx-1",
+      "owner_fingerprint": "111111111111",
+      "permission_actor_fingerprint": "222222222222",
+      "permission_actor_role": "owner",
+      "permission_credential_type": "user_access_token",
+      "automation_principal_fingerprint": "333333333333",
+      "automation_role": "full_access"
     },
     "base": {
       "status": "verified",
-      "policy_version": "chat-isolation-v1",
+      "policy_version": "chat-isolation-v3",
       "permission_chat_id": "oc_xxx",
       "resource_type": "bitable",
       "token_fingerprint": "abcdef012345",
       "external_access_entity": "closed",
       "link_share_entity": "closed",
       "group_permission": "edit",
-      "verified_at": "2026-08-12T10:00:00+08:00"
+      "observed_at": "2026-08-12T09:59:41+08:00",
+      "verified_at": "2026-08-12T10:00:00+08:00",
+      "expires_at": "2026-08-12T10:00:41+08:00",
+      "verification_context_id": "binding:oc_xxx:1",
+      "observation_id": "permission-read-base-1",
+      "owner_fingerprint": "111111111111",
+      "permission_actor_fingerprint": "222222222222",
+      "permission_actor_role": "owner",
+      "permission_credential_type": "user_access_token",
+      "automation_principal_fingerprint": "333333333333",
+      "automation_role": "full_access"
     }
   },
   "onboarding": {
@@ -62,14 +83,24 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
     "draft_status": "ready_for_confirmation",
     "draft_permission_proof": {
       "status": "verified",
-      "policy_version": "chat-isolation-v1",
+      "policy_version": "chat-isolation-v3",
       "permission_chat_id": "oc_xxx",
       "resource_type": "docx",
       "token_fingerprint": "fedcba987654",
       "external_access_entity": "closed",
       "link_share_entity": "closed",
       "group_permission": "edit",
-      "verified_at": "2026-08-12T10:00:00+08:00"
+      "observed_at": "2026-08-12T09:59:40+08:00",
+      "verified_at": "2026-08-12T10:00:00+08:00",
+      "expires_at": "2026-08-12T10:00:40+08:00",
+      "verification_context_id": "draft:oc_xxx:3",
+      "observation_id": "permission-read-draft-3",
+      "owner_fingerprint": "111111111111",
+      "permission_actor_fingerprint": "222222222222",
+      "permission_actor_role": "owner",
+      "permission_credential_type": "user_access_token",
+      "automation_principal_fingerprint": "333333333333",
+      "automation_role": "full_access"
     },
     "enterprise_approver_open_ids": ["ou_xxx"],
     "confirmation": {
@@ -120,18 +151,52 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
     "generated_by": "ou_xxx"
   },
   "feedback": {
-    "cursor": "2026-08-12T10:00:00+08:00|record_id",
-    "learned_rules": []
+    "feedback_cursor": "2026-08-12T10:00:00+08:00|record_id",
+    "learned_rules": [],
+    "rule_evidence": []
   },
   "run": {
     "last_success_at": "2026-08-12T10:00:00+08:00",
-    "weight_version": "v7-32-24-18-10-6-4-2-2-2"
+    "weight_version": "v10-32-24-18-10-6-4-2-2-2"
+  },
+  "post_confirmation": {
+    "flow_version": "post-confirmation-v1",
+    "operation_id": "sha256:...",
+    "formalization_id": "sha256:...",
+    "confirmation_event_id": "om_xxx",
+    "status": "completed",
+    "started_at": "2026-08-12T10:00:00+08:00",
+    "formal_doc_fingerprint": "0123456789ab",
+    "progress_message_id": "om_progress",
+    "interface_call_id": "sha256:...",
+    "fresh_record_count": 25,
+    "pool_written_count": 8,
+    "pushed_lead_count": 5,
+    "batch_id": "sha256:...",
+    "push_message_ids": ["om_card_1"],
+    "completed_at": "2026-08-12T10:02:00+08:00"
   },
   "push": {
     "batches": {}
+  },
+  "unlocks": {
+    "2077311290711822337": {
+      "unlock_id": "sha256:...",
+      "chat_id": "oc_xxx",
+      "actor_open_id": "ou_xxx",
+      "trigger": "base_field",
+      "requested_at": "2026-08-12T22:00:00+08:00",
+      "status": "contact_pushed",
+      "push_message_id": "om_xxx",
+      "completed_at": "2026-08-12T22:01:00+08:00"
+    }
   }
 }
 ```
+
+The optional `binding_recovery` object is additive to schema v10 and defaults to `null`. When a direct-token read proves that the formal knowledge Docx is deleted or not found, `binding_resource_guard.py` sets state `status = rebind_required` and stores only `reason`, the failed token fingerprint, detection time, and reminder-delivery metadata. Keep the full inactive token only in the existing binding; never put it in reminder text or routine logs. No buyer retrieval, scoring, feedback read, Base write, push, or unlock sweep is permitted while `status = rebind_required`.
+
+The `unlocks` map is additive to schema v10 and defaults to `{}` for states created before it existed. It is keyed by `线索ID` and scoped by the state record's own `chat_id`; require `unlocks[<id>].chat_id == state.chat_id` before use. It stores only unlock metadata (authorization ID, actor, trigger, timestamps, delivery status, message ID). Never store contact values, buyer names, or raw detail responses inside `unlocks`. Persist `pending_push` before the contact-card send and finalize with `contact_unlock_guard.py complete`; a lead whose entry already holds `contact_pushed` or `pending_push` must not be released again — send the duplicate-unlock notice instead.
 
 Before formalization, `binding` and active `resource_permissions` are absent, `profile.status` is not `active`, and onboarding holds the draft token/version/hash plus its validated permission proof. Do not synthesize empty formal tokens or permission proofs. Do not store buyer records, contact data, API credentials, or raw API responses in this state. Draft/formal document, Base tokens, and `tradechina_supplier_id` are sensitive resource/account identifiers; never print their full values in routine logs or group errors.
 
@@ -155,24 +220,27 @@ Never use drive-wide search, title-only search, recent global results, or a reso
 - Store one profile object inside the state record for the same `chat_id`; do not maintain a company-name-keyed or document-title-keyed profile cache.
 - Require `profile.source_chat_id == state.chat_id == binding.chat_id == invocation.chat_id` before use.
 - Require `profile.source_doc_token == binding.knowledge_doc_token`. Refresh from that token on mismatch; never look for another document.
-- Require `resource_permissions.permission_chat_id == state.chat_id`, policy `chat-isolation-v1`, and verified formal Docx/Base proofs whose token fingerprints equal the current binding tokens.
+- Require `resource_permissions.permission_chat_id == state.chat_id`, policy `chat-isolation-v3`, verified creator/actor/DealClaw management roles, and formal Docx/Base token fingerprints equal to the binding tokens.
 - Include `source_chat_id` and `source_doc_token` in the normalized profile hash input.
 - Store only the explicit scoring fields defined in `profile-and-matching.md`. Do not copy unrelated company-document text into matcher input or durable profile facts.
 - Require onboarding status to be one of `collecting_history`, `draft_incomplete`, `ready_for_confirmation`, `formalizing`, `formalization_unknown`, or `completed`.
 - A draft is stored under onboarding and is never `profile.status = active`. Only a separately created formal token with matching confirmation provenance may enter the binding and active profile.
-- Require products/categories and target countries in every active v7 profile. Permit an empty `buyer_types` array; it contributes no bonus and does not invalidate the core gate.
+- Require products/categories and target countries in every active v10 profile. Permit an empty `buyer_types` array; it contributes no bonus and does not invalidate the core gate.
 - Scope feedback cursor and every learned rule to the same `chat_id`. Never read another group's Base for feedback.
 - For a group-history-generated document, persist only its bounded history scope, cursor, evidence-manifest hash, timestamps, and validated scoring projection. Do not persist the full message archive or personal contact data.
 
-When upgrading from v1–v6, create a new v7 state record per `chat_id`. Carry only a formal, non-draft document binding and confirmed push message IDs. Do not migrate a process-wide or unknown supplier ID. Require an authorized administrator to bind the correct supplier ID separately for every group. A history-generated document created before explicit enterprise confirmation must be downgraded to onboarding draft state and must not remain active. Re-read every scoring field and require v7 confirmation before reactivation; do not migrate cached profile facts, scores, or learned rules.
+For v1–v6, do not use the automated migrator. Re-onboard into v10 per `chat_id`, rebind the supplier ID, re-read all scoring fields, and require enterprise confirmation.
 
-When upgrading an earlier v7 installation that used public-link editing, mark every binding inactive before its next run. Resolve only its stored tokens, close external/link access, clean collaborators, add the exact bound `openchat` group, validate fresh proofs, and then reactivate with compare-and-set. Never keep an old `anyone_*` result or infer a proof from successful access by the automation identity.
+For v7–v9, stop that group's scheduler and atomically change the exact legacy state to `inactive_for_v10_migration`. Close public/link access, repair collaborators, complete the creator-to-DealClaw management handoff, and obtain two distinct `chat-isolation-v3` readbacks no older than 60 seconds with context `migration:<chat_id>:<source revision>`. Then run `state_migrator.py migrate`. Never migrate an active legacy state, missing handoff, unknown/global supplier ID, public-link proof, or cross-group resource.
 
 ## Normal runs
 
 - Read tokens from the binding and address resources directly by token.
+- Normalize the direct formal-document read as `accessible`, `deleted`, `not_found`, `permission_denied`, `type_mismatch`, or `transient_error`, then run `binding_resource_guard.py evaluate`. Only `deleted` and `not_found` may create `rebind_required`; permission and transient failures remain repair/retry errors.
+- Commit the returned `rebind_required` patch with compare-and-set before sending its exact same-group reminder. Persist the returned reminder message ID with `binding_resource_guard.py complete-reminder`. A later scheduled run must suppress another reminder after `reminder_status = sent`.
+- If state is `rebind_required`, stop before reading feedback, accessing the Base, querying TradeChina, scoring, pushing, or sweeping unlocks. Only the explicit rebind flow below may reactivate it.
 - Refuse any run whose formal Docx or Base permission proof is missing, not verified, cross-group, public-link enabled, or token-fingerprint mismatched. Refresh only by direct token readback; never search for another resource.
-- Run `tenant_run_guard.py` on the current invocation, v7 state, and direct formal-document projection. Then run `scoped_lead_pipeline.py`; do not invoke the buyer API directly from an unguarded model step.
+- Run `tenant_run_guard.py` on the current invocation, v10 state, and direct formal-document projection. Then run `scoped_lead_pipeline.py`; do not invoke the buyer API directly from an unguarded model step.
 - Check resource type, accessibility, title prefix, and stored company name on every run.
 - Re-read the bound document and rebuild the isolated nine-dimension profile for this `chat_id` before scoring.
 - Stop before TradeChina query unless binding tokens exist, the formal profile is `active`, and origin provenance is valid. For `formalized_from_group_history`, additionally require onboarding `completed` with matching confirmation version/hash.
@@ -180,9 +248,26 @@ When upgrading an earlier v7 installation that used public-link editing, mark ev
 - Stop on mismatch. Do not search for a replacement.
 - Update state only with the revision read at run start. Reload and reconcile if compare-and-set fails.
 
+## Immediate post-confirmation run
+
+Treat one accepted confirmation as one durable operation keyed by `SHA-256(chat_id + formalization_id + confirmation message/action ID)`. After formal activation, persist `awaiting_progress_notice`; send the exact progress notice and persist its message ID before changing to `progress_notified`. Only `post_confirmation_flow.py authorize` may then authorize the first buyer retrieval. Pass that authorization to `scoped_lead_pipeline.py`, which records a unique `interface_call_id` and proves that pre-confirmation candidates were not reused.
+
+Continue through the ordinary live-permission, Base-write, card, and batch gates. Persist `completed` and the exact result notice after determinate delivery, including zero-push results. Persist `failed` for retrieval/write/render failures and `unknown` for an indeterminate card send. A duplicate confirmation callback with the same operation ID resumes the stored stage; it never creates another formal document, interface call, or card batch. A different confirmation operation cannot overwrite an unfinished one.
+
 ## Rebinding
 
-Require an explicit administrator instruction naming the `chat_id` and replacement group-scoped URL. Validate the replacement before changing state. Record the actor and time. Never treat a missing resource or renamed title as automatic permission to rebind.
+For a deleted/not-found bound knowledge document, use this sequence:
+
+1. Persist `status = rebind_required` with `binding_recovery.reason = knowledge_document_deleted` before notifying the group. Preserve the existing Base binding, feedback cursor/rules, push history, and unlock metadata.
+2. Send the exact reminder from [message-template.md](message-template.md) only to the originating `chat_id`, persist its message ID, and suppress repeat scheduled reminders. If sending is indeterminate, keep `reminder_status = pending` and reconcile delivery before retrying.
+3. Require an explicit same-group administrator command `重新绑定企业知识库` or `重新绑定企业知识库 <飞书文档URL>`. A deletion signal alone is not permission to replace a token.
+4. Re-enter the ordinary binding candidate rules for this same `chat_id`: inspect only the URL in that command, same-group explicit URLs, and same-group pinned items. Stop on multiple candidates. Never use a global title search or select the first result.
+5. With exactly one candidate, require an authorized source actor, validate the formal title/company, parse required profile fields, and obtain a fresh `chat-isolation-v3` permission proof for its returned token. Reuse the existing Base only when its token, company prefix, schema, and fresh `chat-isolation-v3` proof remain valid; otherwise require an explicit Base repair/rebind.
+6. With zero candidates, run the same-group history onboarding path, create a new draft, require exact-version enterprise confirmation, and create a separate formal knowledge document. Do not bind the draft. The existing Base may be reused only under the validation in step 5.
+7. Atomically replace only the validated formal-document binding/provenance and dependent profile fields, clear `binding_recovery`, increment the revision, and set `status = active`. Record the rebind actor/time and the previous token fingerprint; never retain deleted-document content as the active profile.
+8. Immediately run a fresh guarded buyer match after activation. Do not reuse candidates, scores, batches, or permission proofs from before the deletion or rebind.
+
+For other rebind reasons, still require an explicit administrator instruction naming the `chat_id` and replacement group-scoped URL. Validate the replacement before changing state. Record the actor and time. Never treat a missing resource, renamed title, permission failure, or transient read error as automatic permission to replace a token.
 
 ## Push idempotency
 
