@@ -45,6 +45,9 @@ beforeAll(async () => {
     imageRegistry: 'test-registry/dealclaw',
     nexusGatewayImageTag: 'test',
     dealclawAgentImageTag: 'test',
+    agentPvcSize: '10Gi',
+    agentPvcStorageClass: 'alibabacloud-cnfs-nas',
+    agentPvcAccessMode: 'ReadWriteOnce',
   };
   app = createApp(pool, config);
 });
@@ -59,6 +62,7 @@ describe('GET /healthz', () => {
         port: 0, databaseUrl: TEST_DB, k8sDryRun: true,
         runtimeNamespace: 'dealclaw-test', imageRegistry: 'test-registry/dealclaw',
         nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test',
+        agentPvcSize: '10Gi', agentPvcStorageClass: 'alibabacloud-cnfs-nas', agentPvcAccessMode: 'ReadWriteOnce',
       });
     }
     const res = await request(app).get('/healthz');

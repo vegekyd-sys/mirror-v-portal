@@ -12,6 +12,10 @@ const TEST_TENANT = 'test-tenant';
 
 const app = createApp();
 
+// All billing/account/skill-price routes are behind requireServiceOrAdmin
+// (shared service token or admin JWT). The test uses the service token.
+const SVC_AUTH = 'Bearer test-token';
+
 let dbAvailable = false;
 
 const dbIt = (name: string, fn: (ctx: TestContext) => Promise<void> | void) => {
@@ -23,6 +27,7 @@ const dbIt = (name: string, fn: (ctx: TestContext) => Promise<void> | void) => {
 
 beforeAll(async () => {
   process.env.PAYMENT_SERVICE_TOKEN = 'test-token';
+  process.env.BILLING_SERVICE_TOKEN = 'test-token';
   process.env.ADMIN_API_TOKEN = 'test-token';
 
   // Probe DB availability before running heavy setup
@@ -30,6 +35,10 @@ beforeAll(async () => {
   try {
     await query('DELETE FROM skill_prices');
     await migrate();
+    // Production currently defaults skills to 'shadow' (no charge) until formal
+    // charging begins. Force 'live' here so the billing tests exercise the real
+    // debit / insufficient-credits / affordability paths deterministically.
+    await query("UPDATE skill_prices SET status = 'live'");
     dbAvailable = true;
   } catch {
     console.warn('[credits-ledger tests] Database unavailable — skipping DB-dependent tests');
@@ -78,7 +87,9 @@ describe('GET /healthz', () => {
 
 describe('GET /v1/accounts/:id/balance', () => {
   dbIt('returns balance for existing account', async () => {
-    const res = await request(app).get(`/v1/accounts/${TEST_ACCOUNT}/balance`);
+    const res = await request(app)
+      .get(`/v1/accounts/${TEST_ACCOUNT}/balance`)
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(res.body.accountId).toBe(TEST_ACCOUNT);
     expect(res.body.balance).toBe(10000);
@@ -87,7 +98,9 @@ describe('GET /v1/accounts/:id/balance', () => {
   });
 
   dbIt('returns 404 for non-existent account', async () => {
-    const res = await request(app).get('/v1/accounts/nonexistent/balance');
+    const res = await request(app)
+      .get('/v1/accounts/nonexistent/balance')
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('ACCOUNT_NOT_FOUND');
   });
@@ -97,6 +110,7 @@ describe('POST /v1/accounts/:id/debit', () => {
   dbIt('debites credits on sufficient balance', async () => {
     const res = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 2000, reference: 'req-test-1', idempotencyKey: 'key-a' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -107,6 +121,7 @@ describe('POST /v1/accounts/:id/debit', () => {
   dbIt('returns 402 on insufficient balance', async () => {
     const res = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 20000, reference: 'req-test-2', idempotencyKey: 'key-b' });
     expect(res.status).toBe(402);
     expect(res.body.code).toBe('INSUFFICIENT_CREDITS');
@@ -118,24 +133,29 @@ describe('POST /v1/accounts/:id/debit', () => {
     const key = 'idem-test-001';
     const r1 = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 2000, reference: 'req-001', idempotencyKey: key });
     expect(r1.status).toBe(200);
     expect(r1.body.ok).toBe(true);
 
     const r2 = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 2000, reference: 'req-001', idempotencyKey: key });
     expect(r2.status).toBe(200);
     expect(r2.body.idempotent).toBe(true);
 
     // Balance should only be debited once
-    const bal = await request(app).get(`/v1/accounts/${TEST_ACCOUNT}/balance`);
+    const bal = await request(app)
+      .get(`/v1/accounts/${TEST_ACCOUNT}/balance`)
+      .set('Authorization', SVC_AUTH);
     expect(bal.body.balance).toBe(8000);
   });
 
   dbIt('rejects missing required fields', async () => {
     const res = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 100 });
     expect(res.status).toBe(400);
   });
@@ -145,7 +165,7 @@ describe('POST /v1/accounts/:id/credit', () => {
   dbIt('credits account when authorized', async () => {
     const res = await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/credit`)
-      .set('Authorization', 'Bearer test-token')
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 5000, reference: 'order-001', idempotencyKey: 'credit-key-a' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -166,12 +186,16 @@ describe('GET /v1/accounts/:id/history', () => {
     // Create a few transactions first
     await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 1000, reference: 'req-h1', idempotencyKey: 'hist-1' });
     await request(app)
       .post(`/v1/accounts/${TEST_ACCOUNT}/debit`)
+      .set('Authorization', SVC_AUTH)
       .send({ amount: 2000, reference: 'req-h2', idempotencyKey: 'hist-2' });
 
-    const res = await request(app).get(`/v1/accounts/${TEST_ACCOUNT}/history`);
+    const res = await request(app)
+      .get(`/v1/accounts/${TEST_ACCOUNT}/history`)
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(res.body.accountId).toBe(TEST_ACCOUNT);
     expect(res.body.transactions.length).toBeGreaterThanOrEqual(2);
@@ -183,7 +207,8 @@ describe('GET /v1/accounts/:id/usage', () => {
   dbIt('returns monthly usage', async () => {
     const month = new Date().toISOString().slice(0, 7);
     const res = await request(app)
-      .get(`/v1/accounts/${TEST_ACCOUNT}/usage?month=${month}`);
+      .get(`/v1/accounts/${TEST_ACCOUNT}/usage?month=${month}`)
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(res.body.month).toBe(month);
     expect(res.body.monthlyAllowance).toBe(5_000_000);
@@ -239,7 +264,9 @@ describe('POST /v1/admin/monthly-reset', () => {
 
 describe('GET /v1/skill-prices', () => {
   dbIt('returns all prices with summary', async () => {
-    const res = await request(app).get('/v1/skill-prices');
+    const res = await request(app)
+      .get('/v1/skill-prices')
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.prices)).toBe(true);
     expect(res.body.prices.length).toBeGreaterThan(0);
@@ -252,7 +279,9 @@ describe('GET /v1/skill-prices', () => {
   });
 
   dbIt('filters by category', async () => {
-    const res = await request(app).get('/v1/skill-prices?category=outreach');
+    const res = await request(app)
+      .get('/v1/skill-prices?category=outreach')
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     res.body.prices.forEach((p: any) => expect(p.category).toBe('outreach'));
   });
@@ -262,6 +291,7 @@ describe('PUT /v1/skill-prices/:skillId', () => {
   dbIt('creates and updates a skill price', async () => {
     const r1 = await request(app)
       .put('/v1/skill-prices/test.buyer_basic')
+      .set('Authorization', SVC_AUTH)
       .send({ skillName: '测试买家', category: 'buyer', creditPerUnit: 150 });
     expect(r1.status).toBe(200);
     expect(r1.body.ok).toBe(true);
@@ -269,6 +299,7 @@ describe('PUT /v1/skill-prices/:skillId', () => {
 
     const r2 = await request(app)
       .put('/v1/skill-prices/test.buyer_basic')
+      .set('Authorization', SVC_AUTH)
       .send({ skillName: '测试买家(改)', category: 'buyer', creditPerUnit: 200 });
     expect(r2.status).toBe(200);
     expect(r2.body.price.creditPerUnit).toBe(200);
@@ -280,6 +311,7 @@ describe('POST /v1/skill-prices/estimate', () => {
   dbIt('estimates cost for a known skill', async () => {
     const res = await request(app)
       .post('/v1/skill-prices/estimate')
+      .set('Authorization', SVC_AUTH)
       .send({ skillId: 'dealclaw-find-buyers', quantity: 10 });
     expect(res.status).toBe(200);
     expect(res.body.totalCredit).toBe(3000);
@@ -290,6 +322,7 @@ describe('POST /v1/skill-prices/estimate', () => {
   dbIt('falls back to global default for unknown skill prefix', async () => {
     const res = await request(app)
       .post('/v1/skill-prices/estimate')
+      .set('Authorization', SVC_AUTH)
       .send({ skillId: 'unknown.nonexistent', quantity: 3 });
     expect(res.status).toBe(200);
     expect(res.body.isDefault).toBe(true);
@@ -302,6 +335,7 @@ describe('POST /v1/billing/estimate', () => {
   dbIt('estimates and records billing event', async () => {
     const res = await request(app)
       .post('/v1/billing/estimate')
+      .set('Authorization', SVC_AUTH)
       .send({
         tenantId: TEST_TENANT, accountId: TEST_ACCOUNT,
         taskId: 'task-test-1', skillId: 'dealclaw-analyze-company', quantity: 5,
@@ -317,11 +351,13 @@ describe('POST /v1/billing/settle', () => {
   dbIt('deducts credits and settles billing event', async () => {
     const est = await request(app)
       .post('/v1/billing/estimate')
+      .set('Authorization', SVC_AUTH)
       .send({ tenantId: TEST_TENANT, accountId: TEST_ACCOUNT, taskId: 'task-s', skillId: 'dealclaw-find-buyers', quantity: 10 });
     expect(est.body.ok).toBe(true);
 
     const res = await request(app)
       .post('/v1/billing/settle')
+      .set('Authorization', SVC_AUTH)
       .send({
         tenantId: TEST_TENANT, accountId: TEST_ACCOUNT, taskId: 'task-s',
         skillId: 'dealclaw-find-buyers', quantity: 10,
@@ -336,6 +372,7 @@ describe('POST /v1/billing/settle', () => {
   dbIt('returns 402 on insufficient credits', async () => {
     const res = await request(app)
       .post('/v1/billing/settle')
+      .set('Authorization', SVC_AUTH)
       .send({
         tenantId: TEST_TENANT, accountId: TEST_ACCOUNT, taskId: 'task-fail',
         skillId: 'dealclaw-exhibition-leads', quantity: 100, estimatedEventId: 'fake',
@@ -349,6 +386,7 @@ describe('POST /v1/billing/can-afford', () => {
   dbIt('checks affordability', async () => {
     const res = await request(app)
       .post('/v1/billing/can-afford')
+      .set('Authorization', SVC_AUTH)
       .send({ accountId: TEST_ACCOUNT, skillId: 'dealclaw-find-buyers', quantity: 50 });
     expect(res.status).toBe(200);
     expect(res.body.canAfford).toBe(false);
@@ -359,7 +397,9 @@ describe('POST /v1/billing/can-afford', () => {
 
 describe('GET /v1/billing/events', () => {
   dbIt('returns billing events for a tenant', async () => {
-    const res = await request(app).get(`/v1/billing/events?tenantId=${TEST_TENANT}`);
+    const res = await request(app)
+      .get(`/v1/billing/events?tenantId=${TEST_TENANT}`)
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.events)).toBe(true);
     expect(res.body.summary).toBeDefined();
@@ -370,7 +410,7 @@ describe('GET /v1/admin/monthly-reset/status', () => {
   dbIt('returns active and overdue counts', async () => {
     const res = await request(app)
       .get('/v1/admin/monthly-reset/status')
-      .set('Authorization', 'Bearer test-token');
+      .set('Authorization', SVC_AUTH);
     expect(res.status).toBe(200);
     expect(typeof res.body.activeAccounts).toBe('number');
     expect(typeof res.body.overdueReset).toBe('number');

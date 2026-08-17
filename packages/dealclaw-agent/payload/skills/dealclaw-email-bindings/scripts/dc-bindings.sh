@@ -1,7 +1,8 @@
 #!/bin/bash
 # dc-bindings.sh — DealClaw Email Notify Bindings CLI
-# Usage: bash scripts/dc-bindings.sh <action> [args...]
+# Usage: bash scripts/dc-bindings.sh [--supplier-id <id>] <action> [args...]
 # Actions: list | upsert <agent_email> <webhook_url> <mention_open_id> [note] | delete <agent_email> | test <agent_email>
+# 认证：X-Admin-Token（WEBHOOK_ADMIN_TOKEN）+ X-Supplier-Id（MIO_CDP_SUPPLIER_ID 或 --supplier-id），多租户隔离
 set -euo pipefail
 
 SERVER="114.55.150.21"
@@ -19,32 +20,55 @@ usage() {
   exit 1
 }
 
-# fetch token from server (SSH), or use env override
+# 从脚本目录向上逐级找 .env（单数 workspace/.env 或复数 work/mio-api/.env）里的指定 key
+resolve_env() {
+  local key="$1"
+  local dir env_file val
+  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  while [[ "$dir" != "/" ]]; do
+    for env_file in "$dir/work/mio-api/.env" "$dir/.env"; do
+      [[ -f "$env_file" ]] || continue
+      val=$(grep -m1 "^${key}=" "$env_file" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+      [[ -n "$val" ]] && { echo "$val"; return; }
+    done
+    dir="$(dirname "$dir")"
+  done
+}
+
+# X-Admin-Token：认证。缺了返回 401
 resolve_token() {
-  if [[ -n "${WEBHOOK_DEALCLAW_ADMIN_TOKEN:-}" ]]; then
-    echo "$WEBHOOK_DEALCLAW_ADMIN_TOKEN"
-    return
-  fi
   local t
+  t=$(resolve_env WEBHOOK_ADMIN_TOKEN)
+  [[ -n "$t" ]] && { echo "$t"; return; }
+  # 兜底：SSH 到服务器读 token 文件
   t=$(ssh root@"$SERVER" "grep '^ADMIN_TOKEN=' $TOKEN_FILE" 2>/dev/null | cut -d= -f2- || true)
-  if [[ -z "$t" ]]; then
-    die "无法获取 admin token。请确认 SSH 可达 $SERVER 或设置环境变量 WEBHOOK_DEALCLAW_ADMIN_TOKEN"
-  fi
+  [[ -n "$t" ]] || die "无法获取 admin token。请确认 .env 里的 WEBHOOK_ADMIN_TOKEN 或 SSH 可达 $SERVER"
   echo "$t"
+}
+
+# X-Supplier-Id：租户范围，多租户隔离必传。缺了返回 400
+resolve_supplier_id() {
+  local s
+  s=$(resolve_env MIO_CDP_SUPPLIER_ID)
+  [[ -n "$s" ]] || die "无法获取 supplier id。请确认 .env 里的 MIO_CDP_SUPPLIER_ID，或用 --supplier-id 显式指定"
+  echo "$s"
 }
 
 do_request() {
   local method="$1" path="$2" body="${3:-}"
-  local token
+  local token supplier_id
   token=$(resolve_token)
+  supplier_id="${SUPPLIER_ID_OVERRIDE:-$(resolve_supplier_id)}"
   if [[ -z "$body" ]]; then
     curl -s -X "$method" \
       -H "X-Admin-Token: $token" \
+      -H "X-Supplier-Id: $supplier_id" \
       "$BASE_URL$path" | python3 -m json.tool
   else
     curl -s -X "$method" \
       -H "Content-Type: application/json" \
       -H "X-Admin-Token: $token" \
+      -H "X-Supplier-Id: $supplier_id" \
       -d "$body" \
       "$BASE_URL$path" | python3 -m json.tool
   fi
@@ -100,6 +124,15 @@ cmd_test() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+
+# 先解析可选 --supplier-id（多租户时显式指定租户）
+SUPPLIER_ID_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --supplier-id) SUPPLIER_ID_OVERRIDE="${2:-}"; shift 2 ;;
+    *) break ;;
+  esac
+done
 
 [[ $# -lt 1 ]] && usage
 

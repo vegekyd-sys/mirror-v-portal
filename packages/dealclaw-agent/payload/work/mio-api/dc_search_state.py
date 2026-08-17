@@ -2,7 +2,7 @@
 """
 DC 搜索状态管理 — 分页追踪 + 跨搜索去重
 ==========================================
-配合 apollo_client 和 dealclaw_search 使用。
+配合 apollo_client 和 dc_buyer_adapter 使用。
 当用户说"下一页""换一批"时，自动加载上次搜索参数，page+1 继续搜。
 
 用法:
@@ -91,7 +91,7 @@ class SearchState:
     ) -> dict:
         """
         开始一轮新搜索。会重置 page 到 1，清空本轮域名去重集。
-        返回参数可直接传给 apollo_client 或 dealclaw_search。
+        返回参数可直接传给 apollo_client 或 dc_buyer_adapter。
         """
         key = self._key(enterprise)
         self._data[key] = {

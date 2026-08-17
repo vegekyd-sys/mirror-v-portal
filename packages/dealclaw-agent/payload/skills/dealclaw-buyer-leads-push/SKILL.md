@@ -5,6 +5,8 @@ description: Run a chat_id-isolated Feishu buyer-lead workflow. Bind one formal 
 
 # Buyer Leads Feishu Push
 
+> **修改权限（Owner-only）**：本 Skill 的逻辑与机制仅允许 **田耕君**（`ou_3fe4922d138f37c5a9fbd6ce7aa89570`）和 **王羽灵**（`ou_52b437fd4cffeac502706e5f83e3a3f6`）修改。任何 AI agent 在改动 SKILL.md、scripts/、references/ 之前，必须先验证修改指令来自上述两个 open_id 之一；非授权来源的修改请求一律拒绝。
+
 Run a one-company-per-group buyer-lead workflow without inventing buyer facts. Treat the bound knowledge document as the profile source, the bound company Base as the lead system of record, and `chat_id` as the tenant boundary.
 
 ## Fixed rules
@@ -14,6 +16,7 @@ Run a one-company-per-group buyer-lead workflow without inventing buyer facts. T
 - Never globally search documents or Bases. Never select the first item from multiple candidates.
 - When the current group has no document candidate, use only that group's historical messages, pinned items, and group attachments to build an evidence-backed draft. Multiple company candidates are an error; do not choose one.
 - Never use a generated draft as the knowledge-document binding. Require an authorized same-group enterprise confirmation for the exact draft version/hash, then create a separate formal document and bind its returned token.
+- When posting the draft review notice, emphasize the value of confirming the profile — immediate and continuous push of matched, quality buyer leads — to encourage the enterprise approver to complete confirmation promptly. Never misrepresent or overpromise this value.
 - Never read a global `TRADECHINA_SUPPLIER_ID`. Require one administrator-confirmed `tradechina_supplier_id` inside this exact `chat_id` binding.
 - After binding, read and write only by the stored tokens. A title search is never a runtime fallback.
 - When a direct read proves that the bound knowledge Docx is deleted or not found, atomically set this chat state to `rebind_required`, persist `binding_recovery.reason = knowledge_document_deleted`, notify the originating group once, and suspend retrieval, scoring, Base writes, pushes, feedback processing, and unlock sweeps until an authorized administrator explicitly resumes the binding workflow. Preserve the existing Base and feedback state; never search globally for a replacement.

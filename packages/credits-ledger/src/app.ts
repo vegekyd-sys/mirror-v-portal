@@ -6,7 +6,7 @@ import accountsRouter from './routes/accounts.js';
 import skillPricesRouter from './routes/skill-prices.js';
 import billingRouter from './routes/billing.js';
 import customerAdminRouter from './routes/customer-admin.js';
-import adminAuthRouter, { requireAdmin } from './routes/admin-auth.js';
+import adminAuthRouter, { requireAdmin, requireServiceOrAdmin } from './routes/admin-auth.js';
 import adminSkillsRouter from './routes/admin-skills.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
@@ -28,20 +28,23 @@ export function createApp() {
     }
   });
 
-  // ── Public routes (no auth required) ──
-  app.use(accountsRouter);
-  app.use(skillPricesRouter);
-  app.use(billingRouter);
-  app.use(customerAdminRouter);
+  // ── Billing / accounts / skill-prices ──
+  // Internal service calls authenticate with a shared service token
+  // (BILLING_SERVICE_TOKEN / PAYMENT_SERVICE_TOKEN); admin dashboard
+  // proxies with a valid JWT. Unauthenticated callers are rejected.
+  app.use(requireServiceOrAdmin, accountsRouter);
+  app.use(requireServiceOrAdmin, skillPricesRouter);
+  app.use(requireServiceOrAdmin, billingRouter);
+
+  // ── Customer admin (topup/renew/create-customer/v-command/plans/customers) ──
+  // Money-creation + account-management endpoints: service token or admin JWT.
+  app.use(requireServiceOrAdmin, customerAdminRouter);
 
   // ── Auth routes (login doesn't require auth, others do) ──
   app.use(adminAuthRouter);
 
-  // ── Admin-only routes (JWT protected) ──
-  app.use('/v1/admin', requireAdmin, adminSkillsRouter);
-
-  // Monthly reset (admin only)
-  app.post('/v1/admin/monthly-reset', requireAdmin, async (_req: Request, res: Response) => {
+  // Monthly reset — internal ops-agent / admin (service token or admin JWT)
+  app.post('/v1/admin/monthly-reset', requireServiceOrAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await runMonthlyReset();
       res.json({
@@ -55,7 +58,7 @@ export function createApp() {
     }
   });
 
-  app.get('/v1/admin/monthly-reset/status', requireAdmin, async (_req: Request, res: Response) => {
+  app.get('/v1/admin/monthly-reset/status', requireServiceOrAdmin, async (_req: Request, res: Response) => {
     try {
       const { rows } = await query(
         `SELECT COUNT(*) as total,
@@ -71,6 +74,9 @@ export function createApp() {
       res.status(500).json({ code: 'INTERNAL', message: 'Status check failed' });
     }
   });
+
+  // ── Admin-only routes (JWT protected) ──
+  app.use('/v1/admin', requireAdmin, adminSkillsRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ code: 'NOT_FOUND', message: 'Route not found' });

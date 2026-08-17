@@ -116,7 +116,7 @@ work/mio-api/dc_output_sanitize.py 存在
 DC-CBIE、DC-MI、DC-PRC、DC-EL、DC-LS、DC-KB、DC-IQ、
 DC-OS、DC-Copy、DC-GS、DC-FD、DC-SL、DC-DB、DC-WA、
 CDP、Apollo、Feedback、Evolution、Registry、Gate、
-dc_kb_publish、dealclaw_search、apollo_client
+dc_kb_publish、dc_buyer_adapter、apollo_client
 ```
 - [ ] 0 次出现
 

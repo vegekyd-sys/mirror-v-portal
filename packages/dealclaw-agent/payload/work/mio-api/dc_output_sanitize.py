@@ -46,7 +46,6 @@ BLOCKLIST = [
     (r'\bdc_feedback\.py\b', '引擎文件名', '删掉'),
     (r'\bdc_registry\.py\b', '引擎文件名', '删掉'),
     (r'\bdc_output_sanitize\.py\b', '引擎文件名', '删掉'),
-    (r'\bdealclaw_search\.py\b', '引擎文件名', '删掉'),
     (r'\bapollo_client\.py\b', '引擎文件名', '删掉'),
     # DC-xxx 链式引用
     (r'DC-[A-Z]+(\s*→\s*DC-[A-Z]+)+', 'Skill链', '全删'),

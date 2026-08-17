@@ -5,7 +5,7 @@ DC-Health — DealClaw 系统健康检查
 检查:
   引擎层: 所有 dc_*.py 可编译、可初始化
   数据层: JSON/JSONL 文件存在、格式正确、不损坏
-  API层: CDP / Resend 连通性
+  API层: Resend 连通性
   KB层: 每个企业的知识库六模块完整性
   一致性: leads ↔ persona ↔ KB 数据不矛盾
 
@@ -123,26 +123,6 @@ def check_kb():
 
 def check_apis():
     results = []
-    # CDP
-    cdp_key = os.environ.get("MIO_CDP_APP_KEY", "")
-    cdp_secret = os.environ.get("MIO_CDP_APP_SECRET", "")
-    if cdp_key and cdp_secret:
-        try:
-            import urllib.request, urllib.error
-            # 仅 ping 连通性，不实际搜索
-            req = urllib.request.Request(
-                "https://openapi.tradechina.com/miocdp/v1/health",
-                headers={"appKey": cdp_key, "appSecret": cdp_secret[:8] + "***"}
-            )
-            urllib.request.urlopen(req, timeout=5)
-            results.append(("✅", "CDP API", "连通"))
-        except urllib.error.HTTPError as e:
-            results.append(("⚠️", "CDP API", f"HTTP {e.code}"))
-        except Exception:
-            # health endpoint 可能不存在，只检查 KEY 是否存在
-            results.append(("✅", "CDP API", "凭据已配置"))
-    else:
-        results.append(("⬜", "CDP API", "凭据未配置"))
 
     # Resend
     resend_key = os.environ.get("RESEND_API_KEY", "")

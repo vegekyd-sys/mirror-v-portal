@@ -131,10 +131,15 @@ async function proxyToLedger(path: string, init?: RequestInit & { authReq?: Expr
     ...(init?.headers as Record<string, string> || {}),
   };
 
-  // Forward the JWT token from the incoming request to credits-ledger
-  if (init?.authReq) {
-    const authHeader = init.authReq.header('authorization');
-    if (authHeader) headers['Authorization'] = authHeader;
+  // Forward the incoming Authorization header (admin JWT / public token) if
+  // present; otherwise fall back to the internal service token so public
+  // endpoints (e.g. /public/credit) can still reach credits-ledger now that it
+  // requires auth.
+  const incomingAuth = init?.authReq?.header('authorization');
+  if (incomingAuth) {
+    headers['Authorization'] = incomingAuth;
+  } else if (process.env.BILLING_SERVICE_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.BILLING_SERVICE_TOKEN}`;
   }
 
   const { authReq: _, ...fetchInit } = init || {};
