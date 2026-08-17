@@ -1,5 +1,7 @@
+import type pg from 'pg';
 import type { OpsConfig } from '../config.js';
 import type { TransitionAction } from './state-machine.js';
+import { deliverNotification } from './notifier.js';
 
 /**
  * Execute state-machine actions by calling provisioning-service or external APIs.
@@ -52,6 +54,7 @@ export async function executeActions(
   tenantId: string,
   actions: TransitionAction[],
   config: OpsConfig,
+  pool?: pg.Pool,
 ): Promise<string[]> {
   const baseUrl = config.provisioningServiceUrl.replace(/\/$/, '');
   const token = config.provisioningApiToken;
@@ -82,17 +85,21 @@ export async function executeActions(
           results.push('destroy_pod');
           break;
         }
-        case 'notify':
-          // Bot/email notifications — defer to notification service
+        case 'notify': {
+          const outcome = await deliverNotification(pool, tenantId, action, config);
           console.log(JSON.stringify({
             level: 'info',
             action: 'notify',
             tenantId,
+            notificationType: action.name,
             channel: action.channel,
+            dedupKey: action.dedupKey,
+            outcome,
             message: action.message?.slice(0, 100),
           }));
-          results.push(`notify:${action.channel}`);
+          results.push(`${action.name}:${outcome}`);
           break;
+        }
         case 'backup_data':
         case 'archive_data':
         case 'revoke_tokens':

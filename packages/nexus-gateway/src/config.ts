@@ -16,6 +16,10 @@ export interface GatewayConfig {
   // WSClient — Feishu app credentials for long-connection
   appId?: string;
   appSecret?: string;
+  // Contact writeback — where to report the sender's im_open_id so ops-agent
+  // lifecycle notifications can be delivered (see central-gateway notify relay).
+  provisioningServiceUrl?: string;
+  provisioningApiToken?: string;
 }
 
 function required(name: string): string {
@@ -44,6 +48,8 @@ export function loadConfig(): GatewayConfig {
     allowedAppIds: process.env.DEALCLAW_ALLOWED_APP_IDS?.split(',').map(s => s.trim()),
     appId: process.env.DEALCLAW_APP_ID,
     appSecret: process.env.DEALCLAW_APP_SECRET,
+    provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL,
+    provisioningApiToken: process.env.PROVISIONING_API_TOKEN,
     keyConfig: {
       customerKeyRef: required('DEALCLAW_CUSTOMER_KEY_REF'),
       botCredentialRef: required('DEALCLAW_BOT_CREDENTIAL_REF'),

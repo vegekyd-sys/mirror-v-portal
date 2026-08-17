@@ -45,6 +45,40 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS grace_until TIMESTAMPTZ`);
 
+    // Notification delivery (v0.4):
+    // - platform / im_open_id: where lifecycle notifications get delivered.
+    //   im_open_id is captured by nexus-gateway on the tenant's first bot message.
+    await client.query(`
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'feishu';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS im_open_id TEXT;
+
+      -- The original CHECK constraint only allowed the initial five states, but
+      -- ops-agent writes 'low_credits' and provisioning writes 'provisioning' /
+      -- 'provisioning_failed'. Rebuild the constraint with the full lifecycle set.
+      ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_status_check;
+      ALTER TABLE tenants ADD CONSTRAINT tenants_status_check CHECK (status IN (
+        'pending','provisioning','provisioning_failed',
+        'active','low_credits','suspended','grace','destroyed'
+      ));
+
+      -- Idempotent notification log. Owned by ops-agent; the UNIQUE dedup_key
+      -- guarantees a lifecycle notification is delivered at most once per cycle.
+      CREATE TABLE IF NOT EXISTS tenant_notifications (
+        id                BIGSERIAL PRIMARY KEY,
+        tenant_id         TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        notification_type TEXT NOT NULL,
+        channel           TEXT NOT NULL DEFAULT 'bot',
+        dedup_key         TEXT NOT NULL UNIQUE,
+        message           TEXT NOT NULL,
+        delivered         BOOLEAN NOT NULL DEFAULT FALSE,
+        delivery_error    TEXT,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        delivered_at      TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_tenant_notifications_tenant
+        ON tenant_notifications(tenant_id, created_at DESC);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

@@ -51,7 +51,7 @@ export async function runCronCycle(
         transitions.push(result);
 
         // Execute actions (notifications, pod operations)
-        const actionResults = await executeActions(tenant.id, result.actions, config);
+        const actionResults = await executeActions(tenant.id, result.actions, config, pool);
 
         // Write back status change to DB
         if (result.from !== result.to) {

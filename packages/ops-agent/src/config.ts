@@ -20,6 +20,10 @@ export interface OpsConfig {
   rolloutNexusGatewayTag?: string;
   /** Rollout check interval in minutes (default: 30) */
   rolloutIntervalMinutes: number;
+  /** Central gateway URL — notify relay for lifecycle notifications */
+  centralGatewayUrl?: string;
+  /** Shared secret for the notify relay (must match central-gateway INTERNAL_API_TOKEN) */
+  internalApiToken?: string;
 }
 
 export function loadConfig(): OpsConfig {
@@ -33,5 +37,7 @@ export function loadConfig(): OpsConfig {
     rolloutDealclawAgentTag: process.env.ROLLOUT_DEALCLAW_AGENT_TAG,
     rolloutNexusGatewayTag: process.env.ROLLOUT_NEXUS_GATEWAY_TAG,
     rolloutIntervalMinutes: Number(process.env.ROLLOUT_INTERVAL_MINUTES ?? 30),
+    centralGatewayUrl: process.env.CENTRAL_GATEWAY_URL,
+    internalApiToken: process.env.INTERNAL_API_TOKEN,
   };
 }

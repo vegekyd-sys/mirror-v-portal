@@ -164,7 +164,7 @@ describe('State Machine', () => {
     in7Days.setDate(in7Days.getDate() + 7);
     const result = computeTransition(makeTenant({ subscriptionEnd: in7Days }));
     expect(result).not.toBeNull();
-    expect(result!.actions.some(a => a.message?.includes('7 days'))).toBe(true);
+    expect(result!.actions.some(a => a.type === 'notify' && a.message?.includes('7 天'))).toBe(true);
   });
 
   it('sends 3-day expiry reminder', () => {
@@ -172,7 +172,7 @@ describe('State Machine', () => {
     in3Days.setDate(in3Days.getDate() + 3);
     const result = computeTransition(makeTenant({ subscriptionEnd: in3Days }));
     expect(result).not.toBeNull();
-    expect(result!.actions.some(a => a.message?.includes('3 days'))).toBe(true);
+    expect(result!.actions.some(a => a.type === 'notify' && a.message?.includes('3 天'))).toBe(true);
   });
 
   it('grace 15-day deletion warning', () => {
@@ -193,6 +193,76 @@ describe('State Machine', () => {
     expect(result!.actions).toContainEqual(
       expect.objectContaining({ type: 'notify' }),
     );
+  });
+});
+
+// ── Notification Delivery Design Tests ──
+
+describe('Notification delivery design', () => {
+  it('every notify action carries a stable name and dedupKey', () => {
+    const result = computeTransition(makeTenant({ creditsBalance: 0 }));
+    const notify = result!.actions.find(a => a.type === 'notify') as any;
+    expect(notify.name).toBe('low-credits');
+    expect(notify.dedupKey).toContain('low-credits:cust-001:');
+  });
+
+  it('reminder window: 5 days out fires the 7-day reminder', () => {
+    const in5Days = new Date();
+    in5Days.setDate(in5Days.getDate() + 5);
+    const result = computeTransition(makeTenant({ subscriptionEnd: in5Days }));
+    expect(result).not.toBeNull();
+    const notify = result!.actions.find(a => a.type === 'notify') as any;
+    expect(notify.name).toBe('expiry-reminder-7d');
+  });
+
+  it('reminder window: 2 days out fires the 3-day reminder', () => {
+    const in2Days = new Date();
+    in2Days.setDate(in2Days.getDate() + 2);
+    const result = computeTransition(makeTenant({ subscriptionEnd: in2Days }));
+    const notify = result!.actions.find(a => a.type === 'notify') as any;
+    expect(notify.name).toBe('expiry-reminder-3d');
+  });
+
+  it('expiry reminders are keyed by subscription period (re-fire after renewal)', () => {
+    const periodA = new Date();
+    periodA.setDate(periodA.getDate() + 5);
+    const periodB = new Date(periodA.getTime() + 24 * 3600 * 1000); // +6 days, still in window
+
+    const keyA = (computeTransition(makeTenant({ subscriptionEnd: periodA }))!.actions[0] as any).dedupKey;
+    const keyB = (computeTransition(makeTenant({ subscriptionEnd: periodB }))!.actions[0] as any).dedupKey;
+    expect(keyA).not.toBe(keyB);
+  });
+
+  it('tenant without subscription_end never gets expiry reminders', () => {
+    const result = computeTransition(makeTenant({ subscriptionEnd: null }));
+    expect(result).toBeNull();
+  });
+
+  it('grace 15-day warning fires across the whole 15-30 day window (missed-cron safety)', () => {
+    for (const day of [15, 20, 29]) {
+      const result = computeTransition(makeTenant({ status: 'grace', daysInCurrentStatus: day }));
+      expect(result, `day ${day}`).not.toBeNull();
+      const notify = result!.actions.find(a => a.type === 'notify') as any;
+      expect(notify.name).toBe('grace-15d-warning');
+    }
+  });
+
+  it('grace notifications share one dedupKey per suspension cycle', () => {
+    const suspendedAt = new Date('2026-08-01T00:00:00Z');
+    const day15 = computeTransition(makeTenant({ status: 'grace', daysInCurrentStatus: 15, suspendedAt }))!;
+    const day20 = computeTransition(makeTenant({ status: 'grace', daysInCurrentStatus: 20, suspendedAt }))!;
+    const key15 = (day15.actions.find(a => a.type === 'notify') as any).dedupKey;
+    const key20 = (day20.actions.find(a => a.type === 'notify') as any).dedupKey;
+    expect(key15).toBe(key20);
+    expect(key15).toContain('2026-08-01T00:00:00.000Z');
+  });
+
+  it('resume from suspended is keyed by the suspension cycle', () => {
+    const suspendedAt = new Date('2026-08-01T00:00:00Z');
+    const result = computeTransition(makeTenant({ status: 'suspended', hasPaymentPending: true, suspendedAt }))!;
+    const notify = result.actions.find(a => a.type === 'notify') as any;
+    expect(notify.name).toBe('service-resumed');
+    expect(notify.dedupKey).toContain('2026-08-01T00:00:00.000Z');
   });
 });
 

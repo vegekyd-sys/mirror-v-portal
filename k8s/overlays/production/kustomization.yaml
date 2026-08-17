@@ -114,4 +114,6 @@ secretGenerator:
       - OPS_API_TOKEN=placeholder
       - ADMIN_API_TOKEN=placeholder
       - PAYMENT_SERVICE_TOKEN=placeholder
+      # Shared secret between ops-agent and central-gateway notify relay
+      - INTERNAL_API_TOKEN=***
     type: Opaque

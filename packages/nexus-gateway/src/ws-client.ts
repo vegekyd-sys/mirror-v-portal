@@ -48,6 +48,38 @@ function formatErr(err: unknown) {
   };
 }
 
+// ── Contact writeback ──
+//
+// ops-agent lifecycle notifications (expiry, suspension, grace) are delivered
+// by central-gateway's notify relay to the im_open_id captured here. We report
+// the sender of the first inbound message; the endpoint is an idempotent UPDATE.
+
+let lastReportedOpenId: string | null = null;
+
+async function reportContact(config: GatewayConfig, openId: string): Promise<boolean> {
+  if (!config.provisioningServiceUrl) return false;
+  try {
+    const url = `${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${config.tenantId}/contact`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {}),
+      },
+      body: JSON.stringify({ platform: config.platform, imOpenId: openId }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) {
+      console.warn(`[ws:${config.tenantId}] contact writeback failed: HTTP ${res.status}`);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn(`[ws:${config.tenantId}] contact writeback error: ${err.message}`);
+    return false;
+  }
+}
+
 // ── Main: start WSClient ──
 
 export async function startWSClient(config: GatewayConfig) {
@@ -85,6 +117,15 @@ export async function startWSClient(config: GatewayConfig) {
     const t0 = Date.now();
     const textIn = extractFeishuText(data);
     console.log(`[ws:${tenantId}] trace=${traceId} inbound msg_id=${msgId} sender=${senderOpenId || '-'} text_len=${textIn.length}`);
+
+    // Capture the sender's open_id for lifecycle notification delivery.
+    // Fire-and-forget; never blocks or fails the message path.
+    if (senderOpenId && senderOpenId !== lastReportedOpenId) {
+      const target = senderOpenId;
+      reportContact(config, target)
+        .then(ok => { if (ok) lastReportedOpenId = target; })
+        .catch(() => { /* reportContact never throws */ });
+    }
 
     try {
       const agentReqBody = { intent: { kind: 'chat', text: textIn }, event: data, tenantId };

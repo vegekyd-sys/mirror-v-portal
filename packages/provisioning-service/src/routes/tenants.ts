@@ -314,12 +314,38 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
 
-  // GET /v1/tenants/:id/credentials — read Feishu app credentials
+  // GET /v1/tenants/:id/credentials — read Feishu app credentials + notification contact
   router.get("/v1/tenants/:id/credentials", async (req, res) => {
     try {
-      const { rows } = await pool.query("SELECT app_id, app_secret FROM tenants WHERE tenant_id=$1", [req.params.id]);
+      const { rows } = await pool.query("SELECT app_id, app_secret, platform, im_open_id FROM tenants WHERE tenant_id=$1", [req.params.id]);
       if (!rows.length) { res.status(404).json({ code: "NOT_FOUND" }); return; }
-      res.json({ appId: rows[0].app_id, appSecret: rows[0].app_secret });
+      res.json({
+        appId: rows[0].app_id,
+        appSecret: rows[0].app_secret,
+        platform: rows[0].platform ?? 'feishu',
+        imOpenId: rows[0].im_open_id ?? null,
+      });
+    } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
+  });
+
+  // PATCH /v1/tenants/:id/contact — write back IM contact captured by nexus-gateway
+  // (sender open_id of the first bot message). Used by the notify relay to
+  // deliver lifecycle notifications. Does NOT bump updated_at — ops-agent
+  // derives daysInCurrentStatus from it.
+  router.patch("/v1/tenants/:id/contact", async (req, res) => {
+    try {
+      const { platform, imOpenId } = req.body ?? {};
+      if (!imOpenId || typeof imOpenId !== 'string' || !imOpenId.trim()) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'imOpenId is required' });
+        return;
+      }
+      const safePlatform = ['feishu', 'dingtalk', 'wecom'].includes(platform) ? platform : 'feishu';
+      const result = await pool.query(
+        "UPDATE tenants SET platform=$1, im_open_id=$2 WHERE tenant_id=$3",
+        [safePlatform, imOpenId.trim().slice(0, 128), req.params.id],
+      );
+      if (result.rowCount === 0) { res.status(404).json({ code: "NOT_FOUND" }); return; }
+      res.json({ ok: true });
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
 
@@ -489,7 +515,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.patch('/v1/tenants/:id/status', async (req: Request, res: Response) => {
     try {
       const { status: newStatus, reason } = req.body;
-      const validStatuses = ['pending', 'active', 'suspended', 'grace', 'destroyed'] as const;
+      const validStatuses = [
+        'pending', 'provisioning', 'provisioning_failed',
+        'active', 'low_credits', 'suspended', 'grace', 'destroyed',
+      ] as const;
 
       if (!validStatuses.includes(newStatus)) {
         res.status(400).json({

@@ -121,6 +121,10 @@ export async function provisionTenant(
         { name: 'DEALCLAW_PLATFORM', value: 'feishu' },
         { name: 'DEALCLAW_AGENT_URL', value: `http://dealclaw-agent-${tenantLabel}:18789` },
         { name: 'NODE_ENV', value: 'production' },
+        // Contact writeback — lets nexus-gateway report the sender's im_open_id
+        // so lifecycle notifications can be delivered via the notify relay.
+        { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || 'http://provisioning-service:8082' },
+        { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
       ],
       requests: { cpu: '100m', memory: '128Mi' },
       limits: { cpu: '300m', memory: '256Mi' },

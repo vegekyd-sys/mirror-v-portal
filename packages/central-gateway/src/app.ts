@@ -11,6 +11,7 @@ import {
   type RegistrationSession,
 } from './services/feishu-register.js';
 import { orchestrateOnboarding } from './services/onboarding-orchestrator.js';
+import { relayNotification, type NotifyPayload } from './services/notify-relay.js';
 import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-onboarding.js';
 
 // NB8 FIX: Simple in-memory rate limiter for onboarding endpoints
@@ -384,6 +385,61 @@ export function createApp() {
 
     // Always respond 200 to acknowledge receipt
     res.json({ code: 0 });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Internal notify relay — ops-agent delivers lifecycle notifications here
+  // POST /internal/v1/notify   (Bearer INTERNAL_API_TOKEN)
+  // Body: { tenantId, channel, notificationType?, dedupKey?, message }
+  // ═══════════════════════════════════════════════════════════
+  app.post('/internal/v1/notify', async (req: Request, res: Response) => {
+    if (!config.internalApiToken) {
+      res.status(503).json({ code: 'NOT_CONFIGURED', message: 'INTERNAL_API_TOKEN is not configured' });
+      return;
+    }
+
+    const authHeader = req.headers.authorization || '';
+    if (authHeader !== `Bearer ${config.internalApiToken}`) {
+      res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid or missing bearer token' });
+      return;
+    }
+
+    const { tenantId, channel, notificationType, dedupKey, message } = (req.body ?? {}) as Partial<NotifyPayload>;
+
+    if (!tenantId || typeof tenantId !== 'string') {
+      res.status(400).json({ code: 'INVALID_INPUT', message: 'tenantId is required' });
+      return;
+    }
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      res.status(400).json({ code: 'INVALID_INPUT', message: 'message is required' });
+      return;
+    }
+    const safeChannel = channel === 'email' || channel === 'all' ? channel : 'bot';
+
+    try {
+      const result = await relayNotification(config, {
+        tenantId,
+        channel: safeChannel,
+        notificationType,
+        dedupKey,
+        message: message.slice(0, 4000),
+      });
+      console.log(JSON.stringify({
+        level: result.ok ? 'info' : 'warn',
+        action: 'notify-relay',
+        tenantId,
+        notificationType: notificationType || '-',
+        ok: result.ok,
+        delivered: result.delivered,
+        skipped: result.skipped,
+        reason: result.reason,
+        error: result.error,
+      }));
+      res.json(result);
+    } catch (err: any) {
+      console.error('[notify-relay] unexpected error:', err);
+      res.status(500).json({ ok: false, delivered: [], skipped: [], error: err.message });
+    }
   });
 
   app.use((_req, res) => res.status(404).json({ code: 'NOT_FOUND' }));

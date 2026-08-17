@@ -115,6 +115,10 @@
 | 2.2.10 | 对话式续费流程 | ⬜ | M2 补，由 dealclaw-agent 处理 |
 | 2.2.11 | 单元测试 (状态机 + 通知规则) | ✅ | 29 tests pass |
 | 2.2.12 | 集成测试 (ACK test env) | ✅ | HTTP API: cron scan 14 tenants, 0 errors |
+| 2.2.13 | 通知真实触达 — central-gateway 代发 relay (`POST /internal/v1/notify`，Bearer INTERNAL_API_TOKEN) | ✅ | `central-gateway/src/services/notify-relay.ts` — 租户 Pod 被缩 0 时仍可送达；email 渠道显式 skip |
+| 2.2.14 | 幂等去重 — `tenant_notifications` 表 + UNIQUE dedup_key | ✅ | dedupKey 按周期标记（月份/订阅周期/suspendedAt）；`ops-agent/src/services/notifier.ts` |
+| 2.2.15 | im_open_id 捕获回写 — nexus-gateway 首条消息上报 + `PATCH /v1/tenants/:id/contact` | ✅ | `nexus-gateway/src/ws-client.ts` + tenants 表新增 platform/im_open_id 列 |
+| 2.2.16 | 窗口判断修复 — 到期提醒 7d/3d/1d 改窗口制、grace 15 天警告 `===15`→`>=15&&<30`、subscription_end NULL 不再默认明年 1/1、daysInCurrentStatus 改取 status_log | ✅ | `state-machine.ts` + `db/query.ts`；通知文案中文化 |
 
 ---
 
