@@ -377,7 +377,6 @@ export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
 }
 
 // ── Service ──
-
 export async function createService(
   namespace: string,
   name: string,
@@ -399,4 +398,61 @@ export async function createService(
     if (res.status !== 409) throw new Error(`createService ${name} failed: ${res.status}`);
   }
   console.log(`[k8s] service created: ${namespace}/${name}`);
+}
+
+// ── Job (one-shot backup/archive) ──
+
+export interface JobSpec {
+  namespace: string;
+  name: string;
+  labels: Record<string, string>;
+  image: string;
+  /** Shell command to run inside the container */
+  command: string[];
+  env?: Array<{ name: string; value?: string; valueFrom?: { secretKeyRef: { name: string; key: string } } }>;
+  volumeName: string;
+  pvcClaimName: string;
+  mountPath: string;
+  /** Auto-delete finished Job after this many seconds (default 86400 = 24h) */
+  ttlSecondsAfterFinished?: number;
+  backoffLimit?: number;
+}
+
+export async function createJob(spec: JobSpec): Promise<void> {
+  const container: Record<string, unknown> = {
+    name: spec.name,
+    image: spec.image,
+    command: spec.command,
+    volumeMounts: [
+      { name: spec.volumeName, mountPath: spec.mountPath },
+    ],
+  };
+
+  if (spec.env?.length) container.env = spec.env;
+
+  const body = {
+    apiVersion: 'batch/v1',
+    kind: 'Job',
+    metadata: { name: spec.name, namespace: spec.namespace, labels: spec.labels },
+    spec: {
+      ttlSecondsAfterFinished: spec.ttlSecondsAfterFinished ?? 86_400,
+      backoffLimit: spec.backoffLimit ?? 2,
+      template: {
+        metadata: { labels: spec.labels },
+        spec: {
+          restartPolicy: 'Never',
+          containers: [container],
+          volumes: [
+            { name: spec.volumeName, persistentVolumeClaim: { claimName: spec.pvcClaimName } },
+          ],
+        },
+      },
+    },
+  };
+
+  const res = await k8sRequest('POST', `/apis/batch/v1/namespaces/${spec.namespace}/jobs`, body);
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`createJob ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] job created: ${spec.namespace}/${spec.name}`);
 }

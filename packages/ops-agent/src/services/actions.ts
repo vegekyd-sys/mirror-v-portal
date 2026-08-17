@@ -50,6 +50,28 @@ async function callDestroy(
   }
 }
 
+async function callBackup(
+  baseUrl: string,
+  token: string,
+  tenantId: string,
+  mode: 'backup' | 'archive',
+): Promise<void> {
+  const res = await fetch(`${baseUrl}/v1/tenants/${tenantId}/backup`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ mode }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Backup(${mode}) failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+}
+
 export async function executeActions(
   tenantId: string,
   actions: TransitionAction[],
@@ -100,8 +122,18 @@ export async function executeActions(
           results.push(`${action.name}:${outcome}`);
           break;
         }
-        case 'backup_data':
-        case 'archive_data':
+        case 'backup_data': {
+          await callBackup(baseUrl, token, tenantId, 'backup');
+          console.log(JSON.stringify({ level: 'info', action: 'backup_data', tenantId }));
+          results.push('backup_data');
+          break;
+        }
+        case 'archive_data': {
+          await callBackup(baseUrl, token, tenantId, 'archive');
+          console.log(JSON.stringify({ level: 'info', action: 'archive_data', tenantId }));
+          results.push('archive_data');
+          break;
+        }
         case 'revoke_tokens':
         case 'trigger_monthly_reset':
           console.log(JSON.stringify({ level: 'info', action: action.type, tenantId }));

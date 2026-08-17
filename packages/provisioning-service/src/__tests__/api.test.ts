@@ -48,6 +48,10 @@ beforeAll(async () => {
     agentPvcSize: '10Gi',
     agentPvcStorageClass: 'alibabacloud-cnfs-nas',
     agentPvcAccessMode: 'ReadWriteOnce',
+    ossEndpoint: 'oss-cn-shanghai.aliyuncs.com',
+    ossBucket: 'dealclaw-backup',
+    ossSecretName: 'dealclaw-oss',
+    backupImage: 'alpine:3.19',
   };
   app = createApp(pool, config);
 });
@@ -63,6 +67,7 @@ describe('GET /healthz', () => {
         runtimeNamespace: 'dealclaw-test', imageRegistry: 'test-registry/dealclaw',
         nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test',
         agentPvcSize: '10Gi', agentPvcStorageClass: 'alibabacloud-cnfs-nas', agentPvcAccessMode: 'ReadWriteOnce',
+        ossEndpoint: 'oss-cn-shanghai.aliyuncs.com', ossBucket: 'dealclaw-backup', ossSecretName: 'dealclaw-oss', backupImage: 'alpine:3.19',
       });
     }
     const res = await request(app).get('/healthz');

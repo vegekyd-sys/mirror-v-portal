@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import { provisionTenant, deprovisionTenant } from '../services/provisioning.js';
+import { provisionTenant, deprovisionTenant, backupTenantData } from '../services/provisioning.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -444,6 +444,39 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Scale failed' });
+    }
+  });
+
+  // POST /v1/tenants/:id/backup — create a backup/archive Job for tenant data
+  router.post('/v1/tenants/:id/backup', async (req: Request, res: Response) => {
+    try {
+      const { mode } = req.body ?? {};
+      const backupMode = mode === 'archive' ? 'archive' : 'backup';
+
+      const { rows } = await pool.query('SELECT tenant_id, status FROM tenants WHERE tenant_id = $1', [req.params.id]);
+      if (!rows.length) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+
+      const result = await backupTenantData(req.params.id, config, { mode: backupMode });
+
+      await pool.query(
+        `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)`,
+        [req.params.id, rows[0].status, `${backupMode} Job ${result.jobName} — ${result.ok ? 'created' : 'failed'}`],
+      );
+
+      res.status(result.ok ? 200 : 500).json({
+        ok: result.ok,
+        tenantId: req.params.id,
+        mode: backupMode,
+        jobName: result.jobName,
+        warnings: result.warnings,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Backup tenant data failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Backup failed' });
     }
   });
 

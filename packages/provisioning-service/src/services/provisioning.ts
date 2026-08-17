@@ -4,11 +4,13 @@ import {
   createDeployment,
   createService,
   createPersistentVolumeClaim,
+  createJob,
   deleteSecret,
   deleteDeployment,
   deleteService,
   deletePersistentVolumeClaim,
 } from './k8s-client.js';
+import type { ProvisioningConfig } from '../config.js';
 
 export interface TenantProvision {
   tenantId: string;
@@ -241,6 +243,84 @@ export async function deprovisionTenant(
     return {
       deleted: false,
       warnings: [`Failed to delete tenant ${tenantId} resources: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+}
+
+/**
+ * Back up (or archive) a tenant's runtime data by creating a one-shot K8s Job
+ * that mounts the tenant PVC and uploads /data to OSS via ossutil.
+ *
+ * mode 'backup'  → OSS Standard tier (fast recovery)
+ * mode 'archive' → OSS Archive tier (cheap long-term retention before destroy)
+ */
+export async function backupTenantData(
+  tenantId: string,
+  config: ProvisioningConfig,
+  options: { mode?: 'backup' | 'archive'; runtimeNamespace?: string } = {},
+): Promise<{ ok: boolean; jobName: string; warnings: string[] }> {
+  const mode = options.mode ?? 'backup';
+  const namespace = options.runtimeNamespace || config.runtimeNamespace;
+  const pvcName = `dealclaw-runtime-${tenantId}`;
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').replace(/T/, '-');
+  const jobName = `dealclaw-${mode}-${tenantId}-${timestamp}`;
+  const prefix = `${tenantId}/${mode}/${timestamp}`;
+
+  const labels = {
+    'app.kubernetes.io/part-of': 'dealclaw',
+    'dealclaw.io/tenant-id': tenantId,
+    'dealclaw.io/job-type': `${mode}-data`,
+  };
+
+  // Storage class header for archive tier
+  const storageClassFlag = mode === 'archive'
+    ? ' --meta X-Oss-Storage-Class:Archive'
+    : '';
+
+  const command = [
+    '/bin/sh',
+    '-c',
+    [
+      'apk add --no-cache curl >/dev/null 2>&1',
+      'curl -sSL -o /usr/local/bin/ossutil https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil64',
+      'chmod +x /usr/local/bin/ossutil',
+      '/usr/local/bin/ossutil config -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET" -e "$OSS_ENDPOINT" >/dev/null 2>&1',
+      `/usr/local/bin/ossutil cp -r /data "oss://$OSS_BUCKET/${prefix}/" --update${storageClassFlag}`,
+    ].join(' && '),
+  ];
+
+  const env = [
+    { name: 'OSS_ENDPOINT', value: config.ossEndpoint },
+    { name: 'OSS_BUCKET', value: config.ossBucket },
+    { name: 'OSS_ACCESS_KEY_ID', valueFrom: { secretKeyRef: { name: config.ossSecretName, key: 'accessKeyId' } } },
+    { name: 'OSS_ACCESS_KEY_SECRET', valueFrom: { secretKeyRef: { name: config.ossSecretName, key: 'accessKeySecret' } } },
+  ];
+
+  try {
+    await createJob({
+      namespace,
+      name: jobName,
+      labels,
+      image: config.backupImage,
+      command,
+      env,
+      volumeName: 'runtime-data',
+      pvcClaimName: pvcName,
+      mountPath: '/data',
+      ttlSecondsAfterFinished: mode === 'backup' ? 86_400 : 604_800,
+      backoffLimit: 1,
+    });
+
+    return {
+      ok: true,
+      jobName,
+      warnings: [`${mode} Job ${jobName} created for tenant ${tenantId}`],
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      jobName,
+      warnings: [`Failed to create ${mode} Job: ${err instanceof Error ? err.message : String(err)}`],
     };
   }
 }

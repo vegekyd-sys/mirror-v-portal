@@ -210,9 +210,10 @@ export function computeTransition(state: TenantState): TransitionResult | null {
           to: 'destroyed',
           reason: '30-day grace period expired',
           actions: [
+            // Archive BEFORE destroy so the PVC still exists for the backup Job
+            { type: 'archive_data', tenantId: state.id },
             { type: 'destroy_pod', tenantId: state.id },
             { type: 'revoke_tokens', tenantId: state.id },
-            { type: 'archive_data', tenantId: state.id },
             notifyAction(state, 'tenant-destroyed', 'all', createDestroyedMessage(), suspendCycleKey(state)),
           ],
         };
