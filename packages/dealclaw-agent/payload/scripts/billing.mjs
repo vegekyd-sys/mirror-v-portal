@@ -37,7 +37,10 @@ function saveConfig(cfg) {
 
 function resolveTenantFromCtx({ groupId, userId } = {}) {
   const cfg = loadConfig();
-  if (userId && cfg.users[userId]) return cfg.users[userId];
+  if (userId && cfg.users[userId]) {
+    const u = cfg.users[userId];
+    return typeof u === 'string' ? u : (u.tenant || null);
+  }
   if (groupId && cfg.groups[groupId]) return cfg.groups[groupId];
   return null;
 }
@@ -433,19 +436,26 @@ async function main() {
     }
 
     case 'register-user': {
-      // billing.mjs register-user <openId> <tenantId>  — add/update per-person mapping
-      const [openId, tenantId] = args;
+      // billing.mjs register-user <openId ou_xxx> <tenantId> [--union-id on_xxx]
+      // 可选 --union-id 预留：将来客户买专属部署（多应用）时，同一人跨应用可识别，无需回补数据。
+      const pos = [];
+      let unionId = null;
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--union-id' && args[i + 1]) unionId = args[++i];
+        else pos.push(args[i]);
+      }
+      const [openId, tenantId] = pos;
       if (!openId || !tenantId) {
-        console.error('Usage: billing.mjs register-user <openId ou_xxx> <tenantId>');
+        console.error('Usage: billing.mjs register-user <openId ou_xxx> <tenantId> [--union-id on_xxx]');
         process.exit(1);
       }
       const cfg = loadConfig();
       cfg.users = cfg.users || {};
       const prev = cfg.users[openId];
-      cfg.users[openId] = tenantId;
+      cfg.users[openId] = unionId ? { tenant: tenantId, unionId } : tenantId;
       cfg.lastUpdated = new Date().toISOString().slice(0, 10);
       saveConfig(cfg);
-      console.log(JSON.stringify({ ok: true, openId, tenantId, previous: prev ?? null }));
+      console.log(JSON.stringify({ ok: true, openId, tenantId, unionId, previous: prev ?? null }));
       break;
     }
 
