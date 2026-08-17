@@ -54,3 +54,15 @@ GDPR 未获同意 → 跳过此步骤，不写入。
 - 数据来源不对用户暴露
 - 模糊字段标注 ⚠️，不自行脑补
 - 展后邮件走 Growth Send，不单独发
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次完成展会买家对接并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-exhibition-leads 1 &
+```
+
+- 必须在后台异步执行（加 `&`），不阻塞用户回复
+- 失败静默，不影响主流程

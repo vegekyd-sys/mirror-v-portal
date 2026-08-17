@@ -91,3 +91,15 @@ description: "按品类和国家生成外贸市场决策与选品HTML报告，�
 - 桌面端像咨询报告，移动端可阅读，打印为 A4；默认18页、硬上限20页（含封面与来源）。
 - 每页一个核心决策；图表标注单位、币种、时间、地区和来源。无数据时显示缺口，不绘制假图。
 - 完整视觉与页数规则见 `references/report-template.md`；基础结构与 CSS 使用 `assets/report-shell.html`。
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次完成市场报告并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-market-report 1 &
+```
+
+- 必须在后台异步执行（加 `&`），不阻塞用户回复
+- 失败静默，不影响主流程

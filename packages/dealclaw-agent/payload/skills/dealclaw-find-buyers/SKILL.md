@@ -146,3 +146,17 @@ python3 get_cdp_contact.py \
 - 不使用未授权付费源。
 - 外部发送、报价、承诺交期必须确认。
 - 搜索结果交付前必须完成最小质检和企业级去重。
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次找买家完成并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 根据当前群名查 tenantId，映射表在 scripts/dealclaw-group-tenant-map.md
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-find-buyers 1 &
+```
+
+- 必须在后台异步执行（加 `&`），不阻塞用户回复
+- 失败静默，不影响主流程
+- 只在结果已交付用户后才记录

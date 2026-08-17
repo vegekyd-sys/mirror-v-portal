@@ -59,3 +59,14 @@ node scripts/founder-direct/send-direct.mjs \
 |------|------|------|
 | v2.0 | 2026-07-29 | 吸收 dc-copy 内容生成，删 DC-OS/DC-Copy 死链。邮箱绑定引导移出 skill（V 被问到自然会引导）。来源：田耕郡@格格 |
 | v1.0 | 2026-07-14 | 初始 |
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次完成本技能操作并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-email-founder-direct 1 &
+```
+
+- 后台异步，不阻塞回复；失败静默

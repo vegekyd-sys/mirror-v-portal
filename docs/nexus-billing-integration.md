@@ -188,7 +188,9 @@ Nexus 现有代码默认 **fail-close**（ledger 挂了就 503 拦请求，除�
 
 ## 10. 本地联调 & 验证清单
 
-> `billing.mjs` / `billing-config.json` / `.billing-token` 目前在 **Makaron 工作区**（`workspace/scripts/`，由 V 维护），不在 dealclaw 仓库里。Nexus 联调时可以直接 curl credits-ledger，或用下面的 `BillingClient` 冒烟脚本。
+> **agent 侧计费 CLI**：`billing.mjs` + `billing-config.json`（群 chat_id → 租户映射）+ `dealclaw-billing-record.sh` 已随 dealclaw-agent 的 payload 入仓（`packages/dealclaw-agent/payload/scripts/`）。agent 的 skill 通过 `bash scripts/dealclaw-billing-record.sh --group <chat_id> <skillId> 1 &` 异步埋点计费（estimate→settle，内测期 skill 均为 `shadow` 只记账不扣费）。
+>
+> **服务令牌**（secret，勿提交）：`.billing-token` 文件 gitignored，部署时由 k8s Secret / provisioning 注入；或设环境变量 `DC_BILLING_TOKEN`。Nexus 联调时可以直接 curl credits-ledger，或用下面的 `BillingClient` 冒烟脚本。
 
 ```bash
 # 1. ledger 健康

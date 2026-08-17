@@ -10,3 +10,6 @@ coverage/
 __pycache__/
 *.pyc
 **/email_gateway/data/*.sqlite3*
+
+# billing service token (secret) — use DC_BILLING_TOKEN env instead
+.billing-token

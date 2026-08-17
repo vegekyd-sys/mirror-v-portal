@@ -1,45 +1,40 @@
 #!/bin/bash
-# DealClaw Shadow Billing Recorder
-# Records skill execution to credits-ledger in shadow mode (NO actual charge).
-# Usage: bash scripts/dealclaw-billing-record.sh <tenantId> <skillId> [quantity]
+# DealClaw Billing Recorder — 正式计费埋点（单一事实源：billing.mjs）
 #
-# Group → Tenant mapping:
-#   小元01 → xiaoyuan_01    小元03 → xiaoyuan_03    小元04 → xiaoyuan_04
-#   小元07 → xiaoyuan_07    内测群 → xiaoyuan_neice  Agent测试 → xiaoyuan_agent_test
+# 兼容两种调用：
+#   1) bash scripts/dealclaw-billing-record.sh <tenantId> <skillId> [quantity]
+#   2) bash scripts/dealclaw-billing-record.sh --group <chat_id> <skillId> [quantity]
+#      (或 --user <open_id>) — 由 billing.mjs 从 billing-config.json 自动解析租户
+#
+# 行为：estimate → settle 一次性后台记录（fire-and-forget），失败静默，不阻塞主流程。
+# 说明：BASE_URL 不再写死；billing.mjs 默认连本机 credits-ledger (http://localhost:8081)。
+set -uo pipefail
 
-set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# --group/--user 模式：透传给 billing.mjs 自行解析租户（映射在 billing-config.json）
+if [ "${1:-}" = "--group" ] || [ "${1:-}" = "--user" ]; then
+  node "$SCRIPT_DIR/billing.mjs" record "$@" >/dev/null 2>&1 &
+  exit 0
+fi
+
+# 老模式：<tenantId> <skillId> [quantity]，归一化 skillId
 TENANT_ID="${1:-}"
 SKILL_ID="${2:-}"
 QUANTITY="${3:-1}"
-BASE_URL="https://dealclaw-test.ultronx.tech"
-TASK_ID="agent:${TENANT_ID}:$(date +%s):${RANDOM}"
 
-if [ -z "$TENANT_ID" ] || [ -z "$SKILL_ID" ]; then
-  exit 0
-fi
+[ -z "$TENANT_ID" ] || [ -z "$SKILL_ID" ] && exit 0
 
-ACCOUNT_ID="acct_${TENANT_ID}"
+# 归一化分隔符（. / _ → -）
+SKILL_ID="${SKILL_ID//./-}"
+SKILL_ID="${SKILL_ID//_/-}"
 
-# Step 1: Estimate (creates billing event with status='estimated')
-ESTIMATE=$(curl -s -X POST "${BASE_URL}/v1/billing/estimate" \
-  --connect-timeout 5 --max-time 10 \
-  -H "Content-Type: application/json" \
-  -d "{\"tenantId\":\"${TENANT_ID}\",\"accountId\":\"${ACCOUNT_ID}\",\"taskId\":\"${TASK_ID}\",\"skillId\":\"${SKILL_ID}\",\"quantity\":${QUANTITY},\"metadata\":{\"source\":\"agent_skill_hook\"}}" \
-  2>/dev/null) || true
+# 旧命名 → 标准 skill_id（credits-ledger skill_prices 表）
+case "$SKILL_ID" in
+  dealclaw-company-profile)   SKILL_ID="dealclaw-analyze-company" ;;
+  dealclaw-exhibition-match)  SKILL_ID="dealclaw-exhibition-leads" ;;
+  dealclaw-send-email)        SKILL_ID="dealclaw-email-growth-send" ;;
+esac
 
-# Extract eventId from JSON response without jq
-EVENT_ID=$(echo "$ESTIMATE" | sed -n 's/.*"eventId":"\([^"]*\)".*/\1/p' | head -1)
-
-if [ -z "$EVENT_ID" ]; then
-  exit 0
-fi
-
-# Step 2: Settle (shadow mode: status→settled, billing_mode→shadow, no debit)
-curl -s -X POST "${BASE_URL}/v1/billing/settle" \
-  --connect-timeout 5 --max-time 10 \
-  -H "Content-Type: application/json" \
-  -d "{\"tenantId\":\"${TENANT_ID}\",\"accountId\":\"${ACCOUNT_ID}\",\"skillId\":\"${SKILL_ID}\",\"quantity\":${QUANTITY},\"estimatedEventId\":\"${EVENT_ID}\",\"resultSummary\":\"agent_skill_completed\"}" \
-  > /dev/null 2>&1 || true
-
+node "$SCRIPT_DIR/billing.mjs" record "$TENANT_ID" "$SKILL_ID" "$QUANTITY" >/dev/null 2>&1 &
 exit 0

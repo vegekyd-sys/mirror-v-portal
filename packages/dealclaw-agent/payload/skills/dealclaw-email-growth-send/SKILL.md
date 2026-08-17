@@ -248,9 +248,8 @@ node scripts/resend/send.mjs \
 每次完成邮件发送并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 根据当前群名查 tenantId：小元01→xiaoyuan_01, 小元03→xiaoyuan_03, 小元04→xiaoyuan_04, 小元07→xiaoyuan_07, 内测群→xiaoyuan_neice, Agent测试→xiaoyuan_agent_test
-# 群名无法匹配时用 xiaoyuan_unknown
-bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw.send_email 1 &
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-email-growth-send 1 &
 ```
 
 - 必须在后台异步执行（加 `&`），不阻塞用户回复

@@ -26,3 +26,14 @@ description: "展前邀约：米奥展会走内部数据→客户确认→模板
 - 邀约不生成飞书文档，气泡预览后走邮件
 - 发送前检查邮箱绑定状态，未绑先引导绑定
 - 不询问「走 FD 还是 GS」，直接问「用哪个邮箱发」
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次完成本技能操作并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-exhibition-invitation 1 &
+```
+
+- 后台异步，不阻塞回复；失败静默
