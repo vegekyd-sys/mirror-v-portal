@@ -37,8 +37,8 @@ function saveConfig(cfg) {
 
 function resolveTenantFromCtx({ groupId, userId } = {}) {
   const cfg = loadConfig();
-  if (groupId && cfg.groups[groupId]) return cfg.groups[groupId];
   if (userId && cfg.users[userId]) return cfg.users[userId];
+  if (groupId && cfg.groups[groupId]) return cfg.groups[groupId];
   return null;
 }
 
