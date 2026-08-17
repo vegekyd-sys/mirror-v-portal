@@ -8,6 +8,8 @@ export interface GatewayConfig {
   agentUrl: string;
   // B3 FIX: credits-ledger URL for HTTP debit/balance calls
   creditsLedgerUrl: string;
+  // B3 FIX: shared service token for credits-ledger auth (optional)
+  creditsLedgerToken?: string;
   keyConfig: KeyConfig;
   // B4 FIX: bot secret for signature verification
   botSecret?: string;
@@ -43,6 +45,7 @@ export function loadConfig(): GatewayConfig {
     planTier: (process.env.DEALCLAW_PLAN_TIER ?? 'starter') as PlanTier,
     agentUrl: required('DEALCLAW_AGENT_URL'),
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL ?? 'http://credits-ledger:8081',
+    creditsLedgerToken: process.env.CREDITS_LEDGER_TOKEN ?? process.env.BILLING_SERVICE_TOKEN,
     initialCredits: Number(process.env.DEALCLAW_INITIAL_CREDITS ?? 0),
     botSecret: process.env.DEALCLAW_BOT_SECRET,
     allowedAppIds: process.env.DEALCLAW_ALLOWED_APP_IDS?.split(',').map(s => s.trim()),

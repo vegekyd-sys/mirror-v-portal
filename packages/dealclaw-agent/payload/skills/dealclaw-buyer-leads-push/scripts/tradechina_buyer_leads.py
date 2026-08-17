@@ -105,18 +105,49 @@ def get_countries() -> list[dict[str, Any]]:
     return approved
 
 
-def resolve_country(name: str, countries: list[dict[str, Any]]) -> dict[str, Any]:
+COUNTRY_ALIASES: dict[str, str | None] = {
+    # 简称/缩写 → TradeChina 字典里的精确名（cnName 或 enName）
+    "沙特": "沙特阿拉伯",
+    "saudi": "Saudi Arabia",
+    "阿联酋": "阿拉伯联合酋长国",
+    "uae": "United Arab Emirates",
+    # 明确无数据（TradeChina 国家字典里没有），值为 None → resolve 时跳过而非报错
+    "科威特": None,
+    "kuwait": None,
+    "卡塔尔": None,
+    "qatar": None,
+    "巴林": None,
+    "bahrain": None,
+}
+
+
+def resolve_country(name: str, countries: list[dict[str, Any]]) -> dict[str, Any] | None:
     needle = name.strip().casefold()
     if not needle:
         raise ContractError("Country name must not be empty")
-    matches = []
-    for item in countries:
-        candidates = (str(item.get("cnName", "")), str(item.get("enName", "")))
-        if any(candidate.strip().casefold() == needle for candidate in candidates):
-            matches.append(item)
-    if len(matches) != 1:
-        raise ContractError(f"Country name resolved to {len(matches)} exact matches")
-    return matches[0]
+
+    def exact_matches(value: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item in countries:
+            candidates = (str(item.get("cnName", "")), str(item.get("enName", "")))
+            if any(candidate.strip().casefold() == value for candidate in candidates):
+                out.append(item)
+        return out
+
+    matches = exact_matches(needle)
+    if len(matches) == 1:
+        return matches[0]
+
+    # 别名映射：简称/缩写 → 精确名
+    if needle in COUNTRY_ALIASES:
+        mapped = COUNTRY_ALIASES[needle]
+        if mapped is None:
+            return None  # 明确无数据，调用方应跳过而非中断整个推送
+        matches = exact_matches(mapped.casefold())
+        if len(matches) == 1:
+            return matches[0]
+
+    raise ContractError(f"Country name '{name}' resolved to {len(matches)} exact matches")
 
 
 def approved_text(value: Any) -> str:

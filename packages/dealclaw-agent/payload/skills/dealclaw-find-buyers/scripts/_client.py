@@ -16,11 +16,13 @@ from typing import Any, Dict, Optional
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 # ── 自动加载 .env ──────────────────────────────────────────
-_ENV_DIRS = [
-    os.path.dirname(os.path.abspath(__file__)),  # skill scripts dir
-    os.environ.get("HOME", "") + "/makaron-openclaw/.openclaw-local/workspace",
-    os.environ.get("HOME", "") + "/.openclaw",
-]
+_ENV_DIRS = []
+_d = os.path.dirname(os.path.abspath(__file__))
+while _d and _d != os.path.dirname(_d):
+    _ENV_DIRS.append(os.path.join(_d, "work", "mio-api"))
+    _ENV_DIRS.append(_d)
+    _d = os.path.dirname(_d)
+_ENV_DIRS.append(os.path.join(os.environ.get("HOME", ""), ".openclaw"))
 for _d in _ENV_DIRS:
     _ENV_FILE = os.path.join(_d, ".env")
     if os.path.exists(_ENV_FILE):

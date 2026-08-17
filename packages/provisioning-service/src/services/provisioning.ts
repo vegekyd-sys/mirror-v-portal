@@ -3,9 +3,11 @@ import {
   createSecret as k8sCreateSecret,
   createDeployment,
   createService,
+  createPersistentVolumeClaim,
   deleteSecret,
   deleteDeployment,
   deleteService,
+  deletePersistentVolumeClaim,
 } from './k8s-client.js';
 
 export interface TenantProvision {
@@ -25,6 +27,9 @@ export interface ProvisionOptions {
   imageRegistry?: string;
   nexusGatewayImageTag?: string;
   dealclawAgentImageTag?: string;
+  agentPvcSize?: string;
+  agentPvcStorageClass?: string;
+  agentPvcAccessMode?: 'ReadWriteOnce' | 'ReadWriteMany';
 }
 
 export interface ProvisionResult {
@@ -50,6 +55,9 @@ export async function provisionTenant(
   const registry = options.imageRegistry || process.env.IMAGE_REGISTRY || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealclaw';
   const gwTag = options.nexusGatewayImageTag || process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest';
   const agentTag = options.dealclawAgentImageTag || process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest';
+  const pvcSize = options.agentPvcSize || process.env.AGENT_PVC_SIZE || '10Gi';
+  const pvcStorageClass = options.agentPvcStorageClass || process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas';
+  const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
 
   const nsName = runtimeNs; // shared namespace — per design doc
   const tenantLabel = tenant.tenantId;
@@ -72,11 +80,12 @@ export async function provisionTenant(
   const creditsConfigName = `dealclaw-credits-${tenantLabel}`;
   const gatewayName = `nexus-gateway-${tenantLabel}`;
   const agentName = `dealclaw-agent-${tenantLabel}`;
+  const agentPvcName = `dealclaw-runtime-${tenantLabel}`;
 
   if (dryRun) {
     result.warnings.push(`DRY_RUN: would provision in namespace ${nsName}`);
     result.secrets.push(botSecretName, agentConfigName, creditsConfigName);
-    result.pods.push(gatewayName, agentName);
+    result.pods.push(gatewayName, agentName, agentPvcName);
     return result;
   }
 
@@ -135,8 +144,19 @@ export async function provisionTenant(
     await createService(nsName, gatewayName, 8080, gwLabels);
     result.pods.push(gatewayName);
 
-    // 3. dealclaw-agent Deployment + Service
+    // 3. dealclaw-agent Deployment + Service + per-tenant PVC
     const agentLabels = { ...labels, app: 'dealclaw-agent' };
+
+    // Per-tenant PVC for runtime data persistence (/data)
+    await createPersistentVolumeClaim({
+      namespace: nsName,
+      name: agentPvcName,
+      size: pvcSize,
+      storageClassName: pvcStorageClass,
+      accessMode: pvcAccessMode,
+      labels: agentLabels,
+    });
+
     await createDeployment({
       name: agentName,
       namespace: nsName,
@@ -159,6 +179,12 @@ export async function provisionTenant(
       runAsUser: 1000,
       livenessPath: '/healthz',
       readinessPath: '/healthz',
+      volumes: [
+        { name: 'runtime-data', persistentVolumeClaim: { claimName: agentPvcName } },
+      ],
+      volumeMounts: [
+        { name: 'runtime-data', mountPath: '/data' },
+      ],
     });
     await createService(nsName, agentName, 18789, agentLabels);
     result.pods.push(agentName);
@@ -183,6 +209,7 @@ export async function deprovisionTenant(
 
   const gatewayName = `nexus-gateway-${tenantId}`;
   const agentName = `dealclaw-agent-${tenantId}`;
+  const agentPvcName = `dealclaw-runtime-${tenantId}`;
   const secretNames = [
     `dealclaw-bot-${tenantId}`,
     `dealclaw-agent-config-${tenantId}`,
@@ -197,7 +224,7 @@ export async function deprovisionTenant(
   }
 
   try {
-    // Delete controllers first so their Pods terminate before credentials disappear.
+    // Delete controllers first so their Pods terminate and release the volume.
     await Promise.all([
       deleteDeployment(namespace, gatewayName),
       deleteDeployment(namespace, agentName),
@@ -207,6 +234,8 @@ export async function deprovisionTenant(
       deleteService(namespace, agentName),
       ...secretNames.map(name => deleteSecret(namespace, name)),
     ]);
+    // Delete the per-tenant PVC after the Pod has released it.
+    await deletePersistentVolumeClaim(namespace, agentPvcName);
     return { deleted: true, warnings: [`Deleted tenant ${tenantId} resources from namespace ${namespace}`] };
   } catch (err) {
     return {

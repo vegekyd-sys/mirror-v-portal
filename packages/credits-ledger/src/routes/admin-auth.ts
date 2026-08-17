@@ -34,6 +34,34 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// ── Service-token middleware ──
+// Internal service-to-service calls (billing hook, agent billing CLI, etc.)
+// authenticate with a shared service token (BILLING_SERVICE_TOKEN).
+// `requireServiceOrAdmin` also accepts a valid admin JWT, so the admin
+// dashboard can keep proxying with its JWT.
+export function requireServiceToken(req: Request, res: Response, next: NextFunction) {
+  const token = req.headers.authorization?.replace('Bearer ', '') ?? '';
+  const expected = process.env.BILLING_SERVICE_TOKEN ?? process.env.PAYMENT_SERVICE_TOKEN;
+  if (!expected) {
+    res.status(503).json({ code: 'NOT_CONFIGURED', message: 'BILLING_SERVICE_TOKEN not configured' });
+    return;
+  }
+  if (!token || token !== expected) {
+    res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid service token' });
+    return;
+  }
+  next();
+}
+
+export function requireServiceOrAdmin(req: Request, res: Response, next: NextFunction) {
+  const token = req.headers.authorization?.replace('Bearer ', '') ?? '';
+  const serviceToken = process.env.BILLING_SERVICE_TOKEN ?? process.env.PAYMENT_SERVICE_TOKEN;
+  // Accept the shared service token (internal callers)
+  if (serviceToken && token === serviceToken) return next();
+  // Otherwise require a valid admin JWT (admin dashboard proxy)
+  return requireAdmin(req, res, next);
+}
+
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const user = (req as any).adminUser;

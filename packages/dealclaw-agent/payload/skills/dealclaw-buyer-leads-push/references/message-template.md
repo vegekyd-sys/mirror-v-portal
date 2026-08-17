@@ -10,6 +10,8 @@ After the history fallback creates a draft, send one notice to the originating g
 历史范围：{from} 至 {to}（{message_count} 条，{complete/stop_reason}）
 {待补充或冲突核心字段：...}
 
+✅ 确认企业画像后，AI猎客将立即为您持续匹配并推送优质的海外买家采购商机，助您高效开拓市场、精准触达客户。
+
 请由本群企业画像确认人回复：
 确认企业画像 vN
 或

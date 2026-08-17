@@ -340,3 +340,70 @@ export async function getTenantBillingSummary(tenantId: string) {
     uniqueSkills: Number(r.unique_skills),
   };
 }
+
+/**
+ * Daily consumption aggregation for the trend chart / daily report.
+ * Groups settled billing events by calendar day (in the ledger's TZ).
+ *
+ * - taskCount: settled events that day
+ * - consumedSettled: sum of credit_amount for settled events (shadow + live)
+ * - consumedLive: only live-debited credit
+ * - consumedShadow: only shadow-recorded credit
+ */
+export async function getDailyUsage(params: { tenantId?: string; days?: number }) {
+  const days = params.days && params.days > 0 ? params.days : 30;
+  const conditions = [`created_at > NOW() - INTERVAL '${days} days'`];
+  const values: unknown[] = [];
+
+  if (params.tenantId) {
+    conditions.push(`tenant_id = $${values.length + 1}`);
+    values.push(params.tenantId);
+  }
+
+  const { rows } = await query(
+    `SELECT
+       to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+       COUNT(*) FILTER (WHERE status = 'settled') AS task_count,
+       COALESCE(SUM(CASE WHEN status = 'settled' THEN credit_amount ELSE 0 END), 0) AS consumed_settled,
+       COALESCE(SUM(CASE WHEN status = 'settled' AND billing_mode = 'live' THEN credit_amount ELSE 0 END), 0) AS consumed_live,
+       COALESCE(SUM(CASE WHEN status = 'settled' AND billing_mode = 'shadow' THEN credit_amount ELSE 0 END), 0) AS consumed_shadow
+     FROM skill_billing_events
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY date_trunc('day', created_at)
+     ORDER BY date_trunc('day', created_at) ASC`,
+    values
+  );
+
+  return rows.map((r: any) => ({
+    day: r.day,
+    taskCount: Number(r.task_count),
+    consumedSettled: Number(r.consumed_settled),
+    consumedLive: Number(r.consumed_live),
+    consumedShadow: Number(r.consumed_shadow),
+  }));
+}
+
+export async function getDailyUsageByTenant(params: { days?: number }) {
+  const days = params.days && params.days > 0 ? params.days : 30;
+  const { rows } = await query(
+    `SELECT
+       tenant_id,
+       to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+       COUNT(*) FILTER (WHERE status = 'settled') AS task_count,
+       COALESCE(SUM(CASE WHEN status = 'settled' THEN credit_amount ELSE 0 END), 0) AS consumed_settled,
+       COALESCE(SUM(CASE WHEN status = 'settled' AND billing_mode = 'live' THEN credit_amount ELSE 0 END), 0) AS consumed_live,
+       COALESCE(SUM(CASE WHEN status = 'settled' AND billing_mode = 'shadow' THEN credit_amount ELSE 0 END), 0) AS consumed_shadow
+     FROM skill_billing_events
+     WHERE created_at > NOW() - INTERVAL '${days} days'
+     GROUP BY tenant_id, date_trunc('day', created_at)
+     ORDER BY date_trunc('day', created_at) DESC, tenant_id ASC`
+  );
+  return rows.map((r: any) => ({
+    tenantId: r.tenant_id,
+    day: r.day,
+    taskCount: Number(r.task_count),
+    consumedSettled: Number(r.consumed_settled),
+    consumedLive: Number(r.consumed_live),
+    consumedShadow: Number(r.consumed_shadow),
+  }));
+}

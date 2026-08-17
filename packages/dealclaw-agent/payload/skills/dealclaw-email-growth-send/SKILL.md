@@ -1,6 +1,9 @@
 ---
 name: "dealclaw-email-growth-send"
 description: "Growth Send 规模化邮件触达：Resend发送、自动序列、预热控制、知识库素材检查。来源：田耕郡@格格"
+author: ""
+version: "3.2"
+date: "2026-07-30"
 ---
 
 # DC-Email Growth Send: 规模化触达
@@ -19,9 +22,11 @@ description: "Growth Send 规模化邮件触达：Resend发送、自动序列、
 1. 飞书通知检查 → GET /bindings 查已有绑定，有则自动复用，无则提醒绑定
 2. KB 素材检查 → 缺关键素材（认证/手册）则阻断通知
 3. 生成邮件内容 → 公司口吻，含产品+差异化信息
-4. 发送前校验 → 域名预热 / 收件人格式 / 业务邮箱验证
-5. 发送 → Resend（自动退订+追踪）
-6. 自动序列 → 未回复则间隔跟进，回复则转人工
+4. 发送前检查买家时区 → `python3 scripts/send_window.py --country <ISO> [--city <city>]`。不在工作日 8:00-18:00 则阻断，向用户说明原因及预计发送时间。批量发送时，取多数买家的时区判断；若买家跨时区，逐批检查。
+5. 发送前校验 → 域名预热 / 收件人格式 / 业务邮箱验证
+6. 发送 → Resend（自动退订+追踪）
+7. 回写线索池 → 立刻更新每条记录的 阶段→已触达、最近触达→发送时间、触达渠道→邮件/WhatsApp。不可跳过
+8. 自动序列 → 未回复则间隔跟进，回复则转人工
 ```
 
 ---
@@ -49,7 +54,7 @@ Header: X-Admin-Token: <token>
 
 绑定 API 是 upsert，服务端已存储。V 不需要在 session 中记忆绑定参数。
 
-`X-Admin-Token` 存储在 `work/mio-api/.env` 的 `WEBHOOK_DEALCLAW_ADMIN_TOKEN`。
+`X-Admin-Token` 存储在 `work/mio-api/.env` 的 `WEBHOOK_ADMIN_TOKEN`。
 
 默认发件地址统一使用 `V@mail.dealclaw.io`。
 
@@ -105,6 +110,44 @@ V 根据买家背景和企业画像自主生成，不套死模板。核心原则
 
 发送前查域名预热状态。阶段和日限额由实际配置决定，此 skill 不做默认假设。
 
+### Resend API Key 配置
+
+API Key 存储在 `scripts/resend/.env`，domain-setup.mjs 和 send.mjs 均从此读取。调用 send.mjs 前需 export：
+
+```bash
+export RESEND_API_KEY=$(grep RESEND_API_KEY scripts/resend/.env | cut -d= -f2)
+```
+
+不在 `/home/openclaw/.openclaw/.env` 中读取。
+
+### 域名管理（发送前置条件）
+
+发送邮件前必须确认发件域名已在 Resend 验证通过。使用 `scripts/resend/domain-setup.mjs`：
+
+```bash
+# Step 1: 创建域名
+export RESEND_API_KEY=***
+node scripts/resend/domain-setup.mjs step1 --email sandkey@jasscup.com
+
+# Step 2: 添加域名到 Resend
+node scripts/resend/domain-setup.mjs step2 --domain mail.dealclaw.io
+
+# Step 3: 获取 DNS 验证记录
+node scripts/resend/domain-setup.mjs step3e --domain mail.dealclaw.io
+
+# Step 4: 验证 DNS 已生效
+node scripts/resend/domain-setup.mjs step4 --domain mail.dealclaw.io
+
+# 检测 DNS 托管商
+node scripts/resend/domain-setup.mjs dns-detect --domain mail.dealclaw.io
+```
+
+域名未验证 → 阻断发送，输出 DNS 记录给用户。
+
+### 旧账号残留清理
+
+如果 Resend API 返回非 dealclaw.io 的域名（如旧账号的 mail.dogarm.top），自动删除，不保留。
+
 ---
 
 ## 追踪
@@ -126,7 +169,7 @@ Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**
 ### 管理接口
 
 **Base URL:** `https://webhook.dealclaw.io`
-**认证头:** `X-Admin-Token: <WEBHOOK_DEALCLAW_ADMIN_TOKEN>`
+**认证头:** `X-Admin-Token: <WEBHOOK_ADMIN_TOKEN>`
 
 限流：10次/分钟，burst 5，按调用方 IP 计。429 时退避重试。
 
@@ -199,3 +242,17 @@ node scripts/resend/send.mjs \
 | v3.1.1 | 2026-07-30 | 完善飞书通知绑定：补充全部管理接口、错误码表、agent_email概念、通道类型、密钥不回显设计、限流细节 |
 | v3.1 | 2026-07-30 | 新增飞书通知绑定流程 + MFG 发送前预检 |
 | v3.0 | 2026-07-29 | 吸收 dc-copy 内容生成，三轮序列改为原则级 |
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次完成邮件发送并交付结果后，必须异步记录一条计费事件：
+
+```bash
+# 根据当前群名查 tenantId：小元01→xiaoyuan_01, 小元03→xiaoyuan_03, 小元04→xiaoyuan_04, 小元07→xiaoyuan_07, 内测群→xiaoyuan_neice, Agent测试→xiaoyuan_agent_test
+# 群名无法匹配时用 xiaoyuan_unknown
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw.send_email 1 &
+```
+
+- 必须在后台异步执行（加 `&`），不阻塞用户回复
+- 失败静默，不影响主流程
+- 只在结果已交付用户后才记录

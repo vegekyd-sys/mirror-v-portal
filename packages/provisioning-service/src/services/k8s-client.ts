@@ -170,6 +170,40 @@ export async function deleteService(namespace: string, name: string): Promise<vo
   return deleteNamespacedResource(`/api/v1/namespaces/${namespace}/services`, 'service', namespace, name);
 }
 
+// ── PersistentVolumeClaim ──
+
+export interface PvcSpec {
+  namespace: string;
+  name: string;
+  size: string;
+  storageClassName: string;
+  accessMode: 'ReadWriteOnce' | 'ReadWriteMany';
+  labels: Record<string, string>;
+}
+
+export async function createPersistentVolumeClaim(spec: PvcSpec): Promise<void> {
+  const body = {
+    apiVersion: 'v1',
+    kind: 'PersistentVolumeClaim',
+    metadata: { name: spec.name, namespace: spec.namespace, labels: spec.labels },
+    spec: {
+      storageClassName: spec.storageClassName,
+      accessModes: [spec.accessMode],
+      resources: { requests: { storage: spec.size } },
+    },
+  };
+
+  const res = await k8sRequest('POST', `/api/v1/namespaces/${spec.namespace}/persistentvolumeclaims`, body);
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`createPersistentVolumeClaim ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] PVC created: ${spec.namespace}/${spec.name} (${spec.size}, ${spec.storageClassName})`);
+}
+
+export async function deletePersistentVolumeClaim(namespace: string, name: string): Promise<void> {
+  return deleteNamespacedResource(`/api/v1/namespaces/${namespace}/persistentvolumeclaims`, 'persistentvolumeclaim', namespace, name);
+}
+
 // ── Secret ──
 
 export async function createSecret(namespace: string, name: string, data: Record<string, string>): Promise<void> {

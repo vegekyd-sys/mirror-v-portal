@@ -5,6 +5,8 @@ import {
   canAfford,
   getBillingEvents,
   getTenantBillingSummary,
+  getDailyUsage,
+  getDailyUsageByTenant,
 } from '../services/billing-hook.js';
 
 const router = Router();
@@ -102,6 +104,33 @@ router.get('/v1/billing/events', async (req, res) => {
     const summary = await getTenantBillingSummary(tenantId);
 
     res.json({ events, summary });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// GET /v1/billing/daily-usage?days=30&tenantId=... — daily consumption trend
+router.get('/v1/billing/daily-usage', async (req, res) => {
+  try {
+    const result = await getDailyUsage({
+      tenantId: req.query.tenantId as string | undefined,
+      days: req.query.days ? Number(req.query.days) : 30,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// GET /v1/billing/daily-usage-by-tenant?days=30 — per-tenant daily consumption
+router.get('/v1/billing/daily-usage-by-tenant', async (req, res) => {
+  try {
+    const result = await getDailyUsageByTenant({
+      days: req.query.days ? Number(req.query.days) : 30,
+    });
+    res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ code: 'INTERNAL' });

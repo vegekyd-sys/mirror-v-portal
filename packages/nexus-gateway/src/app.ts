@@ -9,6 +9,53 @@ import { agentLimiter, globalLimiter } from './middleware/ratelimit.js';
 import { sendReply, extractAgentReplyText } from './services/feishu-reply.js';
 import { GATEWAY_HEADERS, type GatewayError, type TenantContext } from './types/index.js';
 
+// Shared service token for credits-ledger calls (optional).
+function ledgerHeaders(token?: string, extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  return h;
+}
+
+interface BillingAccount {
+  tenantId: string;
+  accountId: string;
+}
+
+/** Resolved per-request billing account, or the gateway-level fallback. */
+function billingAccountFor(req: Request, config: GatewayConfig): BillingAccount {
+  const resolved = (req as Request & { billingAccount?: BillingAccount }).billingAccount;
+  return resolved ?? { tenantId: config.tenantId, accountId: config.keyConfig.creditsAccountId };
+}
+
+/** Audit metadata for billing events: who triggered the bill (open_id/group_id). */
+function billingAuditMeta(req: Request): Record<string, string> {
+  const meta = (req as Request & { billingMeta?: { openId?: string; groupId?: string } }).billingMeta;
+  const out: Record<string, string> = {};
+  if (meta?.openId) out.openId = meta.openId;
+  if (meta?.groupId) out.groupId = meta.groupId;
+  return out;
+}
+
+/**
+ * Resolve the billing tenant per-person (open_id) / per-group (chat_id) before
+ * the credits check + billing estimate run. Unknown identities fall back to
+ * the gateway-level single account (preserving legacy behaviour).
+ */
+function resolveBillingContext() {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    const body: any = req.body ?? {};
+    const openId = body?.event?.sender?.sender_id?.open_id || body?.openId || body?.platformUserId;
+    const groupId = body?.event?.message?.chat_id || body?.chatId || body?.groupId;
+
+    // Billing identity is ALWAYS the gateway's own tenant (per-pod config.tenantId),
+    // correct across multi-tenant deployments. open_id/group_id are captured purely
+    // as audit metadata (who triggered the bill) — never used to resolve a tenant.
+    // The actual account is resolved by billingAccountFor() from config.keyConfig.
+    (req as Request & { billingMeta?: { openId?: string; groupId?: string } }).billingMeta = { openId, groupId };
+    next();
+  };
+}
+
 export function createApp(config: GatewayConfig) {
   initIdentityConfig({
     tenantId: config.tenantId,
@@ -51,7 +98,7 @@ export function createApp(config: GatewayConfig) {
         res.status(400).json({ code: 'CONFIG_MISSING' });
         return;
       }
-      const info = await fetchBalance(config.creditsLedgerUrl, accountId);
+      const info = await fetchBalance(config.creditsLedgerUrl, accountId, config.creditsLedgerToken);
       if (!info) {
         res.status(404).json({ code: 'NOT_FOUND' });
         return;
@@ -96,7 +143,7 @@ export function createApp(config: GatewayConfig) {
         if (msgText && isBalanceQuery(msgText) && config.creditsLedgerUrl && config.keyConfig?.creditsAccountId) {
           console.log('[webhook] balance query detected, responding directly');
           try {
-            const balanceInfo = await fetchBalance(config.creditsLedgerUrl, config.keyConfig.creditsAccountId);
+            const balanceInfo = await fetchBalance(config.creditsLedgerUrl, config.keyConfig.creditsAccountId, config.creditsLedgerToken);
             if (balanceInfo && config.appId && config.appSecret) {
               const replyText = formatBalanceReply(balanceInfo);
               const replyResult = await sendReply(config.appId, config.appSecret, msgId, replyText);
@@ -160,6 +207,7 @@ export function createApp(config: GatewayConfig) {
     identityMiddleware,
     attachKeyConfig(config),
     sceneMiddleware,
+    resolveBillingContext(),
     creditsCheckMiddleware(config),
     billingEstimateMiddleware(config),
     async (req: Request, res: Response) => {
@@ -199,7 +247,7 @@ export function createApp(config: GatewayConfig) {
               {
                 method: 'POST',
                 signal: AbortSignal.timeout(5_000),
-                headers: { 'Content-Type': 'application/json' },
+                headers: ledgerHeaders(config.creditsLedgerToken),
                 body: JSON.stringify({
                   tenantId: billing.tenantId,
                   accountId: billing.accountId,
@@ -207,7 +255,7 @@ export function createApp(config: GatewayConfig) {
                   quantity: 1,
                   estimatedEventId: billing.estimatedEventId,
                   resultSummary: 'agent_success',
-                  metadata: { agentStatus: response.status, intentKind: billing.intentKind },
+                  metadata: { agentStatus: response.status, intentKind: billing.intentKind, ...billingAuditMeta(req) },
                 }),
               }
             );
@@ -250,21 +298,22 @@ function attachKeyConfig(config: GatewayConfig) {
  */
 function creditsCheckMiddleware(config: GatewayConfig) {
   return async (req: Request, res: Response, next: NextFunction) => {
+    const { accountId } = billingAccountFor(req, config);
     const intent = req.body?.intent;
     const cost = intent?.kind
       ? (CREDIT_COSTS[intent.kind] ?? DEFAULT_COST)
       : DEFAULT_COST;
 
     if (cost === 0) {
-      (req as any).creditsCheck = { remaining: -1, required: 0, accountId: config.keyConfig.creditsAccountId };
+      (req as any).creditsCheck = { remaining: -1, required: 0, accountId };
       next();
       return;
     }
 
     try {
       const balanceResp = await fetch(
-        `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/accounts/${config.keyConfig.creditsAccountId}/balance`,
-        { signal: AbortSignal.timeout(3_000) }
+        `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/accounts/${accountId}/balance`,
+        { signal: AbortSignal.timeout(3_000), headers: ledgerHeaders(config.creditsLedgerToken) }
       );
 
       if (!balanceResp.ok) {
@@ -273,7 +322,7 @@ function creditsCheckMiddleware(config: GatewayConfig) {
         // Allow fail-open only with explicit env var DEALCLAW_CREDITS_FAIL_OPEN=true (dev mode).
         if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
           console.warn('[credits] FAIL-OPEN: credits-ledger returned', balanceResp.status, '— allowing request');
-          (req as any).creditsCheck = { remaining: -1, required: cost, accountId: config.keyConfig.creditsAccountId };
+          (req as any).creditsCheck = { remaining: -1, required: cost, accountId };
           next();
           return;
         }
@@ -287,13 +336,13 @@ function creditsCheckMiddleware(config: GatewayConfig) {
         const err: GatewayError = {
           code: 'INSUFFICIENT_CREDITS',
           message: `Insufficient credits: need ${cost} credits`,
-          detail: `Account: ${config.keyConfig.creditsAccountId}`,
+          detail: `Account: ${accountId}`,
         };
         res.status(402).json(err);
         return;
       }
 
-      (req as any).creditsCheck = { remaining: balance, required: cost, accountId: config.keyConfig.creditsAccountId };
+      (req as any).creditsCheck = { remaining: balance, required: cost, accountId };
       next();
     } catch (err: any) {
       console.error('Credits ledger unreachable:', err.code || err.message);
@@ -301,7 +350,7 @@ function creditsCheckMiddleware(config: GatewayConfig) {
       // Allow fail-open only with explicit env var DEALCLAW_CREDITS_FAIL_OPEN=true (dev mode).
       if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
         console.warn('[credits] FAIL-OPEN: credits-ledger unreachable — allowing request');
-        (req as any).creditsCheck = { remaining: -1, required: cost, accountId: config.keyConfig.creditsAccountId };
+        (req as any).creditsCheck = { remaining: -1, required: cost, accountId };
         next();
         return;
       }
@@ -337,6 +386,7 @@ function resolveSkillId(intentKind?: string): string {
  */
 function billingEstimateMiddleware(config: GatewayConfig) {
   return async (req: Request, res: Response, next: NextFunction) => {
+    const { accountId, tenantId } = billingAccountFor(req, config);
     const intentKind: string | undefined = req.body?.intent?.kind;
     const skillId = resolveSkillId(intentKind);
     const cost = intentKind ? (CREDIT_COSTS[intentKind] ?? DEFAULT_COST) : DEFAULT_COST;
@@ -345,8 +395,8 @@ function billingEstimateMiddleware(config: GatewayConfig) {
       (req as any).billing = {
         estimatedEventId: null,
         required: 0,
-        accountId: config.keyConfig.creditsAccountId,
-        tenantId: config.tenantId,
+        accountId,
+        tenantId,
         skillId,
         intentKind: intentKind ?? 'unknown',
       } as BillingContext;
@@ -361,9 +411,9 @@ function billingEstimateMiddleware(config: GatewayConfig) {
         {
           method: 'POST',
           signal: AbortSignal.timeout(5_000),
-          headers: { 'Content-Type': 'application/json' },
+          headers: ledgerHeaders(config.creditsLedgerToken),
           body: JSON.stringify({
-            accountId: config.keyConfig.creditsAccountId,
+            accountId,
             skillId,
             quantity: 1,
           }),
@@ -391,20 +441,20 @@ function billingEstimateMiddleware(config: GatewayConfig) {
         console.warn('[billing] FAIL-OPEN: allowing without canAfford pre-check');
       }
 
-      const taskId = `gw:${config.tenantId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const taskId = `gw:${tenantId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       const estimateResp = await fetch(
         `${config.creditsLedgerUrl.replace(/\/$/, '')}/v1/billing/estimate`,
         {
           method: 'POST',
           signal: AbortSignal.timeout(5_000),
-          headers: { 'Content-Type': 'application/json' },
+          headers: ledgerHeaders(config.creditsLedgerToken),
           body: JSON.stringify({
-            tenantId: config.tenantId,
-            accountId: config.keyConfig.creditsAccountId,
+            tenantId,
+            accountId,
             taskId,
             skillId,
             quantity: 1,
-            metadata: { intentKind, source: 'nexus-gateway' },
+            metadata: { intentKind, source: 'nexus-gateway', ...billingAuditMeta(req) },
           }),
         }
       );
@@ -434,7 +484,7 @@ function billingEstimateMiddleware(config: GatewayConfig) {
         console.error('Billing estimate failed:', estimateResp.status, errBody);
         if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
           console.warn('[billing] FAIL-OPEN: estimate returned', estimateResp.status, '— allowing without billing event');
-          (req as any).billing = { estimatedEventId: null, required: cost, accountId: config.keyConfig.creditsAccountId, tenantId: config.tenantId, skillId, intentKind } as BillingContext;
+          (req as any).billing = { estimatedEventId: null, required: cost, accountId, tenantId, skillId, intentKind } as BillingContext;
           next();
           return;
         }
@@ -446,8 +496,8 @@ function billingEstimateMiddleware(config: GatewayConfig) {
       (req as any).billing = {
         estimatedEventId: estimateData.eventId,
         required: estimateData.estimatedCredit ?? cost,
-        accountId: config.keyConfig.creditsAccountId,
-        tenantId: config.tenantId,
+        accountId,
+        tenantId,
         skillId,
         intentKind: intentKind ?? 'unknown',
       } as BillingContext;
@@ -458,7 +508,7 @@ function billingEstimateMiddleware(config: GatewayConfig) {
       console.error('Billing estimate error:', err.code || err.message);
       if (process.env.DEALCLAW_CREDITS_FAIL_OPEN === 'true') {
         console.warn('[billing] FAIL-OPEN: credits-ledger unreachable — allowing without billing event');
-        (req as any).billing = { estimatedEventId: null, required: cost, accountId: config.keyConfig.creditsAccountId, tenantId: config.tenantId, skillId, intentKind } as BillingContext;
+        (req as any).billing = { estimatedEventId: null, required: cost, accountId, tenantId, skillId, intentKind } as BillingContext;
         next();
         return;
       }
@@ -523,11 +573,14 @@ interface BalanceInfo {
   shadowConsumed?: number;
 }
 
-async function fetchBalance(ledgerUrl: string, accountId: string): Promise<BalanceInfo | null> {
+async function fetchBalance(ledgerUrl: string, accountId: string, token?: string): Promise<BalanceInfo | null> {
   // Derive tenant ID from account ID (acct_<tenantId>)
   const tenantId = accountId.startsWith('acct_') ? accountId.slice(5) : accountId;
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${ledgerUrl.replace(/\/$/, '')}/v1/admin/customers/${encodeURIComponent(tenantId)}`, {
     signal: AbortSignal.timeout(5_000),
+    headers,
   });
   if (!res.ok) return null;
   return res.json() as Promise<BalanceInfo>;

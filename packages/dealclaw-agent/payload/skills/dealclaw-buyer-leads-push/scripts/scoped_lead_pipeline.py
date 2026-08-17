@@ -92,6 +92,9 @@ def run_pipeline(
     country_by_key: dict[str, dict[str, Any]] = {}
     for target in profile["target_countries"]:
         resolved = tradechina_buyer_leads.resolve_country(target["name"], countries)
+        if resolved is None:
+            # 明确无数据的国家（如科威特/卡塔尔/巴林），跳过，不中断整个推送
+            continue
         aliases = {tenant_run_guard.normalized(value): value for value in target["aliases"]}
         for key in ("cnName", "enName"):
             value = resolved.get(key)
@@ -103,7 +106,21 @@ def run_pipeline(
     records_by_id: dict[str, dict[str, Any]] = {}
     query_audit = []
     for job in jobs:
-        resolved = country_by_key[tenant_run_guard.normalized(job["country_name"])]
+        resolved = country_by_key.get(tenant_run_guard.normalized(job["country_name"]))
+        if resolved is None:
+            # 该国家无数据（被跳过），记录到 audit 后跳过该查询
+            query_audit.append(
+                {
+                    "country_name": job["country_name"],
+                    "country_id": "",
+                    "product_keyword": job["product_keyword"],
+                    "pages_fetched": 0,
+                    "records_returned": 0,
+                    "rejected_missing_lead_id": 0,
+                    "skipped_no_data": True,
+                }
+            )
+            continue
         result = fetch_buyers_fn(
             supplier_id=context["supplier_id"],
             country_id=str(resolved["countryId"]),
