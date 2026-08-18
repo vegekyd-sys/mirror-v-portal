@@ -218,9 +218,17 @@ stringData:
 
 ### 6.6 待办
 
-- [ ] 恢复流程 `POST /v1/tenants/:id/restore`（从 OSS 拉回数据到新 PVC）
 - [ ] PVC 用量监控告警
 - [ ] OSS 备份定期校验 / 快照（Velero 或 CNFS 快照）
+
+### 6.7 数据恢复
+
+恢复流程 `POST /v1/tenants/:id/restore`（`source=backup|archive`，默认 archive）：
+
+1. 重建 per-tenant PVC（若已被 deprovision 删除）
+2. 创建一次性 restore Job，挂 PVC 跑 `ossutil cp -r oss://<bucket>/<tenantId>/<source>/ /data --update` 拉回数据
+
+需额外 RAM 权限：`oss:GetObject`（下载）。
 
 ## 7. 未来扩展：海外集群
 

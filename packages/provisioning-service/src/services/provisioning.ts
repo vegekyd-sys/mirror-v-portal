@@ -325,3 +325,86 @@ export async function backupTenantData(
     };
   }
 }
+
+/**
+ * Restore a tenant's runtime data from OSS back to its PVC.
+ *
+ * Creates the per-tenant PVC if it doesn't exist (e.g. after destroy),
+ * then runs a one-shot Job that downloads from OSS to /data via ossutil.
+ *
+ * source 'archive' (default) → oss://bucket/<tenantId>/archive/
+ * source 'backup'  → oss://bucket/<tenantId>/backup/
+ */
+export async function restoreTenantData(
+  tenantId: string,
+  config: ProvisioningConfig,
+  options: { source?: 'backup' | 'archive'; runtimeNamespace?: string } = {},
+): Promise<{ ok: boolean; jobName: string; warnings: string[] }> {
+  const source = options.source ?? 'archive';
+  const namespace = options.runtimeNamespace || config.runtimeNamespace;
+  const pvcName = `dealclaw-runtime-${tenantId}`;
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').replace(/T/, '-');
+  const jobName = `dealclaw-restore-${tenantId}-${timestamp}`;
+  const prefix = `${tenantId}/${source}`;
+
+  const labels = {
+    'app.kubernetes.io/part-of': 'dealclaw',
+    'dealclaw.io/tenant-id': tenantId,
+    'dealclaw.io/job-type': 'restore-data',
+  };
+
+  const command = [
+    '/bin/sh',
+    '-c',
+    [
+      'ossutil config -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET" -e "$OSS_ENDPOINT" >/dev/null 2>&1',
+      `ossutil cp -r "oss://$OSS_BUCKET/${prefix}/" /data --update`,
+    ].join(' && '),
+  ];
+
+  const env = [
+    { name: 'OSS_ENDPOINT', value: config.ossEndpoint },
+    { name: 'OSS_BUCKET', value: config.ossBucket },
+    { name: 'OSS_ACCESS_KEY_ID', valueFrom: { secretKeyRef: { name: config.ossSecretName, key: 'accessKeyId' } } },
+    { name: 'OSS_ACCESS_KEY_SECRET', valueFrom: { secretKeyRef: { name: config.ossSecretName, key: 'accessKeySecret' } } },
+  ];
+
+  try {
+    // Recreate the PVC if the tenant was destroyed (deprovision deletes it).
+    await createPersistentVolumeClaim({
+      namespace,
+      name: pvcName,
+      size: config.agentPvcSize,
+      storageClassName: config.agentPvcStorageClass,
+      accessMode: config.agentPvcAccessMode,
+      labels: { ...labels, app: 'dealclaw-agent' },
+    });
+
+    await createJob({
+      namespace,
+      name: jobName,
+      labels,
+      image: config.backupImage,
+      command,
+      env,
+      volumeName: 'runtime-data',
+      pvcClaimName: pvcName,
+      mountPath: '/data',
+      ttlSecondsAfterFinished: 86_400,
+      backoffLimit: 1,
+      imagePullSecrets: [{ name: 'registry-secret-vpc' }],
+    });
+
+    return {
+      ok: true,
+      jobName,
+      warnings: [`restore Job ${jobName} created for tenant ${tenantId} (source=${source})`],
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      jobName,
+      warnings: [`Failed to create restore Job: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+}
