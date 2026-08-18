@@ -416,6 +416,7 @@ export interface JobSpec {
   /** Auto-delete finished Job after this many seconds (default 86400 = 24h) */
   ttlSecondsAfterFinished?: number;
   backoffLimit?: number;
+  imagePullSecrets?: Array<{ name: string }>;
 }
 
 export async function createJob(spec: JobSpec): Promise<void> {
@@ -449,6 +450,10 @@ export async function createJob(spec: JobSpec): Promise<void> {
       },
     },
   };
+
+  if (spec.imagePullSecrets?.length) {
+    (body.spec.template.spec as Record<string, unknown>).imagePullSecrets = spec.imagePullSecrets;
+  }
 
   const res = await k8sRequest('POST', `/apis/batch/v1/namespaces/${spec.namespace}/jobs`, body);
   if (!res.ok) {

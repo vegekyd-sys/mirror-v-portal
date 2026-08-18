@@ -309,6 +309,7 @@ export async function backupTenantData(
       mountPath: '/data',
       ttlSecondsAfterFinished: mode === 'backup' ? 86_400 : 604_800,
       backoffLimit: 1,
+      imagePullSecrets: [{ name: 'registry-secret-vpc' }],
     });
 
     return {
