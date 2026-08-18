@@ -1,9 +1,9 @@
 /**
  * DealClaw Deterministic Billing Hook
  * ------------------------------------
- * 把「计费」从模型自觉（SKILL.md 让模型跑 dealclaw-billing-record.sh）升级为
- * 确定性触发：hook after_tool_call，检测到 billable skill 被执行时，直接对
- * credits-ledger 做 estimate → settle。
+ * 把「计费」从模型自觉升级为确定性触发 + 前置拦截：
+ *   before_tool_call: can-afford 预检，余额不足直接 block（阻止 skill 执行）
+ *   after_tool_call:  estimate → settle（真正扣费，带幂等去重）
  *
  * 触发信号（任一命中即计费，去重）：
  *   1. exec 调用 `dealclaw-billing-record.sh --group <chat_id> <skillId> [qty]`
@@ -90,7 +90,47 @@ function detectSkill(cmd) {
   return null;
 }
 
-async function bill(skillId, chatId, ctxChatId, sessionKey) {
+function ledgerHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (TOKEN) headers['Authorization'] = `Bearer ${TOKEN}`;
+  return headers;
+}
+
+/** 幂等 taskId：同 session + skill + 30min 时间桶内稳定，跨重复执行可去重。 */
+function stableTaskId(tenant, skillId, sessionKey) {
+  const bucket = Math.floor(Date.now() / DEDUP_WINDOW_MS);
+  return `dc-hook:${tenant ?? 'shadow'}:${skillId}:${sessionKey ?? 'unknown'}:${bucket}`;
+}
+
+/**
+ * 前置预检：can-afford（检查余额/订阅/月度额度）。
+ * 返回 { allowed, reason }。can-afford API 故障时 fail-open（允许，settle 阶段再记账）。
+ */
+async function canAfford(skillId, tenant) {
+  const accountId = tenant ? `acct_${tenant}` : 'acct_shadow';
+  try {
+    const res = await fetch(`${LEDGER}/v1/billing/can-afford`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+      headers: ledgerHeaders(),
+      body: JSON.stringify({ accountId, skillId, quantity: 1 }),
+    });
+    if (!res.ok) {
+      console.warn(`[dc-billing] can-afford returned ${res.status} — fail-open`);
+      return { allowed: true, reason: null };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (data.canAfford === false) {
+      return { allowed: false, reason: data.reason || 'Insufficient credits' };
+    }
+    return { allowed: true, reason: null };
+  } catch (err) {
+    console.warn(`[dc-billing] can-afford error — fail-open: ${err.message}`);
+    return { allowed: true, reason: null };
+  }
+}
+
+async function settle(skillId, chatId, ctxChatId, sessionKey) {
   // 去重
   const key = `${sessionKey}\u0000${skillId}`;
   const now = Date.now();
@@ -99,22 +139,19 @@ async function bill(skillId, chatId, ctxChatId, sessionKey) {
   billed.set(key, now);
 
   const tenant = resolveTenant(chatId) || resolveTenant(ctxChatId) || null;
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (TOKEN) headers['Authorization'] = `Bearer ${TOKEN}`;
+  const accountId = tenant ? `acct_${tenant}` : 'acct_shadow';
+  const taskId = stableTaskId(tenant, skillId, sessionKey);
 
   try {
-    const accountId = tenant ? `acct_${tenant}` : 'acct_shadow';
-
     // estimate
     const estRes = await fetch(`${LEDGER}/v1/billing/estimate`, {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
-      headers,
+      headers: ledgerHeaders(),
       body: JSON.stringify({
         tenantId: tenant ?? 'shadow',
         accountId,
-        taskId: `dc-hook:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        taskId,
         skillId,
         quantity: 1,
         metadata: { source: 'dealclaw-billing-plugin', chatId: chatId || ctxChatId || null },
@@ -130,7 +167,7 @@ async function bill(skillId, chatId, ctxChatId, sessionKey) {
     const setRes = await fetch(`${LEDGER}/v1/billing/settle`, {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
-      headers,
+      headers: ledgerHeaders(),
       body: JSON.stringify({
         tenantId: tenant ?? 'shadow',
         accountId,
@@ -160,6 +197,33 @@ export default definePluginEntry({
   name: 'DealClaw Deterministic Billing',
   description: 'Deterministically bills credits-ledger when a billable DealClaw skill executes (estimate→settle).',
   register(api) {
+    // 前置拦截：余额不足直接 block skill 执行
+    api.on('before_tool_call', async (event) => {
+      if (event.toolName !== 'exec') return;
+      const cmd = event.params?.command;
+      if (!cmd) return;
+
+      const hit = detectSkill(cmd);
+      if (!hit) return;
+
+      const ctx = event.ctx || {};
+      const tenant = resolveTenant(hit.chatId) || resolveTenant(ctx.chatId) || null;
+
+      // shadow 租户不拦截（无真实账户）
+      if (!tenant) return;
+
+      const check = await canAfford(hit.skillId, tenant);
+      if (!check.allowed) {
+        console.warn(`[dc-billing] BLOCK ${hit.skillId} for tenant=${tenant}: ${check.reason}`);
+        return {
+          block: true,
+          blockReason: `余额不足，无法执行「${hit.skillId}」：${check.reason}`,
+        };
+      }
+      return undefined;
+    });
+
+    // 后置结算：estimate → settle（真正扣费）
     api.on('after_tool_call', async (event) => {
       if (event.toolName !== 'exec') return;
       const cmd = event.params?.command;
@@ -169,7 +233,7 @@ export default definePluginEntry({
       if (!hit) return;
 
       const ctx = event.ctx || {};
-      await bill(hit.skillId, hit.chatId, ctx.chatId, ctx.sessionKey || ctx.sessionId || 'unknown');
+      await settle(hit.skillId, hit.chatId, ctx.chatId, ctx.sessionKey || ctx.sessionId || 'unknown');
     });
   },
 });
