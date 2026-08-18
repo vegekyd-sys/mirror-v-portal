@@ -107,7 +107,7 @@ description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画�
 每次完成企业分析并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
 bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-analyze-company 1 &
 ```
 

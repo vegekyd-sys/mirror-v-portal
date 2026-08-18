@@ -52,7 +52,7 @@ export async function enrichWithCredits(
   const results = new Map<string, CreditsInfo>();
 
   const tasks = tenantIds.map(async (tenantId) => {
-    const accountId = `credits-${tenantId}`;
+    const accountId = `acct_${tenantId}`;
     const info = await getCreditsBalance(creditsLedgerUrl, accountId);
     results.set(tenantId, info);
   });

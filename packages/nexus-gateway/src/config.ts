@@ -56,7 +56,12 @@ export function loadConfig(): GatewayConfig {
     keyConfig: {
       customerKeyRef: required('DEALCLAW_CUSTOMER_KEY_REF'),
       botCredentialRef: required('DEALCLAW_BOT_CREDENTIAL_REF'),
-      creditsAccountId: required('DEALCLAW_CREDITS_ACCOUNT_ID'),
+      // 账户 id 统一归一化为 acct_<tenantId>（兼容历史 credits- 前缀的坏值）
+      creditsAccountId: (() => {
+        const raw = process.env.DEALCLAW_CREDITS_ACCOUNT_ID;
+        if (!raw) return `acct_${tenantId}`;
+        return `acct_${raw.replace(/^acct_/, '').replace(/^credits-/, '')}`;
+      })(),
       configVersion: process.env.DEALCLAW_CONFIG_VERSION ?? '1',
     },
   };

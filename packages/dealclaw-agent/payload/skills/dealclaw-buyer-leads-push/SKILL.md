@@ -175,3 +175,17 @@ Only enable scheduling after all checks and a manual preview succeed. Read [refe
 - Refuse a push whose profile enterprise name, group IDs, profile hash, run-context ID, or state revision differs from guarded pipeline output. Never let a model supply or rewrite the profile enterprise name.
 - Retry reads safely. Retry writes only with the same unique key and expected state revision.
 - Require explicit administrative rebind intent before replacing tokens in an existing binding.
+
+## 计费记录（Shadow Mode — 测试期仅记录不扣费）
+
+每次买家线索推送完成并交付后，必须异步记录一条计费事件：
+
+```bash
+# 根据当前群名查 tenantId，映射表在 scripts/dealclaw-group-tenant-map.md
+# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
+bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-buyer-leads-push 1 &
+```
+
+- 必须在后台异步执行（加 `&`），不阻塞用户回复
+- 失败静默，不影响主流程
+- 只在结果已交付用户后才记录

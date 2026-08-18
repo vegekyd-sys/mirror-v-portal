@@ -6,9 +6,11 @@
  *   after_tool_call:  estimate → settle（真正扣费，带幂等去重）
  *
  * 触发信号（任一命中即计费，去重）：
- *   1. exec 调用 `dealclaw-billing-record.sh --group <chat_id> <skillId> [qty]`
- *   2. exec 调用 `billing.mjs record/estimate <tenant|--group> <skillId>`
- *   3. exec 运行了 billable skill 的脚本（命令路径含 `skills/dealclaw-<id>/`）
+ *   1. exec 调用 `dealclaw-billing-record.sh --group <chat_id> <skillId> [qty]`（no-op 意图信号）
+ *   2. exec 运行了 billable skill 的脚本（命令路径含 `skills/dealclaw-<id>/`）
+ *
+ * 注意：不再匹配 `billing.mjs record/estimate` —— billing.mjs 是手动/运维工具，
+ * 避免双计费或把 estimate 查询误判成计费。
  *
  * tenant 解析：优先用命令里的 --group <chat_id> 查 billing-config.json 的 groups
  * 映射；查不到则用 event.ctx.chatId；再查不到则 shadow（只记账不扣费）。
@@ -63,11 +65,11 @@ function loadTenantMap() {
 }
 
 function resolveTenant(chatId) {
-  // 新版 per-tenant 模型：agent pod 自带 DEALCLAW_TENANT_ID（权威）
-  if (process.env.DEALCLAW_TENANT_ID) return process.env.DEALCLAW_TENANT_ID;
-  // 旧模型兑底：chat_id → billing-config.json 映射
+  // 优先 chat_id → billing-config.json 映射（正确的多群归属，避免账户 id 串号）
   const cfg = loadTenantMap();
   if (chatId && cfg.groups && cfg.groups[chatId]) return cfg.groups[chatId];
+  // 其次 per-tenant pod 兜底：DEALCLAW_TENANT_ID（仅当 chat_id 无法映射时）
+  if (process.env.DEALCLAW_TENANT_ID) return process.env.DEALCLAW_TENANT_ID;
   return null;
 }
 
@@ -76,16 +78,17 @@ function detectSkill(cmd) {
   const s = String(cmd || '');
 
   // 1) billing-record.sh --group <chat_id> <skillId> [qty]
+  //    （.sh 现在是 no-op 意图信号，插件检测到它才真正计费）
   let m = s.match(/dealclaw-billing-record\.sh\s+(?:--group\s+(\S+)\s+)?(dealclaw-[\w-]+)/);
   if (m && BILLABLE_SKILLS.has(m[2])) return { skillId: m[2], chatId: m[1] || null };
 
-  // 2) billing.mjs record/estimate <tenant|--group oc_xxx> <skillId>
-  m = s.match(/billing\.mjs\s+(?:record|estimate)\s+(?:--group\s+(\S+)\s+)?(dealclaw-[\w-]+)/);
-  if (m && BILLABLE_SKILLS.has(m[2])) return { skillId: m[2], chatId: m[1] || null };
-
-  // 3) 脚本路径 skills/dealclaw-<id>/...
+  // 2) 脚本路径 skills/dealclaw-<id>/...
   m = s.match(/skills\/dealclaw-([\w-]+)\//);
   if (m && BILLABLE_SKILLS.has(`dealclaw-${m[1]}`)) return { skillId: `dealclaw-${m[1]}`, chatId: null };
+
+  // 注意：刻意不再匹配 billing.mjs record/estimate。
+  // billing.mjs 是手动/运维工具（record 会自己 estimate→settle，estimate 只是查询）；
+  // 若插件再匹配它，会导致双计费，或把 estimate 查询误判成计费。
 
   return null;
 }

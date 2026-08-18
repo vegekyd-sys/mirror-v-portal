@@ -153,7 +153,7 @@ python3 get_cdp_contact.py \
 
 ```bash
 # 根据当前群名查 tenantId，映射表在 scripts/dealclaw-group-tenant-map.md
-# 计费：用当前群 chat_id 自动解析租户（映射在 scripts/billing-config.json，由 billing.mjs 读取）
+# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
 bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-find-buyers 1 &
 ```
 

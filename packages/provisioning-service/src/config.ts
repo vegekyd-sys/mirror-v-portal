@@ -30,6 +30,10 @@ export interface ProvisioningConfig {
   ossSecretName: string;
   /** Container image used for the backup Job */
   backupImage: string;
+  /** credits-ledger base URL for account creation (customer-admin) */
+  creditsLedgerUrl: string;
+  /** shared service token for credits-ledger admin auth (BILLING_SERVICE_TOKEN) */
+  creditsLedgerToken: string;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -48,5 +52,7 @@ export function loadConfig(): ProvisioningConfig {
     ossBucket: process.env.OSS_BUCKET || 'dealclaw-backup',
     ossSecretName: process.env.OSS_SECRET_NAME || 'dealclaw-oss',
     backupImage: process.env.BACKUP_IMAGE || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
+    creditsLedgerUrl: process.env.CREDITS_LEDGER_URL || 'http://credits-ledger:8081',
+    creditsLedgerToken: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '',
   };
 }

@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData } from '../services/provisioning.js';
+import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -49,7 +50,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const safeAppSecret = botAppSecret && typeof botAppSecret === 'string' && botAppSecret.trim() ? botAppSecret.trim().slice(0, 128) : null;
       // Tenant workloads are isolated by names/labels inside one runtime namespace.
       const k8sNs = config.runtimeNamespace;
-      const creditsAccountId = `credits-${tenantId.slice(0, 16)}`;
+      const creditsAccountId = `acct_${tenantId}`;
 
       // NS3 FIX: Wrap DB operations in transaction to prevent partial writes.
       // K8s provisioning happens after commit; if it fails, tenant status gets updated.
@@ -79,6 +80,29 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         throw dbErr;
       } finally {
         client.release();
+      }
+
+      // Issue 1 FIX: 创建 credits-ledger 客户账户（身份一致：tenantId=UUID）。
+      // 账户 id = acct_<UUID>，与 tenants.credits_account_id 对齐，否则 agent 计费
+      // 会 ACCOUNT_NOT_FOUND。幂等：已存在 → DUPLICATE → ok。
+      const creditsResult = await createCreditsAccount({
+        tenantId,
+        companyName: safeName,
+        contactEmail: hasContactEmail ? contactEmail : undefined,
+        planTier: safePlanTier,
+        creditsLedgerUrl: config.creditsLedgerUrl,
+        creditsLedgerToken: config.creditsLedgerToken,
+      });
+      if (!creditsResult.ok) {
+        console.error('credits-ledger account creation failed:', creditsResult.error);
+        await pool.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+           VALUES ($1, 'pending', 'provisioning_failed', $2)`,
+          [tenantId, `credits account creation failed: ${creditsResult.error?.slice(0, 200)}`],
+        );
+        await pool.query(`UPDATE tenants SET status = 'provisioning_failed' WHERE tenant_id = $1`, [tenantId]);
+        res.status(500).json({ code: 'PROVISIONING_FAILED', message: 'Tenant created but credits account creation failed' });
+        return;
       }
 
       // Provision K8s resources (after DB commit — if this fails, update status)

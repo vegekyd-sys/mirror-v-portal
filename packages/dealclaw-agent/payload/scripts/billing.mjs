@@ -310,8 +310,8 @@ async function main() {
       }
       if (lookup.tenant) tenant = lookup.tenant;
       if (!tenant && (lookup.groupId || lookup.userId)) {
-        tenant = lookup.groupId || lookup.userId;
-        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${tenant}，shadow 记录消耗（不扣费）`);
+        tenant = 'shadow';  // 未绑定 → 统一 shadow，不写原始 id 污染 tenant_id
+        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${lookup.groupId || lookup.userId}，shadow 记录消耗（不扣费）`);
       }
       if (!tenant || !skill) { console.error('Usage: billing.mjs estimate <tenantId|--group oc_xxx> <skillId> [quantity]'); process.exit(1); }
       await cmdEstimate(tenant, skill, quantity);
@@ -329,8 +329,8 @@ async function main() {
       }
       if (lookup.tenant) tenant = lookup.tenant;
       if (!tenant && (lookup.groupId || lookup.userId)) {
-        tenant = lookup.groupId || lookup.userId;
-        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${tenant}，shadow 记录消耗（不扣费）`);
+        tenant = 'shadow';  // 未绑定 → 统一 shadow，不写原始 id 污染 tenant_id
+        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${lookup.groupId || lookup.userId}，shadow 记录消耗（不扣费）`);
       }
       if (!tenant || !skill || !eventId) { console.error('Usage: billing.mjs settle <tenantId|--group oc_xxx> <skillId> <eventId> [quantity]'); process.exit(1); }
       await cmdSettle(tenant, skill, eventId, quantity);
@@ -348,8 +348,8 @@ async function main() {
       }
       if (lookup.tenant) tenant = lookup.tenant;
       if (!tenant && (lookup.groupId || lookup.userId)) {
-        tenant = lookup.groupId || lookup.userId;
-        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${tenant}，shadow 记录消耗（不扣费）`);
+        tenant = 'shadow';  // 未绑定 → 统一 shadow，不写原始 id 污染 tenant_id
+        console.error(`[billing] ⚠️ 未绑定 ${lookup.groupId ? '群组' : '用户'} ${lookup.groupId || lookup.userId}，shadow 记录消耗（不扣费）`);
       }
       if (!tenant || !skill) { console.error('Usage: billing.mjs record <tenantId|--group oc_xxx|--user ou_xxx> <skillId> [quantity]'); process.exit(1); }
       await cmdRecord(tenant, skill, quantity || 1);
@@ -427,8 +427,8 @@ async function main() {
       }
       if (wrapLookup.tenant) tenant = wrapLookup.tenant;
       if (!tenant && (wrapLookup.groupId || wrapLookup.userId)) {
-        tenant = wrapLookup.groupId || wrapLookup.userId;
-        console.error(`[billing] ⚠️ 未绑定 ${wrapLookup.groupId ? '群组' : '用户'} ${tenant}，shadow 记录消耗（不扣费）`);
+        tenant = 'shadow';  // 未绑定 → 统一 shadow，不写原始 id 污染 tenant_id
+        console.error(`[billing] ⚠️ 未绑定 ${wrapLookup.groupId ? '群组' : '用户'} ${wrapLookup.groupId || wrapLookup.userId}，shadow 记录消耗（不扣费）`);
       }
       if (!tenant || !skill) { console.error('Usage: billing.mjs wrap <tenantId|--group oc_xxx> <skillId> [quantity] -- <command...>'); process.exit(1); }
       await cmdWrap(tenant, skill, quantity || 1, command);

@@ -108,7 +108,7 @@ export async function provisionTenant(
     result.secrets.push(agentConfigName);
 
     await k8sCreateSecret(nsName, creditsConfigName, {
-      DEALCLAW_CREDITS_ACCOUNT_ID: `credits-${tenantLabel}`,
+      DEALCLAW_CREDITS_ACCOUNT_ID: `acct_${tenantLabel}`,
       DEALCLAW_CREDITS_LEDGER_URL: 'http://credits-ledger:8081',
       DEALCLAW_CUSTOMER_KEY_REF: `tenant-keys/${tenantLabel}`,
       DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantLabel}`,
