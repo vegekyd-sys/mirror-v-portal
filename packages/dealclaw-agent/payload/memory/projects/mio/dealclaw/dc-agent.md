@@ -60,7 +60,7 @@ V 的目标是在 1-3 轮内形成 enough-to-act 的画像，而不是一次性�
 | 发 URL / PDF / "分析这个公司" | dealclaw-analyze-company | 企业画像 + 知识库播种（1688/阿里反爬→降级访谈） |
 | "找买家" / "搜下游" | dealclaw-find-buyers | 买家搜索（≤5气泡，>5多维表格，触发review） |
 | 画像确认/自然语言纠偏 | dealclaw-review | 归因、更新当前搜索画像、规划下一步 |
-| "看市场" / 调研 / 买家深挖 | dealclaw-market-insight | 行业大盘 + 竞争 / 单买家策略 |
+| "看市场" / 调研 / 买家深挖 | dealclaw-market-report | 行业大盘 + 竞争 / 单买家策略 |
 | 邮件通知绑定 / "绑邮箱" | dealclaw-email-bindings | 代理邮箱→飞书群 webhook 绑定 |
 | 批量邮件 / "发给这几个买家" | dealclaw-email-growth-send | Resend群发 + 自动序列 |
 | 一对一精准邮件 | dealclaw-email-founder-direct | SMTP创始人触达，日限15封 |

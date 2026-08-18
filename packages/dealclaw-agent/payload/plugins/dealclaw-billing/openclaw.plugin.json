@@ -1,0 +1,14 @@
+{
+  "id": "dealclaw-billing",
+  "name": "DealClaw Deterministic Billing",
+  "description": "Deterministically bills credits-ledger when a billable DealClaw skill executes (estimate→settle).",
+  "version": "1.0.0",
+  "contracts": {},
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

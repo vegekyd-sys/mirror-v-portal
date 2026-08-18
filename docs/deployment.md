@@ -177,7 +177,7 @@ AGENT_PVC_ACCESS_MODE=ReadWriteOnce
 OSS_ENDPOINT=oss-cn-shanghai.aliyuncs.com
 OSS_BUCKET=dealclaw-backup
 OSS_SECRET_NAME=dealclaw-oss
-BACKUP_IMAGE=alpine:3.19
+BACKUP_IMAGE=ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1
 ```
 
 OSS 凭证 Secret（`dealclaw-oss`，Opaque）：
@@ -219,7 +219,6 @@ stringData:
 ### 6.6 待办
 
 - [ ] 恢复流程 `POST /v1/tenants/:id/restore`（从 OSS 拉回数据到新 PVC）
-- [ ] 生产用预装 ossutil 的专用备份镜像（替换 alpine 运行时下载）
 - [ ] PVC 用量监控告警
 - [ ] OSS 备份定期校验 / 快照（Velero 或 CNFS 快照）
 

@@ -47,6 +47,6 @@ export function loadConfig(): ProvisioningConfig {
     ossEndpoint: process.env.OSS_ENDPOINT || 'oss-cn-shanghai.aliyuncs.com',
     ossBucket: process.env.OSS_BUCKET || 'dealclaw-backup',
     ossSecretName: process.env.OSS_SECRET_NAME || 'dealclaw-oss',
-    backupImage: process.env.BACKUP_IMAGE || 'alpine:3.19',
+    backupImage: process.env.BACKUP_IMAGE || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
   };
 }

@@ -113,6 +113,16 @@ const config = {
     deny: deniedTools,
     elevated: { enabled: false },
   },
+  plugins: {
+    load: {
+      paths: [path.join(workspace, 'plugins', 'dealclaw-billing')],
+    },
+    entries: {
+      'dealclaw-billing': {
+        enabled: true,
+      },
+    },
+  },
   logging: {
     redactSensitive: 'tools',
   },

@@ -55,7 +55,7 @@ const SKILL_CATEGORY_MAP: Record<string, string> = {
   'lead-customer-profile': 'buyer', 'data-selection': 'buyer', 'mio-data-selection-api': 'buyer',
   'aochuang-leads': 'buyer', 'qcc-company-lookup': 'buyer', 'qiancean-factory': 'buyer',
   // insight — 市场洞察
-  'dealclaw-analyze-company': 'insight', 'dealclaw-market-insight': 'insight', 'dealclaw-market-report': 'insight',
+  'dealclaw-analyze-company': 'insight', 'dealclaw-market-report': 'insight',
   'mio-customer-visit-analysis': 'insight', 'customer-health-score': 'insight', 's2-win-analysis': 'insight',
   // outreach — 营销触达
   'dealclaw-email-founder-direct': 'outreach', 'dealclaw-email-growth-send': 'outreach', 'dealclaw-email-bindings': 'outreach',

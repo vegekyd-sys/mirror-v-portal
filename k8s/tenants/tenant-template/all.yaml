@@ -55,6 +55,7 @@ stringData:
   DEALCLAW_INITIAL_CREDITS: "5000000"
   DEALCLAW_MODEL: ${DEALCLAW_MODEL}
   DEALCLAW_TIMEZONE: ${TENANT_TIMEZONE}
+  DC_BILLING_TOKEN: ${BILLING_SERVICE_TOKEN}
 
 ---
 # Runtime provider/tool credentials are injected by the provisioning layer.
@@ -218,6 +219,9 @@ spec:
               value: /data/state
             - name: OPENCLAW_WORKSPACE_DIR
               value: /data/workspace
+            # credits-ledger 地址（确定性计费 plugin 依赖；跨 namespace FQDN）
+            - name: DC_BILLING_URL
+              value: http://credits-ledger.dealclaw-prod:8081
           volumeMounts:
             - name: agent-data
               mountPath: /data

@@ -174,6 +174,9 @@ export async function provisionTenant(
       env: [
         { name: 'NODE_ENV', value: 'production' },
         { name: 'DEALCLAW_MODEL', value: 'deepseek/deepseek-chat' },
+        // credits-ledger 地址 + 服务令牌（确定性计费 plugin 依赖）
+        { name: 'DC_BILLING_URL', value: process.env.CREDITS_LEDGER_URL || 'http://credits-ledger:8081' },
+        { name: 'DC_BILLING_TOKEN', value: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '' },
       ],
       requests: { cpu: '500m', memory: '1Gi' },
       limits: { cpu: '2000m', memory: '2Gi' },
@@ -281,11 +284,8 @@ export async function backupTenantData(
     '/bin/sh',
     '-c',
     [
-      'apk add --no-cache curl >/dev/null 2>&1',
-      'curl -sSL -o /usr/local/bin/ossutil https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil64',
-      'chmod +x /usr/local/bin/ossutil',
-      '/usr/local/bin/ossutil config -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET" -e "$OSS_ENDPOINT" >/dev/null 2>&1',
-      `/usr/local/bin/ossutil cp -r /data "oss://$OSS_BUCKET/${prefix}/" --update${storageClassFlag}`,
+      'ossutil config -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET" -e "$OSS_ENDPOINT" >/dev/null 2>&1',
+      `ossutil cp -r /data "oss://$OSS_BUCKET/${prefix}/" --update${storageClassFlag}`,
     ].join(' && '),
   ];
 

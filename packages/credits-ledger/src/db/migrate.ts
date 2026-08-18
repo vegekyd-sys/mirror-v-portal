@@ -202,16 +202,18 @@ export async function migrate() {
 
 async function seedDefaultPrices() {
   const prices = [
-    // ── 一期收费 Skill（9 个）── 详见 docs/skill-pricing-v1.md
-    { skillId: 'dealclaw-find-buyers',           skillName: '搜索买家',               description: '按产品+国家+买家类型搜索匹配买家，含公司简介+官网+推荐理由',    category: 'buyer',      creditPerUnit: 300,    billingUnit: 'per_item',   sortOrder: 1 },
-    { skillId: 'dealclaw-analyze-company',        skillName: '企业画像分析',           description: '爬官网+AI分析产品线/市场定位/竞争力→写入知识库，反爬降级为访谈', category: 'insight',    creditPerUnit: 1200,   billingUnit: 'per_use',    sortOrder: 2 },
-    { skillId: 'dealclaw-market-insight',         skillName: '市场洞察报告',           description: '行业大盘+竞争格局+渠道机会+行动建议，可做整体扫描或单买家深挖',   category: 'insight',    creditPerUnit: 8000,   billingUnit: 'per_report', sortOrder: 3 },
-    { skillId: 'dealclaw-email-growth-send',      skillName: '批量开发信群发',         description: '批量生成个性化开发信→Resend群发→自动序列跟进',                  category: 'outreach',   creditPerUnit: 40,     billingUnit: 'per_email',  sortOrder: 4 },
-    { skillId: 'dealclaw-email-founder-direct',   skillName: '一对一精准开发信',       description: '深度个性化→SMTP创始人直达，日限15封',                            category: 'outreach',   creditPerUnit: 80,     billingUnit: 'per_email',  sortOrder: 5 },
-    { skillId: 'dealclaw-smart-reply',            skillName: '自动处理买家回复',       description: '监控买家回复→意图识别+询盘分类→生成建议回复/自动回复',          category: 'outreach',   creditPerUnit: 40,     billingUnit: 'per_reply',  sortOrder: 6 },
-    { skillId: 'dealclaw-exhibition-leads',       skillName: '展后线索处理',           description: '名片OCR/录音ASR→买家匹配→意向分级→展后跟进→写入线索池',        category: 'exhibition', creditPerUnit: 600,    billingUnit: 'per_person', sortOrder: 7 },
-    { skillId: 'dealclaw-exhibition-invitation',  skillName: '展会邀约',               description: '搜展会目标买家→生成个性化邀约文案→邮件发送',                    category: 'exhibition', creditPerUnit: 100,    billingUnit: 'per_person', sortOrder: 8 },
-    { skillId: 'dealclaw-lead-import',            skillName: '导入线索',               description: '上传Excel/CSV→AI列映射→去重→写入线索池，来源标记用户导入',      category: 'admin',      creditPerUnit: 100,    billingUnit: 'per_use',    sortOrder: 9 },
+    // ── 收费 Skill（10 个）── 权威定价：小元商业化方案 doc rev167 (2026-08-13)
+    // 唯一真相源 = skill_prices 表；此处 seed 仅用于全新部署初始化，务必与 rev167 对齐
+    { skillId: 'dealclaw-analyze-company',        skillName: '企业画像分析',           description: '爬官网+AI分析产品线/市场定位/竞争力→写入知识库',               category: 'insight',    creditPerUnit: 2000,   billingUnit: 'per_use',    sortOrder: 1 },
+    { skillId: 'dealclaw-market-report',          skillName: '市场洞察报告',           description: '按品类+国家生成外贸市场决策与选品HTML报告',                    category: 'insight',    creditPerUnit: 1000,   billingUnit: 'per_report', sortOrder: 2 },
+    { skillId: 'dealclaw-buyer-leads-push',       skillName: '买家线索推送',           description: '主动推送买家线索：持续匹配+筛选+主动送达',                       category: 'buyer',      creditPerUnit: 1000,   billingUnit: 'per_item',   sortOrder: 3 },
+    { skillId: 'dealclaw-find-buyers',            skillName: '搜索买家',               description: '按产品+国家+买家类型搜索匹配买家，含公司简介+官网+推荐理由',    category: 'buyer',      creditPerUnit: 800,    billingUnit: 'per_item',   sortOrder: 4 },
+    { skillId: 'dealclaw-exhibition-leads',       skillName: '展后线索处理',           description: '名片OCR/录音ASR→买家匹配→意向分级→展后跟进→写入线索池',        category: 'exhibition', creditPerUnit: 800,    billingUnit: 'per_person', sortOrder: 5 },
+    { skillId: 'dealclaw-exhibition-invitation',  skillName: '展会邀约',               description: '搜展会目标买家→生成个性化邀约文案→邮件发送',                    category: 'exhibition', creditPerUnit: 200,    billingUnit: 'per_person', sortOrder: 6 },
+    { skillId: 'dealclaw-email-founder-direct',   skillName: '一对一精准开发信',       description: '深度个性化→SMTP创始人直达，日限15封',                            category: 'outreach',   creditPerUnit: 100,    billingUnit: 'per_email',  sortOrder: 7 },
+    { skillId: 'dealclaw-lead-import',            skillName: '导入线索',               description: '上传Excel/CSV→AI列映射→去重→写入线索池，来源标记用户导入',      category: 'admin',      creditPerUnit: 100,    billingUnit: 'per_use',    sortOrder: 8 },
+    { skillId: 'dealclaw-email-growth-send',      skillName: '批量开发信群发',         description: '批量生成个性化开发信→Resend群发→自动序列跟进',                  category: 'outreach',   creditPerUnit: 50,     billingUnit: 'per_email',  sortOrder: 9 },
+    { skillId: 'dealclaw-smart-reply',            skillName: '自动处理买家回复',       description: '监控买家回复→意图识别+询盘分类→生成建议回复/自动回复',          category: 'outreach',   creditPerUnit: 50,     billingUnit: 'per_reply',  sortOrder: 10 },
 
     // ── 免费 Skill（3 个）── credit_per_unit = 0, 仅登记不扣费
     { skillId: 'dealclaw-review',                 skillName: '画像偏好标注',           description: '用户对画像/买家标注✅❌→偏好晋升+双写知识库',                    category: 'admin',      creditPerUnit: 0,      billingUnit: 'per_use',    sortOrder: 50 },

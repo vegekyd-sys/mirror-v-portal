@@ -51,7 +51,7 @@ beforeAll(async () => {
     ossEndpoint: 'oss-cn-shanghai.aliyuncs.com',
     ossBucket: 'dealclaw-backup',
     ossSecretName: 'dealclaw-oss',
-    backupImage: 'alpine:3.19',
+    backupImage: 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
   };
   app = createApp(pool, config);
 });
@@ -67,7 +67,7 @@ describe('GET /healthz', () => {
         runtimeNamespace: 'dealclaw-test', imageRegistry: 'test-registry/dealclaw',
         nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test',
         agentPvcSize: '10Gi', agentPvcStorageClass: 'alibabacloud-cnfs-nas', agentPvcAccessMode: 'ReadWriteOnce',
-        ossEndpoint: 'oss-cn-shanghai.aliyuncs.com', ossBucket: 'dealclaw-backup', ossSecretName: 'dealclaw-oss', backupImage: 'alpine:3.19',
+        ossEndpoint: 'oss-cn-shanghai.aliyuncs.com', ossBucket: 'dealclaw-backup', ossSecretName: 'dealclaw-oss', backupImage: 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
       });
     }
     const res = await request(app).get('/healthz');

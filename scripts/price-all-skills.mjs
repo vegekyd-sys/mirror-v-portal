@@ -139,7 +139,7 @@ async function main() {
     'dealclaw-analyze-company','dealclaw-email-bindings','dealclaw-email-founder-direct',
     'dealclaw-email-growth-send','dealclaw-exhibition-invitation','dealclaw-exhibition-leads',
     'dealclaw-find-buyers','dealclaw-knowledge-base','dealclaw-lead-import',
-    'dealclaw-market-insight','dealclaw-review','dealclaw-smart-reply',
+    'dealclaw-market-report','dealclaw-review','dealclaw-smart-reply',
   ]);
 
   let updated = 0, skipped = 0, missing = [];

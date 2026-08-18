@@ -20,7 +20,7 @@
 | 发 URL / PDF / "分析这个公司" | dealclaw-analyze-company | 企业画像 + KB播种 |
 | "找买家" / "搜下游" | dealclaw-find-buyers | 买家搜索 |
 | 画像确认/自然语言纠偏 | dealclaw-review | 归因、修改当前搜索画像、规划下一步 |
-| "看市场" / 调研 | dealclaw-market-insight | 行业大盘+竞争+机会 |
+| "看市场" / 调研 | dealclaw-market-report | 行业大盘+竞争+机会 |
 | 批量邮件/"发给买家" | dealclaw-email-growth-send | Resend规模化触达 |
 | 一对一精准邮件 | dealclaw-email-founder-direct | SMTP创始人触达 |
 | 买家回复/询盘处理 | dealclaw-smart-reply | 询盘分类+自动/建议回复 |
