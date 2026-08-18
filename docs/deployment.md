@@ -117,7 +117,113 @@ DealClaw 服务的核心链路全在国内：
 | DealClaw Nexus DB | PostgreSQL (Supabase / RDS) | Tenant Registry, Credits, Audit, Orders |
 | 客户 CRM DB | 按客户独立 schema/project | 客户线索、邮件、会议数据 |
 
-## 6. 未来扩展：海外集群
+## 6. 租户数据持久化与备份
+
+### 6.1 持久化分层
+
+dealclaw-agent 运行时数据全部在容器 `/data` 下：
+
+| 目录 | 用途 |
+|------|------|
+| `/data/state` | OpenClaw 状态（config、会话、插件） |
+| `/data/home` | OpenClaw home |
+| `/data/workspace` | agent 工作区（skills、memory、脚本） |
+
+workspace 写入策略：
+- **immutable payload**（identity/skills/scripts）每次启动从镜像 `/opt/dealclaw/payload` rsync 刷新（`--delete`）
+- **customer-mutable 路径**仅保留 `memory/customer/` 和 `work/mio-api/data/`
+- `/overlay`（可选 ConfigMap）→ 客户知识，rsync 进 `memory/customer/`
+
+### 6.2 Per-tenant PVC
+
+每个租户独立 PVC，挂到 dealclaw-agent 的 `/data`：
+
+- PVC 命名：`dealclaw-runtime-<tenantId>`
+- 默认规格：`10Gi` / `alibabacloud-cnfs-nas` / `ReadWriteOnce`
+- 由 provisioning-service 创建，deprovision 时同步删除
+
+环境变量（provisioning-service）：
+
+```
+AGENT_PVC_SIZE=10Gi
+AGENT_PVC_STORAGE_CLASS=alibabacloud-cnfs-nas
+AGENT_PVC_ACCESS_MODE=ReadWriteOnce
+```
+
+### 6.3 扩容策略
+
+阿里云 CNFS NAS 本质是按量付费的弹性文件系统，PVC 的 size 只是配额。
+
+- **在线扩容**：NAS 存储类支持 `allowVolumeExpansion`，`kubectl patch pvc` 无损扩容（NAS 不涉及数据迁移）
+- **按套餐分档**：starter 10Gi / pro 30Gi / enterprise 100Gi，在 plan_tier 映射
+- **监控告警**：ops-agent 巡检 PVC 实际用量，>80% 提醒
+
+### 6.4 数据备份与归档（OSS）
+
+备份通过一次性 K8s Job 实现：挂载租户 PVC → 跑 ossutil 上传 `/data` 到 OSS。
+
+| 模式 | 触发时机 | OSS 存储层 | 用途 |
+|------|---------|-----------|------|
+| `backup` | 租户进 grace（suspend→grace） | Standard | 快速恢复 |
+| `archive` | 销毁前（grace→destroyed） | Archive | 低成本长期归档 |
+
+- 备份 Job：`dealclaw-<backup|archive>-<tenantId>-<timestamp>`，TTL 24h（backup）/ 7d（archive）
+- OSS 路径：`oss://<bucket>/<tenantId>/<mode>/<timestamp>/`
+- 归档顺序：**archive_data 必须先于 destroy_pod**（PVC 存在才能备份）
+
+环境变量（provisioning-service）：
+
+```
+OSS_ENDPOINT=oss-cn-shanghai.aliyuncs.com
+OSS_BUCKET=dealclaw-backup
+OSS_SECRET_NAME=dealclaw-oss
+BACKUP_IMAGE=alpine:3.19
+```
+
+OSS 凭证 Secret（`dealclaw-oss`，Opaque）：
+
+```yaml
+stringData:
+  accessKeyId: "..."
+  accessKeySecret: "..."
+```
+
+### 6.5 OSS 最小 RAM 权限
+
+备份 Job 只做「上传 + 增量对比」，专用子账号 RAM User 最小策略：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:PutObject",
+        "oss:ListObjects",
+        "oss:GetObjectMeta"
+      ],
+      "Resource": [
+        "acs:oss:*:*:dealclaw-backup",
+        "acs:oss:*:*:dealclaw-backup/*"
+      ]
+    }
+  ]
+}
+```
+
+- 恢复流程需额外加 `oss:GetObject`
+- 用专用子账号 AK，不要用主账号，只授权指定 bucket
+- `--update` 依赖 `oss:ListObjects`；若去掉则退化为全量覆盖上传
+
+### 6.6 待办
+
+- [ ] 恢复流程 `POST /v1/tenants/:id/restore`（从 OSS 拉回数据到新 PVC）
+- [ ] 生产用预装 ossutil 的专用备份镜像（替换 alpine 运行时下载）
+- [ ] PVC 用量监控告警
+- [ ] OSS 备份定期校验 / 快照（Velero 或 CNFS 快照）
+
+## 7. 未来扩展：海外集群
 
 以下场景触发海外集群建设：
 
@@ -127,7 +233,7 @@ DealClaw 服务的核心链路全在国内：
 
 **实现**：在 `k8s/overlays/` 下预留 `overseas/` 目录，未来直接复制国内 overlay + 调整 endpoint。
 
-## 7. 相关文档
+## 8. 相关文档
 
 - [CI/CD 方案](./cicd.md) — Jenkins + ACR 构建部署
 - [架构设计](./architecture.md) — 系统架构 + ADR
