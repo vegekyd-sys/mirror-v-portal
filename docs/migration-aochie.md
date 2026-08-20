@@ -19,6 +19,43 @@
 
 ---
 
+## 〇.5 阿里云子账号权限（部署前置）
+
+部署分两类子账号，权限粒度不同。
+
+### 部署管理员子账号（人工操作基础设施用）
+
+| 云服务 | 系统策略 | 用途 |
+|--------|---------|------|
+| 容器服务 ACK | `AliyunCSFullAccess` | 创建/管理集群、节点池、kubectl |
+| 云服务器 ECS | `AliyunECSFullAccess` | ACK 节点（EC2 实例） |
+| 专有网络 VPC | `AliyunVPCFullAccess` | VPC、交换机、安全组 |
+| 云数据库 RDS | `AliyunRDSFullAccess` | 创建/管理 PostgreSQL |
+| 容器镜像 ACR | `AliyunContainerRegistryFullAccess` | 镜像仓库 + push/pull |
+| 对象存储 OSS | `AliyunOSSFullAccess` | 备份 bucket 管理 |
+| 文件存储 NAS | `AliyunNASFullAccess` | PVC 存储 |
+| 负载均衡 SLB/ALB | `AliyunSLBFullAccess` | ingress |
+| 数据传输 DTS | `AliyunDTSFullAccess` | 数据库迁移 |
+| 访问控制 RAM | `AliyunRAMFullAccess` | 创建运行时子账号 |
+
+> 图省事可直接给 `AdministratorAccess`，但生产不建议。
+
+### 运行时子账号（Jenkins / ArgoCD / 应用，最小权限）
+
+| 用途 | 权限 |
+|------|------|
+| Jenkins 推镜像 | `AliyunContainerRegistryFullAccess`（或只给 `cr:*` 自定义） |
+| ArgoCD / 应用拉镜像 | `AliyunContainerRegistryReadOnlyAccess`（或 imagePullSecret） |
+| 应用 OSS 备份 | `oss:PutObject` + `oss:ListObjects` + `oss:GetObjectMeta` + `oss:GetObject`，scope 到 `dealclaw-backup` |
+
+### 说明
+
+1. **管理员与运行时账号分开**：管理员 FullAccess 只给本人；Jenkins/应用用最小权限独立子账号，避免 key 泄露风险扩大。
+2. **ACK service-linked role**：创建集群时阿里云自动创建 `AliyunServiceRoleForACK`（自动处理 VPC/SLB/ECS 关联创建），严格说 ACK 集群创建只需 `AliyunCSFullAccess`；VPC/ECS/SLB 的 FullAccess 是给手动单独创建资源用的。
+3. OSS 备份子账号的最小 RAM 策略见本文档 6.5 节（deployment.md），与管理员账号分开。
+
+---
+
 ## 一、基础设施创建（Phase 1，人工控制台操作）
 
 按依赖顺序执行，每步标了关键配置。
