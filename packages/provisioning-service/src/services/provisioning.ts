@@ -68,6 +68,8 @@ export async function provisionTenant(
   const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
 
   const nsName = tenantNamespace(tenant.tenantId); // per-tenant namespace
+  // Central control-plane namespace where provisioning-service / credits-ledger / ops-agent run
+  const centralNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || 'dealclaw-test';
   const tenantLabel = tenant.tenantId;
 
   const result: ProvisionResult = {
@@ -118,7 +120,8 @@ export async function provisionTenant(
 
     await k8sCreateSecret(nsName, creditsConfigName, {
       DEALCLAW_CREDITS_ACCOUNT_ID: `acct_${tenantLabel}`,
-      DEALCLAW_CREDITS_LEDGER_URL: 'http://credits-ledger:8081',
+      // Cross-namespace: credits-ledger runs in the central namespace
+      DEALCLAW_CREDITS_LEDGER_URL: `http://credits-ledger.${centralNs}:8081`,
       DEALCLAW_CUSTOMER_KEY_REF: `tenant-keys/${tenantLabel}`,
       DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantLabel}`,
     });
@@ -143,7 +146,8 @@ export async function provisionTenant(
         { name: 'NODE_ENV', value: 'production' },
         // Contact writeback — lets nexus-gateway report the sender's im_open_id
         // so lifecycle notifications can be delivered via the notify relay.
-        { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || 'http://provisioning-service:8082' },
+        // Cross-namespace: provisioning-service runs in the central namespace.
+        { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
         { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
       ],
       requests: { cpu: '100m', memory: '128Mi' },
@@ -184,7 +188,8 @@ export async function provisionTenant(
         { name: 'NODE_ENV', value: 'production' },
         { name: 'DEALCLAW_MODEL', value: 'deepseek/deepseek-chat' },
         // credits-ledger 地址 + 服务令牌（确定性计费 plugin 依赖）
-        { name: 'DC_BILLING_URL', value: process.env.CREDITS_LEDGER_URL || 'http://credits-ledger:8081' },
+        // Cross-namespace: credits-ledger runs in the central namespace.
+        { name: 'DC_BILLING_URL', value: process.env.CREDITS_LEDGER_URL || `http://credits-ledger.${centralNs}:8081` },
         { name: 'DC_BILLING_TOKEN', value: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '' },
       ],
       requests: { cpu: '500m', memory: '1Gi' },
