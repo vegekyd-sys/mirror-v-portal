@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
+  createNamespace,
+  deleteNamespace,
   createSecret as k8sCreateSecret,
   createDeployment,
   createService,
@@ -11,6 +13,11 @@ import {
   deletePersistentVolumeClaim,
 } from './k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
+
+/** Per-tenant namespace name — each tenant is fully isolated in its own namespace. */
+export function tenantNamespace(tenantId: string): string {
+  return `dealclaw-${tenantId}`;
+}
 
 export interface TenantProvision {
   tenantId: string;
@@ -53,7 +60,6 @@ export async function provisionTenant(
   options: ProvisionOptions = {},
 ): Promise<ProvisionResult> {
   const dryRun = options.dryRun ?? (process.env.K8S_DRY_RUN === 'true' || process.env.NODE_ENV !== 'production');
-  const runtimeNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || 'dealclaw-staging';
   const registry = options.imageRegistry || process.env.IMAGE_REGISTRY || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealclaw';
   const gwTag = options.nexusGatewayImageTag || process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest';
   const agentTag = options.dealclawAgentImageTag || process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest';
@@ -61,7 +67,7 @@ export async function provisionTenant(
   const pvcStorageClass = options.agentPvcStorageClass || process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas';
   const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
 
-  const nsName = runtimeNs; // shared namespace — per design doc
+  const nsName = tenantNamespace(tenant.tenantId); // per-tenant namespace
   const tenantLabel = tenant.tenantId;
 
   const result: ProvisionResult = {
@@ -93,6 +99,9 @@ export async function provisionTenant(
 
   // === Production path: real K8s API calls ===
   try {
+    // 0. Create per-tenant namespace first
+    await createNamespace(nsName);
+
     // 1. Secrets
     await k8sCreateSecret(nsName, botSecretName, {
       DEALCLAW_APP_ID: tenant.appId || `placeholder-${tenantLabel}`,
@@ -210,7 +219,7 @@ export async function deprovisionTenant(
   options: { dryRun?: boolean; runtimeNamespace?: string } = {},
 ): Promise<{ deleted: boolean; warnings: string[] }> {
   const dryRun = options.dryRun ?? (process.env.K8S_DRY_RUN === 'true' || process.env.NODE_ENV !== 'production');
-  const namespace = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || 'dealclaw-staging';
+  const namespace = tenantNamespace(tenantId);
 
   const gatewayName = `nexus-gateway-${tenantId}`;
   const agentName = `dealclaw-agent-${tenantId}`;
@@ -241,6 +250,8 @@ export async function deprovisionTenant(
     ]);
     // Delete the per-tenant PVC after the Pod has released it.
     await deletePersistentVolumeClaim(namespace, agentPvcName);
+    // Delete the tenant's namespace (removes any remaining resources).
+    await deleteNamespace(namespace);
     return { deleted: true, warnings: [`Deleted tenant ${tenantId} resources from namespace ${namespace}`] };
   } catch (err) {
     return {
@@ -263,7 +274,7 @@ export async function backupTenantData(
   options: { mode?: 'backup' | 'archive'; runtimeNamespace?: string } = {},
 ): Promise<{ ok: boolean; jobName: string; warnings: string[] }> {
   const mode = options.mode ?? 'backup';
-  const namespace = options.runtimeNamespace || config.runtimeNamespace;
+  const namespace = tenantNamespace(tenantId);
   const pvcName = `dealclaw-runtime-${tenantId}`;
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').replace(/T/, '-');
   const jobName = `dealclaw-${mode}-${tenantId}-${timestamp}`;
@@ -341,7 +352,7 @@ export async function restoreTenantData(
   options: { source?: 'backup' | 'archive'; runtimeNamespace?: string } = {},
 ): Promise<{ ok: boolean; jobName: string; warnings: string[] }> {
   const source = options.source ?? 'archive';
-  const namespace = options.runtimeNamespace || config.runtimeNamespace;
+  const namespace = tenantNamespace(tenantId);
   const pvcName = `dealclaw-runtime-${tenantId}`;
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').replace(/T/, '-');
   const jobName = `dealclaw-restore-${tenantId}-${timestamp}`;

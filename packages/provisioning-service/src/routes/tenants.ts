@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData } from '../services/provisioning.js';
+import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData, tenantNamespace } from '../services/provisioning.js';
 import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
@@ -48,8 +48,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const safePhone = contactPhone ? contactPhone.replace(/[^0-9+ -]/g, '').slice(0, 30) : null;
       const safeAppId = botAppId && typeof botAppId === 'string' && botAppId.trim() ? botAppId.trim().slice(0, 64) : null;
       const safeAppSecret = botAppSecret && typeof botAppSecret === 'string' && botAppSecret.trim() ? botAppSecret.trim().slice(0, 128) : null;
-      // Tenant workloads are isolated by names/labels inside one runtime namespace.
-      const k8sNs = config.runtimeNamespace;
+      // Tenant workloads are fully isolated in a per-tenant namespace.
+      const k8sNs = `dealclaw-${tenantId}`;
       const creditsAccountId = `acct_${tenantId}`;
 
       // NS3 FIX: Wrap DB operations in transaction to prevent partial writes.
@@ -119,7 +119,6 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           appSecret: safeAppSecret || undefined,
         }, {
           dryRun: config.k8sDryRun,
-          runtimeNamespace: config.runtimeNamespace,
           imageRegistry: config.imageRegistry,
           nexusGatewayImageTag: config.nexusGatewayImageTag,
           dealclawAgentImageTag: config.dealclawAgentImageTag,
@@ -234,7 +233,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.json({
           ok: true,
           dryRun: true,
-          namespace: config.runtimeNamespace,
+          namespace: tenantNamespace(req.params.id),
           tenantId: req.params.id,
           deployments: [],
           pods: [],
@@ -242,7 +241,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
 
-      const runtime = await getTenantRuntimeStatus(config.runtimeNamespace, req.params.id);
+      const runtime = await getTenantRuntimeStatus(tenantNamespace(req.params.id), req.params.id);
       res.json({ ok: true, dryRun: false, ...runtime });
     } catch (err) {
       console.error('Get tenant runtime status failed:', err);
@@ -300,7 +299,6 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       // Deprovision K8s resources
       const result = await deprovisionTenant(req.params.id, {
         dryRun: config.k8sDryRun,
-        runtimeNamespace: config.runtimeNamespace,
       });
 
       if (!result.deleted) {

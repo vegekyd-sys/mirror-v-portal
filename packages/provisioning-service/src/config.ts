@@ -9,7 +9,7 @@ export interface ProvisioningConfig {
   databaseUrl: string;
   /** Override for local dev/testing — skip actual K8s calls */
   k8sDryRun: boolean;
-  /** Runtime namespace — all tenants deployed here (per design doc) */
+  /** Runtime namespace — deprecated; tenants now use per-tenant namespace dealclaw-<tenantId> */
   runtimeNamespace: string;
   /** ACR registry prefix for container images */
   imageRegistry: string;
