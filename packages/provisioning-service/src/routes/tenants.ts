@@ -371,6 +371,43 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
 
+  // PATCH /v1/tenants/:id/profile — update company name / contact info（对话回写）
+  router.patch('/v1/tenants/:id/profile', async (req: Request, res: Response) => {
+    try {
+      const { companyName, contactEmail } = req.body ?? {};
+      const updates: string[] = [];
+      const params: any[] = [];
+
+      if (companyName && typeof companyName === 'string' && companyName.trim()) {
+        updates.push(`company_name = $${params.length + 1}`);
+        params.push(companyName.trim().slice(0, 200));
+      }
+      if (contactEmail && typeof contactEmail === 'string' && contactEmail.trim()) {
+        updates.push(`contact_email = $${params.length + 1}`);
+        params.push(contactEmail.trim().slice(0, 200));
+      }
+      if (!updates.length) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'companyName or contactEmail is required' });
+        return;
+      }
+
+      params.push(req.params.id);
+      const result = await pool.query(
+        `UPDATE tenants SET ${updates.join(', ')}, updated_at = NOW() WHERE tenant_id = $${params.length}`,
+        params,
+      );
+      if (result.rowCount === 0) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      res.json({ ok: true, tenantId: req.params.id });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Update tenant profile failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Update failed' });
+    }
+  });
+
   // PATCH /v1/tenants/:id/deployment — rolling update deployment image
   router.patch('/v1/tenants/:id/deployment', async (req: Request, res: Response) => {
     try {
