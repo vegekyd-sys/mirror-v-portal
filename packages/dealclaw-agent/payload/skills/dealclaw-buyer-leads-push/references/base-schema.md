@@ -1,6 +1,6 @@
 # Feishu Base schema
 
-Create one Base per company named `企业名称｜AI猎客商机池`. Use one primary table named `买家线索`.
+Reuse the unified lead pool via `ensure_company_lead_pool`（企业名称线索池，主表「线索池」）。评分明细、参展行为作为关联子表（双向关联）。
 
 ## Interface fact fields
 
@@ -65,7 +65,7 @@ Do not add `数据来源`, `原始详情`, `公司官网`, `联系人姓名`, em
 |---|---|
 | 解锁人 | Person |
 | 解锁时间 | Date time |
-| 解锁方式 | Text: `商机池下拉` or `群内指令` |
+| 解锁方式 | Text: `线索池下拉` or `群内指令` |
 | 解锁推送消息ID | Text |
 
 Write these only after the contact card is confirmed sent (`contact_unlock_guard.py complete` with `contact_pushed`). Skip records whose `是否解锁` is `已解锁` and `解锁推送消息ID` is already non-empty; they were released before and must not trigger a duplicate send.
@@ -118,7 +118,7 @@ Set `核心匹配通过` only for the product-name, product-category, and target
 
 ## Schema reconciliation
 
-A bound Base may predate the current schema (for example, a historical 商机池 without the v15 unlock columns). Reconcile it **additively**:
+A bound Base may predate the current schema (for example, a historical 线索池 without the v15 unlock columns). Reconcile it **additively**:
 
 1. Run reconciliation when an existing Base is bound and at the start of every daily run, before the first record upsert or unlock sweep. Read the live `买家线索` field list and pass it to `scripts/base_schema_guard.py plan`.
 2. The guard emits an add-only `add_plan`: create exactly the listed fields with the listed types and select options. For `是否解锁`, create the single-select with options `未解锁`、`已解锁` and default new records to `未解锁`.

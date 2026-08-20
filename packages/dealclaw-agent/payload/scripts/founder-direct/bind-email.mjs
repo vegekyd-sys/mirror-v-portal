@@ -14,6 +14,7 @@ import nodemailer from 'nodemailer';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ACCOUNTS_DIR = resolve(__dirname, 'accounts');
+const REGISTRY = resolve(__dirname, 'email-registry.json');
 if (!existsSync(ACCOUNTS_DIR)) mkdirSync(ACCOUNTS_DIR, { recursive: true });
 
 const args = process.argv.slice(2);
@@ -241,6 +242,20 @@ async function main() {
   };
 
   writeFileSync(accountFile, JSON.stringify(config, null, 2));
+
+  // Step 4.5: Sync to email-registry.json
+  const domain = email.split('@')[1]?.toLowerCase();
+  let registry = {};
+  if (existsSync(REGISTRY)) {
+    try { registry = JSON.parse(readFileSync(REGISTRY, 'utf8')); } catch {}
+  }
+  registry[email] = {
+    protocol: 'smtp',
+    domain,
+    bound_at: new Date().toISOString().slice(0, 10),
+    note: 'SMTP bound via bind-email.mjs'
+  };
+  writeFileSync(REGISTRY, JSON.stringify(registry, null, 2) + '\n');
 
   // Step 5: Send test email to self
   console.log(`Sending test email to ${email}...`);

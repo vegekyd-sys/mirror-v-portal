@@ -17,7 +17,7 @@ from datetime import datetime
 # 格式: (正则, 描述, 改写建议)
 BLOCKLIST = [
     # Skill 名
-    (r'\bDC-CBIE\b', 'Skill名', '删掉或替换为"企业分析"'),
+    (r'企业分析', 'Skill名', '删掉或替换为"企业分析"'),
     (r'\bDC-MI\b', 'Skill名', '删掉或替换为"市场分析"'),
     (r'\bDC-PRC\b', 'Skill名', '删掉或替换为"信息确认"'),
     (r'\bDC-EL\b', 'Skill名', '删掉'),

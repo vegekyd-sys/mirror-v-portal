@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/founder-direct/send-direct.mjs
-// 通过已绑定的企业邮箱 SMTP 发送邮件（走 Sent folder）
+// 发送邮件：Resend 代理邮箱走 Resend API，普通邮箱走 SMTP
 // Usage:
 //   node scripts/founder-direct/send-direct.mjs --from tian@company.com --to buyer@example.com --subject 'quick question' --html '<p>Hi</p>'
 //   node scripts/founder-direct/send-direct.mjs --from tian@company.com --to buyer@example.com --subject '...' --html-file draft.html
@@ -11,7 +11,59 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import nodemailer from 'nodemailer';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// ── Email registry (authoritative protocol source) ───────────
+const REGISTRY_FILE = resolve(__dirname, 'email-registry.json');
+
+function loadRegistry() {
+  if (!existsSync(REGISTRY_FILE)) return {};
+  try { return JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')); } catch { return {}; }
+}
+
+// ── Resend proxy domains (fallback only, registry wins) ──────
+const RESEND_PROXY_DOMAINS = ['mail.dealclaw.io'];
+const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_4BU…Myx1';
+const RESEND_API_URL = 'https://api.resend.com/emails';
+
+function isResendProxy(email) {
+  // 1. Registry first (authoritative)
+  const registry = loadRegistry();
+  const record = registry[email];
+  if (record && record.protocol === 'resend') return true;
+  if (record && record.protocol === 'smtp') return false;
+  // 2. Fallback: hardcoded domain list
+  const domain = email.split('@')[1]?.toLowerCase();
+  return RESEND_PROXY_DOMAINS.includes(domain);
+}
+
+async function sendViaResend(from, to, subject, text, html, cc, bcc) {
+  // Uses Resend HTTP API — no SMTP auth needed for proxy emails
+  const payload = { from, to, subject };
+  if (text) payload.text = text;
+  if (html) payload.html = html;
+  if (cc?.length) payload.cc = cc;
+  if (bcc?.length) payload.bcc = bcc;
+
+  const resp = await fetch(RESEND_API_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (resp.status !== 200) {
+    throw new Error(`Resend API error ${resp.status}: ${JSON.stringify(data)}`);
+  }
+  return {
+    resendId: data.id,
+    via: 'resend',
+    accepted: to,
+    rejected: [],
+    sent_at: new Date().toISOString(),
+  };
+}
+
 const ACCOUNTS_DIR = resolve(__dirname, 'accounts');
 const SENT_LOG = resolve(__dirname, 'sent-log.jsonl');
 
@@ -39,13 +91,17 @@ if (htmlFile) {
   html = readFileSync(htmlFile, 'utf8');
 }
 
-// ── Load account config ────────────────────────────────────────
-const accountFile = resolve(ACCOUNTS_DIR, `${from.replace(/[@.]/g, '_')}.json`);
-if (!existsSync(accountFile)) {
-  console.error(`❌ ${from} not bound. Run bind-email.mjs first.`);
-  process.exit(2);
+// ── Load account config (skip for Resend proxy) ────────────────
+const useResend = isResendProxy(from);
+let account = null;
+if (!useResend) {
+  const accountFile = resolve(ACCOUNTS_DIR, `${from.replace(/[@.]/g, '_')}.json`);
+  if (!existsSync(accountFile)) {
+    console.error(`❌ ${from} not bound. Run bind-email.mjs first.`);
+    process.exit(2);
+  }
+  account = JSON.parse(readFileSync(accountFile, 'utf8'));
 }
-const account = JSON.parse(readFileSync(accountFile, 'utf8'));
 
 // ── Prompt for password ────────────────────────────────────────
 async function promptPassword() {
@@ -72,6 +128,26 @@ function countTodaySent() {
 
 // ── Main ────────────────────────────────────────────────────────
 async function main() {
+  const to = toRaw.split(',').map(s => s.trim());
+  const cc = ccRaw ? ccRaw.split(',').map(s => s.trim()) : undefined;
+  const bcc = bccRaw ? bccRaw.split(',').map(s => s.trim()) : undefined;
+
+  // ── Route: Resend proxy vs SMTP ──────────────────────────
+  if (isResendProxy(from)) {
+    // Resend proxy email — use Resend HTTP API, no SMTP needed
+    if (dryRun) {
+      console.log('DRY RUN (Resend) — would send:');
+      console.log(JSON.stringify({ from, to, subject, cc, bcc, via: 'resend', text_preview: text?.substring(0, 200) }, null, 2));
+      return;
+    }
+    const result = await sendViaResend(from, to, subject, text, html, cc, bcc);
+    console.log(JSON.stringify(result, null, 2));
+    if (!existsSync(SENT_LOG)) writeFileSync(SENT_LOG, '');
+    writeFileSync(SENT_LOG, JSON.stringify({ ...result, from, to, subject }) + '\n', { flag: 'a' });
+    return;
+  }
+
+  // ── SMTP path (non-Resend emails) ─────────────────────────
   // Check daily limit (skip for dry runs)
   if (!dryRun) {
     const todaySent = countTodaySent();
@@ -88,10 +164,6 @@ async function main() {
   }
 
   const pw = parseArg('--password') || await promptPassword();
-
-  const to = toRaw.split(',').map(s => s.trim());
-  const cc = ccRaw ? ccRaw.split(',').map(s => s.trim()) : undefined;
-  const bcc = bccRaw ? bccRaw.split(',').map(s => s.trim()) : undefined;
 
   if (dryRun) {
     console.log('DRY RUN — would send:');

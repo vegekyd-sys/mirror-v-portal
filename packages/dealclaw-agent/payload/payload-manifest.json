@@ -1,10 +1,14 @@
 {
   "name": "dealclaw-base",
-  "version": "dealclaw-base.v1",
-  "updated_at": "2026-08-10T22:45:00+08:00",
+  "version": "dealclaw-base.v2",
+  "updated_at": "2026-08-20T18:00:00+08:00",
+  "source": "standalone-dealclaw-workspace",
   "features": [
-    "natural-language-buyer-profile-calibration",
-    "automatic-enterprise-lead-pool-sync",
-    "lead-pool-link-in-search-output"
+    "standalone-dealclaw-identity",
+    "source-synced-dealclaw-skills",
+    "source-synced-mio-engine-code",
+    "tenant-data-and-credentials-externalized",
+    "nexus-billing-plugin",
+    "alipay-recharge-skill"
   ]
 }

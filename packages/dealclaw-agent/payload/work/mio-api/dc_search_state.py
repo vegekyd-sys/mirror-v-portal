@@ -10,7 +10,7 @@ DC 搜索状态管理 — 分页追踪 + 跨搜索去重
     state = SearchState()
 
     # 开始新搜索
-    state.start(enterprise='lawaken.com', source='apollo', 
+    state.start(enterprise='lawaken.com', source='apollo',
                 keyword_tags=['smart glasses'], country='US',
                 employees=['11,50'], user_open_id='ou_xxx')
 
@@ -23,7 +23,7 @@ DC 搜索状态管理 — 分页追踪 + 跨搜索去重
 
     # 记录新域名（去重）
     state.add_domains(['bestbuy.com', 'newegg.com'])
-    
+
     # 检查域名是否已出现过
     state.seen('bestbuy.com')  # → True/False
 

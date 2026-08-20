@@ -1,6 +1,7 @@
 ---
 name: "dealclaw-exhibition-leads"
 description: "展会线索处理。展中OCR/ASR/匹配→展后跟进。来源：田耕郡@格格"
+author: ""
 ---
 
 # 展会线索处理
@@ -22,6 +23,7 @@ description: "展会线索处理。展中OCR/ASR/匹配→展后跟进。来源�
 4. 匹配 → 关联名片与录音 → 意图分析（高/中/低意向）
 5. 五步完成 → 一条总结气泡
 6. 写入线索池：调 `ensure_company_lead_pool` 获取企业线索池 → OCR 字段写 record，来源「展会线索」；有 ASR 意图时写冷热/阶段
+7. 若名片/录音中涉及展会名称、国家，调 `dc-knowledge-query` 校验展会信息（时间/行业/规模），辅助名片上下文判断。
 
 ### Step 6 写入线索池
 
@@ -47,6 +49,7 @@ GDPR 未获同意 → 跳过此步骤，不写入。
 ## 展后跟进
 
 按意图分类生成跟进邮件，走 Growth Send 发送。
+跟进完成后，调 `dc-knowledge-query` 检查该国是否还有其他 upcoming 米奥展会，有则附加短钩子（如「沙特12月也有HOMELIFE，要不要提前搜买家？」）。
 
 ## 边界
 
@@ -60,8 +63,8 @@ GDPR 未获同意 → 跳过此步骤，不写入。
 每次完成展会买家对接并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-exhibition-leads 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-exhibition-leads 1 &
 ```
 
 - 必须在后台异步执行（加 `&`），不阻塞用户回复

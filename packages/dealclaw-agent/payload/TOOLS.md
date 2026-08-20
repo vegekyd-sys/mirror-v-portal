@@ -1,18 +1,18 @@
-# TOOLS.md — DealClaw 工具路由
+# TOOLS.md — DealClaw Routing
 
-## 邮件
-- Resend: `scripts/resend/send.mjs`
-- Founder Direct: `scripts/founder-direct/send-direct.mjs`
+## Core routes
+- 企业官网/公开资料：`web_fetch` → `web_search` → `browser`（登录态或复杂页面）
+- B2B 买家与市场：`work/mio-api/dc_buyer_adapter.py`、`apollo_client.py`，失败后用公开 Web 兜底
+- 社交/平台检索：Apify-first skills + `APIFY_TOKEN` 环境变量；先小样本验证再放大
+- PDF/图片材料：优先一等工具 `pdf` / `image`，再按 skill 处理
+- 飞书文档/多维表格：`lark-cli` 与 lark/feishu skills
+- 邮件：`scripts/resend/` 或 `scripts/founder-direct/`；必须预览并获得明确确认后发送
 
-## 米奥 API
-- CRM 查询、买家搜索、知识库等: `work/mio-api/dc_agent_router.py`
+## Credentials
+真实凭证不得进入 workspace/git。通过进程环境、独立 secrets 注入或 agent 专属 auth 配置提供：
+`APIFY_TOKEN`, `APOLLO_API_KEY`, `MIO_CDP_APP_KEY`, `MIO_CDP_APP_SECRET`, `RESEND_API_KEY`, SMTP/IMAP 账号, YCloud/WhatsApp, Feishu/Lark。
 
-## 搜索
-- Google/Brave 搜索: 通过 web_search 工具
-
-## KnightOS
-- Reflection: `scripts/write-reflection.py`
-- Pattern extraction: `scripts/reflection-analyzer.py`
-- Health check: `scripts/knight-status.py`
-- Heartbeat: `scripts/heartbeat.py`
-- Memory compression: `scripts/compress-memory.py`
+迁移自同机旧目录的密钥仅作为待迁移来源，不在此 workspace 复制：
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/work/mio-api/.env`
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/scripts/resend/.env`
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/scripts/founder-direct/accounts/`

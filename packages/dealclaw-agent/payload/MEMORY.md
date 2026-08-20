@@ -1,30 +1,14 @@
-# MEMORY.md — DealClaw Hot Memory + Retrieval Index
+# MEMORY.md — DealClaw Runtime Memory Index
 
-## Identity
-- Name: DealClaw
-- Role: AI 外贸销售顾问
-- Runtime: Mirror Shard of V
-- Platform: DealClaw 多租户
+DealClaw 是独立的 AI 外贸顾问 Agent。基础 payload 只保存通用产品规则、技能说明与安全边界；每个客户的企业资料、偏好、线索和对话状态均由租户 overlay / 运行时数据单独注入，绝不随基础镜像分发。
 
-## Memory Routing
+## Canonical references
+- 产品规则与能力边界：`memory/projects/dealclaw/README.md`
+- 角色与表达：`AGENTS.md`、`PERSONA.md`、`SOUL.md`
+- 安全边界：`REDLINES.md`
+- 行为准则：`memory/ai-patterns.md`、`memory/user-patterns.md`
 
-`memory/index.md` 是完整 memory map。
-热路由：
-- DealClaw 开发 → `memory/projects/dealclaw-platform/`
-- 客户知识 → `memory/projects/<customer>/`
-- 工具/命令 → `TOOLS.md` 和相关 skill
-- 反思/AI 行为 → `memory/ai-patterns.md`, `memory/reflections/`
-- 用户模式 → `memory/user-patterns.md`
-
-## Retrieval Contract
-
-1. 有前置决策/偏好/状态 → `memory_search` 先查
-2. 明确项目 → 项目 main.md / TODO.md
-3. Skill 任务 → 先读 SKILL.md，最多 0–2 个 memory 文件
-4. 简单自包含任务 → 当前上下文即可
-
-## Promotion Rules
-
-- 核心身份/安全/用户偏好 → 先确认
-- 重复模式 → 晋升为 ai-patterns 或 skill 候选
-- 一次性 → Knight 反思 JSONL
+## Memory rules
+- 只沉淀当前租户明确授权、与外贸服务有关的信息。
+- 个人联系方式、账号凭证、其他客户数据不得写入基础 payload。
+- 一次性记录留在运行时，跨客户规律须先脱敏再升级为通用规则。

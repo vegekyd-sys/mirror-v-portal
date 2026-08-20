@@ -157,13 +157,11 @@ def auto_register():
 
     engines = {
         "dc_ls_store": ("dc_ls_store.py", "线索存储+去重+标注+偏好", ["dc_audit", "dc_customer_import"], "2.5"),
-        "dc_iq_engine": ("dc_iq_engine.py", "意图识别→状态迁移→自动回复", ["dc_ls_store", "dc_kb_engine", "dc_send_log", "dc_audit"], "2.2"),
+        "dc_iq_engine": ("dc_iq_engine.py", "意图识别→状态迁移→自动回复", ["dc_ls_store", "dc_kb_engine", "dc_audit"], "2.2"),
         "dc_kb_engine": ("dc_kb_engine.py", "六模块统一知识库", ["dc_audit"], "2.0"),
-        "dc_send_log": ("dc_send_log.py", "发送日志+投递追踪+退订检查", ["dc_audit"], "1.1"),
         "dc_copy_engine": ("dc_copy_engine.py", "多语言开发信+渠道适配", [], "2.1"),
         "dc_audit": ("dc_audit.py", "审计日志", [], "1.0"),
         "dc_customer_import": ("dc_customer_import.py", "历史客户导入+标签提取+画像学习", ["dc_kb_engine"], "1.1"),
-        "dc_dashboard": ("dc_dashboard.py", "日报+漏斗+看板", ["dc_send_log", "dc_ls_store", "dc_kb_engine"], "2.0"),
         "dc_circuit": ("dc_circuit.py", "熔断降级", [], "1.0"),
         "dc_degrade": ("dc_degrade.py", "降级决策矩阵", ["dc_error_log"], "1.0"),
         "dc_error_log": ("dc_error_log.py", "结构化错误日志", [], "1.0"),
@@ -188,8 +186,8 @@ def auto_register():
                   ["策略", "切入", "竞品分析"]),
         "dc-kb": ("dc-knowledge-base", "知识库管理", ["dc_kb_engine"], "2.0", "田耕郡",
                   ["知识库", "物料", "产品库"]),
-        "dc-cbie": ("dc-company-buyer-intelligence", "企业买方情报", [], "1.7", "田耕郡",
-                    ["企业画像", "CBIE", "公司分析"]),
+        "dc-analyze-company": ("dc-analyze-company", "企业买方情报", [], "1.7", "田耕郡",
+                    ["企业画像", "企业分析", "公司分析"]),
     }
     for name, (folder, desc, deps, ver, author, triggers) in skill_map.items():
         path = skills_dir / folder / "SKILL.md"

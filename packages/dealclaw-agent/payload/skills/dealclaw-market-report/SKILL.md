@@ -1,9 +1,18 @@
 ---
 name: "dealclaw-market-report"
-description: "按品类和国家生成外贸市场决策与选品HTML报告，覆盖市场规模/竞争/渠道/合规/选品评分/90天开拓方案。DealClaw 项目 Skill。触发条件：用户消息同时包含「产品/品类词」+「国家/市场名」且含「市场/选品/报告/分析/调研/出口/进入」等词之一，即自动触发。"
+description: "按品类和国家生成外贸市场决策与选品HTML报告，覆盖市场规模/竞争/渠道/合规/选品评分/90天开拓方案。DealClaw 项目 Skill。触发：识别到用户有「看市场」意愿（产品/品类 + 国家/市场维度）即主动引导提出做报告，不必等用户明说「报告/分析」，确认后生成。"
+author: ""
 ---
 
 # 外贸市场决策与选品 HTML 报告
+
+## 触发与主动引导（灵活，不死等关键词）
+
+**识别到用户有「看市场」的意愿就主动引导，不要死等用户说「报告/分析」。**
+
+- 用户提到「产品 + 国家/市场」组合（如「巴西减速机好卖吗」「美国咖啡机市场怎么样」「想进墨西哥」），即使没说「报告/分析」，也是看市场意愿 → 主动提出：「我可以帮你做一份 {国家}{产品} 的市场报告——市场规模、竞争、关税、进入建议，要吗？」
+- 用户确认后生成；拒绝就停，不硬推。
+- 只有产品没国家、或只有国家没产品时，问缺的那个，别猜。
 
 ## 输入与输出
 
@@ -39,12 +48,25 @@ description: "按品类和国家生成外贸市场决策与选品HTML报告，�
 - ❌ 错误：只发文件没有摘要
 - ❌ 错误：只发摘要没有文件
 - ❌ 错误："报告已生成：work/xxx-report.html" → 用户收不到文件
+- ❌ 错误：用 `MEDIA:` 行发 HTML → MEDIA 只支持图片/音频/视频，不识别 .html 文档，附件会被丢弃；文档一律用 `message.send` + `filePath`
 
 ## 工具边界
 
 - 不安装、不要求、不调用 Exa MCP。
 - 使用当前可用的互联网浏览/搜索能力、政府与海关网站、官方统计和贸易数据库、当地平台前台、企业官网、经销商与公开项目资料。
 - 没有联网能力时，仅使用用户提供或本地已有资料，并将时效性和数据缺口写入报告；不得用记忆补造现行价格、税率、法规或排名。
+
+## 数据源 API Key
+
+研究可用的官方贸易数据接口（用于「执行流程」第 2、4 步的贸易流/市场规模证据，对应 `references/data-evidence.md` 证据等级 C）：
+
+| 数据源 | API Key | 用途 |
+|---|---|---|
+| 联合国数据（UN Comtrade） | 环境变量 `UN_COMTRADE_API_KEY` | 各国进出口额 / 贸易流 |
+| WTO 数据 | 环境变量 `WTO_API_KEY` | 全球贸易 / 关税 / 政策数据 |
+
+- Key 存于环境变量（`UN_COMTRADE_API_KEY` / `WTO_API_KEY`，定义在 `work/mio-api/.env`），取数时读环境变量，不硬编码进本文件。
+- 优先用这两个官方源交叉验证市场规模与增长；Key 仅用于取数，不写进报告正文，报告里只标来源与链接。
 
 ## 执行流程
 
@@ -97,8 +119,8 @@ description: "按品类和国家生成外贸市场决策与选品HTML报告，�
 每次完成市场报告并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-market-report 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-market-report 1 &
 ```
 
 - 必须在后台异步执行（加 `&`），不阻塞用户回复

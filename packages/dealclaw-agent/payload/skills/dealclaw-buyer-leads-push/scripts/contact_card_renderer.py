@@ -156,7 +156,7 @@ def render(payload: Any) -> dict[str, Any]:
                 "tag": "lark_md",
                 "content": (
                     "联系方式来自 TradeChina 买家详情，仅发送至本群，"
-                    "不会写入AI猎客商机池。请合规使用，勿二次分发。"
+                    "不会写入企业线索池。请合规使用，勿二次分发。"
                 ),
             },
         },
@@ -229,7 +229,7 @@ def self_test() -> None:
         escape_lark_md("ana@example.com"),
         "（已验证）",
         "（未验证）",
-        "不会写入AI猎客商机池",
+        "不会写入企业线索池",
     ):
         assert expected in text_content, f"missing {expected}"
     for expected in ("买家联系方式已解锁", "enable_forward"):

@@ -27,21 +27,21 @@ DC-LS 存储引擎 — 线索标注、去重、历史归档、偏好回传
 
 用法:
     from dc_ls_store import LeadStore
-    
+
     store = LeadStore()
-    
+
     # 标注（enterprise 必填，禁止跨企业操作）
     store.annotate("COXXX", "ou_xxx", "我的买家", enterprise="solarunis.com")
     store.annotate("COYYY", "ou_xxx", "排除", reason="体量太大", enterprise="solarunis.com")
-    
+
     # 去重检查（只在本企业内去重）
     store.is_duplicate("pacifictransmission.com", enterprise="solarunis.com")  # → True/False
     store.filter_duplicates([...candidates...], current_user="ou_xxx", enterprise="solarunis.com")
-    
+
     # 偏好回传
     prefs = store.get_user_preferences("ou_xxx")
     # → {"排除国家": ["US"], "排除规则": [{"type": "size", "threshold": "5000"}]}
-    
+
     # 历史查询
     history = store.get_user_leads("ou_xxx", enterprise="solarunis.com")
     all_leads = store.get_enterprise_leads("solarunis.com")  # 本企业老板视角
@@ -55,7 +55,7 @@ from typing import Optional
 
 
 # ── 配置 ──────────────────────────────────────────────────
-_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+_DATA_DIR = os.environ.get("DC_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _LEADS_FILE = os.path.join(_DATA_DIR, "leads.json")
 _PREFS_FILE = os.path.join(_DATA_DIR, "preferences.json")
 
@@ -132,7 +132,7 @@ class LeadStore:
     def save_lead(self, lead: dict) -> str:
         """
         保存一条线索。自动去重——同 domain 已存在则更新。
-        
+
         lead 必填: company_name, domain, user_open_id, enterprise
         lead 可选: company_cdp_id, country, keywords, source, score
         """
@@ -199,7 +199,7 @@ class LeadStore:
                  promote_long_term: bool = False) -> bool:
         """
         标注一条线索。
-        
+
         Args:
             identifier: company_cdp_id 或 domain 或 company_name
             user_open_id: 标注者
@@ -271,7 +271,7 @@ class LeadStore:
     def filter_duplicates(self, candidates: list[dict], current_user: str, enterprise: str) -> list[dict]:
         """
         过滤重复线索。只在本企业内去重，禁止跨企业探测。
-        
+
         返回: 去重后的候选列表 + 已过滤的域名集合
         """
         ent = normalize_domain(enterprise)
@@ -279,16 +279,16 @@ class LeadStore:
             raise ValueError("filter_duplicates requires enterprise for tenant isolation")
         filtered = []
         removed_domains = set()
-        
+
         for c in candidates:
             domain = normalize_domain(c.get("domain", "") or c.get("website", ""))
             company = normalize_company_name(c.get("company_name", ""))
-            
+
             # 本企业内去重
             if self.is_duplicate(domain, ent):
                 removed_domains.add(domain)
                 continue
-            
+
             # 公司名去重（仅本企业）
             for lead in self._leads:
                 if (normalize_domain(lead.get("enterprise", "")) == ent and
@@ -297,7 +297,7 @@ class LeadStore:
                     break
             else:
                 filtered.append(c)
-        
+
         return filtered
 
     # ── 偏好回传 ──────────────────────────────────────
@@ -314,7 +314,7 @@ class LeadStore:
                 "偏好标签": {},
                 "updated_at": None,
             }
-        
+
         prefs = self._prefs[user_open_id]
         status = lead.get("status")
         reason = lead.get("exclude_reason")
@@ -363,7 +363,7 @@ class LeadStore:
             target = prefs["排除规则"] if promote_long_term else prefs.setdefault("排除候选", [])
             if candidate not in target:
                 target.append(candidate)
-        
+
         prefs["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._save_prefs()
 
@@ -448,6 +448,28 @@ class LeadStore:
         leads = [l for l in self._leads if normalize_domain(l.get("enterprise","")) == ent]
         return sorted(leads, key=lambda l: l.get("annotated_at") or l.get("created_at", ""), reverse=True)
 
+    def is_buyer_blocked(self, enterprise: str, buyer: str) -> bool:
+        """买家是否被拦截（拒绝/排除/黑名单/跳过）。buyer 可为域名或邮箱。"""
+        ent = normalize_domain(enterprise or "")
+        if not ent:
+            return False
+        d = (buyer or "").strip().lower()
+        if "@" in d:
+            d = d.split("@")[-1]
+        d = normalize_domain(d)
+        if not d:
+            return False
+        for l in self._leads:
+            if normalize_domain(l.get("enterprise", "")) != ent:
+                continue
+            if normalize_domain(l.get("domain", "")) != d:
+                continue
+            if int(l.get("iq_stage", 0) or 0) < 0:
+                return True
+            if l.get("status") in ("不是我的买家", "黑名单买家", "排除", "跳过"):
+                return True
+        return False
+
     def get_unannotated_leads(self, user_open_id: str, enterprise: str) -> list[dict]:
         """获取某用户在某企业内未标注的线索"""
         ent = normalize_domain(enterprise)
@@ -492,12 +514,12 @@ class LeadStore:
                 "排除国家": [], "排除规则": [], "偏好标签": {},
                 "歧义排除": {}, "updated_at": None,
             }
-        
+
         disambig = self._prefs[user_open_id].setdefault("歧义排除", {})
         ent_disambig = disambig.setdefault(ent, {
             "关键词排除": [], "行业排除": [], "原因": [],
         })
-        
+
         if exclude_keywords:
             for kw in exclude_keywords:
                 if kw.lower() not in [k.lower() for k in ent_disambig["关键词排除"]]:
@@ -508,7 +530,7 @@ class LeadStore:
                     ent_disambig["行业排除"].append(ind.lower())
         if reason and reason not in ent_disambig["原因"]:
             ent_disambig["原因"].append(reason)
-        
+
         ent_disambig["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._prefs[user_open_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._save_prefs()
@@ -523,10 +545,10 @@ class LeadStore:
         disambig = prefs.get("歧义排除", {}).get(ent, {})
         exclude_kw = disambig.get("关键词排除", [])
         exclude_ind = disambig.get("行业排除", [])
-        
+
         if not exclude_kw and not exclude_ind:
             return (candidates, 0, [])
-        
+
         filtered = []
         excluded = []
         for c in candidates:
@@ -549,7 +571,7 @@ class LeadStore:
                 excluded.append({"company": c.get("company_name","?"), "detail": detail})
             else:
                 filtered.append(c)
-        
+
         return (filtered, len(excluded), excluded)
 
     @staticmethod

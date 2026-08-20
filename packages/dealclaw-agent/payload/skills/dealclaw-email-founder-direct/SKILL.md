@@ -1,7 +1,9 @@
 ---
 name: "dealclaw-email-founder-direct"
 description: "Founder Direct 一对一邮件：SMTP发送、个性化内容、日量控制。来源：田耕郡@格格"
+author: ""
 version: 2.0.0
+date: "2026-07-29"
 ---
 
 # DC-Email Founder Direct: 一对一触达
@@ -18,9 +20,10 @@ version: 2.0.0
 
 ```
 1. 生成邮件内容 → V 根据买家背景+企业优势自主撰写
-2. 发送前确认 → 展示收件人、内容、检查项给用户
-3. 用户确认 → SMTP 发送
-4. 记录发送状态
+2. 发送前检查买家时区 → `python3 work/mio-api/send_window.py --country <ISO> [--city <city>]`。非工作日或不在 8:00-18:00 则阻断，向用户说明原因（如"买家当地时间周六 21:30，邮件将在下周一 8:00 发送"）。
+3. 发送前确认 → 展示收件人、内容、检查项给用户
+4. 用户确认 → SMTP 发送
+5. 回写线索池 → 立刻更新该买家记录：阶段→已触达、最近触达→发送时间、触达渠道→邮件。不可跳过
 ```
 
 ## 邮件内容原则
@@ -41,7 +44,12 @@ V 自主生成，核心约束：
 
 ## 回复处理
 
-买家回复 → V 通知用户 → 展示摘要 → 问是否要回复
+买家回复 → V 收到通知后：
+1. 更新线索池 → 阶段→已回复
+2. 通知用户 → 展示摘要
+3. 触发 smart-reply → 出建议回复内容
+4. 用户确认后发送 → 更新阶段→已回复（如走邮件再次触达）
+5. 进入跟进周期（等待下次触达时机）
 
 ## 发送脚本
 
@@ -65,8 +73,8 @@ node scripts/founder-direct/send-direct.mjs \
 每次完成本技能操作并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-email-founder-direct 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-email-founder-direct 1 &
 ```
 
 - 后台异步，不阻塞回复；失败静默

@@ -71,7 +71,7 @@ const EVENT_LABELS = {
 async function fetchAllEvents(limit = 100) {
   const events = [];
   let url = `${BASE}/events?limit=${limit}`;
-  
+
   while (url) {
     const r = await fetch(url, {
       headers: { 'Authorization': `Bearer ${API_KEY}` },
@@ -83,7 +83,7 @@ async function fetchAllEvents(limit = 100) {
     const body = await r.json();
     const page = body.data || [];
     events.push(...page);
-    
+
     // Check for next page
     if (page.length === limit && page.length > 0) {
       const lastId = page[page.length - 1].id;
@@ -146,7 +146,7 @@ async function main() {
       console.log(`\n📧 ${subject}`);
       console.log(`   发件: ${from} → ${to}`);
       console.log(`   状态: ${statusIcons}`);
-      
+
       for (const e of evts) {
         const ts = new Date(e.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
         const label = EVENT_LABELS[e.type] || e.type;

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
 REGISTRY_FILE = DATA_DIR / "company_registry.json"
 
 # ── 线索池 v4 字段定义（lark-cli base JSON 格式）──
@@ -26,6 +26,8 @@ REGISTRY_FILE = DATA_DIR / "company_registry.json"
 LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "公司名",   "type": "text"},
     {"name": "官网",     "type": "text"},
+    {"name": "公司简介", "type": "text"},
+    {"name": "公司CDPID", "type": "text"},
     {"name": "国家",     "type": "text"},
     {"name": "买家类型", "type": "select", "multiple": False, "options": [
         {"name": "品牌商"}, {"name": "制造商"}, {"name": "经销商"}, {"name": "工程商"}]},
@@ -35,7 +37,7 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "来源",     "type": "select", "multiple": False, "options": [
         {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
-        {"name": "用户导入"}]},
+        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"}]},
     {"name": "冷热",     "type": "select", "multiple": False, "options": [
         {"name": "🔥热"}, {"name": "❄️冷"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [
@@ -45,9 +47,12 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
 
 # 期望的字段名集合（用于验证 field_map 完整性）
 EXPECTED_FIELD_NAMES = {
-    "公司名", "官网", "国家", "买家类型", "匹配产品",
+    "公司名", "官网", "公司简介", "公司CDPID", "国家", "买家类型", "匹配产品",
     "推荐理由", "联系人", "来源", "冷热", "阶段",
 }
+
+# 搜索程序拥有的字段（update 时只允许写这些）；其余为用户手工维护，禁止覆盖。
+SEARCH_OWNED_FIELDS = ("公司名", "官网", "公司CDPID", "国家", "来源")
 
 
 def _now():
@@ -338,11 +343,162 @@ def _normalize_key(value: str) -> str:
     return value.split("/")[0].strip()
 
 
+class BitableResponseParseError(RuntimeError):
+    """Bitable（lark-cli）响应结构无法解析。绝不静默返回空结果。"""
+
+
+def _sanitize_response(resp, max_chars: int = 300) -> str:
+    """脱敏响应摘要：只保留结构骨架，不暴露真实业务数据。"""
+    try:
+        skeleton = {}
+        for k, v in (resp or {}).items():
+            if isinstance(v, list):
+                skeleton[str(k)] = f"<list len={len(v)}>"
+            elif isinstance(v, dict):
+                skeleton[str(k)] = f"<dict keys={list(v.keys())[:8]}>"
+            else:
+                skeleton[str(k)] = f"<{type(v).__name__}>"
+        return json.dumps(skeleton, ensure_ascii=False)[:max_chars]
+    except Exception:
+        return f"<unserializable {type(resp).__name__}>"
+
+
+def parse_created_record_ids(response: dict) -> list:
+    """从 record-batch-create 响应提取 record_id 列表。
+
+    兼容结构（按优先级）：
+      1. data.record_id_list（lark-cli v1.0.85）
+      2. data.records / data.items（旧版，每条 dict 含 record_id/id/record.record_id）
+      3. 顶层 records / items
+
+    有数据但无法提取 record_id → 抛 BitableResponseParseError；
+    明确为空（空列表）才返回 []。
+    """
+    if not isinstance(response, dict):
+        raise BitableResponseParseError(
+            f"batch-create 响应不是 dict: {type(response).__name__}")
+
+    data = response.get("data")
+    if not isinstance(data, dict):
+        data = response
+
+    # 1) data.record_id_list
+    rl = data.get("record_id_list")
+    if isinstance(rl, list):
+        return [str(x) for x in rl if x]
+
+    # 2) data.records / data.items
+    for key in ("records", "items"):
+        recs = data.get(key)
+        if isinstance(recs, list):
+            if not recs:
+                return []
+            ids = []
+            for r in recs:
+                if not isinstance(r, dict):
+                    continue
+                rid = r.get("record_id") or r.get("id")
+                if not rid and isinstance(r.get("record"), dict):
+                    rid = r["record"].get("record_id") or r["record"].get("id")
+                if rid:
+                    ids.append(str(rid))
+            if ids:
+                return ids
+            raise BitableResponseParseError(
+                f"batch-create 响应含 {key}={len(recs)} 条但无法提取 record_id: "
+                f"{_sanitize_response(response)}")
+
+    # 3) 顶层 records / items
+    for key in ("records", "items"):
+        recs = response.get(key)
+        if isinstance(recs, list):
+            if not recs:
+                return []
+            ids = [str(r.get("record_id") or r.get("id")) for r in recs
+                   if isinstance(r, dict) and (r.get("record_id") or r.get("id"))]
+            if ids:
+                return ids
+            raise BitableResponseParseError(
+                f"batch-create 顶层 {key} 无法提取 record_id: {_sanitize_response(response)}")
+
+    raise BitableResponseParseError(
+        f"batch-create 响应无法识别（无 record_id_list/records/items）: "
+        f"{_sanitize_response(response)}")
+
+
+def parse_record_list(response: dict) -> list:
+    """从 record-list 响应提取 [{"record_id": str, "fields": {field_name: value}}]。
+
+    兼容两种结构：
+      A. columnar（lark-cli v1.0.85）：
+         data.record_id_list + data.data（二维数组）+ data.fields / data.field_id_list（列头）
+      B. row-based（旧版）：
+         data.items / data.records，每条 {"record_id"/"id", "fields": {name: value}}
+         或 {"record": {"record_id", "fields": {...}}}
+
+    解析失败抛 BitableResponseParseError。
+    """
+    if not isinstance(response, dict):
+        raise BitableResponseParseError(
+            f"record-list 响应不是 dict: {type(response).__name__}")
+
+    data = response.get("data")
+    if not isinstance(data, dict):
+        data = response
+
+    # A. columnar
+    rid_list = data.get("record_id_list")
+    rows = data.get("data")
+    if isinstance(rid_list, list) and isinstance(rows, list):
+        headers = data.get("fields") or data.get("field_id_list") or []
+        out = []
+        for i, rid in enumerate(rid_list):
+            row = rows[i] if i < len(rows) else []
+            fields = {}
+            if isinstance(headers, list) and isinstance(row, list):
+                for j, h in enumerate(headers):
+                    fields[str(h)] = row[j] if j < len(row) else ""
+            out.append({"record_id": str(rid), "fields": fields})
+        return out
+
+    # B. row-based
+    for key in ("items", "records"):
+        recs = data.get(key)
+        if isinstance(recs, list):
+            out = []
+            for item in recs:
+                if not isinstance(item, dict):
+                    continue
+                fields = item.get("fields")
+                rid = item.get("record_id") or item.get("id")
+                if isinstance(item.get("record"), dict):
+                    if fields is None:
+                        fields = item["record"].get("fields")
+                    if not rid:
+                        rid = item["record"].get("record_id") or item["record"].get("id")
+                if not isinstance(fields, dict):
+                    fields = {}
+                if rid:
+                    out.append({"record_id": str(rid), "fields": fields})
+            return out
+
+    raise BitableResponseParseError(
+        f"record-list 响应无法识别: {_sanitize_response(response)}")
+
+
 def _record_fields(record: dict, source: str) -> dict:
     """把搜索结果映射为线索池 v4 字段。"""
     company = record.get("companyName") or record.get("company_name") or record.get("name") or ""
     website = record.get("website") or record.get("domain") or record.get("url") or ""
+    cdp_id = record.get("companyCdpId") or record.get("company_cdp_id") or record.get("cdpId") or ""
     country = record.get("countryCnName") or record.get("country") or ""
+    profile = (
+        record.get("companyProfile")
+        or record.get("briefInfo")
+        or record.get("买家公司简介")
+        or record.get("company_profile")
+        or ""
+    )
 
     attrs = record.get("companyAttributes") or record.get("buyer_type") or []
     if isinstance(attrs, str):
@@ -371,13 +527,9 @@ def _record_fields(record: dict, source: str) -> dict:
     reason = (
         record.get("recommendation")
         or record.get("recommendation_reason")
-        or record.get("buyerIntroduce")
-        or record.get("companyProfile")
+        or record.get("ai_match_reason")
         or ""
     )
-    contacts = record.get("contacts") or record.get("contact") or record.get("联系人") or ""
-    if isinstance(contacts, list):
-        contacts = "\n".join(str(x) for x in contacts)
 
     fields = {
         "公司名": str(company)[:200],
@@ -386,41 +538,80 @@ def _record_fields(record: dict, source: str) -> dict:
         "推荐理由": str(reason)[:500],
         "来源": source,
     }
+    if cdp_id:
+        fields["公司CDPID"] = str(cdp_id)[:100]
+    if profile:
+        fields["公司简介"] = str(profile)[:500]
     if buyer_type:
         fields["买家类型"] = buyer_type
     if products:
         fields["匹配产品"] = products[:20]
-    if contacts:
-        fields["联系人"] = str(contacts)[:1000]
+    # ⭐ 联系人解锁确认后才落库：初始落库时为空，经用户确认（意图识别/反问）解锁后才写入。
     return fields
 
 
-def _existing_record_index(app_token: str, table_id: str) -> dict:
-    """读取公司名/官网索引，供幂等 upsert 使用。"""
+def _fetch_records(app_token: str, table_id: str) -> list:
+    """读 record-list，返回 [{"record_id", "fields"}]（含搜索字段）。
+
+    统一列字段：公司名/官网/公司CDPID/国家/来源（用于索引 + diff）。
+    解析失败会抛 BitableResponseParseError。
+    """
     result = _run_lark(
         "base", "+record-list",
         "--base-token", app_token,
         "--table-id", table_id,
         "--field-id", "公司名",
         "--field-id", "官网",
+        "--field-id", "公司CDPID",
+        "--field-id", "国家",
+        "--field-id", "来源",
         "--limit", "200",
         "--format", "json",
         "--as", "bot",
     )
-    data = result.get("data", {})
-    items = data.get("items") or data.get("records") or []
+    return parse_record_list(result)
+
+
+def _cmp_val(v) -> str:
+    """把字段值规范化为可比较字符串（select 返回 list）。"""
+    if isinstance(v, list):
+        return "|".join(sorted(str(x).strip() for x in v if str(x).strip()))
+    return str(v or "").strip()
+
+
+def _search_field_diff(existing_fields: dict, new_fields: dict) -> dict:
+    """返回仅含发生变化的搜索字段子集；无变化返回空 dict。"""
+    diff = {}
+    for k in SEARCH_OWNED_FIELDS:
+        if _cmp_val(existing_fields.get(k)) != _cmp_val(new_fields.get(k)):
+            diff[k] = new_fields[k] if k in new_fields else ""
+    return diff
+
+
+def _existing_record_index(app_token: str, table_id: str) -> dict:
+    """从真实 record-list 响应建立索引（供幂等 upsert 使用）。
+
+    返回扁平索引：
+      cdp:<normalized>      → record_id   （最高优先级）
+      website:<normalized>  → record_id   （第二优先级）
+      company:<normalized>  → record_id   （仅辅助，不得单独用于覆盖）
+    解析失败会抛 BitableResponseParseError，不静默返回空。
+    """
     index = {}
-    for item in items:
-        fields = item.get("fields") or item.get("record", {}).get("fields") or {}
-        record_id = item.get("record_id") or item.get("id") or item.get("record", {}).get("record_id")
+    for row in _fetch_records(app_token, table_id):
+        record_id = row.get("record_id")
+        fields = row.get("fields") or {}
         if not record_id:
             continue
-        company_key = _normalize_key(str(fields.get("公司名", "")))
+        cdp_key = _normalize_key(str(fields.get("公司CDPID", "")))
         website_key = _normalize_key(str(fields.get("官网", "")))
-        if company_key:
-            index[f"company:{company_key}"] = record_id
+        company_key = _normalize_key(str(fields.get("公司名", "")))
+        if cdp_key:
+            index[f"cdp:{cdp_key}"] = record_id
         if website_key:
             index[f"website:{website_key}"] = record_id
+        if company_key:
+            index[f"company:{company_key}"] = record_id
     return index
 
 
@@ -432,31 +623,65 @@ def sync_leads_to_pool(
     source: str = "引擎搜索",
     chat_id: Optional[str] = None,
 ) -> Dict:
-    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。"""
+    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。
+
+    幂等键优先级：公司CDPID > normalized_domain；公司名仅辅助，不单独覆盖。
+    created > 0 但解析不到 record_id 时，先按稳定唯一键只读回查恢复；
+    仍无法恢复则抛 BitableResponseParseError（不重新创建）。
+    """
     pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
     app_token = pool["app_token"]
     table_id = pool["table_id"]
-    existing = _existing_record_index(app_token, table_id)
+
+    # 单次读表：建匹配索引 + 保留现有字段（用于 diff）
+    index = {}
+    existing_fields_by_id = {}
+    for row in _fetch_records(app_token, table_id):
+        record_id = row.get("record_id")
+        fields = row.get("fields") or {}
+        if not record_id:
+            continue
+        existing_fields_by_id[record_id] = fields
+        cdp_key = _normalize_key(str(fields.get("公司CDPID", "")))
+        website_key = _normalize_key(str(fields.get("官网", "")))
+        company_key = _normalize_key(str(fields.get("公司名", "")))
+        if cdp_key:
+            index[f"cdp:{cdp_key}"] = record_id
+        if website_key:
+            index[f"website:{website_key}"] = record_id
+        if company_key:
+            index[f"company:{company_key}"] = record_id
 
     creates = []
-    updates = []
+    updates = []   # (record_id, 仅变化字段) — 最小字段更新
     skipped = 0
+    unique_keys = []
     for record in records or []:
         fields = _record_fields(record, source)
-        company_key = _normalize_key(fields.get("公司名", ""))
+        cdp_key = _normalize_key(fields.get("公司CDPID", ""))
         website_key = _normalize_key(fields.get("官网", ""))
-        if not company_key and not website_key:
+        company_key = _normalize_key(fields.get("公司名", ""))
+        unique_keys.append({
+            "cdp": cdp_key, "website": website_key, "company": company_key,
+        })
+        if not cdp_key and not website_key and not company_key:
             skipped += 1
             continue
-        record_id = existing.get(f"website:{website_key}") or existing.get(f"company:{company_key}")
+        # 仅用 cdp / domain 判断是否 upsert；公司名不作为覆盖依据
+        record_id = (index.get(f"cdp:{cdp_key}")
+                     or index.get(f"website:{website_key}"))
         if record_id:
-            updates.append((record_id, fields))
+            diff = _search_field_diff(existing_fields_by_id.get(record_id, {}), fields)
+            if diff:
+                updates.append((record_id, diff))
+            else:
+                skipped += 1   # 值无变化 → 不做无意义 update
         else:
             fields.setdefault("冷热", "❄️冷")
             fields.setdefault("阶段", "待触达")
             creates.append(fields)
 
-    created_ids = []
+    created_ids: list = []
     if creates:
         result = _run_lark(
             "base", "+record-batch-create",
@@ -466,8 +691,18 @@ def sync_leads_to_pool(
             "--as", "bot",
             timeout=60,
         )
-        created = result.get("data", {}).get("records") or result.get("data", {}).get("items") or []
-        created_ids = [x.get("record_id") or x.get("id") for x in created if isinstance(x, dict)]
+        created_ids = parse_created_record_ids(result)
+
+        # created > 0 但无 record_id：先按稳定唯一键只读回查恢复
+        if len(created_ids) != len(creates):
+            recovered = _recover_created_record_ids(app_token, table_id, creates)
+            if recovered:
+                created_ids = recovered
+
+        if len(created_ids) != len(creates):
+            raise BitableResponseParseError(
+                f"batch-create 创建 {len(creates)} 条但仅解析到 {len(created_ids)} 个 record_id，"
+                f"且回查失败。响应摘要: {_sanitize_response(result)}")
 
     for record_id, fields in updates:
         _run_lark(
@@ -484,10 +719,81 @@ def sync_leads_to_pool(
         "updated": len(updates),
         "skipped": skipped,
         "record_ids": [x for x in created_ids if x],
+        "updated_record_ids": [rid for rid, _ in updates],
+        "unique_keys": unique_keys,
+        "response_schema_version": "lark-cli-1.0.85-columnar",
         "app_token": app_token,
         "table_id": table_id,
         "bitable_url": pool["bitable_url"],
     }
+
+
+def _recover_created_record_ids(app_token: str, table_id: str, creates: list) -> list:
+    """按稳定唯一键（cdp > domain）只读回查刚创建的记录，恢复 record_id。
+
+    不重新创建；只读重读索引。返回与 creates 等长且可对齐的 record_id 列表，
+    无法对齐时返回 []。
+    """
+    try:
+        index = _existing_record_index(app_token, table_id)
+    except BitableResponseParseError:
+        return []
+    recovered = []
+    for fields in creates:
+        cdp_key = _normalize_key(str(fields.get("公司CDPID", "")))
+        website_key = _normalize_key(str(fields.get("官网", "")))
+        rid = index.get(f"cdp:{cdp_key}") or index.get(f"website:{website_key}")
+        if rid:
+            recovered.append(rid)
+    return recovered if len(recovered) == len(creates) else []
+
+
+def sync_contacts_to_pool(
+    company_id: str,
+    company_name: str,
+    contact_updates: list,
+    *,
+    source: str = "CDP联系人",
+) -> Dict:
+    """把补全到的联系人字段更新到对应 Bitable lead 记录（按 cdp/domain 匹配，幂等）。
+
+    contact_updates: [{
+        "companyCdpId": str,   # 优先匹配键
+        "website": str,        # 兜底匹配键（normalized_domain）
+        "contact_text": str,   # 写入「联系人」字段的文本
+    }]
+
+    匹配不到 record_id 或 contact_text 为空时跳过。
+    返回 {"updated": n, "matched": n, "app_token": ..., "table_id": ...}
+    """
+    pool = ensure_company_lead_pool(company_id, company_name)
+    app_token = pool["app_token"]
+    table_id = pool["table_id"]
+    existing = _existing_record_index(app_token, table_id)
+
+    updated = 0
+    matched = 0
+    for u in contact_updates or []:
+        cdp_key = _normalize_key(str(u.get("companyCdpId", "") or u.get("company_cdp_id", "")))
+        website_key = _normalize_key(str(u.get("website", "") or u.get("domain", "")))
+        contact_text = str(u.get("contact_text", "") or "").strip()
+        record_id = existing.get(f"cdp:{cdp_key}") or existing.get(f"website:{website_key}")
+        if not record_id or not contact_text:
+            continue
+        matched += 1
+        try:
+            _run_lark(
+                "base", "+record-upsert",
+                "--base-token", app_token,
+                "--table-id", table_id,
+                "--record-id", record_id,
+                "--json", json.dumps({"联系人": contact_text[:1000]}, ensure_ascii=False),
+                "--as", "bot",
+            )
+            updated += 1
+        except Exception:
+            continue
+    return {"updated": updated, "matched": matched, "app_token": app_token, "table_id": table_id}
 
 
 def get_lead_pool(company_id: str) -> Optional[Dict]:
@@ -507,12 +813,6 @@ def get_lead_pool(company_id: str) -> Optional[Dict]:
 
 # ── CLI（与 v1 完全兼容）──
 
-# Shadow billing: log credit estimation without deducting (内测期)
-try:
-    from dc_billing import billing
-except ImportError:
-    billing = None
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("用法:")
@@ -523,15 +823,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     cmd = sys.argv[1]
-
-    # Shadow billing (内测期只记录预估，不扣费)
-    tenant = os.environ.get("DC_TENANT_ID") or os.environ.get("DEALCLAW_TENANT_ID", "")
-    if billing and tenant and cmd == "ensure":
-        try:
-            billing.configure(tenant)
-            billing.estimate("dealclaw-analyze-company", quantity=1)
-        except Exception:
-            pass
 
     if cmd == "ensure":
         if len(sys.argv) < 4:

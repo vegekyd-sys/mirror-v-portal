@@ -37,25 +37,25 @@ def check():
     checked = load_checked()
     changes = []
     headers = {"Authorization": RESEND_KEY}
-    
+
     for eid, name in TRACKED.items():
         r = requests.get(f"https://api.resend.com/emails/{eid}", headers=headers)
         d = r.json()
         event = d.get("last_event", "?")
         opens = d.get("opens_count", 0)
         clicks = d.get("clicks_count", 0)
-        
+
         prev = checked.get(eid, {})
         prev_event = prev.get("event", "")
         prev_opens = prev.get("opens", 0)
-        
+
         if event != prev_event or opens > prev_opens:
             changes.append(f"{'🔔' if event == 'opened' else '📨'} {name}: {event} | opens={opens} | clicks={clicks}")
-        
+
         checked[eid] = {"event": event, "opens": opens, "clicks": clicks, "time": datetime.now().isoformat()}
-    
+
     save_checked(checked)
-    
+
     if changes:
         print("=== 邮件状态变化 ===")
         for c in changes:

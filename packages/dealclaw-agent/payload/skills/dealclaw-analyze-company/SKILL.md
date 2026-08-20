@@ -1,6 +1,7 @@
 ---
 name: "dealclaw-analyze-company"
-description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画像落盘和飞书文档（独立触发）。"
+description: "输入企业官网/PDF，信息搜集 + 聊天纠偏 + 画像落盘到知识库引擎（不生成飞书文档）。"
+author: ""
 ---
 
 # Analyze Company — 企业分析
@@ -36,9 +37,13 @@ description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画�
 > • 产能 — 官网没给具体数字
 > • 目标市场 — 我按官网客户倒推的，不一定对
 
-纠偏完成后给钩子 ≤10 字导向下一步——「要不要找几个意大利买家？」
+纠偏完成后给钩子，不超过一句话，让用户想接着往下聊：
+- 示例：「补完我帮你整理公司档案，后续找买家写开发信直接调」
+- 示例：「信息差不多了，要看看这个品类在美国的市场情况吗？」
+- 示例：「要不要我帮你先整理出来？」
+- 钩子只有一个作用：让用户想接着往下聊。不列能力清单，不提内部术语。
 
-**不在聊天里自动生成飞书文档。** 画像写入知识库由独立触发入口完成，不属于本 skill。
+**不在聊天里自动生成飞书文档。** 画像落盘到知识库引擎（seed_profile）由本 skill 完成，飞书文档生成是独立触发入口。
 
 ## Actions
 
@@ -48,10 +53,15 @@ description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画�
 |----------|---------|
 | 官网 URL | `web_fetch` 中英文页面 → 按字段清单提取 |
 | PDF 文档 | 直接解析提取 |
-| 1688 / 阿里国际站链接 | ⚠️ 阿里系反爬，跳过 web_fetch，直接进「访谈模式」 |
+| 1688 / 阿里国际站链接 | 先 web_fetch 试一次 → 成功就提取；失败则向用户说明原因，再走兜底路径 |
 | 只有公司名 | 先 web_search 找官网 → 找到走正常路径，找不到进访谈模式 |
 
-**访谈模式**：不装模作样说「数据不足」——直接问核心问题：主营产品 / 目标市场 / 认证资质 / 工厂规模。用户答完即出画像。
+**阿里系/反爬失败后的兜底路径**（不可跳过说明直接进访谈）：
+
+1. **说明原因** — 向用户说清楚为什么没扒到（如"1688 页面内容靠 JS 动态加载，静态抓取拿不到实际公司信息"），不要沉默跳过
+2. **兜底搜工商** — 并行尝试天眼查/企查查（注册信息+规模）、Made-in-China/Global Sources（同名店铺）、CDP贸易数据
+3. **汇总已有信息** — 把兜底搜到的公司名、产品线、规模等能确认的先告诉用户
+4. **访谈补缺口** — 基于已有信息追问核心缺口：主营产品 / 目标市场 / 认证资质 / 工厂规模。用户答完即出画像
 
 **替代数据源（官网无/反爬时并行尝试）**：
 - 天眼查/企查查查注册信息和规模
@@ -62,7 +72,14 @@ description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画�
 
 **聊天纠偏。** 给 2-3 句判断 + 主动指出不确定字段 + 钩子导向下一步。
 
-**播种子到知识库引擎。** 分析和纠偏完成后，自动写入本地知识库。dc-review 的纠正也同步落知识库，标记为 V 学习到的内容。
+**播种子到知识库引擎。** 分析和纠偏完成后，必须执行以下步骤，不可跳过：
+
+1. 确定 enterprise key（企业域名去点去协议，如 `easterglass.com` → `easterglasscom`）
+2. 调用 `dc_kb_engine.seed_profile(enterprise_key, profile_data)` 写入画像
+3. 每条产品线调用 `dc_kb_engine.add_product(enterprise_key, name, data)`
+4. 验证：`dc_kb_engine.show(enterprise_key)` 确认 profile.name 非空
+
+dc-review 的纠正也同步落知识库 persona，标记为 V 学习到的内容。
 
 ## Document Fields（知识库写入时参照）
 
@@ -107,8 +124,8 @@ description: "输入企业官网/PDF，信息搜集 + 聊天纠偏。不做画�
 每次完成企业分析并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-analyze-company 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-analyze-company 1 &
 ```
 
 - 必须在后台异步执行（加 `&`），不阻塞用户回复

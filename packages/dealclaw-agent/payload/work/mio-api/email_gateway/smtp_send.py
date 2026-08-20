@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import smtplib
 import ssl
+import time
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
+from pathlib import Path
 from typing import Any, Callable
 
 from .providers import get_provider
@@ -12,8 +17,34 @@ from .secrets import resolve_secret
 from .store import EmailStore, utc_now
 
 
+def _parse_sleep_seconds() -> int:
+    try:
+        v = int(os.environ.get("DC_SMTP_MSGID_SLEEP_SECONDS", "5"))
+    except (TypeError, ValueError):
+        v = 5
+    return max(0, min(v, 30))  # 下限 0，上限 30s
+
+# 发件后回查真实 Message-ID 前的等待秒数（可 env 覆盖，上限 30s）
+SMTP_MSGID_SLEEP_SECONDS = _parse_sleep_seconds()
+
+
 class ConfirmationRequired(PermissionError):
     pass
+
+
+# ── 稳定发送幂等键 ─────────────────────────────────────────
+# company_id + campaign_id + lead_id + recipient + touch_number + content_version
+def build_idempotency_key(
+    *,
+    company_id: str = "",
+    campaign_id: str = "",
+    lead_id: str = "",
+    recipient: str = "",
+    touch_number: int = 0,
+    content_version: str = "",
+) -> str:
+    raw = f"{company_id}|{campaign_id}|{lead_id}|{recipient}|{touch_number}|{content_version}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 class SmtpSender:
@@ -39,8 +70,9 @@ class SmtpSender:
         text: str,
         cc: list[str] | None,
         reply_to: str | None,
-    ) -> None:
-        resend_send(
+    ) -> str:
+        """Send via Resend API. Returns the real Resend email id (provider id)."""
+        return resend_send(
             from_address=from_address,
             to=to,
             subject=subject,
@@ -49,6 +81,68 @@ class SmtpSender:
             reply_to=reply_to,
             secret_resolver=self.secret_resolver,
         )
+
+    def _query_smtp_message_id(self, account: dict, resend_id: str, local_message_id: str) -> str:
+        """回查真实 Message-ID（发送服务/SMTP 上游分配的 RFC Message-ID，用于匹配 In-Reply-To/References）。
+
+        - Resend：message_id 由 delivered webhook / poller 异步回填，发送路径不阻塞。
+        - SMTP：sleep 后走 IMAP Sent 文件夹回查；回查失败返回空（不冒充本地 make_msgid）。
+        """
+        if account.get("provider") == "resend":
+            return ""
+        time.sleep(SMTP_MSGID_SLEEP_SECONDS)
+        return self._query_smtp_message_id_via_imap(account, local_message_id)
+
+    def _query_smtp_message_id_via_imap(self, account: dict, local_message_id: str) -> str:
+        """IMAP Sent 文件夹回查真实 Message-ID（best-effort）。失败/无 imap_host 返回空。"""
+        try:
+            provider = get_provider(account.get("provider", ""))
+            if not getattr(provider, "imap_host", None):
+                return ""
+            import imaplib as _imaplib
+            import ssl as _ssl
+            import email as _email
+            secret = self.secret_resolver(account.get("secret_ref", ""))
+            client = _imaplib.IMAP4_SSL(
+                provider.imap_host, provider.imap_port,
+                ssl_context=_ssl.create_default_context(), timeout=30,
+            )
+            try:
+                client.login(account["email_address"], secret)
+                for folder in ("Sent", "Sent Items", "已发送", "INBOX.Sent"):
+                    status, _ = client.select(folder, readonly=True)
+                    if status == "OK":
+                        break
+                else:
+                    return ""
+                status, data = client.search(None, "HEADER", "Message-ID", local_message_id)
+                if status != "OK" or not data or not data[0]:
+                    return ""
+                uids = data[0].split()
+                if not uids:
+                    return ""
+                status, parts = client.fetch(uids[-1], "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+                if status != "OK":
+                    return ""
+                raw = b"".join(p[1] for p in parts if isinstance(p, tuple) and isinstance(p[1], bytes))
+                if not raw:
+                    return ""
+                return (_email.message_from_bytes(raw).get("Message-ID") or "").strip()
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception:
+            return ""
+
+    def _write_recovery_evidence(self, record: dict[str, Any]) -> None:
+        """Resend accepted but local persistence failed → 由 store 落恢复证据，不重发。"""
+        try:
+            self.store.write_recovery_evidence(record)
+        except Exception:
+            # 恢复证据写失败不掩盖原始持久化错误
+            pass
 
     def send(
         self,
@@ -62,9 +156,22 @@ class SmtpSender:
         bcc: list[str] | None = None,
         reply_to: str | None = None,
         dry_run: bool = False,
+        company_id: str = "",
+        campaign_id: str = "",
+        lead_id: str = "",
+        contact_id: str = "",
+        touch_number: int = 0,
+        content_version: str = "",
+        thread_id: str = "",
     ) -> dict[str, Any]:
         if not to or any("@" not in address for address in [*to, *(cc or []), *(bcc or [])]):
             raise ValueError("valid recipients are required")
+
+        recipient_key = ",".join(sorted(to))
+        idempotency_key = build_idempotency_key(
+            company_id=company_id, campaign_id=campaign_id, lead_id=lead_id,
+            recipient=recipient_key, touch_number=touch_number, content_version=content_version,
+        )
 
         # Try registered account first; fall back to Resend for backward compat.
         from_addr: str
@@ -73,8 +180,9 @@ class SmtpSender:
         except KeyError:
             if "@" in account_id:
                 from_addr = account_id
+                resend_id = ""
                 if not dry_run:
-                    self._send_via_resend(
+                    resend_id = self._send_via_resend(
                         from_address=from_addr, to=to, subject=subject,
                         text=text, cc=cc, reply_to=reply_to,
                     )
@@ -82,6 +190,7 @@ class SmtpSender:
                     from_addr=from_addr, to=to, cc=cc, bcc=bcc,
                     subject=subject, message_id=make_msgid(domain=account_id.split("@", 1)[1]),
                     dry_run=dry_run, account_id=account_id,
+                    resend_id=resend_id, idempotency_key=idempotency_key,
                 )
             raise ValueError(f"email account not found: {account_id}")
 
@@ -93,6 +202,20 @@ class SmtpSender:
         sent_today = self.store.count_sent_today(account_id)
         if sent_today >= int(account["daily_send_limit"]):
             raise RuntimeError("daily send limit reached for this email account")
+
+        # Idempotency: same key must not send twice.
+        if idempotency_key and not dry_run and self.store.has_idempotency_key(idempotency_key):
+            return {
+                **self._build_send_result(
+                    from_addr=from_addr, to=to, cc=cc, bcc=bcc,
+                    subject=subject, message_id=make_msgid(domain=account["email_address"].split("@", 1)[1]),
+                    dry_run=dry_run, account_id=account_id,
+                    resend_id="", idempotency_key=idempotency_key,
+                ),
+                "ok": False,
+                "duplicate": True,
+                "error": "duplicate idempotency key — already sent",
+            }
 
         message_id = make_msgid(domain=account["email_address"].split("@", 1)[1])
         msg = EmailMessage()
@@ -107,12 +230,17 @@ class SmtpSender:
         msg.set_content(text)
 
         envelope = [*to, *(cc or []), *(bcc or [])]
+        resend_id = ""
+        smtp_message_id = ""
+        provider_accepted = False
         if not dry_run:
             if account["provider"] == "resend":
-                self._send_via_resend(
+                resend_id = self._send_via_resend(
                     from_address=formataddr((account["display_name"], account["email_address"])),
                     to=to, subject=subject, text=text, cc=cc, reply_to=reply_to,
-                )
+                ) or ""
+                # Only mark provider-accepted when a real Resend id was returned.
+                provider_accepted = bool(resend_id)
             else:
                 provider = get_provider(account["provider"])
                 secret = self.secret_resolver(account["secret_ref"])
@@ -135,25 +263,49 @@ class SmtpSender:
                 if refused:
                     raise RuntimeError("SMTP server refused one or more recipients")
 
-            self.store.insert_message(
-                {
-                    "account_id": account_id,
-                    "direction": "outbound",
-                    "message_id": message_id,
-                    "sender": account["email_address"],
-                    "recipients": envelope,
-                    "subject": subject,
-                    "text_preview": text,
-                    "related": True,
-                    "status": "sent",
-                    "created_at": utc_now(),
-                }
-            )
+            # 回查真实 Message-ID（Resend 走 API，SMTP 退回本地 make_msgid）
+            smtp_message_id = self._query_smtp_message_id(account, resend_id, message_id)
+
+            # Persist enriched outbound facts. Mark legacy when campaign_id is absent.
+            outbound = {
+                "account_id": account_id,
+                "direction": "outbound",
+                "message_id": message_id,
+                "sender": account["email_address"],
+                "recipients": envelope,
+                "subject": subject,
+                "text_preview": text,
+                "related": True,
+                "status": "sent",
+                "created_at": utc_now(),
+                "resend_id": resend_id,
+                "smtp_message_id": smtp_message_id,
+                "thread_id": thread_id,
+                "company_id": company_id,
+                "campaign_id": campaign_id,
+                "lead_id": lead_id,
+                "contact_id": contact_id,
+                "idempotency_key": idempotency_key,
+                "provider_status": "accepted" if provider_accepted else "",
+                "touch_number": touch_number,
+                "content_version": content_version,
+                "legacy": not bool(campaign_id),
+                "updated_at": utc_now(),
+            }
+            try:
+                self.store.insert_message(outbound)
+            except Exception:
+                # Resend already accepted → do NOT re-send. Save recovery evidence for a
+                # status-only retry; then re-raise so callers don't report a false success.
+                if provider_accepted and resend_id:
+                    self._write_recovery_evidence(outbound)
+                raise
 
         return self._build_send_result(
             from_addr=from_addr, to=to, cc=cc, bcc=bcc,
             subject=subject, message_id=message_id,
             dry_run=dry_run, account_id=account_id,
+            resend_id=resend_id, idempotency_key=idempotency_key,
         )
 
     @staticmethod
@@ -167,6 +319,8 @@ class SmtpSender:
         message_id: str,
         dry_run: bool,
         account_id: str = "",
+        resend_id: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         return {
             "ok": True,
@@ -178,4 +332,6 @@ class SmtpSender:
             "bcc_count": len(bcc or []),
             "subject": subject,
             "message_id": message_id,
+            "resend_id": resend_id,
+            "idempotency_key": idempotency_key,
         }

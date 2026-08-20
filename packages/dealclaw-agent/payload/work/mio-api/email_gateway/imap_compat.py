@@ -17,4 +17,3 @@ def prepare_imap_session(client: imaplib.IMAP4_SSL, provider: ProviderConfig) ->
     )
     if status != "OK":
         raise RuntimeError("IMAP provider rejected client identification")
-

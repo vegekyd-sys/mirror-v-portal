@@ -35,7 +35,7 @@ After `binding_resource_guard.py evaluate` proves `deleted` or `not_found` and t
 ```text
 当前群绑定的企业知识库已被删除或无法通过原 token 找到，AI猎客已暂停。
 请由本群管理员发送新的企业知识库飞书文档链接并回复“重新绑定企业知识库”；如果群内没有现成文档，系统将只根据本群历史消息重新生成企业画像草稿，待确认后完成绑定。
-原AI猎客商机池和本群历史反馈将保留；重新绑定完成前不会查询或推送买家线索。
+原企业线索池和本群历史反馈将保留；重新绑定完成前不会查询或推送买家线索。
 ```
 
 Persist the returned message ID through `binding_resource_guard.py complete-reminder`. Do not include the deleted token, supplier ID, buyer values, another group's resources, or a globally searched replacement. After `reminder_status = sent`, scheduled runs must not repeat the reminder. Permission denial, type mismatch, and transient read failure use their own operational error messages and must not use this deletion notice.
@@ -47,7 +47,7 @@ After valid confirmation, separate formal document creation, Base creation/valid
 ```text
 企业画像已确认，{企业名称}的正式企业知识库已生成并绑定。
 正式企业知识库：{formal Docx URL}
-AI猎客商机池：{Base URL}
+企业线索池：{Base URL}
 正在根据正式企业画像重新匹配合适的买家采购需求，完成后将在本群推送结果。
 ```
 
@@ -111,14 +111,14 @@ Requirements:
 End every card with a divider, the exact raw bound Base URL, this fixed guidance, and one primary URL button:
 
 ```text
-📊 AI猎客商机池：
+📊 企业线索池：
 {Base URL}
 
-💬 请在AI猎客商机池中标记每条线索的匹配结果（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。
+💬 请在企业线索池中标记每条线索的匹配结果（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。
 
-🔓 需要买家联系方式？在AI猎客商机池把该线索的「是否解锁」改为「已解锁」，或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。
+🔓 需要买家联系方式？在企业线索池把该线索的「是否解锁」改为「已解锁」，或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。
 
-[📊 打开AI猎客商机池]
+[📊 打开企业线索池]
 ```
 
 The renderer must require HTTPS, an allowed Feishu/Lark host, no credential/fragment/nonstandard port, and a decoded path exactly equal to `/base/<binding.base_app_token>`. The token appearing only in a query string, fragment, hostname, or larger path is invalid. Do not accept a model-generated or title-searched URL.
@@ -162,7 +162,7 @@ Use the green header template and wide-screen mode, with `enable_forward = false
 💬 WhatsApp：{WhatsApp}（已验证/未验证）
 🌐 公司官网：{公司官网}
 
-联系方式来自 TradeChina 买家详情，仅发送至本群，不会写入AI猎客商机池。请合规使用，勿二次分发。
+联系方式来自 TradeChina 买家详情，仅发送至本群，不会写入企业线索池。请合规使用，勿二次分发。
 ```
 
 - Show each contact row only when the interface value is non-empty. Append the validation badge only from `emailValid`/`mobileValid`/`whatsappValid` integer `1` (已验证) or `0` (未验证); omit the badge when the flag is absent.
@@ -189,7 +189,7 @@ When the guard rejects an unlock because the lead was already released, send:
 
 Persist `state.unlocks[线索ID] = pending_push` before the contact-card send, keyed by the guard's `unlock_id` as the sender idempotency key. Persist the returned message ID immediately via `contact_unlock_guard.py complete` (`status = contact_pushed`); on an indeterminate send persist `status = unknown` and stop without automatic resend. Never store contact values inside `unlocks`.
 
-Only after `contact_pushed`, write the lead's Base record back to the converged state: `是否解锁 = 已解锁`, `解锁人`, `解锁时间`, `解锁方式` (`商机池下拉` or `群内指令`), and `解锁推送消息ID`. This applies to both trigger paths; a `群内指令` unlock must therefore leave the record visibly `已解锁` in the 商机池. An `unknown` or failed send leaves `是否解锁` untouched.
+Only after `contact_pushed`, write the lead's Base record back to the converged state: `是否解锁 = 已解锁`, `解锁人`, `解锁时间`, `解锁方式` (`线索池下拉` or `群内指令`), and `解锁推送消息ID`. This applies to both trigger paths; a `群内指令` unlock must therefore leave the record visibly `已解锁` in the 线索池. An `unknown` or failed send leaves `是否解锁` untouched.
 
 ## Delivery state
 

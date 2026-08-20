@@ -26,6 +26,7 @@ REGISTRY_FILE = DATA_DIR / "company_registry.json"
 LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "公司名",   "type": "text"},
     {"name": "官网",     "type": "text"},
+    {"name": "公司简介", "type": "text"},
     {"name": "国家",     "type": "text"},
     {"name": "买家类型", "type": "select", "multiple": False, "options": [
         {"name": "品牌商"}, {"name": "制造商"}, {"name": "经销商"}, {"name": "工程商"}]},
@@ -35,7 +36,7 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "来源",     "type": "select", "multiple": False, "options": [
         {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
-        {"name": "用户导入"}]},
+        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"}]},
     {"name": "冷热",     "type": "select", "multiple": False, "options": [
         {"name": "🔥热"}, {"name": "❄️冷"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [
@@ -45,7 +46,7 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
 
 # 期望的字段名集合（用于验证 field_map 完整性）
 EXPECTED_FIELD_NAMES = {
-    "公司名", "官网", "国家", "买家类型", "匹配产品",
+    "公司名", "官网", "公司简介", "国家", "买家类型", "匹配产品",
     "推荐理由", "联系人", "来源", "冷热", "阶段",
 }
 
@@ -338,11 +339,71 @@ def _normalize_key(value: str) -> str:
     return value.split("/")[0].strip()
 
 
-def _record_fields(record: dict, source: str) -> dict:
+def _extract_buyer_tags(record: dict) -> list:
+    """提取买家采购/产品标签（中文优先，其次英文）。"""
+    tags = []
+    st = record.get("sortedT2TagInfo") or []
+    # 优先高相关标签（isHighLine=1）
+    for t in st:
+        if not isinstance(t, dict):
+            continue
+        for ti in (t.get("tagInfo") or []):
+            if ti.get("isHighLine") == 1:
+                text = ti.get("nameCn") or ti.get("nameEn") or ""
+                if text and text not in tags:
+                    tags.append(text)
+    # 兜底：全部 tagInfo
+    if not tags:
+        for t in st:
+            if not isinstance(t, dict):
+                continue
+            for ti in (t.get("tagInfo") or []):
+                text = ti.get("nameCn") or ti.get("nameEn") or ""
+                if text and text not in tags:
+                    tags.append(text)
+    # 采购标签兜底
+    p = record.get("purchaseTagCodesDesc") or ""
+    if isinstance(p, str):
+        for x in re.split(r"[,，;；]", p):
+            x = x.strip()
+            if x and x not in tags:
+                tags.append(x)
+    return tags
+
+
+def _match_products(buyer_tags: list, enterprise_products) -> list:
+    """把买家标签对齐到企业真实产品：每个标签匹配最具体的一个产品（列表按优先级排），用户没有的不写。"""
+    matched = []
+    for tag in buyer_tags:
+        hit = None
+        for prod in (enterprise_products or []):
+            if not isinstance(prod, dict):
+                continue
+            name = prod.get("name", "")
+            keywords = prod.get("keywords") or []
+            kws = [k for k in keywords if k]
+            if not kws:
+                continue
+            if any(kw and kw in tag for kw in kws):
+                hit = name
+                break  # 第一个命中即止（列表按优先级排）
+        if hit and hit not in matched:
+            matched.append(hit)
+    return matched
+
+
+def _record_fields(record: dict, source: str, enterprise_products=None) -> dict:
     """把搜索结果映射为线索池 v4 字段。"""
     company = record.get("companyName") or record.get("company_name") or record.get("name") or ""
     website = record.get("website") or record.get("domain") or record.get("url") or ""
     country = record.get("countryCnName") or record.get("country") or ""
+    profile = (
+        record.get("companyProfile")
+        or record.get("briefInfo")
+        or record.get("买家公司简介")
+        or record.get("company_profile")
+        or ""
+    )
 
     attrs = record.get("companyAttributes") or record.get("buyer_type") or []
     if isinstance(attrs, str):
@@ -359,25 +420,16 @@ def _record_fields(record: dict, source: str) -> dict:
         if any(k in text for k in ("工程", "安装", "project", "installer")):
             buyer_type = "工程商"; break
 
-    tags = record.get("purchaseTags") or record.get("matched_products") or record.get("products") or []
-    if isinstance(tags, str):
-        tags = [x.strip() for x in re.split(r"[,，]", tags) if x.strip()]
-    products = []
-    for tag in tags:
-        text = tag.get("name", "") if isinstance(tag, dict) else str(tag)
-        if text and text not in products:
-            products.append(text)
+    # 匹配产品：只写入与企业真实产品对齐的（先看用户有什么产品，再匹配买家采购标签）
+    buyer_tags = _extract_buyer_tags(record)
+    products = _match_products(buyer_tags, enterprise_products)
 
     reason = (
         record.get("recommendation")
         or record.get("recommendation_reason")
-        or record.get("buyerIntroduce")
-        or record.get("companyProfile")
+        or record.get("ai_match_reason")
         or ""
     )
-    contacts = record.get("contacts") or record.get("contact") or record.get("联系人") or ""
-    if isinstance(contacts, list):
-        contacts = "\n".join(str(x) for x in contacts)
 
     fields = {
         "公司名": str(company)[:200],
@@ -388,10 +440,11 @@ def _record_fields(record: dict, source: str) -> dict:
     }
     if buyer_type:
         fields["买家类型"] = buyer_type
+    if profile:
+        fields["公司简介"] = str(profile)[:500]
     if products:
         fields["匹配产品"] = products[:20]
-    if contacts:
-        fields["联系人"] = str(contacts)[:1000]
+    # ⭐ 联系人解锁确认后才落库：初始落库时为空，经用户确认（意图识别/反问）解锁后才写入。
     return fields
 
 
@@ -408,11 +461,26 @@ def _existing_record_index(app_token: str, table_id: str) -> dict:
         "--as", "bot",
     )
     data = result.get("data", {})
-    items = data.get("items") or data.get("records") or []
+    rows = data.get("data") or data.get("items") or data.get("records") or []
+    rids = data.get("record_id_list") or []
+    fnames = data.get("fields") or []
     index = {}
-    for item in items:
-        fields = item.get("fields") or item.get("record", {}).get("fields") or {}
-        record_id = item.get("record_id") or item.get("id") or item.get("record", {}).get("record_id")
+
+    def _fields_of(row):
+        if isinstance(row, dict):
+            return row.get("fields") or row.get("record", {}).get("fields") or {}
+        if isinstance(row, list) and fnames:
+            return dict(zip(fnames, row))
+        return {}
+
+    def _rid_of(item, i):
+        if isinstance(item, dict):
+            return item.get("record_id") or item.get("_record_id") or item.get("id") or item.get("record", {}).get("record_id")
+        return rids[i] if i < len(rids) else None
+
+    for i, item in enumerate(rows):
+        fields = _fields_of(item)
+        record_id = _rid_of(item, i)
         if not record_id:
             continue
         company_key = _normalize_key(str(fields.get("公司名", "")))
@@ -431,8 +499,13 @@ def sync_leads_to_pool(
     *,
     source: str = "引擎搜索",
     chat_id: Optional[str] = None,
+    enterprise_products: Optional[list] = None,
 ) -> Dict:
-    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。"""
+    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。
+
+    enterprise_products: 企业真实产品列表 [{name, keywords}]，用于把买家采购标签
+    对齐到企业产品（用户没有的产品不写入匹配产品）。缺省时匹配产品留空。
+    """
     pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
     app_token = pool["app_token"]
     table_id = pool["table_id"]
@@ -442,7 +515,7 @@ def sync_leads_to_pool(
     updates = []
     skipped = 0
     for record in records or []:
-        fields = _record_fields(record, source)
+        fields = _record_fields(record, source, enterprise_products=enterprise_products)
         company_key = _normalize_key(fields.get("公司名", ""))
         website_key = _normalize_key(fields.get("官网", ""))
         if not company_key and not website_key:
@@ -476,6 +549,112 @@ def sync_leads_to_pool(
             "--table-id", table_id,
             "--record-id", record_id,
             "--json", json.dumps(fields, ensure_ascii=False),
+            "--as", "bot",
+        )
+
+    return {
+        "created": len(creates),
+        "updated": len(updates),
+        "skipped": skipped,
+        "record_ids": [x for x in created_ids if x],
+        "app_token": app_token,
+        "table_id": table_id,
+        "bitable_url": pool["bitable_url"],
+    }
+
+
+_PRESERVE_ON_UPDATE = ("是否解锁", "阶段", "冷热")
+
+def _buyerleads_fields(record: dict, enterprise_products=None) -> dict:
+    """把 buyerLeadsPlaza 猎客线索映射为线索池字段（来源=AI猎客，解锁前联系人为空）。"""
+    reason = record.get("recentTrend") or record.get("买家公司简介") or record.get("companyProfile") or ""
+    fields = {
+        "公司名": (record.get("buyerCompany") or "")[:200],
+        "官网": (record.get("companyWebsite") or record.get("website") or "")[:500],
+        "国家": (record.get("buyerCountry") or "")[:100],
+        "推荐理由": reason[:500],
+        "来源": "AI猎客",
+        "冷热": "🔥热",
+        "阶段": "待触达",
+        "是否解锁": "未解锁",
+    }
+    bt = record.get("buyerType")
+    if bt:
+        fields["买家类型"] = bt
+    # 匹配产品：只写与企业真实产品对齐的（用户没有的不写）
+    product_tags = []
+    pl = record.get("productList") or record.get("关注产品") or []
+    if isinstance(pl, list):
+        for p in pl:
+            if isinstance(p, dict):
+                product_tags.append(p.get("productName") or p.get("productNameEn") or "")
+            else:
+                product_tags.append(str(p))
+    elif isinstance(pl, str):
+        product_tags.append(pl)
+    product_tags.append(reason)
+    products = _match_products([t for t in product_tags if t], enterprise_products)
+    if products:
+        fields["匹配产品"] = products
+    # AI匹配等级：从 AI匹配分 映射（高≥70 / 中≥50 / 低<50）
+    score = record.get("AI匹配分") or record.get("ai_score") or record.get("aiMatchScore")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        fields["AI匹配等级"] = "高" if score >= 70 else "中" if score >= 50 else "低"
+    return fields
+
+
+def sync_buyerleads_to_pool(
+    company_id: str,
+    company_name: str,
+    records: list,
+    *,
+    enterprise_products: Optional[list] = None,
+    chat_id: Optional[str] = None,
+) -> Dict:
+    """把 buyerLeadsPlaza 猎客线索映射并幂等写入统一线索池（来源=AI猎客）。"""
+    pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
+    app_token = pool["app_token"]
+    table_id = pool["table_id"]
+    existing = _existing_record_index(app_token, table_id)
+
+    creates = []
+    updates = []
+    skipped = 0
+    for record in records or []:
+        fields = _buyerleads_fields(record, enterprise_products=enterprise_products)
+        company_key = _normalize_key(fields.get("公司名", ""))
+        website_key = _normalize_key(fields.get("官网", ""))
+        if not company_key and not website_key:
+            skipped += 1
+            continue
+        record_id = existing.get(f"website:{website_key}") or existing.get(f"company:{company_key}")
+        if record_id:
+            updates.append((record_id, fields))
+        else:
+            creates.append(fields)
+
+    created_ids = []
+    if creates:
+        result = _run_lark(
+            "base", "+record-batch-create",
+            "--base-token", app_token,
+            "--table-id", table_id,
+            "--json", json.dumps({"create_records": creates}, ensure_ascii=False),
+            "--as", "bot",
+            timeout=60,
+        )
+        created = (result.get("data", {}).get("record_id_list")
+                   or result.get("data", {}).get("records")
+                   or result.get("data", {}).get("items") or [])
+        created_ids = [x for x in created if isinstance(x, str)]
+
+    for record_id, fields in updates:
+        _run_lark(
+            "base", "+record-upsert",
+            "--base-token", app_token,
+            "--table-id", table_id,
+            "--record-id", record_id,
+            "--json", json.dumps({k: v for k, v in fields.items() if k not in _PRESERVE_ON_UPDATE}, ensure_ascii=False),
             "--as", "bot",
         )
 

@@ -74,7 +74,7 @@ An older confirmation never applies to a newer draft. A bare “确认”, emoji
 
 1. Create a new Feishu Docx from the confirmed snapshot, titled `企业名称｜企业知识库`. Remove the draft warning and add `企业确认版本：vN`, confirmer display name, and confirmation time. Do not rename or reuse the draft token.
 2. Grant the originating group access and capture the returned formal document token.
-3. Create or validate `企业名称｜AI猎客商机池` and capture its app/table tokens only now.
+3. Create or validate `企业名称｜企业线索池` and capture its app/table tokens only now.
 4. Require an authorized administrator to provide the TradeChina supplier ID for this exact `chat_id`. Validate it with a filtered contract check. Do not read a global environment fallback or copy another group's value.
 5. Apply the group-isolated resource access policy to the separate formal Docx and Base. Atomically persist the complete binding `chat_id -> company_name + knowledge_doc_token + base_app_token + base_table_id + tradechina_supplier_id`, both validated permission proofs, set profile status `active`, and store confirmation/formalization provenance. Any permission failure leaves the state inactive.
 6. Retain the draft as review history; do not treat it as a runtime source. After activation, call `post_confirmation_flow.py start` with the exact confirmation result and canonical formal document/Base URLs. Compare-and-set its `state_patch` under `post_confirmation`, then send its exact progress message to the same group with its idempotency key. Persist the returned message ID and set `post_confirmation.status = progress_notified` before any buyer API call.

@@ -291,11 +291,11 @@ def render(payload: Any) -> dict[str, Any]:
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            "📊 **AI猎客商机池：**\n"
+                            "📊 **企业线索池：**\n"
                             f"[{base_url}]({base_url})\n\n"
-                            "💬 请在AI猎客商机池中标记每条线索的匹配结果"
+                            "💬 请在企业线索池中标记每条线索的匹配结果"
                             "（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。\n\n"
-                            "🔓 需要买家联系方式？在AI猎客商机池把该线索的「是否解锁」改为「已解锁」，"
+                            "🔓 需要买家联系方式？在企业线索池把该线索的「是否解锁」改为「已解锁」，"
                             "或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。"
                         ),
                     },
@@ -305,7 +305,7 @@ def render(payload: Any) -> dict[str, Any]:
                     "actions": [
                         {
                             "tag": "button",
-                            "text": {"tag": "plain_text", "content": "📊 打开AI猎客商机池"},
+                            "text": {"tag": "plain_text", "content": "📊 打开企业线索池"},
                             "type": "primary",
                             "url": base_url,
                         }
@@ -395,7 +395,7 @@ def self_test() -> None:
         "买家特征",
         "HomeLife Brazil 2026",
         "推荐理由",
-        "打开AI猎客商机池",
+        "打开企业线索池",
         "待确认/✅匹配/❌不匹配",
         "是否解锁",
         "解锁线索",

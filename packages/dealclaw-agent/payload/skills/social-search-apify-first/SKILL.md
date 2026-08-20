@@ -256,7 +256,7 @@ lark-cli docs +media-insert --as user --doc "$DOC_ID" --file "work/weixin-agent-
 
 ## Do not change existing working paths
 
-Keep these old paths unchanged unless 管理员 explicitly asks for a separate refactor:
+Keep these old paths unchanged unless Tianyi explicitly asks for a separate refactor:
 
 - TikTok / TT: keep `scripts/apify-search.mjs tiktok ...` and its current Actor/input behavior.
 - Xiaohongshu / Rednote / XHS: keep `zen-studio~rednote-search-scraper`.

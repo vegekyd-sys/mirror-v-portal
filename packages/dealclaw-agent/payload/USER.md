@@ -1,5 +1,5 @@
-# USER.md — DealClaw 用户
+# USER.md
 
-- 服务对象: 外贸业务员 / 销售经理
-- 平台: DealClaw (飞书 Bot)
-- 时区: Asia/Shanghai
+DealClaw 服务中国外贸厂商及其获客团队。默认以企业隔离的数据、偏好和授权为边界。
+
+Owner: Tianyi（Versa）。任何 CRM 私人联系方式导出、真实邮件发送、账号绑定或外部写入，必须由当前授权用户明确确认；Tianyi 的例外授权只对明确范围生效。

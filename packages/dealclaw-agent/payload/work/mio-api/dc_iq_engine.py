@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DC-IQ询盘处理引擎 — 入站消息→CBIE上下文→状态迁移→回复/人工断点"""
+"""DC-IQ询盘处理引擎 — 入站消息→企业画像上下文→状态迁移→回复/人工断点"""
 
 import json, os, re, sys, subprocess
 from datetime import datetime, timezone
@@ -37,6 +37,78 @@ MATERIAL_KEYWORDS = {
 
 PROFILE_REQUIRED = ["enterprise_external", "product", "usp"]
 
+# ── 稳定缺资料字段（P0-E2.1：IQ 输出统一英文键，供 dc_email_signals 消费）──
+_MISSING_FIELD_ALIASES = {
+    "catalog": "catalog", "catalogue": "catalog", "brochure": "catalog", "目录": "catalog", "产品手册": "catalog",
+    "price": "price", "price list": "price", "quote": "price", "报价": "price", "价格": "price", "pricing": "price",
+    "spec": "specification", "specification": "specification", "datasheet": "specification", "规格": "specification", "参数": "specification",
+    "certificate": "certificate", "certification": "certificate", "cert": "certificate", "证书": "certificate", "认证": "certificate",
+    "sample": "sample_policy", "samples": "sample_policy", "样品": "sample_policy",
+    "moq": "moq", "最小起订量": "moq",
+    "delivery time": "delivery_time", "delivery_time": "delivery_time", "交期": "delivery_time",
+    "payment terms": "payment_terms", "payment_terms": "payment_terms", "付款条款": "payment_terms",
+    "booth": "booth_number", "booth_number": "booth_number", "展位": "booth_number",
+    "contact": "contact_person", "contact_person": "contact_person", "联系人": "contact_person",
+}
+
+
+def normalize_missing_fields(missing) -> list[str]:
+    """把 IQ 的 missing 字段规范化成去重、稳定的英文键（不把 confidence 低映射成 missing）。"""
+    out: list[str] = []
+    for m in (missing or []):
+        key = _MISSING_FIELD_ALIASES.get(m.strip().lower()) if isinstance(m, str) else None
+        if key is None:
+            key = "other"
+        if key not in out:
+            out.append(key)
+    return out
+
+
+_QUOTE_START_RES = [
+    re.compile(r'写道\s*[:：]'),                                    # 中文 "写道："
+    re.compile(r'发自我的\s'),                                       # "发自我的 iPhone/设备"
+    re.compile(r'^On\s+.{0,120}?\swrote\s*:', re.IGNORECASE),        # 英文 "On ... wrote:"
+    re.compile(r'^>{1,}\s*'),                                        # "> " 引用行
+    re.compile(r'^-{2,}\s*(?:Original\s+Message|原始邮件|回复邮件|Forwarded|转发)\s*-{2,}', re.IGNORECASE),
+]
+
+
+def strip_quoted_reply(text: str) -> str:
+    """剥离 quoted reply / 原始邮件引用，只保留本次新回复正文。
+
+    意图识别与七信号分类前调用，避免引用内容污染（例如引用里的 meeting 被当成买家诉求）。
+    """
+    if not text:
+        return ""
+    out = []
+    for line in str(text).splitlines():
+        s = line.strip()
+        if any(p.search(s) for p in _QUOTE_START_RES):
+            break
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def analyze_only(reply_text: str, company_context: dict = None) -> dict:
+    """纯分析：不写 LeadStore、不改线索阶段、不写 send_log/audit、不生成/发自动回复、
+    不调飞书/dc_notify、不用 user_open_id、不发网络请求。
+
+    返回 {intent, confidence, requested_materials, missing_fields}。
+    注意：intent/材料只基于剥离引用后的本次回复正文。
+    """
+    text = strip_quoted_reply(reply_text or "")
+    intent, conf = classify_intent(text)
+    req = requested_materials(text) or []
+    ctx = company_context or {}
+    available = {str(x).lower() for x in (ctx.get("available_materials") or ctx.get("materials") or [])}
+    missing = [m for m in req if str(m).lower() not in available]
+    return {
+        "intent": intent,
+        "confidence": round(conf, 2),
+        "requested_materials": req,
+        "missing_fields": normalize_missing_fields(missing),
+    }
+
 
 def classify_intent(text):
     tl = text.lower()
@@ -47,7 +119,7 @@ def classify_intent(text):
             scores[intent] = 0.85 if matches >= 3 else (0.7 if matches >= 2 else 0.5)
     if not scores:
         return ("表达兴趣", 0.3)
-    
+
     # 🔄 读取用户纠错记录，覆盖误判
     try:
         intent_file = Path(__file__).resolve().parent / "data" / "intent_corrections.jsonl"
@@ -60,7 +132,7 @@ def classify_intent(text):
                         break
     except Exception:
         pass
-    
+
     priority = ["拒绝", "索要资料", "预约会议", "表达兴趣", "一般回复", "自动回复"]
     for p in priority:
         if p in scores:
@@ -116,8 +188,8 @@ def compact_usp(parts):
             clean.append(x)
     return ", ".join(clean[:3])
 
-def load_cbie_profile(enterprise="", enterprise_domain="", profile_path=""):
-    """读取 CBIE Phase3 画像 markdown/json，返回邮件可用字段。"""
+def load_company_profile(enterprise="", enterprise_domain="", profile_path=""):
+    """读取 企业画像 markdown/json，返回邮件可用字段。"""
     path = Path(profile_path) if profile_path else None
     if not path or not path.exists():
         for slug in _slug_candidates(enterprise_domain) + _slug_candidates(enterprise):
@@ -129,7 +201,7 @@ def load_cbie_profile(enterprise="", enterprise_domain="", profile_path=""):
             if path and path.exists():
                 break
     if not path or not path.exists():
-        return {"source":"missing", "missing":["CBIE画像"], "materials":{}}
+        return {"source":"missing", "missing":["企业画像"], "materials":{}}
 
     text = path.read_text(encoding="utf-8")
     if path.suffix == ".json":
@@ -192,7 +264,7 @@ def material_missing(profile, material_keys):
 
 def build_feishu_notice(reason, buyer_name, buyer_domain, reply_text, missing=None, draft=None, user_open_id=""):
     title = {
-        "missing_profile": "📌 CBIE画像不足，IQ暂停自动回复",
+        "missing_profile": "📌 企业画像不足，IQ暂停自动回复",
         "missing_material": "📂 买家索要资料，但资料不足",
         "uncertain": "💬 买家回复意图不确定",
         "meeting": "📅 买家想约会议，需人工确认",
@@ -263,8 +335,8 @@ class IQEngine:
     def __init__(self):
         self._store = None
         self._kb = None
-        self._sendlog = None
         self._audit = None
+
 
     @property
     def store(self):
@@ -284,11 +356,7 @@ class IQEngine:
 
     @property
     def sendlog(self):
-        if self._sendlog is None:
-            sys.path.insert(0, os.path.dirname(__file__))
-            from dc_send_log import SendLog
-            self._sendlog = SendLog()
-        return self._sendlog
+        return None
 
     def _audit_log(self, action, user_open_id, enterprise, target, detail):
         if not enterprise:
@@ -341,23 +409,28 @@ class IQEngine:
 
     def process(self, buyer_domain, reply_text, channel="GS", current_stage=0,
                 user_open_id="", buyer_name="", enterprise="", enterprise_domain="",
-                cbie_profile_path=""):
-        intent, conf = classify_intent(reply_text)
-        profile = load_cbie_profile(enterprise, enterprise_domain, cbie_profile_path)
+                company_profile_path=""):
+        analysis = analyze_only(reply_text)
+        intent = analysis["intent"]
+        conf = analysis["confidence"]
+        req = analysis["requested_materials"]
+        profile = load_company_profile(enterprise, enterprise_domain, company_profile_path)
         new_stage = get_next_stage(current_stage, intent)
         draft = generate_reply(intent, new_stage, buyer_name, profile)
         result = {
             "intent":intent, "confidence":round(conf,2), "old_stage":current_stage,
             "new_stage":new_stage, "stage_name":STAGE_NAMES.get(new_stage,"未知"),
             "auto_reply":None, "draft_reply":draft, "action":"auto", "break_reason":"",
-            "send_via":"none", "send_to":"", "send_command":"", "cbie_source":profile.get("source"),
-            "missing":[], "feishu_notice":None, "feishu_send":None,
+            "send_via":"none", "send_to":"", "send_command":"", "company_source":profile.get("source"),
+            "missing":[], "missing_fields":[], "requested_materials":req,
+            "feishu_notice":None, "feishu_send":None,
         }
 
         def breakpoint(reason, missing=None, draft_for_notice=None):
             result["action"] = "breakpoint" if reason not in ("rejected",) else "notify_only"
             result["break_reason"] = reason
             result["missing"] = missing or []
+            result["missing_fields"] = normalize_missing_fields(result["missing"])
             notice = build_feishu_notice(reason, buyer_name, buyer_domain, reply_text, missing, draft_for_notice, user_open_id)
             result["feishu_notice"] = notice
             result["feishu_send"] = maybe_send_feishu_notice(user_open_id, notice)
@@ -368,29 +441,16 @@ class IQEngine:
         if intent == "拒绝" or new_stage < 0:
             result["new_stage"] = -1
             result["stage_name"] = STAGE_NAMES[-1]
-            # B: 写入退订事件，后续发送前会被拦截
-            if enterprise and buyer_domain:
-                try:
-                    self.sendlog._append({
-                        "type": "unsubscribed",
-                        "buyer_domain": buyer_domain,
-                        "buyer_name": buyer_name,
-                        "enterprise": enterprise,
-                        "user_open_id": user_open_id,
-                        "channel": channel,
-                        "detail": "buyer rejected via IQ",
-                        "status": "unsubscribed",
-                    })
-                except Exception:
-                    from dc_degrade import degrade
-                    degrade.decide("sendlog_read", error="unsubscribed write failed", enterprise=enterprise, buyer=buyer_domain)
+            # 注意：拒绝/退订拦截原写入旧 send_log（unsubscribed），但发送前拦截从未接入（无生产读者），
+            # 已随 send_log 移除。EmailStore.provider_status 已记录 complained/bounced，
+            # 「IQ 拒绝 → 拦截」需后续单独接入发送前检查。
             self._audit_log("iq.unsubscribed", user_open_id, enterprise, buyer_domain,
                             f"意图: {intent} | 买家: {buyer_name or buyer_domain}")
             # C: 拒绝时不存回复原文，仅存意图标签
             self._save_state(buyer_domain, buyer_name, user_open_id, -1, intent, "", channel, enterprise)
             return breakpoint("rejected")
         if profile.get("missing") or profile.get("source") == "missing":
-            missing = profile.get("missing") or ["CBIE画像"]
+            missing = profile.get("missing") or ["企业画像"]
             return breakpoint("missing_profile", missing, draft)
         if new_stage >= 4:
             self._save_state(buyer_domain, buyer_name, user_open_id, new_stage, intent, reply_text, channel, enterprise)
@@ -398,8 +458,8 @@ class IQEngine:
         if intent == "索要资料":
             needs = requested_materials(reply_text) or ["catalog"]
             ek = enterprise_domain or enterprise or buyer_domain or "unknown"
-            # 首次命中时自动从 CBIE 画像播种 KB
-            self.kb.seed_from_cbie(ek, profile)
+            # 首次命中时自动从 企业画像播种 KB
+            self.kb.seed_from_company_analysis(ek, profile)
             kb_missing = self.kb.missing_materials(ek, needs)
             if kb_missing:
                 return breakpoint("missing_material", kb_missing, draft)
@@ -413,6 +473,7 @@ class IQEngine:
         self._record_to_kb(enterprise, intent, reply_text, buyer_domain)
         self._audit_log("iq.process", user_open_id, enterprise, buyer_domain,
                         f"意图: {intent} → Stage {new_stage} ({STAGE_NAMES.get(new_stage,'?')})")
+        result["missing_fields"] = normalize_missing_fields(result.get("missing"))
         return result
 
     def _save_state(self, buyer_domain, buyer_name, user_open_id, stage, intent, reply_text, channel, enterprise=""):
@@ -439,12 +500,12 @@ class IQEngine:
 
     def follow_up(self, buyer_domain, reply_text, channel="GS",
                   user_open_id="", buyer_name="", buyer_email="",
-                  enterprise="", enterprise_domain="", cbie_profile_path=""):
+                  enterprise="", enterprise_domain="", company_profile_path=""):
         current = self.get_stage(buyer_domain, user_open_id, enterprise) if user_open_id and enterprise else 0
         result = self.process(
             buyer_domain=buyer_domain, reply_text=reply_text, channel=channel, current_stage=current,
             user_open_id=user_open_id, buyer_name=buyer_name, enterprise=enterprise,
-            enterprise_domain=enterprise_domain, cbie_profile_path=cbie_profile_path,
+            enterprise_domain=enterprise_domain, company_profile_path=company_profile_path,
         )
         if result["action"] == "auto" and result["auto_reply"] and buyer_email:
             result["send_via"] = "FD" if channel == "FD" else "GS"
@@ -472,13 +533,13 @@ class IQEngine:
 
     def simulate_conversation(self, buyer_domain, messages, channel="GS",
                               user_open_id="", buyer_name="", buyer_email="",
-                              enterprise="", enterprise_domain="", cbie_profile_path=""):
+                              enterprise="", enterprise_domain="", company_profile_path=""):
         rounds = []
         for msg in messages:
             r = self.follow_up(
                 buyer_domain=buyer_domain, reply_text=msg["text"], channel=channel,
                 user_open_id=user_open_id, buyer_name=buyer_name, buyer_email=buyer_email,
-                enterprise=enterprise, enterprise_domain=enterprise_domain, cbie_profile_path=cbie_profile_path,
+                enterprise=enterprise, enterprise_domain=enterprise_domain, company_profile_path=company_profile_path,
             )
             rounds.append(r)
             if r["action"] == "breakpoint":

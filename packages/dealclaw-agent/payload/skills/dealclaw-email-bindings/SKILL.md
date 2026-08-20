@@ -1,29 +1,48 @@
 ---
 name: "dealclaw-email-bindings"
-description: "DealClaw 邮箱通知绑定管理：管理代理邮箱→飞书群绑定关系，含 upsert/list/delete/test 全操作 + 凭据安全 + 故障排查"
+description: "DealClaw 邮箱通知绑定：区分个人邮箱(IMAP)与 resend 代理邮箱(webhook)两类绑定"
 author: ""
 ---
 
 # DC-Email Notify Bindings — 邮箱通知绑定管理
 
-> 管理 DealClaw email-webhook 的代理邮箱→飞书群绑定。
-> 通道：自定义机器人 webhook，mention_open_id 自动取 V。
+> 管理 DealClaw 的「邮箱 → 飞书群通知」绑定。共两类，**先按邮箱域名路由，再走对应流程**：
 >
+> - **resend 代理邮箱 webhook 绑定**：`xxx@mail.dealclaw.io` 代理邮箱，服务端 webhook 直接推送
+> - **个人邮箱通知绑定**：真实个人/企业邮箱（163、腾讯企业邮箱、gmail 等），本地 IMAP 轮询
+
+---
+
+## 路由判断（先判类型，再收集信息）
+
+看到「绑邮箱 / 绑定邮件通知 / 邮件通知绑定」类请求，先看用户给的**邮箱域名**：
+
+| 邮箱形态 | 类型 | 绑定方式 | 通知路径 |
+|---------|------|---------|---------|
+| `xxx@mail.dealclaw.io` | resend 代理邮箱 | `webhook.dealclaw.io/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
+| `@163.com` / `@qq.com` / `@gmail.com` 等真实邮箱 | 个人邮箱 | `email_gateway.cli`（本地） | cron IMAP 轮询 → 飞书 |
+
+判断规则：邮箱域名是 `mail.dealclaw.io` → 走 **类型 A（代理）**；否则 → 走 **类型 B（个人）**。
+
+- 用户没给邮箱，或只说「绑邮箱」没说是哪种 → 先问邮箱地址，拿到后按域名路由。
+- 用户同时提到「代理邮箱 / dealclaw 邮箱」→ 直接走 A。
+- 用户提到「个人邮箱 / 163 / QQ / gmail」→ 直接走 B。
+
+两类**不要混用**：个人邮箱走 `/bindings` 服务端接口是无意义的（服务端只认 `@mail.dealclaw.io` 的 resend webhook 事件）；代理邮箱也不需要本地 account/IMAP。
+
+---
+
+## 类型 A：resend 代理邮箱 webhook 绑定
+
+> 通道：自定义机器人 webhook，`mention_open_id` 自动取 V。
 > 服务地址：`https://webhook.dealclaw.io`
 
----
+### 触发条件
 
-## 触发条件
+- 用户给的邮箱是 `xxx@mail.dealclaw.io`
+- 或用户说「代理邮箱绑定」「dealclaw 邮箱通知绑定」
 
-- "绑邮箱" / "绑定邮箱" / "邮件通知绑定"
-- 用户同时说「绑定」+「邮件通知」（两词同现即触发）
-- "查绑定" / "有哪些绑定"
-- "删绑定" / "取消绑定"
-- "测试绑定" / "通知能通吗"
-
----
-
-## 绑定需要什么
+### 绑定需要什么
 
 用户提供两样必填、一样可选；认证凭据由脚本自动读取：
 
@@ -32,8 +51,6 @@ author: ""
 | 用户 | 代理邮箱 | 我方发送身份，如 `thia@mail.dealclaw.io` |
 | 用户 | Webhook URL | 飞书群 → 群设置 → 添加自定义机器人 → 复制地址 |
 | 用户 | 验签码（可选） | 机器人开了签名校验才需要，没开就留空 |
-
-不填的不需要：通道固定自定义机器人，不用选。
 
 认证凭据（`X-Admin-Token` + `X-Supplier-Id`）由脚本自动从 `work/mio-api/.env` 读取（`WEBHOOK_ADMIN_TOKEN` / `MIO_CDP_SUPPLIER_ID`），多租户隔离，无需人工提供。
 
@@ -47,24 +64,22 @@ mention_open_id = 处理此绑定请求的应用机器人 open_id，不是用户
 - 在 SKILL.md 或脚本里硬编码某个值
 - 自己编一个
 
-## Agent 交互流程
+### 交互流程
 
-收到绑邮箱请求后，按以下顺序收集信息：
+收到代理邮箱绑定请求后，按顺序收集：
 
 1. **代理邮箱** → 先问，用户不知道格式给示例 `用户名@mail.dealclaw.io`
-2. **Webhook URL + 签名校验** → 用户给了邮箱后，同一轮就要问两样：webhook 地址 + "你的机器人开签名校验了吗？开了给我验签码"。不要分成两轮，也不要在收到 webhook 后再回头问。
+2. **Webhook URL + 签名校验** → 用户给了邮箱后，同一轮就问两样：webhook 地址 + "你的机器人开签名校验了吗？开了给我验签码"。不要分成两轮。
 
 全部信息收集齐后再调用绑定接口。
 
----
-
-## 脚本工具
+### 脚本工具
 
 ```bash
-# 列出全部绑定（token + supplier id 自动从 .env 读，无需手动传）
+# 列出全部绑定
 bash scripts/dc-bindings.sh list
 
-# 新增绑定（mention_open_id 传当前应用机器人的 open_id）
+# 新增/覆盖绑定（mention_open_id 传当前应用机器人的 open_id）
 bash scripts/dc-bindings.sh upsert \
   thia@mail.dealclaw.io \
   "https://open.feishu.cn/open-apis/bot/v2/hook/xxx" \
@@ -80,67 +95,138 @@ bash scripts/dc-bindings.sh test thia@mail.dealclaw.io
 
 upsert 参数：`<agent_email> <webhook_url> <mention_open_id> [note]`
 
----
-
-## 接口速查
-
-### 列出全部绑定
+### 接口速查
 
 ```bash
-curl -s -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://webhook.dealclaw.io/bindings | python3 -m json.tool
-```
+# 列出全部
+curl -s -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://webhook.dealclaw.io/bindings
 
-### 新增/覆盖绑定
-
-```bash
+# 新增/覆盖
 curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "X-Admin-Token: $TOKEN" \
   -H "X-Supplier-Id: $SUPPLIER_ID" \
-  -d '{
-    "agent_email": "thia@mail.dealclaw.io",
-    "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
-    "webhook_secret": "",
-    "prefer": "custom",
-    "mention_open_id": "<机器人open_id>",
-    "note": "备注"
-  }' \
+  -d '{"agent_email":"thia@mail.dealclaw.io","webhook_url":"https://.../hook/xxx","webhook_secret":"","prefer":"custom","mention_open_id":"<机器人open_id>","note":"备注"}' \
   https://webhook.dealclaw.io/bindings
-```
 
-规则：
-- `agent_email` + `webhook_url` + `mention_open_id` 必填
-- `webhook_secret` 可选，没开签名校验就留空
-- `mention_open_id` 按上方 mention_open_id 确定方法取值
-- `prefer` 固定 `custom`
-
-### 删除 / 测试
-
-```bash
+# 删除 / 测试
 curl -s -X DELETE -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://webhook.dealclaw.io/bindings/thia@mail.dealclaw.io
 curl -s -X POST -H "Content-Type: application/json" -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" \
   -d '{"agent_email":"thia@mail.dealclaw.io"}' https://webhook.dealclaw.io/bindings/thia@mail.dealclaw.io/test
 ```
 
+规则：
+- `agent_email` + `webhook_url` + `mention_open_id` 必填
+- `webhook_secret` 可选，没开签名校验就留空
+- `mention_open_id` 按上文方法取值
+- `prefer` 固定 `custom`
+
+---
+
+## 类型 B：个人邮箱通知绑定（本地 IMAP）
+
+> 通道：本地 `email_gateway`，`cron_notify --all` 每 5 分钟 IMAP 轮询 → 飞书卡片。
+> 适用：真实个人/企业邮箱，163 / 腾讯企业邮箱 / gmail。
+
+### 触发条件
+
+- 用户给的邮箱是真实邮箱（`@163.com` / `@qq.com` / `@exmail.qq.com` / `@gmail.com` 等）
+- 或用户说「个人邮箱通知绑定」「把我的 163 邮箱通知绑到这个群」
+
+### 绑定需要什么
+
+个人邮箱绑定 = 两步：**先建 account，再绑群**。需要收集：
+
+| 谁来 | 需要什么 | 说明 |
+|------|---------|------|
+| 用户 | 邮箱地址 | 如 `waqa1988@163.com` |
+| 用户 | provider | `netease_163` / `tencent_exmail` / `gmail` |
+| 用户 | IMAP/SMTP 授权码 | 163/腾讯 = 网页版生成的「客户端授权码」（非登录密码）；gmail = App Password |
+| 用户 | 飞书群 chat_id | `oc_` 开头（通常就是当前群） |
+| 用户 | Webhook URL | 飞书群自定义机器人地址（发卡片通道） |
+| 系统 | enterprise + owner_open_id | enterprise = supplier id（`.env` 的 `MIO_CDP_SUPPLIER_ID`，自动读）；owner = 当前用户 open_id |
+
+### 交互流程
+
+分两段收集，不要一次塞一堆：
+
+1. **邮箱 + provider + 授权码** → 先问这三样（163/腾讯要提示「网页版设置里开启 IMAP/SMTP 并生成客户端授权码，不是登录密码」）。
+2. **chat_id + webhook URL** → 第二段问（群 chat_id 通常就是当前群）。enterprise 自动用 supplier id，owner 默认当前用户，无需用户提供。
+
+收集齐后按下面命令执行，并**验证**（见「验证」）。
+
+### 命令
+
+```bash
+cd work/mio-api
+export DC_DATA_DIR="$(pwd)/data"
+SUPPLIER_ID="$(grep '^MIO_CDP_SUPPLIER_ID=' .env | cut -d= -f2-)"
+
+# 1) 建 account（enterprise 用 supplier id；授权码用 env:/file:/明文 三种 secret-ref 之一，见下）
+python3 -m email_gateway.cli account-add \
+  --enterprise "$SUPPLIER_ID" \
+  --owner-open-id ou_xxx \
+  --email waqa1988@163.com \
+  --provider netease_163 \
+  --secret-ref env:WQA1988_163_APP_PASSWORD \
+  --display-name "王强163"
+
+# 2) 绑群
+python3 -m email_gateway.cli bind-group \
+  --account-id ema_xxx \
+  --chat-id oc_xxx \
+  --webhook "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+```
+
+`account-add` 关键参数：`--enterprise`（= supplier id，`.env` 的 `MIO_CDP_SUPPLIER_ID`）`--owner-open-id`（= 当前用户 open_id）`--email` `--provider` `--secret-ref`（必填），`--mailbox-kind`（默认 personal）、`--display-name`、`--default`、`--daily-send-limit` 可选。
+
+`bind-group` 关键参数：`--account-id` `--chat-id`（必填），`--filter`（默认 `dealclaw_replies`）、`--webhook`、`--webhook-secret` 可选。
+
+### secret-ref 三种形式
+
+- `env:NAME` —— 环境变量（cron 环境 `.env` 不自动加载，需确保 cron 注入了该变量，否则解析失败）
+- `file:/绝对路径` —— 0600 权限文件（cron 可直接读，推荐）
+- 裸明文 —— 直接存密码（简单，但会落进 account 记录文件；用户明确接受泄漏面时才用）
+
+> 提醒：如果授权码解析失败（`SecretResolutionError`），先确认 cron 进程环境里读得到该 secret（env 需注入、file 需存在且 600、明文无需外部依赖）。
+
+### 验证（最小验证门）
+
+1. `account-check`：`python3 -m email_gateway.cli account-check --account-id ema_xxx` → 确认 IMAP/SMTP 认证通过
+2. `sync`：`python3 -m email_gateway.cli sync --account-id ema_xxx` → 确认 IMAP 登录成功（`fetched` 正常，无 `SecretResolutionError`）
+3. 让收件人回一封，等 `cron_notify --all` 跑一轮，群里应出卡片 + @ 数字人
+
 ---
 
 ## 故障排查
 
+### 类型 A（代理邮箱）
+
 - `bound: false` → `agent_email` 可能填成了买家邮箱
 - `via: "none"` → webhook URL 不对或签名校验不匹配
-- `400` → 缺少必填字段（特别是 `mention_open_id`，或漏传 `X-Supplier-Id`）
+- `400` → 缺少必填字段（`mention_open_id` 或漏传 `X-Supplier-Id`）
 - `401` → ADMIN_TOKEN 不对或过期
+
+### 类型 B（个人邮箱）
+
+- `SecretResolutionError` → 授权码在 cron 环境读不到（见 secret-ref 三种形式）
+- `Unsafe Login` / IMAP 登录失败 → 163 需要客户端授权码（非登录密码），且已开启 IMAP/SMTP
+- 收不到通知 → 确认 binding 的 `--webhook` 填了、`notify_enabled` 为真、cron `dealclaw-email-sync-all` 在跑
+- 重复发信被 `duplicate idempotency key` 拦截 → 同一收件人默认幂等，需传 `content_version`/`campaign_id` 区分
 
 ---
 
 ## 限流
 
-10次/分钟 burst 5，超出返回 `429`。
+- 类型 A `/bindings` 接口：10 次/分钟 burst 5，超出返回 `429`。
 
 ---
 
 ## 边界
 
-- 通道固定自定义机器人，mention_open_id 必须为当前应用机器人的 open_id，取值规则见上文
-- 认证双头：`X-Admin-Token`（`WEBHOOK_ADMIN_TOKEN`）+ `X-Supplier-Id`（`MIO_CDP_SUPPLIER_ID`），脚本自动从 `work/mio-api/.env` 读取，多租户隔离
-- 不暴露密钥明文
+- 类型 A：通道固定自定义机器人，`mention_open_id` 必须为当前应用机器人的 open_id
+- 类型 B：`--confirmed-by`（发信）必须匹配邮箱 owner；首次 sync 不导入历史邮件（除非 `--bootstrap-days`）
+- 认证双头（类型 A）：`X-Admin-Token`（`WEBHOOK_ADMIN_TOKEN`）+ `X-Supplier-Id`（`MIO_CDP_SUPPLIER_ID`），脚本自动从 `work/mio-api/.env` 读取
+- 类型 B 的 `enterprise` = supplier id（`.env` 的 `MIO_CDP_SUPPLIER_ID`），与类型 A 的 `X-Supplier-Id` 同源，保持多租户一致
+- 两类不要混用（见「路由判断」）
+- 不暴露密钥明文；授权码/验签码只在必要的命令里传，不写进聊天记录或日志

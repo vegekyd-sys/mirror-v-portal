@@ -156,7 +156,7 @@ def start(payload: Any) -> dict[str, Any]:
         "progress_message": (
             f"企业画像已确认，{company}的正式企业知识库已生成并绑定。\n"
             f"正式企业知识库：{formal_document_url}\n"
-            f"AI猎客商机池：{base_url}\n"
+            f"企业线索池：{base_url}\n"
             "正在根据正式企业画像重新匹配合适的买家采购需求，完成后将在本群推送结果。"
         ),
         "state_patch": {
@@ -305,12 +305,12 @@ def complete(payload: Any) -> dict[str, Any]:
     if pushed_leads:
         result_message = (
             f"{company}的企业画像确认后匹配已完成：本次重新获取并评估{len(records)}条买家线索，"
-            f"{pool_written}条进入AI猎客商机池，已推送{pushed_leads}条高匹配买家线索。"
+            f"{pool_written}条进入企业线索池，已推送{pushed_leads}条高匹配买家线索。"
         )
     else:
         result_message = (
             f"{company}的企业画像确认后匹配已完成：本次重新获取并评估{len(records)}条买家线索，"
-            f"{pool_written}条进入AI猎客商机池，暂未发现符合本次推送门槛的新买家线索。"
+            f"{pool_written}条进入企业线索池，暂未发现符合本次推送门槛的新买家线索。"
         )
     return {
         "status": "completed",

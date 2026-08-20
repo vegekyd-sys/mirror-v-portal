@@ -1,6 +1,7 @@
 ---
 name: "dealclaw-review"
 description: "将买家画像纠偏统一为自然语言回合，由Agent判断语义，脚本保存证据与画像变化。"
+author: ""
 ---
 
 # Review — 自然语言买家画像校准

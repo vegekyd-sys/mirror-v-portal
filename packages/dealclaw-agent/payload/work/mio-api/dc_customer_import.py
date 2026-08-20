@@ -583,16 +583,6 @@ def learn_from_annotate(enterprise, lead, promote_long_term=False):
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Shadow billing
-    try:
-        from dc_billing import billing
-        tenant = os.environ.get("DC_TENANT_ID", "") or os.environ.get("DEALCLAW_TENANT_ID", "")
-        if tenant:
-            billing.configure(tenant)
-            billing.estimate("dealclaw-lead-import", quantity=1)
-    except Exception:
-        pass
-
     if len(sys.argv) < 2:
         print("用法:")
         print("  python3 dc_customer_import.py import <enterprise> <file.csv>")

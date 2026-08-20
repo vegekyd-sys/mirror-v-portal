@@ -13,7 +13,7 @@ from .store import EmailStore
 from .verify import AccountVerifier
 
 
-DEFAULT_DB = Path(__file__).resolve().parent / "data" / "email_gateway.sqlite3"
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def emit(value: object) -> None:
@@ -48,7 +48,7 @@ def format_notifications(results: list[dict]) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DealClaw multi-account email gateway")
-    parser.add_argument("--db", default=os.getenv("DEALCLAW_EMAIL_DB", str(DEFAULT_DB)))
+    parser.add_argument("--data-dir", default=os.getenv("DC_DATA_DIR", str(DEFAULT_DATA_DIR)))
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("providers")
@@ -93,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     bind.add_argument("--account-id", required=True)
     bind.add_argument("--chat-id", required=True)
     bind.add_argument("--filter", choices=["dealclaw_replies", "all"], default="dealclaw_replies")
+    bind.add_argument("--webhook", default="", help="飞书自定义机器人 webhook URL")
+    bind.add_argument("--webhook-secret", default="", help="飞书自定义机器人签名密钥（secret）")
 
     bindings = sub.add_parser("binding-list")
     bindings.add_argument("--chat-id")
@@ -125,16 +127,16 @@ def _csv(value: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    store = EmailStore(args.db)
+    store = EmailStore(args.data_dir)
 
     if args.command == "providers":
         emit({key: get_provider(key).__dict__ for key in sorted(PROVIDERS)})
     elif args.command == "init":
-        emit({"ok": True, "db": str(Path(args.db).resolve())})
+        emit({"ok": True, "data_dir": str(Path(args.data_dir).resolve())})
     elif args.command == "account-add":
         get_provider(args.provider)
-        if not (args.secret_ref.startswith("env:") or args.secret_ref.startswith("file:")):
-            raise ValueError("--secret-ref must use env:NAME or file:/absolute/path")
+        if not args.secret_ref.strip():
+            raise ValueError("--secret-ref must not be empty")
         result = store.add_account(
             enterprise_id=args.enterprise,
             owner_open_id=args.owner_open_id,
@@ -180,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
                 account_id=args.account_id,
                 chat_id=args.chat_id,
                 inbound_filter=args.filter,
+                webhook_url=args.webhook,
+                webhook_secret=args.webhook_secret,
             )
         )
     elif args.command == "binding-list":

@@ -1,20 +1,13 @@
-# ai-patterns.md — DealClaw 行为规则
+# AI patterns
 
-> DealClaw Agent 的学习行为模式。不包含 管理员 个人上下文。
+- Give a business judgment before a data dump.
+- Mark uncertainty; never fabricate.
+- External sends and CRM-private data always require the applicable authorization gate.
 
-## 核心行为
+## 飞书群 URL 格式规则（2026-07-30）
 
-### 外贸场景闭环
-搜线索不开发没意义，出邮件不发送没意义，收回复不跟进没意义。
-每一步结束时必须给下一步——搜了买家就问"要不要触达"，出了邮件就问"要不要发送"。
-
-### 匹配用户工作方式
-- 市场型用户：主动推送高质量报告
-- 开发型用户：主动建线索获取+转化任务
-- 保守观望型用户：保持软节奏，只给钩子
-
-### 技术规则
-- 邮件发送前先确认（外部操作铁律）
-- 不编数据，不确定就承认
-- 不暴露内部引擎名、数据源名
-- 气泡不输出表格，表格只放飞书文档
+**铁律：** 飞书群里发 URL 必须写完整 `https://` 前缀，否则不会自动跳转。
+- ❌ `rajenterprisesinks.com` — 不跳转
+- ✅ `https://rajenterprisesinks.com` — 可点击跳转
+- 提供买家线索时，每条必须带完整可点击链接。
+- Markdown 链接格式 `[文字](https://...)` 在飞书群里不生效，直接用裸 URL。

@@ -8,7 +8,13 @@ const root = path.resolve('payload');
 const requiredFiles = [
   'payload-manifest.json',
   'AGENTS.md',
-  'work/mio-api/dealclaw_search.py',
+  'SOUL.md',
+  'PERSONA.md',
+  'IDENTITY.md',
+  'REDLINES.md',
+  'plugins/dealclaw-billing/index.mjs',
+  'work/mio-api/dc_agent_router.py',
+  'work/mio-api/dc_buyer_adapter.py',
 ];
 
 for (const relative of requiredFiles) {

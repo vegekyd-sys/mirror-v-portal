@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DC-Copy 开发信引擎 — CBIE+OS+buyer → 多渠道多轮序列"""
+"""DC-Copy 开发信引擎 — 企业分析+OS+buyer → 多渠道多轮序列"""
 
 import json, os, sys
 from pathlib import Path
@@ -335,11 +335,11 @@ def localize_email(buyer_name, buyer_company, buyer_domain, product, usp,
     """生成本地化邮件"""
     lang = COUNTRY_LANG.get((buyer_country or "").upper(), "en")
     t = LANG_TEMPLATES.get(lang, LANG_TEMPLATES["en"])
-    
+
     name = buyer_name or "there"
     company = buyer_company or ""
     domain = buyer_domain or ""
-    
+
     greeting = t["greeting"].format(name=name)
     intro = t["intro"].format(company=company, domain=domain)
     who = t["who_we_are"].format(enterprise=enterprise, product=product)
@@ -347,7 +347,7 @@ def localize_email(buyer_name, buyer_company, buyer_domain, product, usp,
     cta = t["cta"].format()
     sign = t["sign"].format(sender=sender_name, enterprise=enterprise, email=sender_email)
     subject = t["subject"].format(product=product)
-    
+
     body = f"{greeting}\n\n{intro}\n\n{who}\n{usp_text}\n\n{cta}\n\n{sign}\n{_legal_footer(lang)}"
     return {"subject": subject, "text": body, "lang": lang}
 
@@ -460,21 +460,10 @@ class CopyEngine:
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
-
-    # Shadow billing
-    try:
-        from dc_billing import billing
-        tenant = os.environ.get("DC_TENANT_ID", "") or os.environ.get("DEALCLAW_TENANT_ID", "")
-        if tenant:
-            billing.configure(tenant)
-            billing.estimate("dealclaw-email-growth-send", quantity=1)
-    except Exception:
-        pass
-
-    from dc_iq_engine import load_cbie_profile
+    from dc_iq_engine import load_company_profile
 
     ce = CopyEngine()
-    profile = load_cbie_profile(profile_path=str(
+    profile = load_company_profile(profile_path=str(
         Path(__file__).parents[2] / "memory/projects/mio/dealclaw/profiles/kmlbelt.md"))
 
     buyer = {"name":"Bonnie","company":"Pacific Transmission","domain":"pacifictransmission.com",
@@ -510,5 +499,3 @@ if __name__ == "__main__":
             sender_name=sender_name,
             sender_email=sender_email,
         )
-
-

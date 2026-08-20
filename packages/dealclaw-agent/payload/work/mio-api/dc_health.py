@@ -25,14 +25,12 @@ KB_DIR = DATA_DIR / "kb"
 ENGINE_DIR = Path(__file__).resolve().parent
 
 ENGINES = [
-    "dc_ls_store", "dc_iq_engine", "dc_kb_engine", "dc_send_log",
-    "dc_copy_engine", "dc_audit", "dc_customer_import", "dc_dashboard",
-    "dc_dashboard_sync",
+    "dc_ls_store", "dc_iq_engine", "dc_kb_engine",
+    "dc_copy_engine", "dc_audit", "dc_customer_import",
 ]
 
 DATA_FILES = [
     ("leads.json", "线索库"),
-    ("send_log.jsonl", "发送日志"),
     ("audit_log.jsonl", "审计日志"),
     ("preferences.json", "偏好"),
 ]
@@ -90,12 +88,12 @@ def check_kb():
     if not KB_DIR.exists():
         results.append(("⬜", "KB目录", "不存在, 尚未初始化"))
         return results
-    
+
     kb_files = list(KB_DIR.glob("*.json"))
     if not kb_files:
         results.append(("⬜", "KB", "无企业知识库"))
         return results
-    
+
     for path in kb_files:
         try:
             kb = json.loads(path.read_text())

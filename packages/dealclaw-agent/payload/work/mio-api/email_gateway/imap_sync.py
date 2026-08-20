@@ -121,6 +121,25 @@ class ImapSynchronizer:
         self.client_factory = client_factory or imaplib.IMAP4_SSL
         self.secret_resolver = secret_resolver
 
+    def _record_reply_fact(self, account, bound, buyer_email, reply_text, inbound_message_id):
+        """把已绑定的入站回复写入七信号（统一信号入口）。"""
+        try:
+            from dc_email_controller.dc_email_signals import analyze_reply, process_reply
+            from dc_email_controller.dc_signal_push import evaluate_for_push
+            _company = bound.get("company_id", "") or account.get("enterprise_id", "")
+            _buyer = (buyer_email.split("@")[-1].lower() if "@" in buyer_email else buyer_email)
+            _a = analyze_reply(reply_text or "", buyer_domain=_buyer, enterprise=_company)
+            _res = process_reply(
+                reply_text=reply_text or "", message_id=inbound_message_id,
+                thread_id=bound.get("thread_id") or bound.get("local_message_id", ""),
+                company_id=_company, campaign_id=bound.get("campaign_id", ""),
+                lead_id=bound.get("lead_id", ""), contact_id=bound.get("contact_id", ""),
+                iq_intent=_a["intent"], requested_materials=_a["requested_materials"],
+                missing_fields=_a["missing_fields"], confidence=_a["confidence"])
+            evaluate_for_push([s["signal_id"] for s in _res.get("signals", [])])
+        except Exception as e:
+            print(f"[imap_sync] signal failed: {e}")
+
     def sync_account(
         self,
         account_id: str,
@@ -217,6 +236,8 @@ class ImapSynchronizer:
                 reference_candidates = [*_message_ids(in_reply_to), *references]
                 related = self.store.has_outbound_reference(account_id, reference_candidates)
                 sender = ", ".join(address for _, address in getaddresses(msg.get_all("From", [])))
+                from_addresses = [address for _, address in getaddresses(msg.get_all("From", []))]
+                first_from = from_addresses[0] if from_addresses else sender
                 recipients = [address for _, address in getaddresses(msg.get_all("To", []))]
                 sent_at = None
                 if msg.get("Date"):
@@ -257,6 +278,14 @@ class ImapSynchronizer:
                     result.fetched += 1
                     if related:
                         result.related += 1
+                        # 绑定原 outbound（In-Reply-To / References），复制 company/campaign/lead/contact 身份，写 log_reply
+                        bound = self.store.bind_reply_to_outbound(
+                            account_id=account_id,
+                            inbound_message_id=message_id,
+                            reference_ids=reference_candidates,
+                        )
+                        if bound is not None:
+                            self._record_reply_fact(account, bound, first_from, stored_preview, message_id)
                     if not related and not emit_all:
                         result.filtered += 1
                     if related or emit_all:

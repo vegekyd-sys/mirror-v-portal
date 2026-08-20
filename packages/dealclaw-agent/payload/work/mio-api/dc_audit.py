@@ -5,7 +5,7 @@ import json, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
 AUDIT_FILE = DATA_DIR / "audit_log.jsonl"
 
 # ── 操作类型 ──────────────────────────────────────────────

@@ -34,7 +34,7 @@ AGENTS = {
         "brand": "元海·出海精英 | Meo Gennie",
         "role": "企业AI决策大脑 / 老板",
         "description": "洞察全局 · 决策中枢 · 资源调度 · 战略驱动",
-        "skills": ["DC-CBIE", "DC-MI", "DC-PRC", "DC-KB", "DC-LS", "DC-OS", "DC-Copy", "DC-GS", "DC-FD", "DC-IQ", "DC-WA"],
+        "skills": ["企业分析", "DC-MI", "DC-PRC", "DC-KB", "DC-LS", "DC-OS", "DC-Copy", "DC-GS", "DC-FD", "DC-IQ", "DC-WA"],
         "sub_agents": ["xiaozhan", "xiaochuang", "xiaotuo"],
         "triggers": [
             "分析企业", "建立知识库", "找买家", "写开发信", "发邮件", "配置域名",

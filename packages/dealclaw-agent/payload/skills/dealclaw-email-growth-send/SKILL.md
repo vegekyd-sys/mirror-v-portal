@@ -22,7 +22,7 @@ date: "2026-07-30"
 1. 飞书通知检查 → GET /bindings 查已有绑定，有则自动复用，无则提醒绑定
 2. KB 素材检查 → 缺关键素材（认证/手册）则阻断通知
 3. 生成邮件内容 → 公司口吻，含产品+差异化信息
-4. 发送前检查买家时区 → `python3 scripts/send_window.py --country <ISO> [--city <city>]`。不在工作日 8:00-18:00 则阻断，向用户说明原因及预计发送时间。批量发送时，取多数买家的时区判断；若买家跨时区，逐批检查。
+4. 发送前检查买家时区 → `python3 work/mio-api/send_window.py --country <ISO> [--city <city>]`。不在工作日 8:00-18:00 则阻断，向用户说明原因及预计发送时间。批量发送时，取多数买家的时区判断；若买家跨时区，逐批检查。
 5. 发送前校验 → 域名预热 / 收件人格式 / 业务邮箱验证
 6. 发送 → Resend（自动退订+追踪）
 7. 回写线索池 → 立刻更新每条记录的 阶段→已触达、最近触达→发送时间、触达渠道→邮件/WhatsApp。不可跳过
@@ -54,7 +54,7 @@ Header: X-Admin-Token: <token>
 
 绑定 API 是 upsert，服务端已存储。V 不需要在 session 中记忆绑定参数。
 
-`X-Admin-Token` 存储在 `work/mio-api/.env` 的 `WEBHOOK_ADMIN_TOKEN`。
+`X-Admin-Token` 存储在 `workspace/.env` 的 `WEBHOOK_ADMIN_TOKEN`。
 
 默认发件地址统一使用 `V@mail.dealclaw.io`。
 
@@ -93,6 +93,18 @@ V 根据买家背景和企业画像自主生成，不套死模板。核心原则
 - 结尾给一个轻行动引导
 - HTML + 纯文本双版本
 - 退订 footer 由 send.mjs 自动注入
+
+### 反垃圾（Anti-Spam）控制 — 冷信首封必读
+
+> 来源实践（2026-08-20 领艺首轮群发）：`trevor@expertmedicalsupplies.co.za` 被拒 `550 High probability of spam`（ContentRejected）。根因是营销词密度过高 + 冷群发语境。以下为硬约束：
+
+1. **去营销化标题**：冷信标题不用「形容词+品牌堆砌」式（如 "German-standard … / premium …"），改用低调商务询价式（如 "Inquiry - <品类> for your product range" / "Regarding <品类> at the Johannesburg show"）。
+2. **降营销词密度**：首封正文避免连用 "German-standard / century-old / full-solution / premium / luxury" 等密集形容词；一句话一个卖点，多留中性陈述（我是谁、做什么、何时在哪参展）。
+3. **强一对一姿态**：标题和正文不重复品牌名 3 次以上；结尾用轻提问（"Could you let me know if this is useful?"）而非硬 CTA。
+4. **新发送身份/新收件域逐批检查**：发件身份首次投递到某域，反垃圾误杀概率高；批量发前对每个新域做一次 check，单批控制发件节奏（≥0.5s 间隔），勿大并列。
+5. **bounce 分级复盘**：`type=Transient / subType=ContentRejected` 属内容触发（可改内容重投，改后可自动重发）；`type=Permanent`（邮箱不存在/无效）才停止、记入无效名单待清。
+
+> 未读本小节的 agent 在生成群发内容前，应默认按上述约束生成冷信。
 
 ---
 
@@ -248,8 +260,8 @@ node scripts/resend/send.mjs \
 每次完成邮件发送并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-email-growth-send 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-email-growth-send 1 &
 ```
 
 - 必须在后台异步执行（加 `&`），不阻塞用户回复

@@ -182,18 +182,8 @@ def build_homepage(enterprise, layer_links=None):
     qs = iq.get("common_questions", [])
     if qs:
         recent_learnings.append(f"买家常问: {qs[0]['question'][:50]}")
-    
-    # 🔄 回路3: Evolution → KB文档 — 拉取最新的进化建议
-    try:
-        from dc_evolution import run_all as run_evolution
-        evo_insights = run_evolution(enterprise, days=30)
-        if evo_insights:
-            top_ins = evo_insights[:2]
-            for ins in top_ins:
-                recent_learnings.append(f"💡 进化发现: {ins.get('insight','')[:70]}")
-    except Exception:
-        pass
-    
+
+
     if not recent_learnings:
         recent_learnings = ["知识库刚建立，开始使用后会累积学习记录"]
 
@@ -725,7 +715,7 @@ def build_layer3(enterprise, user_open_id=""):
         lines.append("## 🔗 数据来源")
         lines.append("")
         lines.append(comp_evidence([
-            f"企业画像: CBIE 分析 + 人工补充",
+            f"企业画像: 企业分析 + 人工补充",
             f"买家画像: {len(evo)} 次进化 · v{persona.get('version',0)}",
             f"IQ 记忆: {iq.get('total_interactions',0)} 次买家互动",
             "竞争情报: web_search + 人工标注",

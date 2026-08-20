@@ -19,6 +19,7 @@ def main() -> None:
 	p.add_argument("--company-name", default="", help="公司名关键字")
 	p.add_argument("--profile-keyword", default="", help="公司简介关键字")
 	p.add_argument("--countries-json", default="[]", help="国家二字码：RU 或 RU,US；亦支持 JSON 数组")
+	p.add_argument("--pre-exhibition-ids-json", default="[]", help="展会预注册买家过滤：展会 ID 数组，如 152996309411 或 152996309411,xxx")
 	p.add_argument("--features-json", default="[]", help="features：5,7 或 [5,7]")
 	p.add_argument("--company-info-json", default="[]", help="companyInfo：1,3 或 [1,3]")
 	p.add_argument("--contact-info-json", default="[]", help="contactInfo：3,4 或 [3,4]")
@@ -27,7 +28,7 @@ def main() -> None:
 	p.add_argument("--trade-scale-level-json", default="[]", help="tradeScaleLevel：3 或 [2,3]")
 	p.add_argument("--annual-revenue-level-json", default="[]", help="annualRevenueLevel：3 或 [3,4]")
 	p.add_argument("--page-num", type=int, default=1)
-	p.add_argument("--page-size", type=int, default=20)
+	p.add_argument("--page-size", type=int, default=100)
 	p.add_argument("--sort-type", type=int, default=2, help="0不排 1VIP到展 2综合")
 	p.add_argument("--search-similarity", action="store_true")
 
@@ -48,6 +49,7 @@ def main() -> None:
 			"companyName": args.company_name or "",
 			"profileKeyword": args.profile_keyword or "",
 			"countries": parse_json_array("countries-json", args.countries_json),
+			"preExhibitionIds": parse_json_array("pre-exhibition-ids-json", args.pre_exhibition_ids_json),
 			"features": parse_json_array("features-json", args.features_json),
 			"companyInfo": parse_json_array("company-info-json", args.company_info_json),
 			"contactInfo": parse_json_array("contact-info-json", args.contact_info_json),

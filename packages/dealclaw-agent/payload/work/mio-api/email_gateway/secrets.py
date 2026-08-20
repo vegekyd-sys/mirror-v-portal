@@ -15,6 +15,7 @@ def resolve_secret(secret_ref: str) -> str:
     Supported references:
       env:VARIABLE_NAME
       file:/absolute/path
+      <plaintext>            # 裸值直接作为密码返回（明文存储）
     """
     if secret_ref.startswith("env:"):
         name = secret_ref[4:].strip()
@@ -39,5 +40,5 @@ def resolve_secret(secret_ref: str) -> str:
             raise SecretResolutionError("secret file is empty")
         return value
 
-    raise SecretResolutionError("secret_ref must use env:NAME or file:/absolute/path")
-
+    # 裸值视为明文密码（用户明确选择明文存储）
+    return secret_ref

@@ -122,7 +122,7 @@ def append_email_reply(
     notes: str = "",
 ) -> None:
     """
-    dc_webhook_poll / dc_iq_engine 处理完回复后调用。
+    dc_iq_engine 处理完回复后调用。
     intent 由 classify_intent() 产出。
     """
     _append_row(
@@ -247,6 +247,9 @@ def append_pending_reply(
 
 # ── 企业身份 ──────────────────────────────────────────────
 
+
+
+
 def append_company_profile(
     *,
     company_id: str = "",
@@ -260,14 +263,14 @@ def append_company_profile(
     """企业画像确认后调用。幂等: company_id+profile_version 去重。"""
     path = _MEMORY_ROOT / "company" / "profile.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # 幂等检查
     if path.exists():
         existing = path.read_text(encoding="utf-8")
         key = f"profile_version: {profile_version}"
         if key in existing and f"company_id: {company_id}" in existing:
             return  # 已存在，跳过
-    
+
     path.write_text(
         f"# Company Profile\n\n"
         f"company_id: {company_id}\n"
@@ -280,6 +283,65 @@ def append_company_profile(
         f"timezone: Asia/Shanghai\n",
         encoding="utf-8",
     )
+
+
+def append_company_basic_info(
+    *,
+    company_id: str = "",
+    company_name: str = "",
+    company_name_en: str = "",
+    website: str = "",
+    email: str = "",
+    phone: str = "",
+    whatsapp: str = "",
+    product_tags: str = "",
+    business_model: str = "",
+    founded: str = "",
+    employees: str = "",
+) -> None:
+    """从 supplier id（getBasicInfo）写入企业基本信息层。
+
+    与 append_company_profile（解析画像）分层：这里只存 supplier id 直接返回的
+    公司名/联系方式/产品标签等基础字段，不与 analyze-company 解析画像冲突。
+    幂等：company_id 相同则跳过。
+    """
+    if not company_id or not company_id.strip():
+        return
+    path = _MEMORY_ROOT / "company" / "profile.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 读取现有内容，合并「基本信息」段（不覆盖画像解析段）
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        if "## Basic Info" in existing and f"supplier_id: {company_id}" in existing:
+            return  # 已存在，跳过
+    else:
+        existing = "# Company Profile\n\n"
+
+    basic_block = (
+        "## Basic Info\n"
+        f"supplier_id: {company_id}\n"
+        f"company_name: {company_name}\n"
+        f"company_name_en: {company_name_en}\n"
+        f"website: {website}\n"
+        f"email: {email}\n"
+        f"phone: {phone}\n"
+        f"whatsapp: {whatsapp}\n"
+        f"product_tags: {product_tags}\n"
+        f"business_model: {business_model}\n"
+        f"founded: {founded}\n"
+        f"employees: {employees}\n"
+        f"updated_at: {_now()}\n"
+    )
+
+    if "## Basic Info" in existing:
+        # 替换已有的 basic info 段
+        import re as _re
+        existing = _re.sub(r"## Basic Info\n(?:.*\n)*?(?=\n\n|\Z)", basic_block.rstrip() + "\n", existing, count=1)
+    else:
+        existing = existing.rstrip() + "\n\n" + basic_block
+
+    path.write_text(existing, encoding="utf-8")
 
 
 def init_company_profile(

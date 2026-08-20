@@ -5,12 +5,15 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import subprocess
 import sys
 import time
 import urllib.request
 from collections import defaultdict
+from pathlib import Path
 
-from .cli import DEFAULT_DB
+from .cli import DEFAULT_DATA_DIR
 from .imap_sync import ImapSynchronizer
 from .store import EmailStore
 
@@ -34,19 +37,68 @@ def _sign(secret: str, timestamp: str) -> str:
     return base64.b64encode(hmac.new(key, b"", hashlib.sha256).digest()).decode("utf-8")
 
 
-V_OPEN_ID = "ou_15273b08310b914c5f97b27af680c149"
+def _env_value(name: str, default: str = "") -> str:
+    """读 .env 文件（cron 环境 .env 不自动加载，与 dc_resend_source 一致）。"""
+    for f in [Path(__file__).resolve().parent / ".env",
+              Path(__file__).resolve().parent.parent / ".env"]:
+        if f.exists():
+            for line in f.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return os.getenv(name, default)
 
-# Map email account owner → the DealClaw agent (数字人) that should be @mentioned.
-OWNER_AGENT_MAP: dict[str, str] = {
-    "ou_a57ce7904df34cc0e16c770309ce9196": V_OPEN_ID,  # 王强 → V
-}
+
+V_OPEN_ID = _env_value("MIO_V_OPEN_ID", "")
+
+# 特定 owner 可覆盖默认 @ 目标（数字人 open_id）；空则走默认 V_OPEN_ID / 群内数字人。
+OWNER_AGENT_MAP: dict[str, str] = {}
 
 
-def _resolve_mention(owner_open_id: str) -> str:
-    return OWNER_AGENT_MAP.get(owner_open_id, "")
+def _fetch_group_digital_agent(chat_id: str) -> str:
+    """从群里获取应用数字人 bot 的 open_id（member_id）。
+
+    用 lark-cli 查群成员，优先返回带 app_id 的 bot（应用机器人 = 数字人），
+    纯 webhook 通知机器人没有 app_id，会被跳过。
+    """
+    if not chat_id:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["lark-cli", "im", "+chat-members-list", "--chat-id", chat_id, "--as", "bot"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    stdout = proc.stdout or ""
+    try:
+        idx = stdout.find("{")
+        data = json.loads(stdout[idx:] if idx >= 0 else stdout)
+    except Exception:
+        return ""
+    bots = data.get("data", {}).get("bots", [])
+    for b in bots:
+        if b.get("app_id") and b.get("member_id"):
+            return b["member_id"]
+    for b in bots:
+        if b.get("member_id"):
+            return b["member_id"]
+    return ""
 
 
-def _build_webhook_card(events: list[dict]) -> dict:
+def _resolve_mention(owner_open_id: str, chat_id: str = "") -> str:
+    """回复卡片的 @ 目标：owner 映射 → 默认 MIO_V_OPEN_ID → 群内应用数字人。"""
+    mapped = OWNER_AGENT_MAP.get(owner_open_id)
+    if mapped:
+        return mapped
+    if V_OPEN_ID:
+        return V_OPEN_ID
+    return _fetch_group_digital_agent(chat_id)
+
+
+def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
     elements: list[dict] = []
     mention_ids: set[str] = set()
     for index, event in enumerate(events):
@@ -66,7 +118,7 @@ def _build_webhook_card(events: list[dict]) -> dict:
         elements.append(
             {"tag": "div", "text": {"content": f"邮件内容\n{preview}", "tag": "lark_md"}}
         )
-        mention_id = _resolve_mention(event.get("owner_open_id", ""))
+        mention_id = _resolve_mention(event.get("owner_open_id", ""), chat_id)
         if mention_id:
             mention_ids.add(mention_id)
     if mention_ids:
@@ -112,35 +164,57 @@ def _send_webhook(url: str, secret: str, payload: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sync mailboxes and send Feishu webhook cards")
-    parser.add_argument("--db", default=str(DEFAULT_DB))
+    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     account_scope = parser.add_mutually_exclusive_group(required=True)
     account_scope.add_argument("--account-id")
     account_scope.add_argument("--all", action="store_true")
-    parser.add_argument("--webhook", required=True, help="Feishu bot webhook URL")
-    parser.add_argument("--webhook-secret", default="", help="Feishu bot signing secret")
+    parser.add_argument("--webhook", default="", help="Feishu bot webhook URL（fallback，未绑定群时用）")
+    parser.add_argument("--webhook-secret", default="", help="Feishu bot signing secret（fallback）")
     args = parser.parse_args(argv)
 
-    store = EmailStore(args.db)
+    store = EmailStore(args.data_dir)
     account_ids = (
         [row["account_id"] for row in store.list_accounts(enabled_only=True)]
         if args.all
         else [args.account_id]
     )
-    all_events: list[dict] = []
     errors: list[str] = []
+    sent_any = False
     syncer = ImapSynchronizer(store)
     for account_id in account_ids:
         try:
             result = syncer.sync_account(account_id).as_dict()
-            all_events.extend(result.get("events", []))
         except Exception as exc:
             errors.append(f"{account_id}:{type(exc).__name__}")
-    if all_events:
-        _send_webhook(args.webhook, args.webhook_secret, _build_webhook_card(all_events))
-    if errors and not all_events:
+            continue
+        events = result.get("events", [])
+        if not events:
+            continue
+        # 按 account 的 binding 路由：有启用绑定则发到各绑定的 webhook，否则 fallback 全局 --webhook
+        bindings = [
+            b for b in store.list_bindings()
+            if b.get("account_id") == account_id and b.get("notify_enabled")
+        ]
+        chat_id = bindings[0].get("chat_id", "") if bindings else ""
+        card = _build_webhook_card(events, chat_id)
+        targets: list[tuple[str, str]] = []
+        if bindings:
+            for b in bindings:
+                url = b.get("webhook_url") or args.webhook
+                if url:
+                    targets.append((url, b.get("webhook_secret") or args.webhook_secret))
+        elif args.webhook:
+            targets.append((args.webhook, args.webhook_secret))
+        for url, secret in targets:
+            try:
+                _send_webhook(url, secret, card)
+                sent_any = True
+            except Exception as exc:
+                errors.append(f"{account_id}:webhook:{type(exc).__name__}")
+    if errors and not sent_any:
         raise RuntimeError("; ".join(errors))
     if errors:
-        print(f"警告：{len(errors)} 个邮箱同步失败", file=sys.stderr)
+        print(f"警告：{len(errors)} 个邮箱同步/发送失败", file=sys.stderr)
     print("NO_REPLY")
     return 0
 

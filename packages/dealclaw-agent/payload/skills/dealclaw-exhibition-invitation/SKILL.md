@@ -1,6 +1,7 @@
 ---
 name: "dealclaw-exhibition-invitation"
 description: "展前邀约：米奥展会走内部数据→客户确认→模板邀约→邮件发送。来源：田耕郡@格格"
+author: ""
 ---
 
 # 展前邀约
@@ -11,7 +12,20 @@ description: "展前邀约：米奥展会走内部数据→客户确认→模板
 
 ## 动作
 
-确认参数 → 搜买家（米奥展会优先内部数据）→ 出名单客户确认 → 访谈补变量 → 询问附件 → 统一模板填充 → 气泡预览 → 检查邮箱绑定（未绑先引导）→ 用户确认后发送。
+确认参数 → 搜买家（米奥展会优先内部数据）→ 出名单客户确认 → **选邀请函模板（必做，从资产库给用户选）** → 访谈补变量 → 统一模板填充 → 气泡预览 → 检查邮箱绑定（未绑先引导）→ 用户确认后发送。
+
+### 邀请函模板选择（必做，不可跳过）
+
+邀请买家来展位，必须**附上邀请函模板供用户选择**，不手写一封了事。
+
+- 模板资产库：`assets/templates/`，索引见 `assets/templates/index.md`。
+- 选择逻辑（按「行业 + 目标国家/展会 + 语言」）：
+  - 巴西 → 葡语，用「巴西工业_homelife.pdf」或行业专业展内的巴西/homelife 类模板；
+  - 墨西哥/拉美 → 西语，用对应行业专业展模板；
+  - 迪拜/中东 → 英语。
+- 无完全匹配行业 → 用最接近行业模板，或「泛家居」兜底（当前无则用 DEFU 软装 / Homelife 类）。
+- 生成时替换占位字段：展会名 / 日期 / 地点 / 国家 / 展商名 / 展位号 / 产品线 / 报名入口 / 参展商名录。
+- 把可选择的模板（含文件名 + 适用行业/语言）列给用户挑，选中后再填充字段生成。
 
 ## 边界
 
@@ -25,6 +39,7 @@ description: "展前邀约：米奥展会走内部数据→客户确认→模板
 - 邀约用统一模板，不逐条手写
 - 邀约不生成飞书文档，气泡预览后走邮件
 - 发送前检查邮箱绑定状态，未绑先引导绑定
+- 发送前检查买家时区：`python3 work/mio-api/send_window.py --country <ISO> [--city <city>]`。非工作日或不在 8:00-18:00 则阻断，向用户说明买家当地时间和预计延迟发送时间
 - 不询问「走 FD 还是 GS」，直接问「用哪个邮箱发」
 
 ## 计费记录（Shadow Mode — 测试期仅记录不扣费）
@@ -32,8 +47,8 @@ description: "展前邀约：米奥展会走内部数据→客户确认→模板
 每次完成本技能操作并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-exhibition-invitation 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-exhibition-invitation 1 &
 ```
 
 - 后台异步，不阻塞回复；失败静默

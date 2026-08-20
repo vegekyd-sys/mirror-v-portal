@@ -1,4 +1,4 @@
-# PROJECTS.md — DealClaw
+# PROJECTS.md
 
-- DealClaw Agent: 当前 workspace，外贸 AI 销售助手
-- DealClaw Platform: 多租户 SaaS 平台（nexus-gateway / provisioning / credits / ops）
+- DealClaw Agent：当前独立 workspace 与技能/引擎迁移。
+- DealClaw Nexus：`work/dealclaw-nexus/`，未来单独部署支撑代码；不等同于本 Agent 的运行时。

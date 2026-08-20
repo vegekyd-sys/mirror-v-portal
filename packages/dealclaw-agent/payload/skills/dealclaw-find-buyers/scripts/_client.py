@@ -99,7 +99,8 @@ def parse_json_array(name: str, raw: Optional[str]) -> list:
 				out.append(item)
 		return out
 	if not isinstance(v, list):
-		raise ValueError(f"{name} 必须是 JSON 数组")
+		# 单值标量（如 "123" / "RU"）→ 包成单元素数组；字符串类字段统一转字符串
+		v = [str(v)] if _array_prefers_string_items(name) else [v]
 	return v
 
 

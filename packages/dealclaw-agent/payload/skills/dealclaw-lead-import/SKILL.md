@@ -1,6 +1,7 @@
 ---
 name: "dealclaw-lead-import"
 description: "Excel/CSV通用线索导入。解析→列映射→去重→写入企业线索池。来源标记「用户导入」。来源：田耕郡@格格"
+author: ""
 ---
 
 # DC-Lead-Import：Excel/CSV 线索导入
@@ -30,6 +31,7 @@ description: "Excel/CSV通用线索导入。解析→列映射→去重→写入
 5. 写入 bitable — 按 field_map 逐条写 record，来源「用户导入」
     ↓
 6. 气泡确认 — 「导入了 X 家买家，已写入线索池」+ bitable 链接
+7. 导入完成后，检查线索涉及的国家列表，对展会国批量调 `dc-knowledge-query`，有 upcoming 展会时附加一句推荐（如「你导入的线索里有3个沙特买家，沙特12/20有HOMELIFE」）。
 ```
 
 ## 列映射
@@ -88,8 +90,8 @@ python3 dc_company_registry.py ensure "<company_id>" "<company_name>"
 每次完成本技能操作并交付结果后，必须异步记录一条计费事件：
 
 ```bash
-# 计费：dealclaw-billing 插件自动 detect 此命令并 estimate→settle（租户映射在 scripts/billing-config.json）
-bash scripts/dealclaw-billing-record.sh --group <chat_id> dealclaw-lead-import 1 &
+# 计费埋点（正式链路）：tenantId = 当前租户（按 open_id/群 chat_id 从 scripts/billing-config.json 解析；解析不到自动 shadow 记录）
+bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-lead-import 1 &
 ```
 
 - 后台异步，不阻塞回复；失败静默

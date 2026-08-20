@@ -1,16 +1,40 @@
 #!/bin/bash
-# DealClaw Billing Recorder — DEPRECATED as a charging path.
+# DealClaw Billing Recorder — 正式计费埋点（单一事实源：billing.mjs）
 #
-# 计费已升级为「确定性触发」：dealclaw-billing 插件在 before_tool_call 做
-# can-afford 预检、after_tool_call 做 estimate→settle（带幂等去重）。
-#
-# 本脚本保留为「意图信号」：插件检测到 exec 命令含 dealclaw-billing-record.sh
-# 即触发计费（skillId + --group chat_id 从命令里解析）。脚本自身**不再**调用
-# billing.mjs record，否则会与插件重复扣费。
-#
-# 兼容两种调用（仅作信号，不产生实际计费）：
+# 兼容两种调用：
 #   1) bash scripts/dealclaw-billing-record.sh <tenantId> <skillId> [quantity]
 #   2) bash scripts/dealclaw-billing-record.sh --group <chat_id> <skillId> [quantity]
+#      (或 --user <open_id>) — 由 billing.mjs 从 billing-config.json 自动解析租户
+#
+# 行为：estimate → settle 一次性后台记录（fire-and-forget），失败静默，不阻塞主流程。
+# 说明：BASE_URL 不再写死；billing.mjs 默认连本机 credits-ledger (http://localhost:8081)。
 set -uo pipefail
-# Intentionally a no-op — billing is handled deterministically by the plugin.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --group/--user 模式：透传给 billing.mjs 自行解析租户（映射在 billing-config.json）
+if [ "${1:-}" = "--group" ] || [ "${1:-}" = "--user" ]; then
+  node "$SCRIPT_DIR/billing.mjs" record "$@" >/dev/null 2>&1 &
+  exit 0
+fi
+
+# 老模式：<tenantId> <skillId> [quantity]，归一化 skillId
+TENANT_ID="${1:-}"
+SKILL_ID="${2:-}"
+QUANTITY="${3:-1}"
+
+[ -z "$TENANT_ID" ] || [ -z "$SKILL_ID" ] && exit 0
+
+# 归一化分隔符（. / _ → -）
+SKILL_ID="${SKILL_ID//./-}"
+SKILL_ID="${SKILL_ID//_/-}"
+
+# 旧命名 → 标准 skill_id（credits-ledger skill_prices 表）
+case "$SKILL_ID" in
+  dealclaw-company-profile)   SKILL_ID="dealclaw-analyze-company" ;;
+  dealclaw-exhibition-match)  SKILL_ID="dealclaw-exhibition-leads" ;;
+  dealclaw-send-email)        SKILL_ID="dealclaw-email-growth-send" ;;
+esac
+
+node "$SCRIPT_DIR/billing.mjs" record "$TENANT_ID" "$SKILL_ID" "$QUANTITY" >/dev/null 2>&1 &
 exit 0

@@ -5,7 +5,7 @@ DC-KB v2 — DealClaw 统一知识库引擎
 每个企业一个知识库文件: data/kb/{enterprise_slug}.json
 
 六模块:
-  🏢 profile     企业画像 (CBIE)
+  🏢 profile     企业画像 (analyze-company)
   👤 persona     买家画像 (导入+标注累积)
   📦 products    产品库 (结构化产品线)
   📋 materials   物料库 (销售材料清单)
@@ -117,23 +117,42 @@ class KBEngine:
     # ═══════════════════════════════════════════════════════
 
     def seed_profile(self, enterprise, profile_data):
-        """从 CBIE 写入企业画像，同时自动播种买家画像"""
+        """从 analyze-company 写入企业画像，同时自动播种买家画像。
+
+        兼容两套字段：新字段（analyze-company Document Fields）+ 旧 CBIE 字段（历史兼容）（enterprise_external/usp 等）。
+        """
         kb = self.ensure(enterprise)
         p = profile_data or {}
+        # 公司名：新 key name / name_en，旧 key enterprise_external / enterprise_internal
+        _name = (p.get("name")
+                 or p.get("enterprise_internal")
+                 or p.get("enterprise_external")
+                 or p.get("company_name") or "")
+        _name_en = (p.get("name_en")
+                    or p.get("enterprise_external")
+                    or p.get("company_name_en") or "")
+        _product = (p.get("product")
+                    or p.get("products")
+                    or ((", ".join(p["products"]) if isinstance(p.get("products"), list) else "")) or "")
         kb["profile"] = {
-            "name": p.get("enterprise_external") or p.get("enterprise_internal") or "",
-            "product": p.get("product") or "",
-            "usp": p.get("usp") or "",
+            "name": _name,
+            "name_en": _name_en,
+            "product": _product,
+            "products": p.get("products", []) if isinstance(p.get("products", []), list) else ([x.strip() for x in str(_product).split(",") if x.strip()] if _product else []),
+            "usp": p.get("usp") or p.get("advantage", ""),
             "certifications": p.get("certifications") or "",
             "target_markets": p.get("target_markets") or [],
-            "founded": p.get("founded", ""),
-            "scale": p.get("scale") or p.get("company_type") or "",
-            "cbie_source": p.get("source", ""),
-            "cbie_updated": _now(),
+            "founded": p.get("founded", "") or p.get("year_founded", ""),
+            "company_type": p.get("company_type") or p.get("enterprise_type", ""),
+            "business_model": p.get("business_model", ""),
+            "customization": p.get("customization", ""),
+            "scale": p.get("scale") or p.get("company_type") or p.get("employees", ""),
+            "source": p.get("source") or p.get("data_source", ""),
+            "updated": _now(),
         }
         self._save(enterprise, kb)
         self._audit_log("kb.profile", enterprise, enterprise, f"画像更新: {kb['profile'].get('name','')[:30]}")
-        # 🔗 Heartbeat: 企业画像确认
+        # 🔗 Heartbeat: 企业画像确认 → 落盘 company/profile.md
         try:
             from heartbeat_data import append_company_profile
             append_company_profile(
@@ -142,16 +161,16 @@ class KBEngine:
                 products=kb["profile"].get("product", ""),
                 target_markets=", ".join(kb["profile"].get("target_markets", [])) if isinstance(kb["profile"].get("target_markets"), list) else kb["profile"].get("target_markets", ""),
                 buyer_types=str(p.get("buyer_types", "")),
-                profile_version=p.get("profile_version", str(hash(str(p.get("product",""))+str(p.get("target_markets",""))))[:8]),
+                profile_version=p.get("profile_version", str(hash(str(_product)+str(p.get("target_markets",""))))[:8]),
             )
         except Exception as _hb_err:
             print(f"[heartbeat] append_company_profile failed: {_hb_err}")
-        # 🔄 回路1: CBIE → Persona — 自动播种买家画像
+        # 🔄 回路1: analyze-company → Persona — 自动播种买家画像
         markets = p.get("target_markets") or []
         if markets:
             incoming = {"country": {m: 0.5/len(markets) for m in markets[:8]}}
-            self.update_persona(enterprise, incoming, source="cbie_auto", weight=0.3,
-                               change=f"CBIE 画像更新→买家画像自动播种: {', '.join(markets[:4])}")
+            self.update_persona(enterprise, incoming, source="analyze_auto", weight=0.3,
+                               change=f"企业画像更新→买家画像自动播种: {', '.join(markets[:4])}")
 
     # ═══════════════════════════════════════════════════════
     #  👤 买家画像
@@ -266,8 +285,8 @@ class KBEngine:
         }
         self._save(enterprise, kb)
 
-    def seed_materials_from_cbie(self, enterprise, profile):
-        """从 CBIE 自动播种物料"""
+    def seed_materials_from_company_analysis(self, enterprise, profile):
+        """从企业分析自动播种物料"""
         kb = self.ensure(enterprise)
         mats = kb.get("materials", {})
         cert = profile.get("certifications") or profile.get("certificate")
@@ -281,7 +300,7 @@ class KBEngine:
             changed = True
         if changed:
             self._save(enterprise, kb)
-            self._audit_log("kb.seed", enterprise, enterprise, f"CBIE→KB auto-seed")
+            self._audit_log("kb.seed", enterprise, enterprise, f"analyze-company→KB auto-seed")
 
     def summary_for_iq(self, enterprise):
         kb = self.ensure(enterprise)
@@ -309,9 +328,9 @@ class KBEngine:
         return result
 
     # ── 向后兼容别名 ──
-    def seed_from_cbie(self, enterprise_key, profile):
-        """向后兼容: CBIE → KB 播种物料 + 画像"""
-        self.seed_materials_from_cbie(enterprise_key, profile)
+    def seed_from_company_analysis(self, enterprise_key, profile):
+        """向后兼容: 企业分析 → KB 播种物料 + 画像"""
+        self.seed_materials_from_company_analysis(enterprise_key, profile)
         self.seed_profile(enterprise_key, profile)
 
     # ═══════════════════════════════════════════════════════

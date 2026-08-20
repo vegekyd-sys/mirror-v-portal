@@ -207,7 +207,7 @@ async function cmdWrap(tenant, skill, quantity, command) {
   const { spawn } = await import('node:child_process');
   const [cmd, ...rest] = command;
   const child = spawn(cmd, rest, { stdio: 'inherit', shell: true });
-  
+
   const exitCode = await new Promise((resolve) => {
     child.on('close', resolve);
     child.on('error', (err) => {
@@ -427,8 +427,8 @@ async function main() {
       }
       if (wrapLookup.tenant) tenant = wrapLookup.tenant;
       if (!tenant && (wrapLookup.groupId || wrapLookup.userId)) {
-        tenant = 'shadow';  // 未绑定 → 统一 shadow，不写原始 id 污染 tenant_id
-        console.error(`[billing] ⚠️ 未绑定 ${wrapLookup.groupId ? '群组' : '用户'} ${wrapLookup.groupId || wrapLookup.userId}，shadow 记录消耗（不扣费）`);
+        tenant = wrapLookup.groupId || wrapLookup.userId;
+        console.error(`[billing] ⚠️ 未绑定 ${wrapLookup.groupId ? '群组' : '用户'} ${tenant}，shadow 记录消耗（不扣费）`);
       }
       if (!tenant || !skill) { console.error('Usage: billing.mjs wrap <tenantId|--group oc_xxx> <skillId> [quantity] -- <command...>'); process.exit(1); }
       await cmdWrap(tenant, skill, quantity || 1, command);
