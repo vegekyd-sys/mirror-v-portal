@@ -81,6 +81,47 @@ export function createApp(config: GatewayConfig) {
   });
 
   /**
+   * Profile writeback — the dealclaw-agent reports the company name the user
+   * told it in conversation. Forwards to provisioning-service using the
+   * gateway's OWN tenantId (authoritative, not request-controlled).
+   * PATCH /v1/agent/profile
+   */
+  app.patch('/v1/agent/profile', async (req: Request, res: Response) => {
+    try {
+      const { companyName, contactEmail } = req.body ?? {};
+      if (!config.provisioningServiceUrl) {
+        res.status(503).json({ code: 'CONFIG_MISSING', message: 'provisioning service not configured' });
+        return;
+      }
+
+      const upstream = await fetch(
+        `${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${config.tenantId}/profile`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {}),
+          },
+          body: JSON.stringify({ companyName, contactEmail }),
+          signal: AbortSignal.timeout(5_000),
+        }
+      );
+
+      if (!upstream.ok) {
+        const errBody = await upstream.text().catch(() => '');
+        console.warn(`[profile] writeback failed: HTTP ${upstream.status} ${errBody.slice(0, 200)}`);
+        res.status(502).json({ code: 'UPSTREAM_ERROR', message: 'Failed to update profile' });
+        return;
+      }
+
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[profile] writeback error:', err.message);
+      res.status(502).json({ code: 'UPSTREAM_ERROR', message: err.message });
+    }
+  });
+
+  /**
    * Webhook receiver for Feishu event subscriptions.
    * POST /v1/agent/:tenantId/webhook
    * Handles URL verification and forwards message events to dealclaw-agent.
