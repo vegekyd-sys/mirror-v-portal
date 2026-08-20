@@ -10,7 +10,7 @@
 | 项 | 决策 |
 |----|------|
 | 奥驰账号 | 已就绪，region 与奥创一致（华东2 上海 `cn-shanghai`） |
-| 域名 | 未定，先用 `dealclaw-test.ultronx.tech` 占位（迁移后再换） |
+| 域名 | 已确认 `api-dealclaw.datathink.com` |
 | 数据库迁移 | **DTS**（数据传输服务，在线迁移） |
 | CI/CD | **新建** Jenkins + ArgoCD（不复用奥创） |
 | 基础设施 | **人工手动创建**（控制台操作） |
@@ -79,7 +79,7 @@
 
 ### 1.7 ALB 负载均衡 + 域名
 - 控制台：应用型负载均衡 ALB → 创建实例（VPC 选 1.1）
-- 域名：暂时用 `dealclaw-test.ultronx.tech` 占位（**后续换奥驰域名时再改**）
+- 域名：`api-dealclaw.datathink.com`（DNS 解析到奥驰 ALB）
 - TLS 证书：迁移 `ultronx-tls` 或重新签发
 - 文档：https://help.aliyun.com/zh/slb/application-load-balancer/
 
@@ -184,7 +184,7 @@ skopeo copy docker://ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealcl
 | dealclaw-oss secret | 奥驰 OSS AccessKey |
 | registry-secret-vpc | 奥驰 ACR 凭证 |
 | ultronx-tls | 奥驰域名证书 |
-| ingress host | `dealclaw-test.ultronx.tech`（占位） |
+| ingress host | `api-dealclaw.datathink.com` |
 
 ### 5.2 ArgoCD 同步
 1. Application 指向 `aochie/` overlay
@@ -207,7 +207,7 @@ skopeo copy docker://ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealcl
 - [ ] DTS 增量同步停止 → 新数据写入奥驰库
 
 ### 6.2 域名切换
-1. 验证通过后，DNS 切到奥驰（若域名未定，先保持占位域名跑通）
+1. 验证通过后，DNS 切到 `api-dealclaw.datathink.com`
 2. 飞书事件订阅地址更新
 
 ### 6.3 切换
@@ -230,4 +230,4 @@ skopeo copy docker://ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealcl
 2. 奥驰 RDS 连接串（创建后给我）
 3. 奥驰 OSS AccessKey（创建后给我）
 4. 奥创 RDS 的 PG 版本 + ACK Kubernetes 版本（用于奥驰侧对齐）
-5. 最终域名（决定 TLS + 飞书回调，当前占位 `dealclaw-test.ultronx.tech`）
+5. 最终域名：`api-dealclaw.datathink.com`（已确认）
