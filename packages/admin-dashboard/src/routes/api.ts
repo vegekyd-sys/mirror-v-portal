@@ -150,12 +150,15 @@ async function proxyToLedger(path: string, init?: RequestInit & { authReq?: Expr
   // Forward the incoming Authorization header (admin JWT / public token) if
   // present; otherwise fall back to the internal service token so public
   // endpoints (e.g. /public/credit) can still reach credits-ledger now that it
-  // requires auth.
+  // requires auth. This service doesn't receive PAYMENT_SERVICE_TOKEN; its
+  // PROVISIONING_API_TOKEN is the same shared triple-role token, so it is a
+  // valid fallback for ledger service-to-service auth.
   const incomingAuth = init?.authReq?.header('authorization');
+  const serviceToken = process.env.BILLING_SERVICE_TOKEN ?? process.env.PROVISIONING_API_TOKEN;
   if (incomingAuth) {
     headers['Authorization'] = incomingAuth;
-  } else if (process.env.BILLING_SERVICE_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.BILLING_SERVICE_TOKEN}`;
+  } else if (serviceToken) {
+    headers['Authorization'] = `Bearer ${serviceToken}`;
   }
 
   const { authReq: _, ...fetchInit } = init || {};
