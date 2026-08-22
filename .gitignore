@@ -13,3 +13,9 @@ __pycache__/
 
 # billing service token (secret) — use DC_BILLING_TOKEN env instead
 .billing-token
+
+# build artifacts
+*.tsbuildinfo
+
+# workbuddy local data
+.workbuddy/
