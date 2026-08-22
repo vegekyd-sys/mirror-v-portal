@@ -8,6 +8,10 @@ export interface OpsConfig {
   port: number;
   databaseUrl: string;
   creditsLedgerUrl: string;
+  /** Service token for credits-ledger /v1/accounts/* (Bearer). Falls back
+   *  to provisioningApiToken — both are provisioned from the same shared
+   *  secret (dealclaw-payment/token) in the deployment manifests. */
+  creditsLedgerToken?: string;
   /** Cron interval in minutes (default: 60 = hourly) */
   cronIntervalMinutes: number;
   /** Provisioning-service API URL for rollout */
@@ -31,6 +35,8 @@ export function loadConfig(): OpsConfig {
     port: Number(process.env.PORT ?? 8083),
     databaseUrl: required('DATABASE_URL'),
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL ?? 'http://credits-ledger:8081',
+    creditsLedgerToken: process.env.CREDITS_LEDGER_TOKEN
+      ?? process.env.PROVISIONING_API_TOKEN,
     cronIntervalMinutes: Number(process.env.CRON_INTERVAL_MINUTES ?? 60),
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8082',
     provisioningApiToken: required('PROVISIONING_API_TOKEN'),

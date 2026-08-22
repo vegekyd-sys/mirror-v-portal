@@ -12,15 +12,22 @@ export interface CreditsInfo {
 /**
  * Get credits balance for a single account from credits-ledger.
  * Returns zero-values on network error (fail-open — don't block ops scan).
+ *
+ * Auth: credits-ledger requires a service token (PAYMENT_SERVICE_TOKEN /
+ * BILLING_SERVICE_TOKEN) on /v1/accounts/*. Without the Bearer header the
+ * ledger answers 401 and the fail-open path silently reports balance 0 —
+ * which previously caused healthy tenants to be flagged `low_credits`.
  */
 export async function getCreditsBalance(
   creditsLedgerUrl: string,
   accountId: string,
+  token?: string,
 ): Promise<CreditsInfo> {
   try {
     const url = `${creditsLedgerUrl.replace(/\/$/, '')}/v1/accounts/${accountId}/balance`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(5_000),
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
 
     if (!res.ok) {
@@ -48,12 +55,13 @@ export async function getCreditsBalance(
 export async function enrichWithCredits(
   creditsLedgerUrl: string,
   tenantIds: string[],
+  token?: string,
 ): Promise<Map<string, CreditsInfo>> {
   const results = new Map<string, CreditsInfo>();
 
   const tasks = tenantIds.map(async (tenantId) => {
     const accountId = `acct_${tenantId}`;
-    const info = await getCreditsBalance(creditsLedgerUrl, accountId);
+    const info = await getCreditsBalance(creditsLedgerUrl, accountId, token);
     results.set(tenantId, info);
   });
 

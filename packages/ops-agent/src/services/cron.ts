@@ -30,7 +30,11 @@ export async function runCronCycle(
 
     // 2. Enrich with real credits balances
     if (tenants.length > 0) {
-      const creditsMap = await enrichWithCredits(config.creditsLedgerUrl, tenants.map(t => t.id));
+      const creditsMap = await enrichWithCredits(
+        config.creditsLedgerUrl,
+        tenants.map(t => t.id),
+        config.creditsLedgerToken,
+      );
       for (const t of tenants) {
         const info = creditsMap.get(t.id);
         if (info) {

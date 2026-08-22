@@ -166,37 +166,46 @@ export async function provisionTenant(
     await k8sCreateSecret(nsName, runtimeSecretName, options.runtimeSecretData);
     result.secrets.push(runtimeSecretName);
 
-    // 2. nexus-gateway Deployment + Service
-    const gwLabels = { ...labels, app: 'nexus-gateway' };
-    await createDeployment({
-      name: gatewayName,
-      namespace: nsName,
-      image: `${registry}/nexus-gateway:${gwTag}`,
-      port: 8080,
-      labels: gwLabels,
-      envFrom: [
-        { secretRef: { name: botSecretName } },
-        { secretRef: { name: agentConfigName } },
-        { secretRef: { name: creditsConfigName } },
-      ],
-      env: [
-        { name: 'DEALCLAW_PLATFORM', value: tenant.platform || 'feishu' },
-        { name: 'DEALCLAW_AGENT_URL', value: `http://dealclaw-agent-${tenantLabel}:18789` },
-        { name: 'NODE_ENV', value: 'production' },
-        // Contact writeback — lets nexus-gateway report the sender's im_open_id
-        // so lifecycle notifications can be delivered via the notify relay.
-        // Cross-namespace: provisioning-service runs in the central namespace.
-        { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
-        { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
-      ],
-      requests: { cpu: '100m', memory: '128Mi' },
-      limits: { cpu: '300m', memory: '256Mi' },
-      imagePullSecrets: [{ name: 'registry-secret-vpc' }],
-      livenessPath: '/healthz',
-      readinessPath: '/healthz',
-    });
-    await createService(nsName, gatewayName, 8080, gwLabels);
-    result.pods.push(gatewayName);
+    // 2. nexus-gateway Deployment + Service — IM tenants only.
+    // The gateway binds to feishu/dingtalk/wecom and crashes on any other
+    // DEALCLAW_PLATFORM value. Web-platform tenants (e.g. the built-in
+    // default tenant) have no IM channel: admin chat is proxied by
+    // provisioning-service straight to the agent's /execute endpoint, so
+    // no gateway is deployed for them.
+    if (tenant.platform !== 'web') {
+      const gwLabels = { ...labels, app: 'nexus-gateway' };
+      await createDeployment({
+        name: gatewayName,
+        namespace: nsName,
+        image: `${registry}/nexus-gateway:${gwTag}`,
+        port: 8080,
+        labels: gwLabels,
+        envFrom: [
+          { secretRef: { name: botSecretName } },
+          { secretRef: { name: agentConfigName } },
+          { secretRef: { name: creditsConfigName } },
+        ],
+        env: [
+          { name: 'DEALCLAW_PLATFORM', value: tenant.platform || 'feishu' },
+          { name: 'DEALCLAW_AGENT_URL', value: `http://dealclaw-agent-${tenantLabel}:18789` },
+          { name: 'NODE_ENV', value: 'production' },
+          // Contact writeback — lets nexus-gateway report the sender's im_open_id
+          // so lifecycle notifications can be delivered via the notify relay.
+          // Cross-namespace: provisioning-service runs in the central namespace.
+          { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
+          { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
+        ],
+        requests: { cpu: '100m', memory: '128Mi' },
+        limits: { cpu: '300m', memory: '256Mi' },
+        imagePullSecrets: [{ name: 'registry-secret-vpc' }],
+        livenessPath: '/healthz',
+        readinessPath: '/healthz',
+      });
+      await createService(nsName, gatewayName, 8080, gwLabels);
+      result.pods.push(gatewayName);
+    } else {
+      result.warnings.push('web-platform tenant: nexus-gateway skipped (chat proxied directly to agent)');
+    }
 
     // 3. dealclaw-agent Deployment + Service + per-tenant PVC
     const agentLabels = { ...labels, app: 'dealclaw-agent' };
