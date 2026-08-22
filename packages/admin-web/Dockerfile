@@ -10,7 +10,6 @@ RUN npm run build
 
 FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-# base=/admin2/ means index.html expects assets under /admin2/*, so the dist
-# output must live in the admin2/ subdirectory of the nginx root.
-COPY --from=build /app/dist /usr/share/nginx/html/admin2
+# base='/' — dist goes straight into the nginx html root.
+COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080

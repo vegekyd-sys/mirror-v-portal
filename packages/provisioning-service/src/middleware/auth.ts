@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
  * Shared Bearer token auth middleware.
- * Used by provisioning-service, ops-agent, admin-dashboard, and central-gateway.
+ * Used by provisioning-service, ops-agent, and central-gateway.
  *
  * NB2/NB3/NB4/NB8 FIX: Adds token-based auth to services that previously had none.
  *
@@ -33,10 +33,9 @@ export function createAuthMiddleware(envVar: string) {
 
 /**
  * Admin JWT verification.
- * KEEP IN SYNC with credits-ledger services/admin-auth.ts verifyJwt() and
- * admin-dashboard middleware/auth.ts verifyJwtLocal() — same HS256 +
- * base64url HMAC scheme, secret = ADMIN_JWT_SECRET (copied per service
- * because Docker images build each package standalone with npm).
+ * KEEP IN SYNC with credits-ledger services/admin-auth.ts verifyJwt() —
+ * same HS256 + base64url HMAC scheme, secret = ADMIN_JWT_SECRET (copied per
+ * service because Docker images build each package standalone with npm).
  */
 export function verifyAdminJwt(token: string): Record<string, unknown> | null {
   const secret = process.env.ADMIN_JWT_SECRET;

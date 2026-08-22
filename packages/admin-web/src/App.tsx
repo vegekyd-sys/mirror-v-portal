@@ -5,8 +5,15 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
 import TenantsPage from './pages/TenantsPage';
+import CustomersPage from './pages/CustomersPage';
+import CustomerDetailPage from './pages/CustomerDetailPage';
+import PlansPage from './pages/PlansPage';
+import SkillPricesPage from './pages/SkillPricesPage';
+import SkillsPage from './pages/SkillsPage';
+import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
+import UsersPage from './pages/UsersPage';
 
-// Router basename mirrors vite `base` (phase 2: /admin2, phase 3: '').
+// Router basename mirrors vite `base` (phase 3: '/' → empty basename).
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 function RequireAuth({ children }: { children: ReactElement }) {
@@ -31,6 +38,13 @@ export default function App() {
           >
             <Route index element={<OverviewPage />} />
             <Route path="tenants" element={<TenantsPage />} />
+            <Route path="customers" element={<CustomersPage />} />
+            <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
+            <Route path="plans" element={<PlansPage />} />
+            <Route path="pricing" element={<SkillPricesPage />} />
+            <Route path="skills" element={<SkillsPage />} />
+            <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
+            <Route path="users" element={<UsersPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

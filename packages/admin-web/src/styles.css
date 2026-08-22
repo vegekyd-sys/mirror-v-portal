@@ -34,12 +34,6 @@ a:hover { color: #818cf8; }
 }
 .header nav a:hover { background: #24243e; color: #fff; }
 .header nav a.active { background: #312e81; color: #e0e7ff; }
-.header nav .nav-disabled {
-  padding: 6px 12px;
-  font-size: 13px;
-  color: #555;
-  cursor: not-allowed;
-}
 .header-right { display: flex; align-items: center; gap: 14px; font-size: 13px; }
 .header-right .user { color: #888; }
 
@@ -177,3 +171,112 @@ tr.selected { background: #1e1b4b; }
 /* ── Operation log ── */
 .log-area { font-size: 12px; color: #666; max-height: 200px; overflow-y: auto; }
 .log-area .log-err { color: #f87171; }
+
+/* ── Modal ── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 16px;
+  z-index: 100;
+  overflow-y: auto;
+}
+.modal-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 10px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #2a2a4a;
+}
+.modal-head h3 { font-size: 15px; color: #fff; }
+.modal-close {
+  background: none;
+  color: #888;
+  font-size: 14px;
+  padding: 4px 8px;
+}
+.modal-close:hover { color: #fff; background: #24243e; }
+.modal-body { padding: 18px; }
+.modal-body .form-row input[type='text'],
+.modal-body .form-row input[type='number'],
+.modal-body .form-row input[type='password'],
+.modal-body .form-row select,
+.modal-body .form-row textarea { flex: 1; min-width: 220px; }
+
+/* ── Plan template cards ── */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.plan-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plan-price { font-size: 20px; font-weight: 700; color: #fff; }
+.plan-feats { list-style: none; font-size: 12px; color: #999; line-height: 1.9; }
+.plan-feats li::before { content: '· '; color: #6366f1; }
+
+/* ── 30-day consumption bar chart ── */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 140px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 12px 10px 6px;
+}
+.bar-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; min-width: 0; }
+.bar { width: 100%; max-width: 18px; background: #6366f1; border-radius: 2px 2px 0 0; }
+.bar-label { font-size: 9px; color: #666; margin-top: 4px; transform: scale(0.9); white-space: nowrap; }
+
+/* ── Tabs (customer detail logs) ── */
+.tabs { display: flex; gap: 6px; border-bottom: 1px solid #2a2a4a; margin-bottom: 14px; }
+.tab {
+  background: none;
+  color: #888;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+  font-weight: 500;
+}
+.tab:hover { color: #fff; background: #24243e; }
+.tab.active { color: #e0e7ff; background: #312e81; }
+
+/* ── Key/value breakdown rows ── */
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #ccc;
+  padding: 6px 0;
+  border-bottom: 1px dashed #24243e;
+}
+.kv-row:last-child { border-bottom: none; }
+
+/* ── Runtime config preset chips ── */
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.chip {
+  background: #24243e;
+  color: #a5b4fc;
+  border: 1px solid #312e81;
+  border-radius: 14px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.chip:hover:not(:disabled) { background: #312e81; color: #e0e7ff; }
+.chip-done { background: #065f46; color: #6ee7b7; border-color: #059669; cursor: default; }

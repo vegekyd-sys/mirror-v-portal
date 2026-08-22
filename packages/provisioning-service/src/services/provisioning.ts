@@ -135,12 +135,12 @@ export async function provisionTenant(
 
     // 1b. tenant-config Secret — runtime provider/tool credentials for
     // dealclaw-agent (envFrom). Built from the runtime_configs table
-    // (global defaults + per-tenant overrides), managed via admin-dashboard.
+    // (global defaults + per-tenant overrides), managed via admin-web.
     // Fail closed: without it the agent Pod cannot start.
     const runtimeSecretName = 'tenant-config';
     if (!options.runtimeSecretData || Object.keys(options.runtimeSecretData).length === 0) {
       throw new Error(
-        'Runtime config is empty — configure global defaults (e.g. DEEPSEEK_API_KEY) via admin-dashboard before provisioning',
+        'Runtime config is empty — configure global defaults (e.g. DEEPSEEK_API_KEY) via the admin console before provisioning',
       );
     }
     await k8sCreateSecret(nsName, runtimeSecretName, options.runtimeSecretData);

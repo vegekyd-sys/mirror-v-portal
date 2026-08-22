@@ -1,5 +1,5 @@
-// App shell: top header with navigation. Pages marked 待迁移 still live in
-// the legacy admin-dashboard and will move here in later iterations.
+// App shell: top header with navigation. All pages live in this SPA since
+// phase 3 retired the legacy admin-dashboard.
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
@@ -15,12 +15,12 @@ export default function Layout() {
             概览
           </NavLink>
           <NavLink to="/tenants">租户管理</NavLink>
-          <span className="nav-disabled" title="仍在旧后台，后续迁移">
-            运行时配置（待迁移）
-          </span>
-          <span className="nav-disabled" title="仍在旧后台，后续迁移">
-            Skill 管理（待迁移）
-          </span>
+          <NavLink to="/customers">客户与 Credits</NavLink>
+          <NavLink to="/plans">套餐模板</NavLink>
+          <NavLink to="/pricing">Skill 定价</NavLink>
+          <NavLink to="/skills">Skill 管理</NavLink>
+          <NavLink to="/runtime-configs">运行时配置</NavLink>
+          <NavLink to="/users">用户管理</NavLink>
         </nav>
         <div className="header-right">
           <span className="user">{user?.displayName || user?.username || 'Admin'}</span>

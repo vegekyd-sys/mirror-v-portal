@@ -83,7 +83,7 @@ const check = await fetch(`${LEDGER_URL}/v1/billing/can-afford`, {
 
 ## 管理后台
 
-访问 admin-dashboard → **Skill 定价** 标签页。
+访问管理后台（admin-web）→ **Skill 定价** 标签页。
 
 功能：
 - 查看所有 Skill 定价（按分类汇总）

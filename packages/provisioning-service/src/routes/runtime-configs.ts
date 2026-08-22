@@ -13,7 +13,7 @@ import { getMasterKey, MasterKeyError } from '../services/crypto.js';
  * Admin API for per-tenant runtime configuration.
  *
  * Mounted with the same Bearer-token auth as the tenant routes
- * (PROVISIONING_API_TOKEN); admin-dashboard proxies these endpoints.
+ * (PROVISIONING_API_TOKEN); the admin-web SPA calls these endpoints directly.
  *
  * Scope semantics: tenantId omitted/null → global defaults; tenantId set →
  * per-tenant override. Resolution at provisioning time merges the two,

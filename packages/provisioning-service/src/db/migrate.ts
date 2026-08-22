@@ -80,7 +80,7 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
     `);
 
     // Per-tenant runtime configuration (v0.5):
-    // Backs the admin-dashboard "runtime config" management page. Values are
+    // Backs the admin-web "runtime config" management page. Values are
     // AES-256-GCM encrypted (see services/crypto.ts) before storage and are
     // materialized as the tenant-config Secret in the tenant's namespace at
     // provisioning time.
