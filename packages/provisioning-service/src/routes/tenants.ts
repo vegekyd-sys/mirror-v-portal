@@ -119,6 +119,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           appSecret: safeAppSecret || undefined,
         }, {
           dryRun: config.k8sDryRun,
+          runtimeNamespace: config.runtimeNamespace,
           imageRegistry: config.imageRegistry,
           nexusGatewayImageTag: config.nexusGatewayImageTag,
           dealclawAgentImageTag: config.dealclawAgentImageTag,

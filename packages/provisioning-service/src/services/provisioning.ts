@@ -12,7 +12,7 @@ import {
   deleteService,
   deletePersistentVolumeClaim,
 } from './k8s-client.js';
-import type { ProvisioningConfig } from '../config.js';
+import { DEFAULT_RUNTIME_NAMESPACE, type ProvisioningConfig } from '../config.js';
 
 /** Per-tenant namespace name — each tenant is fully isolated in its own namespace. */
 export function tenantNamespace(tenantId: string): string {
@@ -69,7 +69,7 @@ export async function provisionTenant(
 
   const nsName = tenantNamespace(tenant.tenantId); // per-tenant namespace
   // Central control-plane namespace where provisioning-service / credits-ledger / ops-agent run
-  const centralNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || 'dealclaw-test';
+  const centralNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || DEFAULT_RUNTIME_NAMESPACE;
   const tenantLabel = tenant.tenantId;
 
   const result: ProvisionResult = {

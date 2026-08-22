@@ -98,6 +98,7 @@
 | 2.1.9 | K8s RBAC 配置 | ✅ | RBAC manifests 已提交 |
 | 2.1.10 | 单元测试 (validation + sanitize + quota) | ✅ | 14 tests pass |
 | 2.1.11 | 集成测试 (ACK test env) | ✅ | HTTP API: create/read/delete tenant lifecycle |
+| 2.1.12 | RUNTIME_NAMESPACE 统一 — 单一默认值 `DEFAULT_RUNTIME_NAMESPACE`（原 config 默认 `dealclaw-staging` 与 provisioning 内联 `dealclaw-test` 不一致）+ provisionTenant 改走 config 注入 + deployment.yaml 用 downward API (`fieldRef: metadata.namespace`) 注入 | ✅ | 保证跨 namespace FQDN（credits-ledger.\<ns\> / provisioning-service.\<ns\>）在任何控制面 namespace 下都拼对 |
 
 ### 2.2 Ops Agent
 
