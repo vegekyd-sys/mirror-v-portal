@@ -107,3 +107,49 @@
 
 - 部署顺序：先 aochi 下线旧网关，再部署新 provisioning，避免双网关抢 WS
 - ArgoCD 对 Secret 删除 data 键有盲区：需手动 `kubectl patch --type=json` remove（selfHeal 不会回滚该操作）
+
+---
+
+# 方案 C 撤销 + registry-sync（commit 6f36ae5 / Build 待触发）
+
+## 两项改动
+
+### 1. 镜像版本改从 Docker Registry 自动同步（替代 Jenkins hook）
+
+| 变更 | 内容 |
+|---|---|
+| `services/registry-sync.ts`（新增） | 复用 `registry-secret-vpc` 拉镜像凭据（Basic auth）调 Docker Registry HTTP API v2 `GET /v2/<repo>/<service>/tags/list`；解析 CI tag `<branch>.<git-sha>.<build>` 元数据；`INSERT ... ON CONFLICT (service, tag) DO NOTHING` 幂等入库，`created_by='registry-sync'` |
+| `index.ts` | 启动时同步 + 每 30 分钟定时同步（unref） |
+| `admin-ops.ts` | 删除 `POST /v1/admin/image-releases`（Jenkins hook）；新增 `POST /v1/admin/image-releases/sync` 手动触发；列表排序 `build_number::bigint DESC` |
+| `admin-web` ImageReleasesPage | 删除手动登记表单；「从镜像仓库同步」+「刷新列表」按钮；挂载时静默同步 |
+| aochi `f25aacb`（本地） | Jenkins pipeline 删除 `registerImageRelease()` 函数与调用点 |
+
+单服务拉取失败不阻塞其它服务（per-service error 记录）；无凭据时匿名尝试并 warn。
+
+### 2. 撤销 dealclaw-test 收编，全部 per-tenant
+
+| 变更 | 内容 |
+|---|---|
+| `central-test-tenant.ts` | **删除**（连同测试） |
+| `default-tenant.ts` 重写 | default 租户改 per-tenant：命名空间 `dealclaw-default`、agent `dealclaw-agent-default:18789`；`resolveTenantConfig` 读 runtime_configs（空/异常 → `waiting_config`，fail-closed）；`deploymentExists` 自愈；遗留外部 Agent 行自动迁移 |
+| central-gateway | 删除死配置 `DEALCLAW_AGENT_URL`（orchestrator 声明未使用） |
+| aochi `f25aacb`（本地） | 删除 `base/dealclaw-agent/`（Deployment/Service/PVC）与两 overlay 引用；central-gateway env 清理；tenant-config 删除 `DEEPSEEK_API_KEY`（唯一消费者是中央 agent） |
+
+副产收益：rollout 批量滚动原先靠 `k8s_namespace IS NOT NULL` 过滤把 default 排除在外（盲区），default 拿到命名空间后自动纳入滚动覆盖。
+
+## ⚠️ 部署顺序（关键，aochi 本地 commit f25aacb 暂不 push）
+
+ArgoCD production Application 配置了 `automated + prune + selfHeal`，而 Jenkins `deployK8s` 会把 tag 更新自动 push 到 aochi main——一旦清理改动到达 main，中央 dealclaw-agent 会被立即 prune。因此必须：
+
+1. 触发 Jenkins 构建 provisioning-service（预计 Build #43）→ ArgoCD 自动同步新镜像
+2. 新 provisioning 启动 → `ensureDefaultTenant` 建 `dealclaw-default` ns + agent → Running
+3. 管理后台「运行时配置」确认 default 租户配置（DeepSeek key），否则停在 waiting_config
+4. 验证 `POST /v1/admin/tenants/default/chat` 200（走新 per-tenant agent）
+5. **之后**才 push aochi `f25aacb`（先 `git pull --rebase` 拿回 Jenkins 的 kustomization 更新）→ ArgoCD prune 中央 agent
+6. 构建部署 admin-web / central-gateway（镜像含本批前端与死配置清理）
+7. 销毁 dealclaw-test：先 `kubectl delete` 中央 ns 的 `nexus-gateway-dealclaw-test` + `dealclaw-bot-dealclaw-test` Secret（deprovisionTenant 只删 `dealclaw-dealclaw-test` ns 资源），再 `DELETE /v1/tenants/dealclaw-test`
+8. 验证：租户表无 dealclaw-test（destroyed）；中央 ns 无 nexus-gateway*/dealclaw-agent；image_releases 出现 `created_by='registry-sync'` 记录；手动 sync 端点可用
+
+## 测试
+
+provisioning-service 56 passed / 14 skipped；central-gateway 47 passed（registry-sync 新增 4 个用例：元数据写入、单服务 401 隔离、dry-run 跳过、匿名同步）。
