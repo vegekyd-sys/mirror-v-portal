@@ -28,6 +28,14 @@ export function createApp() {
     }
   });
 
+  // ── Auth routes — MUST be mounted before the requireServiceOrAdmin layers ──
+  // Express runs middleware in registration order; if the service/admin auth
+  // layers sit above this router, anonymous POST /v1/admin/auth/login is
+  // rejected before it can ever reach the login handler (chicken-and-egg:
+  // you would need a JWT to obtain a JWT). The router's other routes
+  // (/v1/admin/auth/me, user management) carry their own requireAdmin.
+  app.use(adminAuthRouter);
+
   // ── Billing / accounts / skill-prices ──
   // Internal service calls authenticate with a shared service token
   // (BILLING_SERVICE_TOKEN / PAYMENT_SERVICE_TOKEN); admin dashboard
@@ -39,9 +47,6 @@ export function createApp() {
   // ── Customer admin (topup/renew/create-customer/v-command/plans/customers) ──
   // Money-creation + account-management endpoints: service token or admin JWT.
   app.use(requireServiceOrAdmin, customerAdminRouter);
-
-  // ── Auth routes (login doesn't require auth, others do) ──
-  app.use(adminAuthRouter);
 
   // Monthly reset — internal ops-agent / admin (service token or admin JWT)
   app.post('/v1/admin/monthly-reset', requireServiceOrAdmin, async (_req: Request, res: Response) => {
