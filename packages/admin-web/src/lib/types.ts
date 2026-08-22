@@ -11,8 +11,23 @@ export interface Tenant {
   creditsAccountId?: string | null;
   quotaAgents?: number | null;
   quotaCreditsMonthly?: number | null;
+  isDefault?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface ImageRelease {
+  id: number;
+  service: string;
+  tag: string;
+  image: string;
+  gitCommit?: string | null;
+  buildNumber?: string | null;
+  buildEnv?: string | null;
+  createdBy?: string | null;
+  notes?: string | null;
+  createdAt?: string;
+  promoted?: boolean;
 }
 
 export interface StatusLogEntry {

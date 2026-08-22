@@ -2,6 +2,7 @@ import pg from 'pg';
 import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
+import { ensureDefaultTenant } from './services/default-tenant.js';
 
 async function main() {
   const config = loadConfig();
@@ -25,6 +26,24 @@ async function main() {
       message: 'Provisioning Service started',
     }));
   });
+
+  // Default tenant bootstrap — fire-and-forget so a failure can never keep
+  // the service from starting. Idempotent; retried periodically so that a
+  // fresh system completes provisioning once the admin configures the model
+  // key (运行时配置) without needing a restart.
+  ensureDefaultTenant(pool, config)
+    .then((r) => console.log(`[default-tenant] boot ensure: ${r.action}${r.detail ? ` — ${r.detail}` : ''}`))
+    .catch((err) => console.error('[default-tenant] boot ensure error:', err));
+  const defaultTenantTimer = setInterval(() => {
+    ensureDefaultTenant(pool, config)
+      .then((r) => {
+        if (r.action !== 'already_ready' && r.action !== 'skipped') {
+          console.log(`[default-tenant] periodic ensure: ${r.action}${r.detail ? ` — ${r.detail}` : ''}`);
+        }
+      })
+      .catch((err) => console.error('[default-tenant] periodic ensure error:', err));
+  }, 10 * 60 * 1000);
+  defaultTenantTimer.unref();
 
   // Graceful shutdown
   const shutdown = async () => {

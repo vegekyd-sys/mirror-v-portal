@@ -30,6 +30,9 @@ export interface TenantProvision {
   quotaCreditsMonthly: number;
   appId?: string;
   appSecret?: string;
+  /** IM platform the tenant's gateway binds to. Defaults to 'feishu';
+   *  tenants served only via web chat (e.g. the default tenant) use 'web'. */
+  platform?: string;
 }
 
 export interface ProvisionOptions {
@@ -177,7 +180,7 @@ export async function provisionTenant(
         { secretRef: { name: creditsConfigName } },
       ],
       env: [
-        { name: 'DEALCLAW_PLATFORM', value: 'feishu' },
+        { name: 'DEALCLAW_PLATFORM', value: tenant.platform || 'feishu' },
         { name: 'DEALCLAW_AGENT_URL', value: `http://dealclaw-agent-${tenantLabel}:18789` },
         { name: 'NODE_ENV', value: 'production' },
         // Contact writeback — lets nexus-gateway report the sender's im_open_id

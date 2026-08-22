@@ -28,17 +28,52 @@ interface BatchResponse {
 }
 
 /**
+ * Fetch admin-promoted rollout targets from provisioning-service
+ * (GET /v1/admin/rollout-targets, backed by the rollout_targets table and
+ * managed via the admin console's image release page). Returns an empty map
+ * on any error so the env-var fallback keeps working.
+ */
+async function fetchPromotedTargets(
+  baseUrl: string,
+  token: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const res = await fetch(`${baseUrl}/v1/admin/rollout-targets`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return map;
+    const body = (await res.json()) as { ok?: boolean; targets?: Array<{ service: string; tag: string }> };
+    for (const t of body.targets ?? []) {
+      if (t?.service && t?.tag) map.set(t.service, t.tag);
+    }
+  } catch (err) {
+    console.warn(`[rollout] failed to fetch promoted targets, falling back to env: ${(err as Error).message}`);
+  }
+  return map;
+}
+
+/**
  * Run a rollout check: for each service with a configured desired tag,
  * call provisioning-service's batch deployment API to update all active tenants.
+ *
+ * Desired tag resolution (per service): admin-promoted rollout_targets first,
+ * then the ROLLOUT_*_TAG env vars as fallback.
  */
 export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[]> {
+  const baseUrl = config.provisioningServiceUrl.replace(/\/$/, '');
+  const promoted = await fetchPromotedTargets(baseUrl, config.provisioningApiToken);
+
   const targets: RolloutTarget[] = [];
 
-  if (config.rolloutNexusGatewayTag) {
-    targets.push({ service: 'nexus-gateway', image: config.rolloutNexusGatewayTag });
+  const gwTag = promoted.get('nexus-gateway') || config.rolloutNexusGatewayTag;
+  if (gwTag) {
+    targets.push({ service: 'nexus-gateway', image: gwTag });
   }
-  if (config.rolloutDealclawAgentTag) {
-    targets.push({ service: 'dealclaw-agent', image: config.rolloutDealclawAgentTag });
+  const agentTag = promoted.get('dealclaw-agent') || config.rolloutDealclawAgentTag;
+  if (agentTag) {
+    targets.push({ service: 'dealclaw-agent', image: agentTag });
   }
 
   if (!targets.length) {
@@ -46,7 +81,6 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
   }
 
   const results: RolloutResult[] = [];
-  const baseUrl = config.provisioningServiceUrl.replace(/\/$/, '');
 
   for (const target of targets) {
     const start = Date.now();

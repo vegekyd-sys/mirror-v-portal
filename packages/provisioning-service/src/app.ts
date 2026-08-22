@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import pg from 'pg';
 import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
+import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 
@@ -14,7 +15,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // NB2/NB8 FIX: restrict CORS to known origins
   app.use(cors({
     origin: process.env.CORS_ORIGIN || false,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   }));
   app.use(express.json({ limit: '1mb' }));
 
@@ -29,6 +30,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
   app.use(createTenantRoutes(pool, config, auth));
   app.use(createRuntimeConfigRoutes(pool, auth));
+  app.use(createAdminOpsRoutes(pool, config, auth));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

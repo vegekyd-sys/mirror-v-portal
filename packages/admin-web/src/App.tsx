@@ -11,6 +11,8 @@ import SkillPricesPage from './pages/SkillPricesPage';
 import SkillsPage from './pages/SkillsPage';
 import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
 import UsersPage from './pages/UsersPage';
+import ImageReleasesPage from './pages/ImageReleasesPage';
+import ChatPage from './pages/ChatPage';
 
 // Router basename mirrors vite `base` (phase 3: '/' → empty basename).
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -39,9 +41,11 @@ export default function App() {
             <Route path="tenants" element={<Navigate to="/customers" replace />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
+            <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />
             <Route path="skills" element={<SkillsPage />} />
+            <Route path="image-releases" element={<ImageReleasesPage />} />
             <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
             <Route path="users" element={<UsersPage />} />
           </Route>

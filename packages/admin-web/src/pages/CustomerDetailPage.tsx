@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
-import { TENANT_STATUSES, type StatusLogEntry, type Tenant } from '../lib/types';
+import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
-import { IconArrowLeft, IconRefresh, IconTrash } from '../components/icons';
+import { IconArrowLeft, IconBox, IconRefresh, IconTrash } from '../components/icons';
 
 interface AuditEntry {
   id?: string | number;
@@ -166,6 +166,47 @@ export default function CustomerDetailPage() {
       await loadTenant();
     } catch (e) {
       flash(`销毁失败：${errMsg(e)}`);
+    }
+  };
+
+  // ── 运行镜像更新（单租户） ──
+  const [releases, setReleases] = useState<ImageRelease[]>([]);
+  const [imgService, setImgService] = useState<'dealclaw-agent' | 'nexus-gateway'>('dealclaw-agent');
+  const [imgTag, setImgTag] = useState('');
+  const [imgBusy, setImgBusy] = useState(false);
+
+  useEffect(() => {
+    api<{ releases: ImageRelease[] }>('/v1/admin/image-releases?limit=50')
+      .then((r) => setReleases(r.releases || []))
+      .catch(() => {});
+  }, []);
+
+  const serviceReleases = releases.filter((r) => r.service === imgService);
+
+  const updateImage = async () => {
+    const tag = imgTag.trim();
+    if (!tag) {
+      flash('请输入或选择镜像 Tag');
+      return;
+    }
+    if (
+      !window.confirm(
+        `确认将租户 ${tenantId} 的 ${imgService} 镜像更新为 ${tag}？\nPod 将滚动重启，期间该租户服务短暂不可用。`,
+      )
+    )
+      return;
+    setImgBusy(true);
+    try {
+      const r = await api<{ image: string }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/deployment`,
+        { method: 'PATCH', body: { service: imgService, image: tag } },
+      );
+      flash(`已触发滚动更新：${imgService} → ${r.image || tag}`);
+      setImgTag('');
+    } catch (e) {
+      flash(`镜像更新失败：${errMsg(e)}`);
+    } finally {
+      setImgBusy(false);
     }
   };
 
@@ -460,6 +501,51 @@ export default function CustomerDetailPage() {
           </div>
         </div>
       )}
+
+      {/* ── 运行镜像更新 ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        运行镜像更新
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="form-row">
+            <label className="field-label">服务</label>
+            <select
+              value={imgService}
+              onChange={(e) => {
+                setImgService(e.target.value as 'dealclaw-agent' | 'nexus-gateway');
+                setImgTag('');
+              }}
+            >
+              <option value="dealclaw-agent">dealclaw-agent</option>
+              <option value="nexus-gateway">nexus-gateway</option>
+            </select>
+            <input
+              type="text"
+              className="mono"
+              style={{ flex: 1, minWidth: 220 }}
+              list={`img-tags-${imgService}`}
+              value={imgTag}
+              onChange={(e) => setImgTag(e.target.value)}
+              placeholder="选择或输入镜像 Tag，如 master.e3d43339.12"
+            />
+            <datalist id={`img-tags-${imgService}`}>
+              {serviceReleases.map((r) => (
+                <option key={r.id} value={r.tag}>
+                  {`${fmtTime(r.createdAt)} · ${r.createdBy || ''}`}
+                </option>
+              ))}
+            </datalist>
+            <button className="btn-primary" onClick={() => void updateImage()} disabled={imgBusy}>
+              {imgBusy ? '更新中…' : (<><IconBox /> 更新此租户镜像</>)}
+            </button>
+          </div>
+          <div className="hint">
+            仅更新当前租户（滚动重启该服务的 Deployment）。如需把某个版本推给全部租户，请到
+            「镜像版本」页使用「提升发布」，由 ops-agent 自动滚动更新。
+          </div>
+        </div>
+      </div>
 
       {/* ── 日志 tabs ── */}
       <div className="tabs" style={{ marginTop: 24 }}>

@@ -194,7 +194,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, contact_phone, plan_tier, status,
                 k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly,
-                created_at, updated_at
+                is_default, created_at, updated_at
          FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
@@ -226,6 +226,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           creditsAccountId: t.credits_account_id,
           quotaAgents: t.quota_agents,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
+          isDefault: t.is_default === true,
           createdAt: t.created_at,
           updatedAt: t.updated_at,
         },
@@ -278,7 +279,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.get('/v1/tenants', async (_req: Request, res: Response) => {
     try {
       const { rows } = await pool.query(
-        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_credits_monthly, created_at
+        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_credits_monthly, is_default, created_at
          FROM tenants ORDER BY created_at DESC LIMIT 100`,
       );
 
@@ -291,6 +292,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           planTier: t.plan_tier,
           status: t.status,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
+          isDefault: t.is_default === true,
           createdAt: t.created_at,
         })),
         total: rows.length,

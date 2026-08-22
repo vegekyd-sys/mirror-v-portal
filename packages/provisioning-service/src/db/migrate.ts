@@ -104,6 +104,38 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON runtime_configs(tenant_id, config_key) WHERE tenant_id IS NOT NULL;
     `);
 
+    // Image release registry + rollout targets (v0.6):
+    // Every CI build records its image here (Jenkins post-build hook) so the
+    // admin console can list built versions and roll them out manually.
+    // rollout_targets holds the console-controlled "desired fleet tag" per
+    // service; ops-agent's rollout cron reads it (env tags are the fallback).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS image_releases (
+        id            BIGSERIAL PRIMARY KEY,
+        service       TEXT NOT NULL,
+        tag           TEXT NOT NULL,
+        image         TEXT NOT NULL,
+        git_commit    TEXT,
+        build_number  TEXT,
+        build_env     TEXT,
+        created_by    TEXT NOT NULL DEFAULT 'jenkins',
+        notes         TEXT,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (service, tag)
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_releases_service
+        ON image_releases(service, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS rollout_targets (
+        service     TEXT PRIMARY KEY,
+        tag         TEXT NOT NULL,
+        updated_by  TEXT,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

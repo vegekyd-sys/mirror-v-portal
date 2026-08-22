@@ -13,12 +13,14 @@ interface NavItem {
 const WORKBENCH: NavItem[] = [
   { to: '/', icon: '概', label: '概览', end: true },
   { to: '/customers', icon: '客', label: '客户与 Credits' },
+  { to: '/chat', icon: '聊', label: '对话' },
   { to: '/pricing', icon: '价', label: 'Skill 定价' },
   { to: '/plans', icon: '套', label: '套餐模板' },
   { to: '/skills', icon: '技', label: 'Skill 管理' },
 ];
 
 const SYSTEM: NavItem[] = [
+  { to: '/image-releases', icon: '镜', label: '镜像版本' },
   { to: '/runtime-configs', icon: '配', label: '运行时配置' },
   { to: '/users', icon: '户', label: '用户管理' },
 ];
