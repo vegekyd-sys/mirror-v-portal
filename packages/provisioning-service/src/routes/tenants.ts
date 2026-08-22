@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData, tenantNamespace } from '../services/provisioning.js';
+import { resolveTenantConfig } from '../services/runtime-config.js';
 import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
@@ -108,6 +109,15 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       // Provision K8s resources (after DB commit — if this fails, update status)
       let provisionResult;
       try {
+        // Resolve runtime config (global defaults + tenant overrides) from the
+        // runtime_configs table. Skipped in dry-run mode so local/test flows
+        // don't require RUNTIME_CONFIG_KEY. Resolution failures (missing
+        // master key, empty config) mark the tenant provisioning_failed below.
+        let runtimeSecretData: Record<string, string> | undefined;
+        if (!config.k8sDryRun) {
+          runtimeSecretData = await resolveTenantConfig(pool, tenantId);
+        }
+
         provisionResult = await provisionTenant({
           tenantId,
           companyName: safeName,
@@ -123,6 +133,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           imageRegistry: config.imageRegistry,
           nexusGatewayImageTag: config.nexusGatewayImageTag,
           dealclawAgentImageTag: config.dealclawAgentImageTag,
+          runtimeSecretData,
         });
       } catch (provErr: unknown) {
         const e = provErr as any;

@@ -78,6 +78,7 @@
 | 1.3.7 | Basic Auth 登录页 | ✅ | `packages/admin-dashboard/public/login.html` |
 | 1.3.7.1 | IP 白名单 | ⬜ | 可通过 K8s NetworkPolicy 限制 |
 | 1.3.8 | K8s deployment.yaml | ✅ | `ultronx/cd/k8s/dealclaw/applications/admin-dashboard/` |
+| 1.3.9 | 每租户运行时配置管理页 — 全局默认 + 租户覆盖，敏感值掩码，预设 key 清单 | ✅ | `public/admin-runtime-configs.html` + `/api/admin/runtime-configs*` 代理路由 → provisioning-service |
 
 ---
 
@@ -99,6 +100,7 @@
 | 2.1.10 | 单元测试 (validation + sanitize + quota) | ✅ | 14 tests pass |
 | 2.1.11 | 集成测试 (ACK test env) | ✅ | HTTP API: create/read/delete tenant lifecycle |
 | 2.1.12 | RUNTIME_NAMESPACE 统一 — 单一默认值 `DEFAULT_RUNTIME_NAMESPACE`（原 config 默认 `dealclaw-staging` 与 provisioning 内联 `dealclaw-test` 不一致）+ provisionTenant 改走 config 注入 + deployment.yaml 用 downward API (`fieldRef: metadata.namespace`) 注入 | ✅ | 保证跨 namespace FQDN（credits-ledger.\<ns\> / provisioning-service.\<ns\>）在任何控制面 namespace 下都拼对 |
+| 2.1.13 | 每租户运行时配置管理 — `runtime_configs` 表（全局默认 + 租户覆盖，AES-256-GCM 加密入库，主密钥 `RUNTIME_CONFIG_KEY`）+ CRUD API `/v1/admin/runtime-configs` + provisionTenant 从 DB 合并生成租户 ns 内 `tenant-config` Secret（空配置 fail-closed）+ deprovision 清理 | ✅ | `services/crypto.ts` / `services/runtime-config.ts` / `routes/runtime-configs.ts`；替代原手工共享 Secret，25 tests |
 
 ### 2.2 Ops Agent
 

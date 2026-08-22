@@ -125,6 +125,22 @@ router.get('/audit', async (req, res) => {
 // ── Skill Pricing (proxy to credits-ledger) ──
 const CREDITS_LEDGER_URL = process.env.CREDITS_LEDGER_URL || 'http://localhost:8081';
 
+// ── Runtime Config (proxy to provisioning-service) ──
+const PROVISIONING_SERVICE_URL = process.env.PROVISIONING_SERVICE_URL || 'http://localhost:8082';
+
+async function proxyToProvisioning(path: string, init?: { method?: string; body?: string }) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (process.env.PROVISIONING_API_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.PROVISIONING_API_TOKEN}`;
+  }
+  const res = await fetch(`${PROVISIONING_SERVICE_URL}${path}`, {
+    method: init?.method || 'GET',
+    headers,
+    body: init?.body,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 async function proxyToLedger(path: string, init?: RequestInit & { authReq?: ExpressRequest }) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -454,6 +470,46 @@ router.get('/admin/skills', async (req, res) => {
   try {
     const query = new URLSearchParams(req.query as Record<string,string>).toString();
     const result = await proxyToLedger(`/v1/admin/skills${query ? '?' + query : ''}`, { authReq: req });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// ── Runtime Config (per-tenant configuration management) ──
+
+router.get('/admin/runtime-configs/presets', async (_req, res) => {
+  try {
+    const result = await proxyToProvisioning('/v1/admin/runtime-configs/presets');
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/admin/runtime-configs', async (req, res) => {
+  try {
+    const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId : '';
+    const result = await proxyToProvisioning(
+      `/v1/admin/runtime-configs${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''}`,
+    );
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.put('/admin/runtime-configs', async (req, res) => {
+  try {
+    const result = await proxyToProvisioning('/v1/admin/runtime-configs', {
+      method: 'PUT',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.delete('/admin/runtime-configs/:key', async (req, res) => {
+  try {
+    const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId : '';
+    const result = await proxyToProvisioning(
+      `/v1/admin/runtime-configs/${encodeURIComponent(req.params.key)}${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''}`,
+      { method: 'DELETE' },
+    );
     res.status(result.status).json(result.body);
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });

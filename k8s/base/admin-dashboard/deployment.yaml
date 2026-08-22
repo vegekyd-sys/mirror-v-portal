@@ -30,6 +30,15 @@ spec:
           value: "8090"
         - name: CREDITS_LEDGER_URL
           value: "http://credits-ledger:8081"
+        # Runtime-config management page proxies to provisioning-service
+        - name: PROVISIONING_SERVICE_URL
+          value: "http://provisioning-service:8082"
+        - name: PROVISIONING_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dealclaw-auth
+              key: PROVISIONING_API_TOKEN
+              optional: true
         - name: ADMIN_JWT_SECRET
           valueFrom:
             secretKeyRef:

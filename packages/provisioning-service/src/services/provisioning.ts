@@ -39,6 +39,12 @@ export interface ProvisionOptions {
   agentPvcSize?: string;
   agentPvcStorageClass?: string;
   agentPvcAccessMode?: 'ReadWriteOnce' | 'ReadWriteMany';
+  /**
+   * Merged runtime config (global defaults + tenant overrides, decrypted).
+   * Materialized as the `tenant-config` Secret in the tenant namespace,
+   * which the dealclaw-agent Deployment consumes via envFrom.
+   */
+  runtimeSecretData?: Record<string, string>;
 }
 
 export interface ProvisionResult {
@@ -94,7 +100,7 @@ export async function provisionTenant(
 
   if (dryRun) {
     result.warnings.push(`DRY_RUN: would provision in namespace ${nsName}`);
-    result.secrets.push(botSecretName, agentConfigName, creditsConfigName);
+    result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config');
     result.pods.push(gatewayName, agentName, agentPvcName);
     return result;
   }
@@ -126,6 +132,19 @@ export async function provisionTenant(
       DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantLabel}`,
     });
     result.secrets.push(creditsConfigName);
+
+    // 1b. tenant-config Secret — runtime provider/tool credentials for
+    // dealclaw-agent (envFrom). Built from the runtime_configs table
+    // (global defaults + per-tenant overrides), managed via admin-dashboard.
+    // Fail closed: without it the agent Pod cannot start.
+    const runtimeSecretName = 'tenant-config';
+    if (!options.runtimeSecretData || Object.keys(options.runtimeSecretData).length === 0) {
+      throw new Error(
+        'Runtime config is empty — configure global defaults (e.g. DEEPSEEK_API_KEY) via admin-dashboard before provisioning',
+      );
+    }
+    await k8sCreateSecret(nsName, runtimeSecretName, options.runtimeSecretData);
+    result.secrets.push(runtimeSecretName);
 
     // 2. nexus-gateway Deployment + Service
     const gwLabels = { ...labels, app: 'nexus-gateway' };
@@ -180,8 +199,8 @@ export async function provisionTenant(
       labels: agentLabels,
       envFrom: [
         { secretRef: { name: agentConfigName } },
-        // Shared runtime provider credentials in the test namespace.
-        // Production should use a tenant-scoped runtime Secret.
+        // Runtime provider/tool credentials — the tenant-config Secret is
+        // created in this tenant's namespace by provisionTenant (step 1b).
         { secretRef: { name: 'tenant-config' } },
       ],
       env: [
@@ -233,6 +252,7 @@ export async function deprovisionTenant(
     `dealclaw-bot-${tenantId}`,
     `dealclaw-agent-config-${tenantId}`,
     `dealclaw-credits-${tenantId}`,
+    'tenant-config',
   ];
 
   if (dryRun) {

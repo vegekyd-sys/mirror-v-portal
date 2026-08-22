@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>运行时配置 — DealClaw Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f1a; color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .header {
+      background: #1a1a2e; border-bottom: 1px solid #2a2a4a;
+      padding: 16px 24px; display: flex; align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 18px; color: #fff; }
+    .header .user { font-size: 13px; color: #888; }
+    .header a { color: #6366f1; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .header a:hover { color: #818cf8; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .section-title { font-size: 16px; color: #fff; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #2a2a4a; }
+    .action-bar { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+    button {
+      padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
+      border: none; font-weight: 600; transition: background 0.2s;
+    }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover { background: #5558e6; }
+    .btn-primary:disabled { background: #444; cursor: not-allowed; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-secondary { background: #374151; color: #ccc; }
+    .btn-secondary:hover { background: #4b5563; }
+    select, input, textarea {
+      background: #0f0f1a; border: 1px solid #333; color: #fff;
+      padding: 8px 10px; border-radius: 6px; font-size: 13px;
+    }
+    select:focus, input:focus, textarea:focus { border-color: #6366f1; outline: none; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a4a; }
+    th { color: #888; font-weight: 600; white-space: nowrap; }
+    td { color: #ccc; }
+    td.mono { font-family: monospace; font-size: 12px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge-global { background: #1e3a5f; color: #93c5fd; }
+    .badge-tenant { background: #3b0a2a; color: #f472b6; }
+    .badge-secret { background: #422006; color: #fcd34d; }
+    .badge-plain { background: #1f2937; color: #9ca3af; }
+    .msg { font-size: 13px; padding: 10px; border-radius: 6px; margin-bottom: 12px; display: none; }
+    .msg-ok { background: #065f46; color: #6ee7b7; border: 1px solid #059669; display: block; }
+    .msg-err { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; display: block; }
+    .msg-warn { background: #78350f; color: #fde68a; border: 1px solid #d97706; display: block; }
+    .empty { color: #666; font-size: 13px; padding: 20px 0; }
+    .hint { color: #666; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+    .form-card {
+      background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px;
+      padding: 16px; margin-bottom: 20px;
+    }
+    .form-row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+    .form-row label { font-size: 12px; color: #888; min-width: 70px; }
+    .form-row input[type="text"] { flex: 1; min-width: 220px; }
+    .form-row .checkbox-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aaa; }
+    .preset-chip {
+      display: inline-block; padding: 4px 10px; margin: 3px; border-radius: 12px;
+      background: #26264a; color: #a5b4fc; font-size: 12px; cursor: pointer;
+      border: 1px solid #3730a3; font-family: monospace;
+    }
+    .preset-chip:hover { background: #3730a3; color: #fff; }
+    .preset-chip.configured { opacity: 0.45; text-decoration: line-through; cursor: default; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚙️ DealClaw Admin — 运行时配置</h1>
+    <div>
+      <span class="user" id="user-display">加载中...</span>
+      <a href="/">← 管理后台首页</a>
+      <a href="/admin/skills">Skill 管理</a>
+      <a href="#" id="logout-link">退出</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="msg" class="msg"></div>
+
+    <div class="action-bar">
+      <label style="font-size:13px;color:#888">作用域：</label>
+      <select id="scope-select" onchange="reload()">
+        <option value="">🌐 全局默认</option>
+      </select>
+      <button class="btn-secondary" onclick="reload()">🔄 刷新</button>
+    </div>
+
+    <div id="key-warning" class="msg"></div>
+
+    <div class="section-title">➕ 添加 / 更新配置</div>
+    <div class="form-card">
+      <div class="form-row">
+        <label>预设项</label>
+        <div id="preset-chips"><span class="empty" style="padding:0">加载中...</span></div>
+      </div>
+      <div class="form-row">
+        <label>Key</label>
+        <input type="text" id="cfg-key" placeholder="如 DEEPSEEK_API_KEY（合法环境变量名）" style="font-family:monospace">
+      </div>
+      <div class="form-row">
+        <label>Value</label>
+        <input type="text" id="cfg-value" placeholder="配置值（保存时加密入库）">
+      </div>
+      <div class="form-row">
+        <label>说明</label>
+        <input type="text" id="cfg-desc" placeholder="可选，便于其他管理员理解用途">
+      </div>
+      <div class="form-row">
+        <label></label>
+        <div class="checkbox-wrap">
+          <input type="checkbox" id="cfg-secret" checked>
+          <span>敏感值（列表中掩码显示；取消勾选则明文可见）</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <label></label>
+        <button class="btn-primary" id="btn-save" onclick="saveConfig()">💾 保存（当前作用域）</button>
+      </div>
+    </div>
+
+    <div class="section-title" id="list-title">配置列表</div>
+    <div id="config-list"><span class="empty">加载中...</span></div>
+    <div class="hint">
+      说明：创建租户时，系统合并「全局默认 + 该租户覆盖」生成租户 namespace 内的
+      <code>tenant-config</code> Secret（dealclaw-agent 通过 envFrom 注入）。
+      已存在的租户不受影响（本期仅新建租户生效）。敏感值保存后不可再读取，编辑需重新输入完整值。
+    </div>
+
+    <div class="section-title">📜 操作日志</div>
+    <div id="log-area" style="font-size:12px; color:#666; max-height:200px; overflow-y:auto;"></div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN = localStorage.getItem('admin_jwt') || '';
+    let presets = [];
+    let currentItems = [];
+    let keyConfigured = true;
+
+    function checkAuth() {
+      if (!AUTH_TOKEN) { window.location.href = '/login'; return false; }
+      return true;
+    }
+
+    function userInfo() {
+      try {
+        const u = JSON.parse(localStorage.getItem('admin_user') || '{}');
+        document.getElementById('user-display').textContent = u.displayName || u.username || 'Admin';
+      } catch(e) {}
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem('admin_jwt');
+      localStorage.removeItem('admin_user');
+      document.cookie = 'auth_token=; path=/; max-age=0';
+      window.location.href = '/login';
+    });
+
+    function showMsg(text, kind='ok') {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.className = 'msg msg-' + kind;
+      setTimeout(() => { el.className = 'msg'; el.textContent = ''; }, 6000);
+    }
+
+    function log(msg, isErr=false) {
+      const el = document.getElementById('log-area');
+      const t = new Date().toLocaleTimeString();
+      el.innerHTML = `<div style="color:${isErr?'#f87171':'#888'}">[${t}] ${msg}</div>` + el.innerHTML;
+    }
+
+    async function api(path, opts={}) {
+      const res = await fetch(path, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${AUTH_TOKEN}`,
+          ...opts.headers,
+        },
+        ...opts,
+      });
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    }
+
+    function currentScope() {
+      return document.getElementById('scope-select').value; // '' = global
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    }
+
+    // ── Load tenants into scope selector ──
+    async function loadScopes() {
+      if (!checkAuth()) return;
+      const { body } = await api('/api/tenants');
+      const sel = document.getElementById('scope-select');
+      const cur = sel.value;
+      for (const t of (body.tenants || [])) {
+        const opt = document.createElement('option');
+        opt.value = t.tenant_id;
+        opt.textContent = `🏢 ${t.company_name || t.tenant_id} (${t.status})`;
+        sel.appendChild(opt);
+      }
+      if (cur) sel.value = cur;
+    }
+
+    // ── Load presets ──
+    async function loadPresets() {
+      if (!checkAuth()) return;
+      const { status, body } = await api('/api/admin/runtime-configs/presets');
+      if (status !== 200) return;
+      presets = body.presets || [];
+      renderPresetChips();
+    }
+
+    function renderPresetChips() {
+      const el = document.getElementById('preset-chips');
+      if (!presets.length) { el.innerHTML = '<span class="empty" style="padding:0">无预设</span>'; return; }
+      el.innerHTML = presets.map(p => {
+        const configured = currentItems.some(i => i.key === p.key);
+        return `<span class="preset-chip ${configured ? 'configured' : ''}"
+          title="${esc(p.description)}" onclick="fillPreset('${esc(p.key)}')">${esc(p.key)}</span>`;
+      }).join('');
+    }
+
+    function fillPreset(key) {
+      const p = presets.find(x => x.key === key);
+      if (!p) return;
+      document.getElementById('cfg-key').value = p.key;
+      document.getElementById('cfg-desc').value = p.description;
+      document.getElementById('cfg-secret').checked = p.isSecret !== false;
+      document.getElementById('cfg-value').focus();
+    }
+
+    // ── Load config list for current scope ──
+    async function reload() {
+      if (!checkAuth()) return;
+      const scope = currentScope();
+      const qs = scope ? `?tenantId=${encodeURIComponent(scope)}` : '';
+      const { status, body } = await api(`/api/admin/runtime-configs${qs}`);
+      const listEl = document.getElementById('config-list');
+      const warnEl = document.getElementById('key-warning');
+
+      if (status !== 200) {
+        listEl.innerHTML = `<div class="empty">加载失败 (${status}): ${esc(body.message || body.code || '')}</div>`;
+        return;
+      }
+
+      currentItems = body.items || [];
+      keyConfigured = body.keyConfigured !== false;
+
+      warnEl.className = 'msg' + (keyConfigured ? '' : ' msg-warn');
+      warnEl.textContent = keyConfigured ? '' :
+        '⚠️ RUNTIME_CONFIG_KEY 未在服务端配置：可以查看列表，但无法保存新值，创建租户也会失败。请先在 provisioning-service 设置主密钥。';
+
+      document.getElementById('list-title').textContent =
+        scope ? `配置列表 — 租户覆盖 (${scope})` : '配置列表 — 全局默认';
+
+      if (!currentItems.length) {
+        listEl.innerHTML = `<div class="empty">当前作用域暂无配置${scope ? '（未覆盖的 key 将使用全局默认值）' : '（请先添加 DEEPSEEK_API_KEY 等必需项）'}</div>`;
+      } else {
+        let html = `<table><thead><tr>
+          <th>Key</th><th>值</th><th>类型</th><th>说明</th><th>更新时间</th><th style="width:160px">操作</th>
+        </tr></thead><tbody>`;
+        for (const item of currentItems) {
+          html += `<tr>
+            <td class="mono">${esc(item.key)}</td>
+            <td class="mono">${esc(item.displayValue)}</td>
+            <td>${item.isSecret ? '<span class="badge badge-secret">敏感</span>' : '<span class="badge badge-plain">明文</span>'}</td>
+            <td>${esc(item.description || '-')}</td>
+            <td style="font-size:11px;color:#777">${new Date(item.updatedAt).toLocaleString()}</td>
+            <td>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="editConfig('${esc(item.key)}')">✏️ 改值</button>
+              <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="removeConfig('${esc(item.key)}')">🗑 删除</button>
+            </td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+        listEl.innerHTML = html;
+      }
+      renderPresetChips();
+    }
+
+    // ── Save (insert or update) ──
+    async function saveConfig() {
+      if (!checkAuth()) return;
+      const key = document.getElementById('cfg-key').value.trim();
+      const value = document.getElementById('cfg-value').value;
+      const description = document.getElementById('cfg-desc').value.trim();
+      const isSecret = document.getElementById('cfg-secret').checked;
+      const scope = currentScope();
+
+      if (!key) { showMsg('请填写 Key', 'err'); return; }
+      if (!value) { showMsg('请填写 Value（要删除请使用删除按钮）', 'err'); return; }
+      if (scope && !confirm(`确认为租户 ${scope} 设置覆盖值？该租户创建时将优先使用此值。`)) return;
+
+      document.getElementById('btn-save').disabled = true;
+      try {
+        const { status, body } = await api('/api/admin/runtime-configs', {
+          method: 'PUT',
+          body: JSON.stringify({ tenantId: scope || null, key, value, isSecret, description: description || undefined }),
+        });
+        if (status === 200) {
+          showMsg(`已保存 ${key}（作用域：${scope || '全局默认'}）`);
+          log(`保存 ${key} @ ${scope || 'global'}`);
+          document.getElementById('cfg-value').value = '';
+        } else {
+          showMsg(body.message || `保存失败 (${status})`, 'err');
+          log(`保存失败 ${key}: ${JSON.stringify(body)}`, true);
+        }
+      } catch (e) {
+        showMsg('网络错误', 'err');
+        log(`网络错误: ${e}`, true);
+      }
+      document.getElementById('btn-save').disabled = false;
+      reload();
+    }
+
+    // ── Edit: masked values can't be prefilled; re-enter full value ──
+    async function editConfig(key) {
+      if (!checkAuth()) return;
+      const value = prompt(`输入 "${key}" 的新值（原值已加密，无法回显）：`);
+      if (value === null || value === '') return;
+
+      const { status, body } = await api('/api/admin/runtime-configs', {
+        method: 'PUT',
+        body: JSON.stringify({ tenantId: currentScope() || null, key, value }),
+      });
+      if (status === 200) {
+        showMsg(`已更新 ${key}`);
+        log(`更新 ${key} @ ${currentScope() || 'global'}`);
+      } else {
+        showMsg(body.message || `更新失败 (${status})`, 'err');
+      }
+      reload();
+    }
+
+    // ── Delete ──
+    async function removeConfig(key) {
+      if (!checkAuth()) return;
+      const scope = currentScope();
+      const scopeName = scope ? `租户 ${scope}` : '全局默认';
+      if (!confirm(`确认删除 ${scopeName} 作用域下的 "${key}"？已存在的租户不受影响。`)) return;
+
+      const qs = scope ? `?tenantId=${encodeURIComponent(scope)}` : '';
+      const { status, body } = await api(`/api/admin/runtime-configs/${encodeURIComponent(key)}${qs}`, {
+        method: 'DELETE',
+      });
+      if (status === 200) {
+        showMsg(`已删除 ${key}`);
+        log(`删除 ${key} @ ${scope || 'global'}`);
+      } else {
+        showMsg(body.message || `删除失败 (${status})`, 'err');
+      }
+      reload();
+    }
+
+    // Init
+    userInfo();
+    loadScopes();
+    loadPresets();
+    reload();
+  </script>
+</body>
+</html>

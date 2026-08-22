@@ -115,5 +115,7 @@ secretGenerator:
       - ADMIN_API_TOKEN=placeholder
       - PAYMENT_SERVICE_TOKEN=placeholder
       # Shared secret between ops-agent and central-gateway notify relay
+      # Master key (64 hex chars) for encrypting per-tenant runtime config values
+      - RUNTIME_CONFIG_KEY=placeholder
       - INTERNAL_API_TOKEN=***
     type: Opaque

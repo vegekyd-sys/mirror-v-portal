@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import pg from 'pg';
 import { createTenantRoutes } from './routes/tenants.js';
+import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import type { ProvisioningConfig } from './config.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 
@@ -13,7 +14,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // NB2/NB8 FIX: restrict CORS to known origins
   app.use(cors({
     origin: process.env.CORS_ORIGIN || false,
-    methods: ['GET', 'POST', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
   }));
   app.use(express.json({ limit: '1mb' }));
 
@@ -25,6 +26,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // NB2 FIX: Add Bearer token auth to all tenant routes
   const auth = createAuthMiddleware('PROVISIONING_API_TOKEN');
   app.use(createTenantRoutes(pool, config, auth));
+  app.use(createRuntimeConfigRoutes(pool, auth));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

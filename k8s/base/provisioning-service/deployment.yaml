@@ -41,6 +41,15 @@ spec:
             secretKeyRef:
               name: dealclaw-db
               key: url
+        # Master key for encrypting per-tenant runtime config values at rest
+        # (AES-256-GCM). Optional at startup — the service fails closed on
+        # config write/resolve when unset.
+        - name: RUNTIME_CONFIG_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dealclaw-auth
+              key: RUNTIME_CONFIG_KEY
+              optional: true
         resources:
           requests:
             cpu: 100m

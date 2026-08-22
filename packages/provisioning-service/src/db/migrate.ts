@@ -79,6 +79,31 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON tenant_notifications(tenant_id, created_at DESC);
     `);
 
+    // Per-tenant runtime configuration (v0.5):
+    // Backs the admin-dashboard "runtime config" management page. Values are
+    // AES-256-GCM encrypted (see services/crypto.ts) before storage and are
+    // materialized as the tenant-config Secret in the tenant's namespace at
+    // provisioning time.
+    //
+    // tenant_id NULL = global default (shared provider keys); a non-NULL
+    // tenant_id row overrides the global value for that tenant. Two partial
+    // unique indexes are needed because plain UNIQUE treats NULLs as distinct.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS runtime_configs (
+        id              BIGSERIAL PRIMARY KEY,
+        tenant_id       TEXT REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        config_key      TEXT NOT NULL,
+        encrypted_value TEXT NOT NULL,
+        is_secret       BOOLEAN NOT NULL DEFAULT TRUE,
+        description     TEXT,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS runtime_configs_global_key_uq
+        ON runtime_configs(config_key) WHERE tenant_id IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS runtime_configs_tenant_key_uq
+        ON runtime_configs(tenant_id, config_key) WHERE tenant_id IS NOT NULL;
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

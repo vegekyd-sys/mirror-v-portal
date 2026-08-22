@@ -46,6 +46,11 @@ export function createApp(dbUrl?: string) {
     res.sendFile(join(__dirname, '..', 'public', 'admin-skills.html'));
   });
 
+  app.get('/admin/runtime-configs', requireAdmin, (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(join(__dirname, '..', 'public', 'admin-runtime-configs.html'));
+  });
+
   // ── Protected API routes (auth bypass for login + public endpoints) ──
   app.use('/api', (req, res, next) => {
     // Skip auth for login, public credit queries, and health
