@@ -206,6 +206,42 @@ export async function deletePersistentVolumeClaim(namespace: string, name: strin
 
 // ── Secret ──
 
+/** Read a secret's type + base64 data. Returns null when it does not exist. */
+export async function getSecret(
+  namespace: string,
+  name: string,
+): Promise<{ type: string; data: Record<string, string> } | null> {
+  const res = await k8sRequest('GET', `/api/v1/namespaces/${namespace}/secrets/${name}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`getSecret ${namespace}/${name} failed: ${res.status}`);
+  const body = res.body as any;
+  return { type: body?.type || 'Opaque', data: body?.data || {} };
+}
+
+/**
+ * Create a secret from raw (already base64-encoded) data, preserving the
+ * source secret's type (e.g. kubernetes.io/dockerconfigjson). Used to copy
+ * secrets across namespaces. 409 (already exists) is tolerated.
+ */
+export async function copySecretToNamespace(
+  namespace: string,
+  name: string,
+  type: string,
+  data: Record<string, string>,
+): Promise<void> {
+  const res = await k8sRequest('POST', `/api/v1/namespaces/${namespace}/secrets`, {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: { name, namespace },
+    type,
+    data,
+  });
+  if (!res.ok) {
+    if (res.status !== 409) throw new Error(`copySecret ${name} -> ${namespace} failed: ${res.status}`);
+  }
+  console.log(`[k8s] secret created: ${namespace}/${name}`);
+}
+
 export async function createSecret(namespace: string, name: string, data: Record<string, string>): Promise<void> {
   const res = await k8sRequest('POST', `/api/v1/namespaces/${namespace}/secrets`, {
     apiVersion: 'v1',

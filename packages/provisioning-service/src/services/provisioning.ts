@@ -3,6 +3,8 @@ import {
   createNamespace,
   deleteNamespace,
   createSecret as k8sCreateSecret,
+  getSecret,
+  copySecretToNamespace,
   createDeployment,
   createService,
   createPersistentVolumeClaim,
@@ -109,6 +111,21 @@ export async function provisionTenant(
   try {
     // 0. Create per-tenant namespace first
     await createNamespace(nsName);
+
+    // 0b. Copy the image pull secret into the tenant namespace. The
+    // Deployments created below reference `registry-secret-vpc`, but that
+    // dockerconfig secret only exists in the control-plane namespace —
+    // without copying it, tenant pods fail with ErrImagePull.
+    const pullSecretName = 'registry-secret-vpc';
+    const pullSecret = await getSecret(centralNs, pullSecretName);
+    if (pullSecret && Object.keys(pullSecret.data).length > 0) {
+      await copySecretToNamespace(nsName, pullSecretName, pullSecret.type, pullSecret.data);
+      result.secrets.push(pullSecretName);
+    } else {
+      result.warnings.push(
+        `Image pull secret ${pullSecretName} not found in ${centralNs} — tenant pods may fail to pull images`,
+      );
+    }
 
     // 1. Secrets
     await k8sCreateSecret(nsName, botSecretName, {
