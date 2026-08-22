@@ -4,7 +4,6 @@ import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
-import TenantsPage from './pages/TenantsPage';
 import CustomersPage from './pages/CustomersPage';
 import CustomerDetailPage from './pages/CustomerDetailPage';
 import PlansPage from './pages/PlansPage';
@@ -37,7 +36,7 @@ export default function App() {
             }
           >
             <Route index element={<OverviewPage />} />
-            <Route path="tenants" element={<TenantsPage />} />
+            <Route path="tenants" element={<Navigate to="/customers" replace />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
             <Route path="plans" element={<PlansPage />} />

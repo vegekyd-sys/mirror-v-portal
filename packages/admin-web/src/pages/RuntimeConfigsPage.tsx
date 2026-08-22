@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
+import { IconAlert, IconRefresh, IconSave } from '../components/icons';
 
 interface ConfigItem {
   key: string;
@@ -155,9 +156,14 @@ export default function RuntimeConfigsPage() {
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
       {!keyConfigured && (
-        <div className="msg msg-warn">
-          ⚠️ RUNTIME_CONFIG_KEY 未在服务端配置：可以查看列表，但无法保存新值，创建租户也会失败。
-          请先在 provisioning-service 设置主密钥。
+        <div className="msg msg-warn" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <span style={{ marginTop: 2 }}>
+            <IconAlert size={15} />
+          </span>
+          <span>
+            RUNTIME_CONFIG_KEY 未在服务端配置：可以查看列表，但无法保存新值，创建租户也会失败。
+            请先在 provisioning-service 设置主密钥。
+          </span>
         </div>
       )}
 
@@ -166,21 +172,21 @@ export default function RuntimeConfigsPage() {
           作用域：
         </label>
         <select value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option value="">🌐 全局默认</option>
+          <option value="">全局默认</option>
           {tenants.map((t) => (
             <option key={t.tenantId} value={t.tenantId}>
-              🏢 {t.companyName || t.tenantId}（{t.status}）
+              {t.companyName || t.tenantId}（{t.status}）
             </option>
           ))}
         </select>
         <button className="btn-secondary" onClick={() => void loadConfigs(scope)}>
-          🔄 刷新
+          <IconRefresh /> 刷新
         </button>
       </div>
 
       {/* ── 表单 ── */}
       <div className="form-card">
-        <div style={{ fontSize: 14, color: '#171c2e', fontWeight: 700, marginBottom: 10 }}>➕ 添加 / 更新配置</div>
+        <div style={{ fontSize: 14, color: '#171c2e', fontWeight: 700, marginBottom: 10 }}>添加 / 更新配置</div>
         {presets.length > 0 && (
           <div className="preset-row">
             {presets.map((p) => (
@@ -240,7 +246,7 @@ export default function RuntimeConfigsPage() {
         <div className="form-row">
           <label className="field-label" />
           <button className="btn-primary" onClick={() => void save()} disabled={saving}>
-            {saving ? '保存中…' : '💾 保存（当前作用域）'}
+            {saving ? '保存中…' : (<><IconSave /> 保存（当前作用域）</>)}
           </button>
         </div>
       </div>
@@ -283,10 +289,10 @@ export default function RuntimeConfigsPage() {
                 </td>
                 <td>
                   <button className="btn-secondary btn-sm" onClick={() => void editValue(i)}>
-                    ✏️ 改值
+                    改值
                   </button>{' '}
                   <button className="btn-danger btn-sm" onClick={() => void remove(i)}>
-                    🗑 删除
+                    删除
                   </button>
                 </td>
               </tr>
@@ -300,7 +306,7 @@ export default function RuntimeConfigsPage() {
       </div>
 
       <div className="section-title" style={{ fontSize: 14 }}>
-        📜 操作日志
+        操作日志
       </div>
       <div className="log-area">
         {opLogs.map((l, i) => (

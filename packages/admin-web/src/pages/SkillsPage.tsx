@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { fmtNum } from '../components/badges';
+import { IconRefresh, IconSearch } from '../components/icons';
 
 interface Skill {
   skillId: string;
@@ -129,16 +130,16 @@ export default function SkillsPage() {
 
       <div className="action-bar">
         <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
+          <IconRefresh /> 刷新
         </button>
         <button className="btn-primary" onClick={() => void sync()} disabled={busy}>
-          {busy ? '扫描中…' : '🔍 扫描 SKILL.md 注册新 Skill'}
+          {busy ? '扫描中…' : (<><IconSearch /> 扫描 SKILL.md 注册新 Skill</>)}
         </button>
       </div>
 
       {/* ── 待审核 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
-        🆕 待审核 Skill（新注册）{pending.length > 0 ? ` — ${pending.length} 个` : ''}
+        待审核 Skill（新注册）{pending.length > 0 ? ` — ${pending.length} 个` : ''}
       </div>
       {pending.length === 0 ? (
         <div className="empty">暂无待审核 Skill</div>
@@ -166,10 +167,10 @@ export default function SkillsPage() {
                 <td>{s.responsiblePerson || '-'}</td>
                 <td>
                   <button className="btn-primary btn-sm" onClick={() => void act(s, 'activate')}>
-                    ✅ 审核通过
+                    审核通过
                   </button>{' '}
                   <button className="btn-danger btn-sm" onClick={() => void act(s, 'reject')}>
-                    ❌ 拒绝
+                    拒绝
                   </button>
                 </td>
               </tr>
@@ -180,7 +181,7 @@ export default function SkillsPage() {
 
       {/* ── 全部 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
-        ✅ 全部 Skill — {skills.length} 个
+        全部 Skill — {skills.length} 个
       </div>
       {skills.length === 0 ? (
         <div className="empty">暂无已注册 Skill</div>
@@ -215,7 +216,7 @@ export default function SkillsPage() {
                 <td>
                   {s.activationStatus === 'approved' && s.status !== 'live' && (
                     <button className="btn-primary btn-sm" onClick={() => void act(s, 'launch')}>
-                      🚀 上线计费
+                      上线计费
                     </button>
                   )}{' '}
                   {s.activationStatus === 'rejected' && (
@@ -236,7 +237,7 @@ export default function SkillsPage() {
       )}
 
       <div className="section-title" style={{ fontSize: 14 }}>
-        📜 操作日志
+        操作日志
       </div>
       <div className="log-area">
         {opLogs.map((l, i) => (

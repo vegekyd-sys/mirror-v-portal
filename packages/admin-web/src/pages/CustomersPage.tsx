@@ -1,10 +1,18 @@
-// 客户与 Credits — migrated from the legacy prebuilt SPA (view: customers).
-// Data: credits-ledger GET /v1/admin/customers (+ plans for the create form).
-import { useCallback, useEffect, useMemo, useState } from 'react';
+// 客户与 Credits — 合并原「租户管理」后的客户统一视图。
+// 数据：credits-ledger GET /v1/admin/customers；租户状态与开通来自 provisioning-service
+// GET /v1/tenants；创建客户走 provisioning POST /v1/tenants（真实开通 K8s + 计费账户）。
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
+import type { Tenant } from '../lib/types';
 import { fmtNum } from '../components/badges';
 import Modal from '../components/Modal';
+import {
+  IconChevronDown,
+  IconPlus,
+  IconRefresh,
+  IconSearch,
+} from '../components/icons';
 
 interface Customer {
   accountId: string;
@@ -35,27 +43,43 @@ interface CustomerStats {
   closed?: number;
 }
 
-interface Plan {
-  planId: string;
-  planName: string;
-  tier?: string;
-  annualFeeYuan?: number;
-  initialCredit?: number;
-}
-
 const emptyCreate = {
-  tenantId: '',
   companyName: '',
-  contactName: '',
   contactEmail: '',
-  planId: '',
+  contactPhone: '',
+  planTier: 'starter',
+  quotaAgents: '1',
+  quotaCreditsMonthly: '1000000',
+  botAppId: '',
+  botAppSecret: '',
+};
+
+const dotTone = (status?: string | null): string => {
+  switch (status) {
+    case 'active':
+      return 'green';
+    case 'suspended':
+    case 'grace':
+    case 'low_credits':
+      return 'orange';
+    case 'pending':
+    case 'provisioning':
+      return 'blue';
+    case 'provisioning_failed':
+    case 'destroyed':
+      return 'red';
+    default:
+      return '';
+  }
 };
 
 export default function CustomersPage() {
   const navigate = useNavigate();
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [stats, setStats] = useState<CustomerStats>({});
-  const [plans, setPlans] = useState<Plan[]>([]);
+  const [tenants, setTenants] = useState<Record<string, Tenant>>({});
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState('');
@@ -83,13 +107,19 @@ export default function CustomersPage() {
     } catch (e) {
       setError(errMsg(e));
     }
+    api<{ tenants: Tenant[] }>('/v1/tenants')
+      .then((r) => {
+        const m: Record<string, Tenant> = {};
+        (r.tenants || []).forEach((t) => {
+          m[t.tenantId] = t;
+        });
+        setTenants(m);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     void load();
-    api<{ plans: Plan[] }>('/v1/admin/plans')
-      .then((r) => setPlans(r.plans || []))
-      .catch(() => {});
   }, [load]);
 
   const tiers = useMemo(
@@ -115,28 +145,36 @@ export default function CustomersPage() {
     });
   }, [customers, search, tierFilter, sortBy]);
 
+  const totalFrozen = useMemo(
+    () => customers.reduce((s, c) => s + (c.frozenCredits || 0), 0),
+    [customers],
+  );
+
   const createCustomer = async () => {
     const body = {
-      tenantId: createForm.tenantId.trim(),
-      companyName: createForm.companyName.trim() || undefined,
-      contactName: createForm.contactName.trim() || undefined,
-      contactEmail: createForm.contactEmail.trim() || undefined,
-      planId: createForm.planId,
+      companyName: createForm.companyName.trim(),
+      contactEmail: createForm.contactEmail.trim(),
+      contactPhone: createForm.contactPhone.trim(),
+      planTier: createForm.planTier,
+      quotaAgents: Number(createForm.quotaAgents) || 1,
+      quotaCreditsMonthly: Number(createForm.quotaCreditsMonthly) || 1000000,
+      botAppId: createForm.botAppId.trim(),
+      botAppSecret: createForm.botAppSecret.trim(),
     };
-    if (!body.tenantId || !body.planId) {
-      setCreateErr('租户 ID 与套餐为必填');
+    if (!window.confirm(`确认创建客户「${body.companyName || '未命名'}」？将立即开通 K8s 资源与计费账户。`))
       return;
-    }
     setCreating(true);
     setCreateErr('');
     try {
-      const r = await api<{ ok: boolean; accountId?: string; message?: string; error?: string }>(
-        '/v1/admin/customers',
+      const r = await api<{ tenant?: Tenant; provisioning?: { dryRun?: boolean } }>(
+        '/v1/tenants',
         { method: 'POST', body },
       );
-      if (r.ok === false) throw new Error(r.error || '创建失败');
       setShowCreate(false);
       setCreateForm({ ...emptyCreate });
+      window.alert(
+        `客户创建成功：${r.tenant?.tenantId || '-'}${r.provisioning?.dryRun ? '（dry-run 模式）' : ''}`,
+      );
       await load();
     } catch (e) {
       setCreateErr(errMsg(e));
@@ -162,7 +200,7 @@ export default function CustomersPage() {
       setTopupFor(null);
       setTopupAmount('100000');
       setTopupReason('');
-      window.alert(`充值成功，当前余额 ${fmtNum(r.balanceAfter)} credits`);
+      window.alert(`续费充值成功，当前余额 ${fmtNum(r.balanceAfter)} credits`);
       await load();
     } catch (e) {
       setTopupErr(errMsg(e));
@@ -173,8 +211,27 @@ export default function CustomersPage() {
 
   return (
     <>
-      <div className="section-title">客户与 Credits</div>
-      <div className="page-sub">掌握客户用量、客户健康度与续费机会</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">客户与 Credits</div>
+          <div className="page-sub">掌握客户用量、客户健康度与续费机会</div>
+        </div>
+        <div className="page-actions">
+          <button className="btn-secondary" onClick={() => void load()}>
+            <IconRefresh /> 刷新
+          </button>
+          <button className="btn-primary" onClick={() => setShowCreate(true)}>
+            <IconPlus /> 创建客户
+          </button>
+          <button
+            className="icon-btn"
+            title="搜索客户"
+            onClick={() => searchRef.current?.focus()}
+          >
+            <IconSearch />
+          </button>
+        </div>
+      </div>
 
       {error && <div className="msg msg-err">加载失败：{error}</div>}
 
@@ -183,7 +240,7 @@ export default function CustomersPage() {
           <span className="stat-icon">客</span>
           <div className="label">活跃客户</div>
           <div className="num">{stats.active ?? 0}</div>
-          <div className="stat-sub">客户账户总量 {stats.total ?? rows.length}</div>
+          <div className="stat-sub">共 {stats.total ?? customers.length} 个客户账户</div>
         </div>
         <div className="stat-card">
           <span className="stat-icon green">余</span>
@@ -199,164 +256,154 @@ export default function CustomersPage() {
         </div>
         <div className="stat-card">
           <span className="stat-icon blue">冻</span>
-          <div className="label">低余额预警</div>
-          <div className="num">{stats.lowBalance ?? 0}</div>
-          <div className="stat-sub">余额 &lt; 50,000 的客户</div>
+          <div className="label">冻结 / 预留</div>
+          <div className="num">{fmtNum(totalFrozen)}</div>
+          <div className="stat-sub">当前冻结中的 credits</div>
         </div>
       </div>
 
-      <div className="action-bar" style={{ marginTop: 20 }}>
-        <input
-          type="text"
-          placeholder="搜索公司 / 租户 ID"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ minWidth: 200 }}
-        />
-        <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
-          <option value="">全部套餐</option>
-          {tiers.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-        >
-          <option value="consumed">按消耗排序</option>
-          <option value="balance">按余额排序</option>
-          <option value="name">按名称排序</option>
-        </select>
-        <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
-        </button>
-        <button className="btn-primary" onClick={() => setShowCreate(true)}>
-          ➕ 新建客户账户
-        </button>
-        <span style={{ fontSize: 12, color: '#666' }}>{rows.length} 个客户</span>
-      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <div className="panel-title">客户账户</div>
+            <div className="panel-sub">数据采自 credits_accounts · 近实时</div>
+          </div>
+          <div className="panel-meta">{rows.length} 个结果</div>
+        </div>
 
-      {rows.length === 0 ? (
-        <div className="empty">暂无客户</div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>客户</th>
-              <th>套餐</th>
-              <th>余额 / 可用</th>
-              <th>已消耗（任务数）</th>
-              <th>冻结</th>
-              <th>消耗占比</th>
-              <th>状态</th>
-              <th style={{ width: 150 }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((c) => (
-              <tr
-                key={c.tenantId}
-                className="clickable"
-                onClick={() => navigate(`/customers/${encodeURIComponent(c.tenantId)}`)}
-              >
-                <td>
-                  <strong>{c.companyName || c.tenantId}</strong>
-                  <br />
-                  <span style={{ fontSize: 11, color: '#9aa0b4' }}>{c.tenantId}</span>
-                </td>
-                <td>
-                  <span className={`badge badge-plan-${c.planTier || 'starter'}`}>
-                    {c.planTier || '-'}
-                  </span>
-                </td>
-                <td className="mono">
-                  {fmtNum(c.balance)} / {fmtNum(c.availableBalance)}
-                </td>
-                <td className="mono">
-                  {fmtNum(c.lifetimeConsumed)}（{fmtNum(c.totalTasks)}）
-                </td>
-                <td className="mono">{fmtNum(c.frozenCredits)}</td>
-                <td>
-                  {(() => {
-                    const consumed = c.lifetimeConsumed || 0;
-                    const total = consumed + (c.balance || 0);
-                    const pct = total > 0 ? Math.round((consumed / total) * 100) : 0;
-                    return (
+        <div className="filter-row">
+          <div className="search-box">
+            <IconSearch />
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder="搜索公司名称…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
+            <option value="">全部套餐</option>
+            {tiers.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
+            <option value="consumed">消耗：从高到低</option>
+            <option value="balance">余额：从高到低</option>
+            <option value="name">名称：A–Z</option>
+          </select>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="empty">暂无客户</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>客户</th>
+                <th>套餐</th>
+                <th>余额</th>
+                <th>已消耗</th>
+                <th>冻结</th>
+                <th>消耗占比</th>
+                <th style={{ width: 110, textAlign: 'right' }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => {
+                const tStatus = tenants[c.tenantId]?.status ?? c.status;
+                const consumed = c.lifetimeConsumed || 0;
+                const total = consumed + (c.balance || 0);
+                const pct = total > 0 ? Math.round((consumed / total) * 100) : 0;
+                return (
+                  <tr
+                    key={c.tenantId}
+                    className="clickable"
+                    onClick={() => navigate(`/customers/${encodeURIComponent(c.tenantId)}`)}
+                  >
+                    <td>
+                      <div className="cell-main">
+                        <span className={`dot ${dotTone(tStatus)}`} />
+                        {c.companyName || c.tenantId}
+                      </div>
+                      <div className="cell-sub">{c.tenantId}</div>
+                    </td>
+                    <td>
+                      <span className={`badge badge-plan-${c.planTier || 'starter'}`}>
+                        {c.planTier || '-'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="cell-main">{fmtNum(c.balance)}</div>
+                      <div className="cell-sub">可用 {fmtNum(c.availableBalance)}</div>
+                    </td>
+                    <td>
+                      <div className="cell-main">{fmtNum(consumed)}</div>
+                      <div className="cell-sub">{fmtNum(c.totalTasks)} 次任务</div>
+                    </td>
+                    <td className="mono">
+                      {c.frozenCredits ? (
+                        <span className="frozen-num">{fmtNum(c.frozenCredits)}</span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td>
                       <span className="progress-wrap">
                         <span className="progress">
                           <i style={{ width: `${pct}%` }} />
                         </span>
                         <span className="progress-pct">{pct}%</span>
                       </span>
-                    );
-                  })()}
-                </td>
-                <td>
-                  <span
-                    className={`badge ${c.status === 'active' ? 'badge-active' : c.status === 'suspended' ? 'badge-failed' : 'badge-dead'}`}
-                  >
-                    {c.status || '-'}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    className="btn-secondary btn-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/customers/${encodeURIComponent(c.tenantId)}`);
-                    }}
-                  >
-                    详情
-                  </button>{' '}
-                  <button
-                    className="btn-soft btn-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setTopupFor(c);
-                      setTopupErr('');
-                    }}
-                  >
-                    续费
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      <div className="hint">
-        数据来源：credits-ledger <code>GET /v1/admin/customers</code>
-        。点击行查看消耗明细、调用日志与转账记录。
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        className="btn-soft btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTopupFor(c);
+                          setTopupErr('');
+                        }}
+                      >
+                        续费
+                      </button>{' '}
+                      <button
+                        className="icon-btn sm"
+                        title="查看详情"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/customers/${encodeURIComponent(c.tenantId)}`);
+                        }}
+                      >
+                        <IconChevronDown />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      {/* ── 新建客户 ── */}
-      <Modal title="新建客户账户" open={showCreate} onClose={() => setShowCreate(false)}>
+      <div className="hint">
+        点击行查看消耗明细、调用日志与租户开通状态；圆点代表租户生命周期状态
+        （绿 active · 橙 停用/宽限/欠费 · 蓝 开通中 · 红 失败/已销毁）。
+      </div>
+
+      {/* ── 创建客户（provisioning 开通） ── */}
+      <Modal title="创建客户" open={showCreate} onClose={() => setShowCreate(false)}>
         {createErr && <div className="msg msg-err">{createErr}</div>}
-        <div className="form-row">
-          <label className="field-label">租户 ID</label>
-          <input
-            type="text"
-            value={createForm.tenantId}
-            onChange={(e) => setCreateForm({ ...createForm, tenantId: e.target.value })}
-            placeholder="小写字母/数字/连字符，如 acme-corp"
-          />
-        </div>
         <div className="form-row">
           <label className="field-label">公司名称</label>
           <input
             type="text"
             value={createForm.companyName}
             onChange={(e) => setCreateForm({ ...createForm, companyName: e.target.value })}
-          />
-        </div>
-        <div className="form-row">
-          <label className="field-label">联系人</label>
-          <input
-            type="text"
-            value={createForm.contactName}
-            onChange={(e) => setCreateForm({ ...createForm, contactName: e.target.value })}
+            placeholder="如：示例科技有限公司（建议填写，可后补）"
           />
         </div>
         <div className="form-row">
@@ -365,30 +412,78 @@ export default function CustomersPage() {
             type="text"
             value={createForm.contactEmail}
             onChange={(e) => setCreateForm({ ...createForm, contactEmail: e.target.value })}
+            placeholder="可选，缺失时系统生成占位邮箱"
           />
         </div>
         <div className="form-row">
-          <label className="field-label">套餐</label>
+          <label className="field-label">联系电话</label>
+          <input
+            type="text"
+            value={createForm.contactPhone}
+            onChange={(e) => setCreateForm({ ...createForm, contactPhone: e.target.value })}
+            placeholder="可选"
+          />
+        </div>
+        <div className="form-row">
+          <label className="field-label">套餐档位</label>
           <select
-            value={createForm.planId}
-            onChange={(e) => setCreateForm({ ...createForm, planId: e.target.value })}
+            value={createForm.planTier}
+            onChange={(e) => setCreateForm({ ...createForm, planTier: e.target.value })}
           >
-            <option value="">选择套餐…</option>
-            {plans.map((p) => (
-              <option key={p.planId} value={p.planId}>
-                {p.planName} · ¥{fmtNum(p.annualFeeYuan)}/年 · 初始 {fmtNum(p.initialCredit)}{' '}
-                credits
-              </option>
-            ))}
+            <option value="starter">starter</option>
+            <option value="pro">pro</option>
+            <option value="enterprise">enterprise</option>
           </select>
+          <label className="field-label" style={{ minWidth: 70 }}>
+            Agent 配额
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            style={{ flex: 0, minWidth: 90 }}
+            value={createForm.quotaAgents}
+            onChange={(e) => setCreateForm({ ...createForm, quotaAgents: e.target.value })}
+          />
+        </div>
+        <div className="form-row">
+          <label className="field-label">月度积分额度</label>
+          <input
+            type="number"
+            min={0}
+            max={100000000}
+            style={{ flex: 0, minWidth: 160 }}
+            value={createForm.quotaCreditsMonthly}
+            onChange={(e) => setCreateForm({ ...createForm, quotaCreditsMonthly: e.target.value })}
+          />
+        </div>
+        <div className="form-row">
+          <label className="field-label">飞书 App ID</label>
+          <input
+            type="text"
+            className="mono"
+            value={createForm.botAppId}
+            onChange={(e) => setCreateForm({ ...createForm, botAppId: e.target.value })}
+            placeholder="cli_xxxx（可留空后补）"
+          />
+        </div>
+        <div className="form-row">
+          <label className="field-label">飞书 App Secret</label>
+          <input
+            type="text"
+            className="mono"
+            value={createForm.botAppSecret}
+            onChange={(e) => setCreateForm({ ...createForm, botAppSecret: e.target.value })}
+            placeholder="可留空后补"
+          />
         </div>
         <div className="hint">
-          创建账户 <code>acct_&lt;tenantId&gt;</code>
-          ，按套餐发放初始 Credits，订阅期一年。已存在的租户将重新激活。
+          创建即真实开通——写租户记录、建 credits 账户、在独立 namespace 中创建
+          Deployment/Secret/PVC。前置条件：运行时配置需先配好全局默认（如 DEEPSEEK_API_KEY）。
         </div>
         <div className="form-row" style={{ marginTop: 12 }}>
           <button className="btn-primary" onClick={() => void createCustomer()} disabled={creating}>
-            {creating ? '创建中…' : '创建'}
+            {creating ? '创建中…' : '创建并开通'}
           </button>
           <button className="btn-secondary" onClick={() => setShowCreate(false)}>
             取消
@@ -396,9 +491,9 @@ export default function CustomersPage() {
         </div>
       </Modal>
 
-      {/* ── 充值 ── */}
+      {/* ── 续费充值 ── */}
       <Modal
-        title={`充值 Credits — ${topupFor?.companyName || topupFor?.tenantId || ''}`}
+        title={`续费充值 — ${topupFor?.companyName || topupFor?.tenantId || ''}`}
         open={!!topupFor}
         onClose={() => setTopupFor(null)}
       >

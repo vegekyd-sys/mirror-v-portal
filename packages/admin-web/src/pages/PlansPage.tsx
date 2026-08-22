@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { fmtNum } from '../components/badges';
 import Modal from '../components/Modal';
+import { IconPlus, IconRefresh } from '../components/icons';
 
 interface Plan {
   planId: string;
@@ -133,10 +134,10 @@ export default function PlansPage() {
 
       <div className="action-bar">
         <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
+          <IconRefresh /> 刷新
         </button>
         <button className="btn-primary" onClick={openCreate}>
-          ➕ 新建套餐
+          <IconPlus /> 新建套餐
         </button>
         <span style={{ fontSize: 12, color: '#666' }}>{plans.length} 个套餐</span>
       </div>
@@ -146,14 +147,16 @@ export default function PlansPage() {
           <div className="plan-card" key={p.planId}>
             <span className="badge badge-plan-pro">{p.tier || '-'}</span>
             <h3>{p.planName}</h3>
-            <div className="plan-price">¥{fmtNum(p.annualFeeYuan)} / 年</div>
+            <div className="plan-price">
+              ¥{fmtNum(p.annualFeeYuan)} <span>/ 年</span>
+            </div>
             <ul className="plan-feats">
-              <li>✓ 初始 {fmtNum(p.initialCredit)} Credits</li>
+              <li>初始 {fmtNum(p.initialCredit)} Credits</li>
               <li>
-                ✓ {p.seatsMin ?? '-'}–{p.seatsMax ?? '-'} 个席位
+                {p.seatsMin ?? '-'}–{p.seatsMax ?? '-'} 个席位
               </li>
-              <li>✓ 续费 ¥{fmtNum(p.renewalPricePer100k)} / 10万</li>
-              <li>✓ {Math.round(((p.renewalDiscount ?? 1) || 1) * 100)}% 续费系数</li>
+              <li>续费 ¥{fmtNum(p.renewalPricePer100k)} / 10万</li>
+              <li>{Math.round(((p.renewalDiscount ?? 1) || 1) * 100)}% 续费系数</li>
             </ul>
             <div className="form-row">
               <button className="btn-secondary btn-sm" onClick={() => openEdit(p)}>

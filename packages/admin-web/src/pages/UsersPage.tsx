@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import Modal from '../components/Modal';
+import { IconCopy, IconPlus, IconRefresh } from '../components/icons';
 
 interface AdminUserRow {
   id: string;
@@ -124,10 +125,10 @@ export default function UsersPage() {
 
       <div className="action-bar">
         <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
+          <IconRefresh /> 刷新
         </button>
         <button className="btn-primary" onClick={() => setShowCreate(true)}>
-          ➕ 新建管理员
+          <IconPlus /> 新建管理员
         </button>
       </div>
 
@@ -240,7 +241,7 @@ export default function UsersPage() {
         />
         <div className="form-row" style={{ marginTop: 12 }}>
           <button className="btn-primary" onClick={copyToken}>
-            📋 复制口令
+            <IconCopy /> 复制口令
           </button>
           <button className="btn-secondary" onClick={() => setTokenReveal(null)}>
             我已保存，关闭

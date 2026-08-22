@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { fmtNum } from '../components/badges';
 import Modal from '../components/Modal';
+import { IconRefresh } from '../components/icons';
 
 interface SkillPrice {
   skillId: string;
@@ -202,7 +203,7 @@ export default function SkillPricesPage() {
 
       <div className="action-bar">
         <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
+          <IconRefresh /> 刷新
         </button>
         <span style={{ fontSize: 12, color: '#666' }}>{prices.length} 个 Skill</span>
       </div>

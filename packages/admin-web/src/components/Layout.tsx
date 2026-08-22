@@ -1,6 +1,7 @@
 // App shell: dark sidebar navigation + light content area (phase 3 redesign).
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { IconLogout } from './icons';
 
 interface NavItem {
   to: string;
@@ -15,7 +16,6 @@ const WORKBENCH: NavItem[] = [
   { to: '/pricing', icon: '价', label: 'Skill 定价' },
   { to: '/plans', icon: '套', label: '套餐模板' },
   { to: '/skills', icon: '技', label: 'Skill 管理' },
-  { to: '/tenants', icon: '租', label: '租户管理' },
 ];
 
 const SYSTEM: NavItem[] = [
@@ -77,7 +77,7 @@ export default function Layout() {
                 logout();
               }}
             >
-              退出登录 ↗
+              退出登录 <IconLogout size={12} />
             </a>
           </div>
         </div>

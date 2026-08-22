@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, errMsg } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { IconArrowRight, IconCheck } from '../components/icons';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -85,11 +86,13 @@ export default function LoginPage() {
             </div>
             <button type="submit" className="login-btn" disabled={busy || !passphrase.trim()}>
               <span>{busy ? '验证中…' : '安全登录'}</span>
-              <span>→</span>
+              <IconArrowRight size={16} />
             </button>
           </form>
           <div className="login-note">
-            <span className="tick">✓</span>
+            <span className="tick">
+              <IconCheck size={11} />
+            </span>
             <span>
               登录凭证（JWT）仅保存在当前浏览器，
               <br />

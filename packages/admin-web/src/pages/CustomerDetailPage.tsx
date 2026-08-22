@@ -1,9 +1,12 @@
 // 客户详情 — migrated from the legacy prebuilt SPA (view: detail).
 // Data: credits-ledger GET /v1/admin/customers/:tenantId.
+// 租户生命周期（状态/资料/销毁/状态日志）合并自原「租户管理」页。
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
-import { fmtNum, fmtTime } from '../components/badges';
+import { TENANT_STATUSES, type StatusLogEntry, type Tenant } from '../lib/types';
+import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
+import { IconArrowLeft, IconRefresh, IconTrash } from '../components/icons';
 
 interface AuditEntry {
   id?: string | number;
@@ -80,6 +83,92 @@ export default function CustomerDetailPage() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('events');
 
+  const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [statusLog, setStatusLog] = useState<StatusLogEntry[]>([]);
+  const [tenantErr, setTenantErr] = useState('');
+  const [dStatus, setDStatus] = useState('pending');
+  const [dReason, setDReason] = useState('');
+  const [dCompany, setDCompany] = useState('');
+  const [dEmail, setDEmail] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const flash = (text: string) => {
+    setMsg(text);
+    window.setTimeout(() => setMsg(''), 6000);
+  };
+
+  const loadTenant = useCallback(async () => {
+    try {
+      const r = await api<{ tenant: Tenant; statusLog: StatusLogEntry[] }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}`,
+      );
+      setTenant(r.tenant);
+      setStatusLog(r.statusLog || []);
+      setDStatus(r.tenant.status || 'pending');
+      setDCompany(r.tenant.companyName || '');
+      setDEmail(r.tenant.contactEmail || '');
+      setTenantErr('');
+    } catch (e) {
+      setTenant(null);
+      setTenantErr(errMsg(e));
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadTenant();
+  }, [loadTenant]);
+
+  const changeStatus = async () => {
+    const reason = dReason.trim() || '管理员手动变更';
+    if (!window.confirm(`确认将租户 ${tenantId} 状态改为 ${dStatus}？`)) return;
+    try {
+      const r = await api<{ fromStatus: string; toStatus: string }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/status`,
+        { method: 'PATCH', body: { status: dStatus, reason } },
+      );
+      flash(`状态已更新：${r.fromStatus} → ${r.toStatus}`);
+      setDReason('');
+      await loadTenant();
+    } catch (e) {
+      flash(`状态变更失败：${errMsg(e)}`);
+    }
+  };
+
+  const saveProfile = async () => {
+    const companyName = dCompany.trim();
+    const contactEmail = dEmail.trim();
+    if (!companyName && !contactEmail) {
+      flash('公司名称与邮箱至少填一项');
+      return;
+    }
+    try {
+      await api(`/v1/tenants/${encodeURIComponent(tenantId)}/profile`, {
+        method: 'PATCH',
+        body: { companyName, contactEmail },
+      });
+      flash('资料已更新');
+      await loadTenant();
+    } catch (e) {
+      flash(`资料更新失败：${errMsg(e)}`);
+    }
+  };
+
+  const destroyTenant = async () => {
+    if (
+      !window.confirm(
+        `确认销毁租户「${tenant?.companyName || tenantId}」？将删除其 namespace 内全部 K8s 资源（租户记录保留为 destroyed）。此操作不可逆。`,
+      )
+    )
+      return;
+    try {
+      await api(`/v1/tenants/${encodeURIComponent(tenantId)}`, { method: 'DELETE' });
+      flash(`租户已销毁：${tenantId}`);
+      await loadTenant();
+    } catch (e) {
+      flash(`销毁失败：${errMsg(e)}`);
+    }
+  };
+
   const load = useCallback(async () => {
     try {
       const r = await api<CustomerDetailData>(
@@ -118,12 +207,24 @@ export default function CustomerDetailPage() {
 
   return (
     <>
-      <div className="action-bar">
-        <Link to="/customers">← 返回客户列表</Link>
-        <button className="btn-secondary" onClick={() => void load()}>
-          🔄 刷新
-        </button>
+      <div className="page-head">
+        <Link to="/customers" className="link-back">
+          <IconArrowLeft /> 返回客户列表
+        </Link>
+        <div className="page-actions">
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              void load();
+              void loadTenant();
+            }}
+          >
+            <IconRefresh /> 刷新
+          </button>
+        </div>
       </div>
+
+      {msg && <div className="msg msg-ok">{msg}</div>}
 
       <div className="section-title">
         {data.companyName || data.tenantId}
@@ -224,6 +325,141 @@ export default function CustomerDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── 租户开通与状态 ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        租户开通与状态
+      </div>
+      {tenantErr ? (
+        <div className="hint">未加载到开通信息：{tenantErr}</div>
+      ) : !tenant ? (
+        <div className="empty">加载中...</div>
+      ) : (
+        <div className="panel">
+          <div className="panel-head">
+            <div>
+              <div className="panel-title">开通信息</div>
+              <div className="panel-sub">provisioning-service · {tenant.tenantId}</div>
+            </div>
+            <StatusBadge status={tenant.status} />
+          </div>
+          <div className="panel-body">
+            <div className="detail-grid">
+              <div className="detail-item">
+                <div className="k">公司名称</div>
+                <div className="v">{tenant.companyName || '-'}</div>
+              </div>
+              <div className="detail-item">
+                <div className="k">联系邮箱 / 电话</div>
+                <div className="v">
+                  {tenant.contactEmail || '-'} / {tenant.contactPhone || '-'}
+                </div>
+              </div>
+              <div className="detail-item">
+                <div className="k">套餐 / Agent 配额</div>
+                <div className="v">
+                  <PlanBadge plan={tenant.planTier} /> × {tenant.quotaAgents ?? '-'}
+                </div>
+              </div>
+              <div className="detail-item">
+                <div className="k">月度积分额度</div>
+                <div className="v">{fmtNum(tenant.quotaCreditsMonthly)}</div>
+              </div>
+              <div className="detail-item">
+                <div className="k">K8s Namespace</div>
+                <div className="v">{tenant.k8sNamespace || '-'}</div>
+              </div>
+              <div className="detail-item">
+                <div className="k">Credits 账户</div>
+                <div className="v">{tenant.creditsAccountId || '-'}</div>
+              </div>
+              <div className="detail-item">
+                <div className="k">创建时间</div>
+                <div className="v">{fmtTime(tenant.createdAt)}</div>
+              </div>
+              <div className="detail-item">
+                <div className="k">更新时间</div>
+                <div className="v">{fmtTime(tenant.updatedAt)}</div>
+              </div>
+            </div>
+
+            <div className="form-row">
+              <label className="field-label">变更状态</label>
+              <select value={dStatus} onChange={(e) => setDStatus(e.target.value)}>
+                {TENANT_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                style={{ flex: 1, minWidth: 180 }}
+                value={dReason}
+                onChange={(e) => setDReason(e.target.value)}
+                placeholder="变更原因（记入状态日志）"
+              />
+              <button className="btn-secondary" onClick={() => void changeStatus()}>
+                应用
+              </button>
+            </div>
+            <div className="form-row">
+              <label className="field-label">编辑资料</label>
+              <input
+                type="text"
+                style={{ flex: 1, minWidth: 160 }}
+                value={dCompany}
+                onChange={(e) => setDCompany(e.target.value)}
+                placeholder="公司名称"
+              />
+              <input
+                type="text"
+                style={{ flex: 1, minWidth: 160 }}
+                value={dEmail}
+                onChange={(e) => setDEmail(e.target.value)}
+                placeholder="联系邮箱"
+              />
+              <button className="btn-secondary" onClick={() => void saveProfile()}>
+                保存
+              </button>
+            </div>
+            <div className="form-row">
+              <label className="field-label" />
+              <button className="btn-danger" onClick={() => void destroyTenant()}>
+                <IconTrash /> 销毁租户
+              </button>
+            </div>
+
+            {statusLog.length > 0 && (
+              <>
+                <div style={{ fontSize: 13, color: '#171c2e', fontWeight: 600, margin: '14px 0 8px' }}>
+                  状态日志
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>变更</th>
+                      <th>原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statusLog.map((l, i) => (
+                      <tr key={i}>
+                        <td style={{ fontSize: 11, color: '#777' }}>{fmtTime(l.at)}</td>
+                        <td className="mono">
+                          {l.from ?? '∅'} → {l.to}
+                        </td>
+                        <td>{l.reason || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── 日志 tabs ── */}
       <div className="tabs" style={{ marginTop: 24 }}>
