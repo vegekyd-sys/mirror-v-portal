@@ -1,4 +1,4 @@
-import express, { type Request, type Response } from 'express';
+import express, { type Express, type Request, type Response } from 'express';
 import helmet from 'helmet';
 
 // Gateway headers injected by nexus-gateway
@@ -28,7 +28,7 @@ export function getMockConfig(): MockConfig {
   return { ...mockConfig };
 }
 
-export function createApp() {
+export function createApp(): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
