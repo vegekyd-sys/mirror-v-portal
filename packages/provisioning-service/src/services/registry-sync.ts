@@ -108,6 +108,66 @@ async function resolveRegistryAuth(
 }
 
 /**
+ * Parse a `WWW-Authenticate: Bearer realm="...",service="...",scope="..."`
+ * challenge into its parameters. Returns null when the header is not a
+ * Bearer challenge.
+ */
+export function parseBearerChallenge(header: string): Record<string, string> | null {
+  const m = /^Bearer\s+(.*)$/i.exec(header.trim());
+  if (!m) return null;
+  const params: Record<string, string> = {};
+  const pair = /(\w+)="([^"]*)"/g;
+  let hit: RegExpExecArray | null;
+  while ((hit = pair.exec(m[1])) !== null) params[hit[1]] = hit[2];
+  return Object.keys(params).length > 0 ? params : null;
+}
+
+/**
+ * GET the tags list honoring the Docker Registry token flow: when the
+ * registry answers 401 with a Bearer challenge (Aliyun ACR does), exchange
+ * the pull credentials for a scoped token at the realm endpoint and retry
+ * the request with it.
+ */
+async function fetchTagsListWithAuth(
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response>,
+  url: string,
+  authHeader: string | null,
+): Promise<Response> {
+  const basicHeaders: Record<string, string> = authHeader
+    ? { Authorization: `Basic ${authHeader}` }
+    : {};
+  const first = await fetchFn(url, {
+    headers: basicHeaders,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (first.status !== 401) return first;
+
+  const challenge = first.headers.get('www-authenticate');
+  if (!challenge) return first;
+  const params = parseBearerChallenge(challenge);
+  if (!params?.realm) return first;
+
+  const tokenUrl = new URL(params.realm);
+  if (params.service) tokenUrl.searchParams.set('service', params.service);
+  if (params.scope) tokenUrl.searchParams.set('scope', params.scope);
+  const tokenRes = await fetchFn(tokenUrl.toString(), {
+    headers: basicHeaders,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!tokenRes.ok) {
+    throw new Error(`auth realm returned HTTP ${tokenRes.status}`);
+  }
+  const tokenBody = (await tokenRes.json()) as { token?: string; access_token?: string };
+  const token = tokenBody.token ?? tokenBody.access_token;
+  if (!token) throw new Error('auth realm returned no token');
+
+  return fetchFn(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+}
+
+/**
  * Sync tags for all tenant-facing services from the container registry
  * into the image_releases table. See module doc for semantics.
  */
@@ -154,10 +214,7 @@ export async function syncImageReleases(
   for (const service of REGISTRY_SYNC_SERVICES) {
     const url = `https://${host}/v2/${repoPrefix}${service}/tags/list`;
     try {
-      const res = await fetchFn(url, {
-        headers: authHeader ? { Authorization: `Basic ${authHeader}` } : {},
-        signal: AbortSignal.timeout(20_000),
-      });
+      const res = await fetchTagsListWithAuth(fetchFn, url, authHeader);
       if (!res.ok) {
         results.push({
           service,

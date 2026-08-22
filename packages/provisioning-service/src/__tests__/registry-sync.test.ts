@@ -23,6 +23,7 @@ import {
   parseTagMeta,
   splitRegistryRef,
   basicAuthFromDockerConfig,
+  parseBearerChallenge,
 } from '../services/registry-sync.js';
 import { getSecret } from '../services/k8s-client.js';
 import type { ProvisioningConfig } from '../config.js';
@@ -192,5 +193,91 @@ describe('syncImageReleases', () => {
     const r = await syncImageReleases(pool, baseConfig, fetchImpl as any);
     expect(r.ok).toBe(true);
     expect(pool.inserted).toHaveLength(2);
+  });
+
+  it('exchanges credentials for a bearer token on 401 Bearer challenge (ACR flow)', async () => {
+    vi.mocked(getSecret).mockResolvedValue(dockerConfigSecret() as any);
+    const pool = makeFakePool();
+    const calls: Array<{ url: string; auth?: string }> = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, auth: (init?.headers as any)?.Authorization });
+      if (url.startsWith('https://auth.example.com/token')) {
+        // Realm exchange must carry the Basic credentials
+        expect((init?.headers as any)?.Authorization).toBe('Basic dXNlcjpwYXNz');
+        expect(url).toContain('service=registry.example.com');
+        expect(url).toContain(encodeURIComponent('repository:dealclaw-nexus/dealclaw-agent:pull'));
+        return new Response(JSON.stringify({ token: 'tok-123' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('dealclaw-agent')) {
+        const auth = (init?.headers as any)?.Authorization;
+        if (auth === 'Basic dXNlcjpwYXNz') {
+          return new Response('unauthorized', {
+            status: 401,
+            headers: {
+              'www-authenticate':
+                'Bearer realm="https://auth.example.com/token",service="registry.example.com",scope="repository:dealclaw-nexus/dealclaw-agent:pull"',
+            },
+          });
+        }
+        expect(auth).toBe('Bearer tok-123');
+        return tagsResponse(['master.a7bcda5b.42']);
+      }
+      // nexus-gateway: no challenge, direct 200
+      return tagsResponse(['master.e3d43339.7']);
+    });
+
+    const r = await syncImageReleases(pool, baseConfig, fetchImpl as any);
+
+    expect(r.ok).toBe(true);
+    expect(r.results[0]).toMatchObject({ service: 'dealclaw-agent', ok: true, discovered: 1, inserted: 1 });
+    expect(r.results[1]).toMatchObject({ service: 'nexus-gateway', ok: true, inserted: 1 });
+    // dealclaw-agent: basic 401 → realm → bearer retry
+    const agentCalls = calls.filter((c) => c.url.includes('/v2/dealclaw-nexus/dealclaw-agent/tags/list'));
+    expect(agentCalls.map((c) => c.auth)).toEqual(['Basic dXNlcjpwYXNz', 'Bearer tok-123']);
+  });
+
+  it('reports the realm error when the token exchange fails', async () => {
+    vi.mocked(getSecret).mockResolvedValue(dockerConfigSecret() as any);
+    const pool = makeFakePool();
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://auth.example.com/token')) {
+        return new Response('forbidden', { status: 403 });
+      }
+      return new Response('unauthorized', {
+        status: 401,
+        headers: {
+          'www-authenticate':
+            'Bearer realm="https://auth.example.com/token",service="registry.example.com",scope="repository:dealclaw-nexus/dealclaw-agent:pull"',
+        },
+      });
+    });
+
+    const r = await syncImageReleases(pool, baseConfig, fetchImpl as any);
+
+    expect(r.ok).toBe(false);
+    expect(r.results[0]).toMatchObject({ service: 'dealclaw-agent', ok: false, error: 'auth realm returned HTTP 403' });
+    expect(r.results[1]).toMatchObject({ service: 'nexus-gateway', ok: false, error: 'auth realm returned HTTP 403' });
+    expect(pool.inserted).toHaveLength(0);
+  });
+});
+
+describe('parseBearerChallenge', () => {
+  it('extracts realm, service and scope', () => {
+    expect(
+      parseBearerChallenge(
+        'Bearer realm="https://dockerauth-vpc.cn-hangzhou.aliyuncs.com/auth",service="registry.aliyuncs.com:cn-hangzhou:china:cri-x",scope="repository:dealclaw-nexus/dealclaw-agent:pull"',
+      ),
+    ).toEqual({
+      realm: 'https://dockerauth-vpc.cn-hangzhou.aliyuncs.com/auth',
+      service: 'registry.aliyuncs.com:cn-hangzhou:china:cri-x',
+      scope: 'repository:dealclaw-nexus/dealclaw-agent:pull',
+    });
+  });
+  it('returns null for non-bearer headers', () => {
+    expect(parseBearerChallenge('Basic realm="x"')).toBeNull();
+    expect(parseBearerChallenge('Bearer')).toBeNull();
   });
 });
