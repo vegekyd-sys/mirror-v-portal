@@ -180,7 +180,7 @@ export default function RuntimeConfigsPage() {
 
       {/* ── 表单 ── */}
       <div className="form-card">
-        <div style={{ fontSize: 14, color: '#fff', marginBottom: 10 }}>➕ 添加 / 更新配置</div>
+        <div style={{ fontSize: 14, color: '#171c2e', fontWeight: 700, marginBottom: 10 }}>➕ 添加 / 更新配置</div>
         {presets.length > 0 && (
           <div className="preset-row">
             {presets.map((p) => (
@@ -228,7 +228,7 @@ export default function RuntimeConfigsPage() {
         </div>
         <div className="form-row">
           <label className="field-label" />
-          <label style={{ fontSize: 13, color: '#ccc', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <label style={{ fontSize: 13, color: '#5b5f75', display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
               type="checkbox"
               checked={formSecret}

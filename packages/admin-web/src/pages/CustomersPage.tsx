@@ -174,25 +174,34 @@ export default function CustomersPage() {
   return (
     <>
       <div className="section-title">客户与 Credits</div>
+      <div className="page-sub">掌握客户用量、客户健康度与续费机会</div>
 
       {error && <div className="msg msg-err">加载失败：{error}</div>}
 
       <div className="stat-grid">
         <div className="stat-card">
-          <div className="num">{stats.active ?? 0}</div>
+          <span className="stat-icon">客</span>
           <div className="label">活跃客户</div>
+          <div className="num">{stats.active ?? 0}</div>
+          <div className="stat-sub">客户账户总量 {stats.total ?? rows.length}</div>
         </div>
         <div className="stat-card">
+          <span className="stat-icon green">余</span>
+          <div className="label">总余额</div>
           <div className="num">{fmtNum(stats.totalBalance)}</div>
-          <div className="label">总余额（credits）</div>
+          <div className="stat-sub">credits_accounts.balance</div>
         </div>
         <div className="stat-card">
-          <div className="num">{fmtNum(stats.totalConsumed)}</div>
+          <span className="stat-icon orange">耗</span>
           <div className="label">累计消耗</div>
+          <div className="num">{fmtNum(stats.totalConsumed)}</div>
+          <div className="stat-sub">lifetime_consumed</div>
         </div>
         <div className="stat-card">
+          <span className="stat-icon blue">冻</span>
+          <div className="label">低余额预警</div>
           <div className="num">{stats.lowBalance ?? 0}</div>
-          <div className="label">低余额预警（&lt;50,000）</div>
+          <div className="stat-sub">余额 &lt; 50,000 的客户</div>
         </div>
       </div>
 
@@ -240,6 +249,7 @@ export default function CustomersPage() {
               <th>余额 / 可用</th>
               <th>已消耗（任务数）</th>
               <th>冻结</th>
+              <th>消耗占比</th>
               <th>状态</th>
               <th style={{ width: 150 }}>操作</th>
             </tr>
@@ -252,12 +262,14 @@ export default function CustomersPage() {
                 onClick={() => navigate(`/customers/${encodeURIComponent(c.tenantId)}`)}
               >
                 <td>
-                  {c.companyName || c.tenantId}
+                  <strong>{c.companyName || c.tenantId}</strong>
                   <br />
-                  <span style={{ fontSize: 11, color: '#777' }}>{c.tenantId}</span>
+                  <span style={{ fontSize: 11, color: '#9aa0b4' }}>{c.tenantId}</span>
                 </td>
                 <td>
-                  <span className="badge badge-plan-starter">{c.planTier || '-'}</span>
+                  <span className={`badge badge-plan-${c.planTier || 'starter'}`}>
+                    {c.planTier || '-'}
+                  </span>
                 </td>
                 <td className="mono">
                   {fmtNum(c.balance)} / {fmtNum(c.availableBalance)}
@@ -266,6 +278,21 @@ export default function CustomersPage() {
                   {fmtNum(c.lifetimeConsumed)}（{fmtNum(c.totalTasks)}）
                 </td>
                 <td className="mono">{fmtNum(c.frozenCredits)}</td>
+                <td>
+                  {(() => {
+                    const consumed = c.lifetimeConsumed || 0;
+                    const total = consumed + (c.balance || 0);
+                    const pct = total > 0 ? Math.round((consumed / total) * 100) : 0;
+                    return (
+                      <span className="progress-wrap">
+                        <span className="progress">
+                          <i style={{ width: `${pct}%` }} />
+                        </span>
+                        <span className="progress-pct">{pct}%</span>
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td>
                   <span
                     className={`badge ${c.status === 'active' ? 'badge-active' : c.status === 'suspended' ? 'badge-failed' : 'badge-dead'}`}
@@ -284,14 +311,14 @@ export default function CustomersPage() {
                     详情
                   </button>{' '}
                   <button
-                    className="btn-primary btn-sm"
+                    className="btn-soft btn-sm"
                     onClick={(e) => {
                       e.stopPropagation();
                       setTopupFor(c);
                       setTopupErr('');
                     }}
                   >
-                    充值
+                    续费
                   </button>
                 </td>
               </tr>

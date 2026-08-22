@@ -190,7 +190,7 @@ export default function CustomerDetailPage() {
       {/* ── 拆分 ── */}
       <div className="detail-grid" style={{ marginTop: 20 }}>
         <div className="form-card" style={{ marginBottom: 0 }}>
-          <div style={{ fontSize: 13, color: '#fff', marginBottom: 8 }}>
+          <div style={{ fontSize: 13, color: '#171c2e', fontWeight: 600, marginBottom: 8 }}>
             已结算消耗：{fmtNum(data.liveConsumed)} credits
           </div>
           {breakdown(data.skillBreakdown).length === 0 ? (
@@ -207,7 +207,7 @@ export default function CustomerDetailPage() {
           )}
         </div>
         <div className="form-card" style={{ marginBottom: 0 }}>
-          <div style={{ fontSize: 13, color: '#fff', marginBottom: 8 }}>
+          <div style={{ fontSize: 13, color: '#171c2e', fontWeight: 600, marginBottom: 8 }}>
             内测消耗（不扣费）：{fmtNum(data.shadowConsumed)} credits
           </div>
           {breakdown(data.shadowBreakdown).length === 0 ? (

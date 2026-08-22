@@ -1,43 +1,92 @@
-// App shell: top header with navigation. All pages live in this SPA since
-// phase 3 retired the legacy admin-dashboard.
+// App shell: dark sidebar navigation + light content area (phase 3 redesign).
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+
+interface NavItem {
+  to: string;
+  icon: string;
+  label: string;
+  end?: boolean;
+}
+
+const WORKBENCH: NavItem[] = [
+  { to: '/', icon: '概', label: '概览', end: true },
+  { to: '/customers', icon: '客', label: '客户与 Credits' },
+  { to: '/pricing', icon: '价', label: 'Skill 定价' },
+  { to: '/plans', icon: '套', label: '套餐模板' },
+  { to: '/skills', icon: '技', label: 'Skill 管理' },
+  { to: '/tenants', icon: '租', label: '租户管理' },
+];
+
+const SYSTEM: NavItem[] = [
+  { to: '/runtime-configs', icon: '配', label: '运行时配置' },
+  { to: '/users', icon: '户', label: '用户管理' },
+];
+
+function SideNav({ items }: { items: NavItem[] }) {
+  return (
+    <>
+      {items.map((it) => (
+        <NavLink
+          key={it.to}
+          to={it.to}
+          end={it.end}
+          className={({ isActive }) => `side-item ${isActive ? 'active' : ''}`}
+        >
+          <span className="side-icon">{it.icon}</span>
+          <span className="nav-label">{it.label}</span>
+        </NavLink>
+      ))}
+    </>
+  );
+}
 
 export default function Layout() {
   const { user, logout } = useAuth();
 
   return (
-    <>
-      <header className="header">
-        <h1>🏢 DealClaw Admin</h1>
-        <nav>
-          <NavLink to="/" end>
-            概览
-          </NavLink>
-          <NavLink to="/tenants">租户管理</NavLink>
-          <NavLink to="/customers">客户与 Credits</NavLink>
-          <NavLink to="/plans">套餐模板</NavLink>
-          <NavLink to="/pricing">Skill 定价</NavLink>
-          <NavLink to="/skills">Skill 管理</NavLink>
-          <NavLink to="/runtime-configs">运行时配置</NavLink>
-          <NavLink to="/users">用户管理</NavLink>
-        </nav>
-        <div className="header-right">
-          <span className="user">{user?.displayName || user?.username || 'Admin'}</span>
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              logout();
-            }}
-          >
-            退出
-          </a>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="side-logo">
+          <div className="logo-mark">元</div>
+          <div>
+            <div className="brand">小元</div>
+            <div className="brand-sub">管理后台</div>
+          </div>
         </div>
-      </header>
-      <main className="container">
-        <Outlet />
+        <nav className="side-nav">
+          <div className="side-section">工 作 台</div>
+          <SideNav items={WORKBENCH} />
+          <div className="side-section">系 统</div>
+          <SideNav items={SYSTEM} />
+        </nav>
+        <div className="side-foot">
+          <div className="side-status">
+            <span className="status-dot" />
+            <div>
+              服务运行正常
+              <div className="sub">前端静态托管 · API 实时同步</div>
+            </div>
+          </div>
+          <div className="side-user">
+            <span className="user">{user?.displayName || user?.username || 'Admin'}</span>
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                logout();
+              }}
+            >
+              退出登录 ↗
+            </a>
+          </div>
+        </div>
+      </aside>
+      <main className="main">
+        <div className="container">
+          <Outlet />
+        </div>
       </main>
-    </>
+    </div>
   );
 }
