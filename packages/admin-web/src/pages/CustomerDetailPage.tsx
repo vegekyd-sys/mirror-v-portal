@@ -6,7 +6,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
-import { IconArrowLeft, IconBox, IconRefresh, IconTrash } from '../components/icons';
+import { IconArrowLeft, IconBox, IconChat, IconRefresh, IconTrash } from '../components/icons';
 
 interface AuditEntry {
   id?: string | number;
@@ -166,6 +166,86 @@ export default function CustomerDetailPage() {
       await loadTenant();
     } catch (e) {
       flash(`销毁失败：${errMsg(e)}`);
+    }
+  };
+
+  // ── 飞书绑定 ──
+  interface FeishuBinding {
+    tenantId: string;
+    bound: boolean;
+    appId: string | null;
+    platform: string;
+    imOpenId: string | null;
+  }
+
+  const [fsBinding, setFsBinding] = useState<FeishuBinding | null>(null);
+  const [fsAppId, setFsAppId] = useState('');
+  const [fsAppSecret, setFsAppSecret] = useState('');
+  const [fsBusy, setFsBusy] = useState(false);
+
+  const loadBinding = useCallback(async () => {
+    try {
+      const r = await api<{ binding: FeishuBinding }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/feishu-binding`,
+      );
+      setFsBinding(r.binding);
+    } catch {
+      setFsBinding(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadBinding();
+  }, [loadBinding]);
+
+  const bindFeishu = async () => {
+    const appId = fsAppId.trim();
+    const appSecret = fsAppSecret.trim();
+    if (!/^cli_[a-zA-Z0-9]{4,64}$/.test(appId)) {
+      flash('App ID 格式不正确（应以 cli_ 开头）');
+      return;
+    }
+    if (!appSecret || appSecret.length < 8) {
+      flash('请填写完整的 App Secret');
+      return;
+    }
+    setFsBusy(true);
+    try {
+      const r = await api<{ message?: string }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/feishu-binding`,
+        { method: 'PUT', body: { appId, appSecret } },
+      );
+      flash(r.message || `已绑定 ${appId}`);
+      setFsAppSecret('');
+      await loadBinding();
+      await loadTenant();
+    } catch (e) {
+      flash(`绑定失败：${errMsg(e)}`);
+    } finally {
+      setFsBusy(false);
+    }
+  };
+
+  const unbindFeishu = async () => {
+    if (
+      !window.confirm(
+        `确认解绑租户「${tenant?.companyName || tenantId}」的飞书应用 ${fsBinding?.appId || ''}？\n解绑后该租户无法通过飞书聊天（网页对话不受影响），网关将被删除。`,
+      )
+    )
+      return;
+    setFsBusy(true);
+    try {
+      const r = await api<{ message?: string }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/feishu-binding`,
+        { method: 'DELETE' },
+      );
+      flash(r.message || '已解绑');
+      await loadBinding();
+      await loadTenant();
+    } catch (e) {
+      flash(`解绑失败：${errMsg(e)}`);
+    } finally {
+      setFsBusy(false);
     }
   };
 
@@ -501,6 +581,65 @@ export default function CustomerDetailPage() {
           </div>
         </div>
       )}
+
+      {/* ── 飞书绑定 ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        飞书绑定
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="form-row" style={{ marginBottom: 10 }}>
+            <label className="field-label">当前状态</label>
+            {fsBinding === null ? (
+              <span className="hint" style={{ margin: 0 }}>加载中…</span>
+            ) : fsBinding.bound ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-active">已绑定</span>
+                <span className="mono" style={{ fontSize: 12 }}>{fsBinding.appId}</span>
+                {fsBinding.imOpenId && (
+                  <span className="hint" style={{ margin: 0 }}>
+                    通知联系人 open_id：{fsBinding.imOpenId.slice(0, 12)}…
+                  </span>
+                )}
+                <button
+                  className="btn-danger"
+                  disabled={fsBusy}
+                  onClick={() => void unbindFeishu()}
+                >
+                  解绑
+                </button>
+              </span>
+            ) : (
+              <span className="badge badge-pending">未绑定（仅网页对话）</span>
+            )}
+          </div>
+          <div className="form-row">
+            <label className="field-label">App ID</label>
+            <input
+              type="text"
+              className="mono"
+              style={{ flex: '0 1 260px' }}
+              value={fsAppId}
+              onChange={(e) => setFsAppId(e.target.value)}
+              placeholder="cli_xxxxxxxxxxxxxxxx"
+            />
+            <input
+              type="password"
+              style={{ flex: 1, minWidth: 180 }}
+              value={fsAppSecret}
+              onChange={(e) => setFsAppSecret(e.target.value)}
+              placeholder="App Secret（仅提交时传输）"
+            />
+            <button className="btn-primary" disabled={fsBusy} onClick={() => void bindFeishu()}>
+              <IconChat /> {fsBusy ? '处理中…' : fsBinding?.bound ? '更换绑定' : '绑定'}
+            </button>
+          </div>
+          <div className="hint">
+            绑定后该租户的智能体即可在飞书中对话：网关通过长连接接入飞书，无需公网回调。要求应用已启用「机器人」能力并开启「长连接」接收模式。
+            绑定时会先向飞书校验凭据，校验通过才生效；同一应用同时只能绑定一个租户。
+          </div>
+        </div>
+      </div>
 
       {/* ── 运行镜像更新 ── */}
       <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>

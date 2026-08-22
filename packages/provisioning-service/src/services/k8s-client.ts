@@ -256,6 +256,43 @@ export async function createSecret(namespace: string, name: string, data: Record
   console.log(`[k8s] secret created: ${namespace}/${name}`);
 }
 
+/**
+ * Create or replace a secret with raw string values (upsert). Unlike
+ * createSecret (which tolerates 409 and keeps the OLD content), this makes
+ * the secret's content match `data` exactly — used by the Feishu binding
+ * flow to rotate DEALCLAW_APP_ID/DEALCLAW_APP_SECRET.
+ */
+export async function putSecret(namespace: string, name: string, data: Record<string, string>): Promise<void> {
+  // PUT requires the current resourceVersion, so GET it first.
+  const getRes = await k8sRequest('GET', `/api/v1/namespaces/${namespace}/secrets/${name}`);
+  if (getRes.ok) {
+    const resourceVersion = (getRes.body as any)?.metadata?.resourceVersion;
+    const res = await k8sRequest('PUT', `/api/v1/namespaces/${namespace}/secrets/${name}`, {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name, namespace, resourceVersion },
+      type: 'Opaque',
+      stringData: data,
+    });
+    if (!res.ok) throw new Error(`putSecret ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+    console.log(`[k8s] secret replaced: ${namespace}/${name}`);
+    return;
+  }
+  if (getRes.status !== 404) {
+    throw new Error(`putSecret: getSecret ${namespace}/${name} failed: ${getRes.status}`);
+  }
+  // Not found — create it.
+  const res = await k8sRequest('POST', `/api/v1/namespaces/${namespace}/secrets`, {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: { name, namespace },
+    type: 'Opaque',
+    stringData: data,
+  });
+  if (!res.ok) throw new Error(`putSecret ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  console.log(`[k8s] secret created: ${namespace}/${name}`);
+}
+
 // ── Deployment ──
 
 export interface DeploymentSpec {
@@ -410,6 +447,42 @@ export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
     throw new Error(`scaleDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
   console.log(`[k8s] deployment scaled: ${spec.namespace}/${spec.name} -> ${spec.replicas}`);
+}
+
+// ── Deployment Restart (rollout) ──
+
+/**
+ * Trigger a rolling restart by patching an annotation on the pod template.
+ * Used after rotating secret content (e.g. new Feishu app credentials) so the
+ * gateway Pod re-reads envFrom secrets. 404 is tolerated — callers may invoke
+ * this right after createDeployment, where the ordering is not guaranteed.
+ */
+export async function restartDeployment(namespace: string, name: string): Promise<boolean> {
+  const body = {
+    spec: {
+      template: {
+        metadata: {
+          annotations: {
+            'dealclaw.io/restarted-at': new Date().toISOString(),
+          },
+        },
+      },
+    },
+  };
+
+  const res = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
+    body,
+    'application/strategic-merge-patch+json',
+  );
+
+  if (!res.ok) {
+    if (res.status === 404) return false;
+    throw new Error(`restartDeployment ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment restarted: ${namespace}/${name}`);
+  return true;
 }
 
 // ── Service ──

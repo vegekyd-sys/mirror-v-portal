@@ -5,6 +5,12 @@ import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData
 import { resolveTenantConfig } from '../services/runtime-config.js';
 import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
+import {
+  FeishuBindingError,
+  getTenantFeishuBinding,
+  bindTenantFeishuApp,
+  unbindTenantFeishuApp,
+} from '../services/feishu-binding.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -682,6 +688,67 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const e = err as any;
       console.error('Batch deployment update failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Batch update failed' });
+    }
+  });
+
+  // ── Feishu app binding ──
+  // GET /v1/tenants/:id/feishu-binding — current binding state
+  router.get('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
+    try {
+      const binding = await getTenantFeishuBinding(pool, req.params.id);
+      if (!binding) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      res.json({ ok: true, binding });
+    } catch (err: unknown) {
+      console.error('Get feishu binding failed:', err);
+      res.status(500).json({ code: 'INTERNAL', message: 'Failed to get binding' });
+    }
+  });
+
+  // PUT /v1/tenants/:id/feishu-binding — bind / rotate the Feishu app for
+  // this tenant's agent. Verifies the credentials against the Feishu open
+  // API first, then updates DB + K8s secret and (re)deploys nexus-gateway.
+  router.put('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
+    try {
+      const { appId, appSecret } = req.body ?? {};
+      if (!appId || typeof appId !== 'string' || !appSecret || typeof appSecret !== 'string') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'appId and appSecret are required' });
+        return;
+      }
+      const result = await bindTenantFeishuApp(pool, config, req.params.id, { appId, appSecret });
+      res.json({
+        ...result,
+        message: result.restarted
+          ? `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 已滚动重启（约 10–30 秒生效）`
+          : `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 部署于 ${result.gatewayNamespace}（约 10–30 秒生效）`,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      if (e instanceof FeishuBindingError) {
+        res.status(e.status).json({ code: e.code, message: e.message });
+        return;
+      }
+      console.error('Bind feishu app failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || '绑定失败' });
+    }
+  });
+
+  // DELETE /v1/tenants/:id/feishu-binding — unbind: gateway is removed,
+  // credentials cleared; the agent keeps serving web chat.
+  router.delete('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
+    try {
+      const result = await unbindTenantFeishuApp(pool, config, req.params.id);
+      res.json({ ...result, message: `已解绑并移除网关 ${result.removedGateway}` });
+    } catch (err: unknown) {
+      const e = err as any;
+      if (e instanceof FeishuBindingError) {
+        res.status(e.status).json({ code: e.code, message: e.message });
+        return;
+      }
+      console.error('Unbind feishu app failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || '解绑失败' });
     }
   });
 
