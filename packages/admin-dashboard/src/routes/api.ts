@@ -514,4 +514,66 @@ router.delete('/admin/runtime-configs/:key', async (req, res) => {
   } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
 });
 
+// ── Tenant Management (proxy to provisioning-service) ──
+
+router.get('/admin/tenants', async (_req, res) => {
+  try {
+    const result = await proxyToProvisioning('/v1/tenants');
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+// Create tenant — allowlist known fields only (no dryRun passthrough).
+router.post('/admin/tenants', async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const body: Record<string, unknown> = {};
+    for (const k of ['companyName', 'contactEmail', 'contactPhone', 'planTier',
+      'quotaAgents', 'quotaCreditsMonthly', 'botAppId', 'botAppSecret'] as const) {
+      if (b[k] !== undefined && b[k] !== '') body[k] = b[k];
+    }
+    const result = await proxyToProvisioning('/v1/tenants', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.get('/admin/tenants/:tenantId', async (req, res) => {
+  try {
+    const result = await proxyToProvisioning(`/v1/tenants/${encodeURIComponent(req.params.tenantId)}`);
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.delete('/admin/tenants/:tenantId', async (req, res) => {
+  try {
+    const result = await proxyToProvisioning(`/v1/tenants/${encodeURIComponent(req.params.tenantId)}`, {
+      method: 'DELETE',
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.patch('/admin/tenants/:tenantId/status', async (req, res) => {
+  try {
+    const result = await proxyToProvisioning(`/v1/tenants/${encodeURIComponent(req.params.tenantId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
+router.patch('/admin/tenants/:tenantId/profile', async (req, res) => {
+  try {
+    const result = await proxyToProvisioning(`/v1/tenants/${encodeURIComponent(req.params.tenantId)}/profile`, {
+      method: 'PATCH',
+      body: JSON.stringify(req.body),
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) { res.status(502).json({ code: 'UPSTREAM_UNAVAILABLE' }); }
+});
+
 export default router;

@@ -41,14 +41,23 @@ export function createApp(dbUrl?: string) {
   });
 
   // ── Protected HTML pages ──
-  app.get('/admin/skills', requireAdmin, (_req, res) => {
+  // NOTE: the /admin prefix stripping middleware above rewrites /admin/* to /*
+  // before routing, so these pages must be registered at their stripped paths.
+  // Browsers still link to /admin/skills etc.; both prefixed and stripped
+  // requests end up here.
+  app.get('/skills', requireAdmin, (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.sendFile(join(__dirname, '..', 'public', 'admin-skills.html'));
   });
 
-  app.get('/admin/runtime-configs', requireAdmin, (_req, res) => {
+  app.get('/runtime-configs', requireAdmin, (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.sendFile(join(__dirname, '..', 'public', 'admin-runtime-configs.html'));
+  });
+
+  app.get('/tenants', requireAdmin, (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(join(__dirname, '..', 'public', 'admin-tenants.html'));
   });
 
   // ── Protected API routes (auth bypass for login + public endpoints) ──

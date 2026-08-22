@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>租户管理 — DealClaw Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f1a; color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .header {
+      background: #1a1a2e; border-bottom: 1px solid #2a2a4a;
+      padding: 16px 24px; display: flex; align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 18px; color: #fff; }
+    .header .user { font-size: 13px; color: #888; }
+    .header a { color: #6366f1; text-decoration: none; font-size: 13px; margin-left: 16px; }
+    .header a:hover { color: #818cf8; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .section-title { font-size: 16px; color: #fff; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #2a2a4a; }
+    .action-bar { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+    button {
+      padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
+      border: none; font-weight: 600; transition: background 0.2s;
+    }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover { background: #5558e6; }
+    .btn-primary:disabled { background: #444; cursor: not-allowed; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-secondary { background: #374151; color: #ccc; }
+    .btn-secondary:hover { background: #4b5563; }
+    select, input, textarea {
+      background: #0f0f1a; border: 1px solid #333; color: #fff;
+      padding: 8px 10px; border-radius: 6px; font-size: 13px;
+    }
+    select:focus, input:focus, textarea:focus { border-color: #6366f1; outline: none; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a4a; }
+    th { color: #888; font-weight: 600; white-space: nowrap; }
+    td { color: #ccc; }
+    td.mono { font-family: monospace; font-size: 12px; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #1a1a2e; }
+    tr.selected { background: #1e1b4b; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge-active { background: #065f46; color: #6ee7b7; }
+    .badge-pending, .badge-provisioning { background: #1e3a5f; color: #93c5fd; }
+    .badge-failed { background: #7f1d1d; color: #fca5a5; }
+    .badge-warn { background: #78350f; color: #fde68a; }
+    .badge-dead { background: #1f2937; color: #9ca3af; }
+    .badge-plan-starter { background: #1f2937; color: #9ca3af; }
+    .badge-plan-pro { background: #312e81; color: #a5b4fc; }
+    .badge-plan-enterprise { background: #422006; color: #fcd34d; }
+    .msg { font-size: 13px; padding: 10px; border-radius: 6px; margin-bottom: 12px; display: none; }
+    .msg-ok { background: #065f46; color: #6ee7b7; border: 1px solid #059669; display: block; }
+    .msg-err { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; display: block; }
+    .msg-warn { background: #78350f; color: #fde68a; border: 1px solid #d97706; display: block; }
+    .empty { color: #666; font-size: 13px; padding: 20px 0; }
+    .hint { color: #666; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+    .form-card {
+      background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px;
+      padding: 16px; margin-bottom: 20px;
+    }
+    .form-row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+    .form-row label { font-size: 12px; color: #888; min-width: 90px; }
+    .form-row input[type="text"], .form-row input[type="number"] { flex: 1; min-width: 220px; }
+    .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 20px; margin-bottom: 16px; }
+    .detail-item { font-size: 13px; }
+    .detail-item .k { color: #888; font-size: 12px; }
+    .detail-item .v { color: #e0e0e0; font-family: monospace; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🏢 DealClaw Admin — 租户管理</h1>
+    <div>
+      <span class="user" id="user-display">加载中...</span>
+      <a href="/">← 管理后台首页</a>
+      <a href="/admin/runtime-configs">运行时配置</a>
+      <a href="/admin/skills">Skill 管理</a>
+      <a href="#" id="logout-link">退出</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="msg" class="msg"></div>
+
+    <div class="action-bar">
+      <label style="font-size:13px;color:#888">状态筛选：</label>
+      <select id="status-filter" onchange="renderList()">
+        <option value="">全部</option>
+        <option value="pending">pending</option>
+        <option value="provisioning">provisioning</option>
+        <option value="active">active</option>
+        <option value="provisioning_failed">provisioning_failed</option>
+        <option value="suspended">suspended</option>
+        <option value="low_credits">low_credits</option>
+        <option value="grace">grace</option>
+        <option value="destroyed">destroyed</option>
+      </select>
+      <button class="btn-secondary" onclick="loadList()">🔄 刷新</button>
+      <button class="btn-primary" id="btn-toggle-create" onclick="toggleCreate()">➕ 新建租户</button>
+      <span id="list-count" style="font-size:12px;color:#666"></span>
+    </div>
+
+    <!-- ── 创建租户 ── -->
+    <div class="form-card" id="create-card" style="display:none">
+      <div class="section-title" style="margin-top:0">➕ 新建租户</div>
+      <div class="form-row">
+        <label>公司名称</label>
+        <input type="text" id="c-company" placeholder="如：示例科技有限公司（建议填写，可后补）">
+      </div>
+      <div class="form-row">
+        <label>联系邮箱</label>
+        <input type="text" id="c-email" placeholder="可选，缺失时系统生成占位邮箱">
+      </div>
+      <div class="form-row">
+        <label>联系电话</label>
+        <input type="text" id="c-phone" placeholder="可选">
+      </div>
+      <div class="form-row">
+        <label>套餐档位</label>
+        <select id="c-plan">
+          <option value="starter">starter</option>
+          <option value="pro">pro</option>
+          <option value="enterprise">enterprise</option>
+        </select>
+        <label style="min-width:70px">Agent 配额</label>
+        <input type="number" id="c-agents" value="1" min="1" max="100" style="flex:0;min-width:90px">
+      </div>
+      <div class="form-row">
+        <label>月度积分额度</label>
+        <input type="number" id="c-credits" value="1000000" min="0" max="100000000" style="flex:0;min-width:160px">
+        <span style="font-size:12px;color:#666">（初始余额按套餐模板发放，此处仅为配额上限）</span>
+      </div>
+      <div class="form-row">
+        <label>飞书 App ID</label>
+        <input type="text" id="c-appid" placeholder="cli_xxxx（租户自建应用，可留空后补）" style="font-family:monospace">
+      </div>
+      <div class="form-row">
+        <label>飞书 App Secret</label>
+        <input type="text" id="c-appsecret" placeholder="可留空后补（PUT credentials）" style="font-family:monospace">
+      </div>
+      <div class="form-row">
+        <label></label>
+        <button class="btn-primary" id="btn-create" onclick="createTenant()">🚀 创建并开通（Provision K8s）</button>
+        <button class="btn-secondary" onclick="toggleCreate()">取消</button>
+      </div>
+      <div class="hint">
+        说明：创建即真实开通——写租户记录、建 credits 账户、在独立 namespace 中创建
+        Deployment/Secret/PVC。<b>前置条件</b>：运行时配置页必须先配好全局默认
+        （如 DEEPSEEK_API_KEY），否则开通失败（状态停在 provisioning_failed，无自动重试）。
+        飞书凭据留空时机器人无法连接飞书，可之后在详情页外通过 PUT credentials 补齐。
+      </div>
+    </div>
+
+    <!-- ── 详情 ── -->
+    <div id="detail-card" style="display:none">
+      <div class="section-title">📋 租户详情 — <span id="detail-id" class="mono"></span></div>
+      <div class="form-card">
+        <div id="detail-body"><span class="empty">加载中...</span></div>
+        <div class="form-row" style="margin-top:14px">
+          <label>变更状态</label>
+          <select id="d-status">
+            <option value="pending">pending</option>
+            <option value="provisioning">provisioning</option>
+            <option value="active">active</option>
+            <option value="provisioning_failed">provisioning_failed</option>
+            <option value="suspended">suspended</option>
+            <option value="low_credits">low_credits</option>
+            <option value="grace">grace</option>
+            <option value="destroyed">destroyed</option>
+          </select>
+          <input type="text" id="d-reason" placeholder="变更原因（记入状态日志）" style="flex:1;min-width:180px">
+          <button class="btn-secondary" onclick="changeStatus()">应用</button>
+        </div>
+        <div class="form-row">
+          <label>编辑资料</label>
+          <input type="text" id="d-company" placeholder="公司名称" style="flex:1;min-width:160px">
+          <input type="text" id="d-email" placeholder="联系邮箱" style="flex:1;min-width:160px">
+          <button class="btn-secondary" onclick="saveProfile()">保存</button>
+        </div>
+        <div class="form-row">
+          <label></label>
+          <button class="btn-danger" onclick="destroyTenant()">🗑 销毁租户（deprovision + 软删）</button>
+          <button class="btn-secondary" onclick="closeDetail()">关闭详情</button>
+        </div>
+      </div>
+      <div class="section-title" style="font-size:14px">状态日志</div>
+      <div id="status-log"><span class="empty">加载中...</span></div>
+    </div>
+
+    <!-- ── 列表 ── -->
+    <div class="section-title">租户列表</div>
+    <div id="tenant-list"><span class="empty">加载中...</span></div>
+    <div class="hint">
+      数据来源：provisioning-service <code>GET /v1/tenants</code>（最多 100 条，按创建时间倒序）。
+      点击行查看详情与状态日志。Pod 工作负载管理（镜像/扩缩容）见后续版本。
+    </div>
+
+    <div class="section-title">📜 操作日志</div>
+    <div id="log-area" style="font-size:12px; color:#666; max-height:200px; overflow-y:auto;"></div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN = localStorage.getItem('admin_jwt') || '';
+    let tenants = [];
+    let selectedId = null;
+
+    function checkAuth() {
+      if (!AUTH_TOKEN) { window.location.href = '/login'; return false; }
+      return true;
+    }
+
+    function userInfo() {
+      try {
+        const u = JSON.parse(localStorage.getItem('admin_user') || '{}');
+        document.getElementById('user-display').textContent = u.displayName || u.username || 'Admin';
+      } catch(e) {}
+    }
+
+    document.getElementById('logout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem('admin_jwt');
+      localStorage.removeItem('admin_user');
+      document.cookie = 'auth_token=; path=/; max-age=0';
+      window.location.href = '/login';
+    });
+
+    function showMsg(text, kind='ok') {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.className = 'msg msg-' + kind;
+      setTimeout(() => { el.className = 'msg'; el.textContent = ''; }, 8000);
+    }
+
+    function log(msg, isErr=false) {
+      const el = document.getElementById('log-area');
+      const t = new Date().toLocaleTimeString();
+      el.innerHTML = `<div style="color:${isErr?'#f87171':'#888'}">[${t}] ${msg}</div>` + el.innerHTML;
+    }
+
+    async function api(path, opts={}) {
+      const res = await fetch(path, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${AUTH_TOKEN}`,
+          ...opts.headers,
+        },
+        ...opts,
+      });
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    }
+
+    function statusBadge(status) {
+      const cls = {
+        active: 'badge-active',
+        pending: 'badge-pending',
+        provisioning: 'badge-provisioning',
+        provisioning_failed: 'badge-failed',
+        suspended: 'badge-failed',
+        low_credits: 'badge-warn',
+        grace: 'badge-warn',
+        destroyed: 'badge-dead',
+      }[status] || 'badge-dead';
+      return `<span class="badge ${cls}">${esc(status || 'unknown')}</span>`;
+    }
+
+    function planBadge(plan) {
+      return `<span class="badge badge-plan-${esc(plan)}">${esc(plan || '-')}</span>`;
+    }
+
+    function shortId(id) {
+      return id && id.length > 12 ? id.slice(0, 8) + '…' + id.slice(-4) : (id || '-');
+    }
+
+    // ── List ──
+    async function loadList() {
+      if (!checkAuth()) return;
+      const { status, body } = await api('/api/admin/tenants');
+      const listEl = document.getElementById('tenant-list');
+      if (status !== 200) {
+        listEl.innerHTML = `<div class="empty">加载失败 (${status}): ${esc(body.message || body.code || '')}</div>`;
+        return;
+      }
+      tenants = body.tenants || [];
+      renderList();
+    }
+
+    function renderList() {
+      const listEl = document.getElementById('tenant-list');
+      const filter = document.getElementById('status-filter').value;
+      const rows = filter ? tenants.filter(t => t.status === filter) : tenants;
+      document.getElementById('list-count').textContent =
+        `${rows.length} / ${tenants.length} 个租户`;
+
+      if (!rows.length) {
+        listEl.innerHTML = '<div class="empty">暂无租户</div>';
+        return;
+      }
+      let html = `<table><thead><tr>
+        <th>公司 / 租户</th><th>Tenant ID</th><th>套餐</th><th>状态</th>
+        <th>月度积分额度</th><th>创建时间</th><th style="width:130px">操作</th>
+      </tr></thead><tbody>`;
+      for (const t of rows) {
+        html += `<tr class="clickable ${t.tenantId === selectedId ? 'selected' : ''}" onclick="openDetail('${esc(t.tenantId)}')">
+          <td>${esc(t.companyName || '<span style="color:#666">未命名</span>')}<br>
+              <span style="font-size:11px;color:#777">${esc(t.contactEmail || '')}</span></td>
+          <td class="mono" title="${esc(t.tenantId)}">${esc(shortId(t.tenantId))}</td>
+          <td>${planBadge(t.planTier)}</td>
+          <td>${statusBadge(t.status)}</td>
+          <td>${Number(t.quotaCreditsMonthly || 0).toLocaleString()}</td>
+          <td style="font-size:11px;color:#777">${t.createdAt ? new Date(t.createdAt).toLocaleString() : '-'}</td>
+          <td>
+            <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="event.stopPropagation();openDetail('${esc(t.tenantId)}')">详情</button>
+            <button class="btn-danger" style="padding:4px 10px;font-size:12px" onclick="event.stopPropagation();quickDestroy('${esc(t.tenantId)}')">销毁</button>
+          </td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      listEl.innerHTML = html;
+    }
+
+    // ── Create ──
+    function toggleCreate() {
+      const card = document.getElementById('create-card');
+      card.style.display = card.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function createTenant() {
+      if (!checkAuth()) return;
+      const body = {
+        companyName: document.getElementById('c-company').value.trim(),
+        contactEmail: document.getElementById('c-email').value.trim(),
+        contactPhone: document.getElementById('c-phone').value.trim(),
+        planTier: document.getElementById('c-plan').value,
+        quotaAgents: Number(document.getElementById('c-agents').value) || 1,
+        quotaCreditsMonthly: Number(document.getElementById('c-credits').value) || 1000000,
+        botAppId: document.getElementById('c-appid').value.trim(),
+        botAppSecret: document.getElementById('c-appsecret').value.trim(),
+      };
+      if (!confirm(`确认创建租户「${body.companyName || '未命名'}」？将立即开通 K8s 资源与计费账户。`)) return;
+
+      document.getElementById('btn-create').disabled = true;
+      try {
+        const { status, body: resp } = await api('/api/admin/tenants', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        if (status === 201 || status === 200) {
+          const tid = resp.tenant?.tenantId;
+          showMsg(`租户创建成功：${tid}${resp.provisioning?.dryRun ? '（dry-run 模式）' : ''}`);
+          log(`创建租户 ${tid}`);
+          toggleCreate();
+          await loadList();
+          if (tid) openDetail(tid);
+        } else {
+          const detail = resp.provisioning ? ` | provisioning: ${JSON.stringify(resp.provisioning)}` : '';
+          showMsg(`创建失败 (${status}): ${resp.message || resp.code || ''}${detail}`, 'err');
+          log(`创建失败: ${JSON.stringify(resp)}`, true);
+        }
+      } catch (e) {
+        showMsg('网络错误', 'err');
+        log(`网络错误: ${e}`, true);
+      }
+      document.getElementById('btn-create').disabled = false;
+    }
+
+    // ── Detail ──
+    async function openDetail(tenantId) {
+      if (!checkAuth()) return;
+      selectedId = tenantId;
+      renderList();
+      document.getElementById('detail-card').style.display = 'block';
+      document.getElementById('detail-id').textContent = tenantId;
+      document.getElementById('detail-body').innerHTML = '<span class="empty">加载中...</span>';
+      document.getElementById('status-log').innerHTML = '<span class="empty">加载中...</span>';
+
+      const { status, body } = await api(`/api/admin/tenants/${encodeURIComponent(tenantId)}`);
+      if (status !== 200) {
+        document.getElementById('detail-body').innerHTML =
+          `<div class="empty">加载失败 (${status}): ${esc(body.message || body.code || '')}</div>`;
+        return;
+      }
+      const t = body.tenant || {};
+      document.getElementById('detail-body').innerHTML = `
+        <div class="detail-grid">
+          <div class="detail-item"><div class="k">公司名称</div><div class="v">${esc(t.companyName || '-')}</div></div>
+          <div class="detail-item"><div class="k">状态</div><div class="v">${statusBadge(t.status)}</div></div>
+          <div class="detail-item"><div class="k">联系邮箱</div><div class="v">${esc(t.contactEmail || '-')}</div></div>
+          <div class="detail-item"><div class="k">联系电话</div><div class="v">${esc(t.contactPhone || '-')}</div></div>
+          <div class="detail-item"><div class="k">套餐 / Agent 配额</div><div class="v">${planBadge(t.planTier)} × ${esc(t.quotaAgents ?? '-')}</div></div>
+          <div class="detail-item"><div class="k">月度积分额度</div><div class="v">${Number(t.quotaCreditsMonthly || 0).toLocaleString()}</div></div>
+          <div class="detail-item"><div class="k">K8s Namespace</div><div class="v">${esc(t.k8sNamespace || '-')}</div></div>
+          <div class="detail-item"><div class="k">Credits 账户</div><div class="v">${esc(t.creditsAccountId || '-')}</div></div>
+          <div class="detail-item"><div class="k">创建时间</div><div class="v">${t.createdAt ? new Date(t.createdAt).toLocaleString() : '-'}</div></div>
+          <div class="detail-item"><div class="k">更新时间</div><div class="v">${t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '-'}</div></div>
+        </div>`;
+      document.getElementById('d-status').value = t.status || 'pending';
+      document.getElementById('d-company').value = t.companyName || '';
+      document.getElementById('d-email').value = t.contactEmail || '';
+
+      const logs = body.statusLog || [];
+      document.getElementById('status-log').innerHTML = logs.length
+        ? `<table><thead><tr><th>时间</th><th>变更</th><th>原因</th></tr></thead><tbody>` +
+          logs.map(l => `<tr>
+            <td style="font-size:11px;color:#777">${new Date(l.at).toLocaleString()}</td>
+            <td class="mono">${esc(l.from ?? '∅')} → ${esc(l.to)}</td>
+            <td>${esc(l.reason || '-')}</td>
+          </tr>`).join('') + '</tbody></table>'
+        : '<div class="empty">暂无状态变更记录</div>';
+
+      document.getElementById('detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function closeDetail() {
+      selectedId = null;
+      document.getElementById('detail-card').style.display = 'none';
+      renderList();
+    }
+
+    async function changeStatus() {
+      if (!selectedId) return;
+      const status = document.getElementById('d-status').value;
+      const reason = document.getElementById('d-reason').value.trim() || '管理员手动变更';
+      if (!confirm(`确认将租户 ${shortId(selectedId)} 状态改为 ${status}？`)) return;
+      const { status: code, body } = await api(`/api/admin/tenants/${encodeURIComponent(selectedId)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, reason }),
+      });
+      if (code === 200) {
+        showMsg(`状态已更新：${body.fromStatus} → ${body.toStatus}`);
+        log(`状态变更 ${selectedId}: ${body.fromStatus} → ${body.toStatus}`);
+        await loadList();
+        openDetail(selectedId);
+      } else {
+        showMsg(body.message || `状态变更失败 (${code})`, 'err');
+      }
+    }
+
+    async function saveProfile() {
+      if (!selectedId) return;
+      const companyName = document.getElementById('d-company').value.trim();
+      const contactEmail = document.getElementById('d-email').value.trim();
+      if (!companyName && !contactEmail) { showMsg('公司名称与邮箱至少填一项', 'err'); return; }
+      const { status, body } = await api(`/api/admin/tenants/${encodeURIComponent(selectedId)}/profile`, {
+        method: 'PATCH',
+        body: JSON.stringify({ companyName, contactEmail }),
+      });
+      if (status === 200) {
+        showMsg('资料已更新');
+        log(`资料更新 ${selectedId}`);
+        await loadList();
+        openDetail(selectedId);
+      } else {
+        showMsg(body.message || `资料更新失败 (${status})`, 'err');
+      }
+    }
+
+    async function destroyTenant() {
+      if (!selectedId) return;
+      const name = (tenants.find(t => t.tenantId === selectedId) || {}).companyName || selectedId;
+      if (!confirm(`确认销毁租户「${name}」？将删除其 namespace 内全部 K8s 资源（租户记录保留为 destroyed）。此操作不可逆。`)) return;
+      const { status, body } = await api(`/api/admin/tenants/${encodeURIComponent(selectedId)}`, {
+        method: 'DELETE',
+      });
+      if (status === 200) {
+        showMsg(`租户已销毁：${selectedId}`);
+        log(`销毁租户 ${selectedId}`);
+        closeDetail();
+        loadList();
+      } else {
+        showMsg(body.message || `销毁失败 (${status})`, 'err');
+      }
+    }
+
+    function quickDestroy(tenantId) {
+      openDetail(tenantId);
+      setTimeout(() => destroyTenant(), 300);
+    }
+
+    // Init
+    userInfo();
+    loadList();
+  </script>
+</body>
+</html>
