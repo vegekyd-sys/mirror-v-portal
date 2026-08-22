@@ -485,6 +485,14 @@ export async function restartDeployment(namespace: string, name: string): Promis
   return true;
 }
 
+/** Whether a Deployment exists (used by self-heal checks). */
+export async function deploymentExists(namespace: string, name: string): Promise<boolean> {
+  const res = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
+  if (res.status === 404) return false;
+  if (!res.ok) throw new Error(`deploymentExists ${namespace}/${name} failed: ${res.status}`);
+  return true;
+}
+
 // ── Service ──
 export async function createService(
   namespace: string,
