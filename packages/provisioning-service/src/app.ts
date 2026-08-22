@@ -5,7 +5,7 @@ import pg from 'pg';
 import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import type { ProvisioningConfig } from './config.js';
-import { createAuthMiddleware } from './middleware/auth.js';
+import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   const app = express();
@@ -23,8 +23,10 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
     res.json({ ok: true, service: 'provisioning-service', version: '0.1.0' });
   });
 
-  // NB2 FIX: Add Bearer token auth to all tenant routes
-  const auth = createAuthMiddleware('PROVISIONING_API_TOKEN');
+  // NB2 FIX: Add Bearer token auth to all tenant routes.
+  // Accepts the shared service token (internal callers) OR a valid admin
+  // JWT (pure-frontend admin SPA calling directly, no proxy in front).
+  const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
   app.use(createTenantRoutes(pool, config, auth));
   app.use(createRuntimeConfigRoutes(pool, auth));
 
