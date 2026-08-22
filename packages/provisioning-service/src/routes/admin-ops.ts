@@ -197,7 +197,7 @@ export function createAdminOpsRoutes(
 
       const tenantId = req.params.id;
       const { rows } = await pool.query(
-        'SELECT tenant_id, status, k8s_namespace FROM tenants WHERE tenant_id = $1',
+        'SELECT tenant_id, status, k8s_namespace, agent_endpoint FROM tenants WHERE tenant_id = $1',
         [tenantId],
       );
       if (!rows.length) {
@@ -212,8 +212,11 @@ export function createAdminOpsRoutes(
         return;
       }
 
-      const namespace = rows[0].k8s_namespace || `dealclaw-${tenantId}`;
-      const agentUrl = `http://dealclaw-agent-${tenantId}.${namespace}:18789/execute`;
+      // External agent (default tenant → central dealclaw-test agent) wins;
+      // otherwise fall back to the per-tenant agent in its namespace.
+      const agentUrl = rows[0].agent_endpoint
+        ? `${String(rows[0].agent_endpoint).replace(/\/$/, '')}/execute`
+        : `http://dealclaw-agent-${tenantId}.${rows[0].k8s_namespace || `dealclaw-${tenantId}`}:18789/execute`;
 
       // Chat user identity: the logged-in admin (or console when called
       // with the service token). Session continuity on the agent side is

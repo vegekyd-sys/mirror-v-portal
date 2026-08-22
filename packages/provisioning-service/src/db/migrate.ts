@@ -134,6 +134,13 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
 
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
+
+      -- External agent endpoint (v0.5): when set, the tenant does NOT get a
+      -- per-tenant dealclaw-agent Deployment; chat is proxied straight to this
+      -- URL instead. Used by the built-in default tenant, which reuses the
+      -- central dealclaw-test agent managed by ArgoCD in the control-plane
+      -- namespace.
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_endpoint TEXT;
     `);
 
     console.log(JSON.stringify({

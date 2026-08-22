@@ -307,7 +307,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.delete('/v1/tenants/:id', async (req: Request, res: Response) => {
     try {
       const { rows } = await pool.query(
-        `SELECT status FROM tenants WHERE tenant_id = $1`,
+        `SELECT status, is_default FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
 
@@ -317,6 +317,14 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const { status } = rows[0];
+
+      if (rows[0].is_default) {
+        res.status(400).json({
+          code: 'DEFAULT_TENANT_IMMUTABLE',
+          message: '内置默认租户不可删除（它复用中央 dealclaw-test agent）',
+        });
+        return;
+      }
 
       if (status === 'destroyed') {
         res.status(400).json({ code: 'ALREADY_DESTROYED', message: 'Tenant already destroyed' });
@@ -450,13 +458,20 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const tenantId = req.params.id;
-      const { rows } = await pool.query('SELECT k8s_namespace, status FROM tenants WHERE tenant_id = $1', [tenantId]);
+      const { rows } = await pool.query('SELECT k8s_namespace, status, agent_endpoint FROM tenants WHERE tenant_id = $1', [tenantId]);
       if (!rows.length) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
       }
       if (rows[0].status === 'destroyed') {
         res.status(400).json({ code: 'TENANT_DESTROYED', message: 'Tenant has been destroyed' });
+        return;
+      }
+      if (rows[0].agent_endpoint) {
+        res.status(400).json({
+          code: 'EXTERNAL_AGENT',
+          message: '该租户使用外部（中央）Agent，镜像由 ArgoCD/GitOps 管理，不能在此更新',
+        });
         return;
       }
 
@@ -502,9 +517,16 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const tenantId = req.params.id;
-      const { rows } = await pool.query('SELECT k8s_namespace, status FROM tenants WHERE tenant_id = $1', [tenantId]);
+      const { rows } = await pool.query('SELECT k8s_namespace, status, agent_endpoint FROM tenants WHERE tenant_id = $1', [tenantId]);
       if (!rows.length) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      if (rows[0].agent_endpoint) {
+        res.status(400).json({
+          code: 'EXTERNAL_AGENT',
+          message: '该租户使用外部（中央）Agent，扩缩容由 ArgoCD/GitOps 管理，不能在此操作',
+        });
         return;
       }
 
