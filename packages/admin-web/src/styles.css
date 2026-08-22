@@ -1,0 +1,179 @@
+/* DealClaw Admin — global dark theme.
+   Palette carried over from the legacy admin-dashboard pages:
+   bg #0f0f1a / card #1a1a2e / border #2a2a4a / accent #6366f1. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+
+a { color: #6366f1; text-decoration: none; }
+a:hover { color: #818cf8; }
+
+/* ── Header & nav ── */
+.header {
+  background: #1a1a2e;
+  border-bottom: 1px solid #2a2a4a;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.header h1 { font-size: 18px; color: #fff; white-space: nowrap; }
+.header nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.header nav a {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #aaa;
+}
+.header nav a:hover { background: #24243e; color: #fff; }
+.header nav a.active { background: #312e81; color: #e0e7ff; }
+.header nav .nav-disabled {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #555;
+  cursor: not-allowed;
+}
+.header-right { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+.header-right .user { color: #888; }
+
+/* ── Layout ── */
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.page-loading { padding: 60px 24px; text-align: center; color: #666; font-size: 14px; }
+
+.section-title {
+  font-size: 16px;
+  color: #fff;
+  margin: 24px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2a2a4a;
+}
+
+.action-bar { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+
+/* ── Controls ── */
+button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+.btn-primary { background: #6366f1; color: #fff; }
+.btn-primary:hover { background: #5558e6; }
+.btn-primary:disabled { background: #444; cursor: not-allowed; }
+.btn-danger { background: #dc2626; color: #fff; }
+.btn-danger:hover { background: #b91c1c; }
+.btn-secondary { background: #374151; color: #ccc; }
+.btn-secondary:hover { background: #4b5563; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+select, input, textarea {
+  background: #0f0f1a;
+  border: 1px solid #333;
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+select:focus, input:focus, textarea:focus { border-color: #6366f1; outline: none; }
+label.field-label { font-size: 12px; color: #888; min-width: 90px; }
+
+/* ── Table ── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a4a; }
+th { color: #888; font-weight: 600; white-space: nowrap; }
+td { color: #ccc; }
+.mono { font-family: monospace; font-size: 12px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #1a1a2e; }
+tr.selected { background: #1e1b4b; }
+
+/* ── Badges ── */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge-active { background: #065f46; color: #6ee7b7; }
+.badge-pending, .badge-provisioning { background: #1e3a5f; color: #93c5fd; }
+.badge-failed { background: #7f1d1d; color: #fca5a5; }
+.badge-warn { background: #78350f; color: #fde68a; }
+.badge-dead { background: #1f2937; color: #9ca3af; }
+.badge-plan-starter { background: #1f2937; color: #9ca3af; }
+.badge-plan-pro { background: #312e81; color: #a5b4fc; }
+.badge-plan-enterprise { background: #422006; color: #fcd34d; }
+
+/* ── Messages & cards ── */
+.msg { font-size: 13px; padding: 10px; border-radius: 6px; margin-bottom: 12px; }
+.msg-ok { background: #065f46; color: #6ee7b7; border: 1px solid #059669; }
+.msg-err { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }
+.msg-warn { background: #78350f; color: #fde68a; border: 1px solid #d97706; }
+
+.form-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.form-row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.form-row input[type='text'], .form-row input[type='number'], .form-row input[type='password'] {
+  flex: 1;
+  min-width: 220px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px 20px;
+  margin-bottom: 16px;
+}
+.detail-item { font-size: 13px; }
+.detail-item .k { color: #888; font-size: 12px; }
+.detail-item .v { color: #e0e0e0; font-family: monospace; word-break: break-all; }
+
+.empty { color: #666; font-size: 13px; padding: 20px 0; }
+.hint { color: #666; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+
+/* ── Overview stat cards ── */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-top: 16px; }
+.stat-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 18px;
+}
+.stat-card .num { font-size: 28px; font-weight: 700; color: #fff; }
+.stat-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+
+/* ── Login ── */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 12px;
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 400px;
+}
+.login-card h1 { font-size: 20px; color: #fff; margin-bottom: 6px; }
+.login-card .sub { font-size: 13px; color: #777; margin-bottom: 24px; }
+.login-card .field { margin-bottom: 16px; }
+.login-card input { width: 100%; }
+.login-card button { width: 100%; padding: 10px; }
+.login-card .err { color: #fca5a5; font-size: 13px; margin-bottom: 12px; }
+
+/* ── Operation log ── */
+.log-area { font-size: 12px; color: #666; max-height: 200px; overflow-y: auto; }
+.log-area .log-err { color: #f87171; }
