@@ -17,7 +17,6 @@ export interface OrchestratorConfig {
   provisioningServiceUrl: string;
   provisioningApiToken?: string;
   baseUrl: string;
-  agentUrl: string;
 }
 
 export interface OnboardingResult {

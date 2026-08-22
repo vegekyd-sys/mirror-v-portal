@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
 import { ensureDefaultTenant } from './services/default-tenant.js';
-import { ensureCentralTestTenant } from './services/central-test-tenant.js';
+import { syncImageReleases } from './services/registry-sync.js';
 
 async function main() {
   const config = loadConfig();
@@ -46,22 +46,23 @@ async function main() {
   }, 10 * 60 * 1000);
   defaultTenantTimer.unref();
 
-  // Central test tenant adoption — brings the legacy ArgoCD-managed
-  // dealclaw-test gateway into the tenant registry / Feishu binding system.
-  // Same fire-and-forget + idempotent + periodic-retry contract as above.
-  ensureCentralTestTenant(pool, config)
-    .then((r) => console.log(`[central-test-tenant] boot ensure: ${r.action}${r.detail ? ` — ${r.detail}` : ''}`))
-    .catch((err) => console.error('[central-test-tenant] boot ensure error:', err));
-  const centralTestTimer = setInterval(() => {
-    ensureCentralTestTenant(pool, config)
+  // Registry sync — the image release registry's source of truth is the
+  // container registry (replaces the removed Jenkins post-build hook).
+  // Fire-and-forget + idempotent + periodic (every 30 min) so newly built
+  // images appear in the admin console's 镜像版本 page without any manual
+  // step; admins can also trigger POST /v1/admin/image-releases/sync.
+  const runRegistrySync = (trigger: string) =>
+    syncImageReleases(pool, config)
       .then((r) => {
-        if (r.action !== 'already_ready' && r.action !== 'skipped') {
-          console.log(`[central-test-tenant] periodic ensure: ${r.action}${r.detail ? ` — ${r.detail}` : ''}`);
-        }
+        const summary = r.results
+          .map((s) => `${s.service}: ${s.ok ? `+${s.inserted}/${s.discovered}` : `ERR ${s.error}`}`)
+          .join('; ');
+        console.log(`[registry-sync] ${trigger}: ${r.ok ? 'ok' : 'partial failure'} — ${summary}`);
       })
-      .catch((err) => console.error('[central-test-tenant] periodic ensure error:', err));
-  }, 10 * 60 * 1000);
-  centralTestTimer.unref();
+      .catch((err) => console.error(`[registry-sync] ${trigger} error:`, err));
+  runRegistrySync('boot');
+  const registrySyncTimer = setInterval(() => runRegistrySync('periodic'), 30 * 60 * 1000);
+  registrySyncTimer.unref();
 
   // Graceful shutdown
   const shutdown = async () => {

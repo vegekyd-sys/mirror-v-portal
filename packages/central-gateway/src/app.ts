@@ -141,7 +141,6 @@ export function createApp() {
           provisioningServiceUrl: config.provisioningServiceUrl,
           provisioningApiToken: config.provisioningApiToken,
           baseUrl: config.baseUrl,
-          agentUrl: config.agentUrl,
         });
 
         if (!result.ok) {
@@ -495,7 +494,6 @@ async function handleFeishuJsonOnboard(
         provisioningServiceUrl: config.provisioningServiceUrl,
         provisioningApiToken: config.provisioningApiToken,
         baseUrl: config.baseUrl,
-        agentUrl: config.agentUrl,
       });
       if (!result.ok) {
         registeredSession.status = 'failed';

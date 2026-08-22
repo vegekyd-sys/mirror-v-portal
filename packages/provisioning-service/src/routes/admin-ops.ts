@@ -2,8 +2,11 @@
  * Admin/ops routes: image release registry, rollout promotion, tenant chat
  * proxy, and default-tenant bootstrap trigger.
  *
- * Image release flow:
- *   Jenkins build pushes image → post-build hook calls POST /v1/admin/image-releases
+ * Image release flow (registry sync replaces the old Jenkins post-build
+ * hook, which was removed):
+ *   provisioning-service pulls tags from the container registry
+ *   (Docker v2 API — see services/registry-sync.ts) into image_releases,
+ *   on boot + every 30 min and on demand via POST /v1/admin/image-releases/sync
  *   → admin console lists releases → operator promotes a tag
  *   (POST /v1/admin/image-releases/promote) → rollout_targets is updated →
  *   ops-agent's rollout cron reads GET /v1/admin/rollout-targets and rolls
@@ -14,20 +17,10 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
 import { ensureDefaultTenant } from '../services/default-tenant.js';
+import { syncImageReleases } from '../services/registry-sync.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-/** Construct full docker image from tag-only or short references.
- *  KEEP IN SYNC with routes/tenants.ts normalizeImage (same package, but
- *  kept local here to avoid restructuring the tenant router). */
-function normalizeImage(registry: string, service: string, img: string): string {
-  if (img.includes('/')) return img; // already full path like registry/service:tag
-  if (img.includes(':')) {
-    return `${registry}/${service}:${img.split(':').pop()}`;
-  }
-  return `${registry}/${service}:${img}`;
-}
 
 export function createAdminOpsRoutes(
   pool: pg.Pool,
@@ -45,51 +38,17 @@ export function createAdminOpsRoutes(
     return 'service-token';
   };
 
-  // POST /v1/admin/image-releases — record a built image (idempotent).
-  // Called by the Jenkins post-build hook; safe to call repeatedly.
-  router.post('/v1/admin/image-releases', async (req: Request, res: Response) => {
+  // POST /v1/admin/image-releases/sync — pull the current tag list from the
+  // container registry into image_releases (manual refresh; also runs on
+  // boot + every 30 min, see index.ts). Idempotent.
+  router.post('/v1/admin/image-releases/sync', async (_req: Request, res: Response) => {
     try {
-      const { service, tag, gitCommit, buildNumber, buildEnv, notes, createdBy } = req.body ?? {};
-
-      if (!service || !RELEASE_SERVICES.includes(service)) {
-        res.status(400).json({ code: 'BAD_REQUEST', message: `service must be one of: ${RELEASE_SERVICES.join(', ')}` });
-        return;
-      }
-      if (!tag || typeof tag !== 'string' || !TAG_PATTERN.test(tag)) {
-        res.status(400).json({ code: 'BAD_REQUEST', message: 'tag must match ' + TAG_PATTERN });
-        return;
-      }
-
-      const image = normalizeImage(config.imageRegistry, service, String(tag));
-      const result = await pool.query(
-        `INSERT INTO image_releases (service, tag, image, git_commit, build_number, build_env, created_by, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (service, tag) DO NOTHING
-         RETURNING id`,
-        [
-          service,
-          tag,
-          image,
-          gitCommit ? String(gitCommit).slice(0, 64) : null,
-          buildNumber ? String(buildNumber).slice(0, 32) : null,
-          buildEnv ? String(buildEnv).slice(0, 16) : null,
-          createdBy ? String(createdBy).slice(0, 64) : 'jenkins',
-          notes ? String(notes).slice(0, 500) : null,
-        ],
-      );
-
-      res.json({
-        ok: true,
-        created: result.rowCount === 1,
-        id: result.rows[0]?.id ?? null,
-        service,
-        tag,
-        image,
-      });
+      const result = await syncImageReleases(pool, config);
+      res.json({ ...result, ok: result.ok });
     } catch (err: unknown) {
       const e = err as any;
-      console.error('Record image release failed:', e);
-      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Record failed' });
+      console.error('Registry sync failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Sync failed' });
     }
   });
 
@@ -103,15 +62,23 @@ export function createAdminOpsRoutes(
       const { rows: targets } = await pool.query('SELECT service, tag FROM rollout_targets');
       const promoted = new Map(targets.map((t: any) => [t.service, t.tag]));
 
+      // Sort by CI build number when the tag carries one (registry-synced
+      // rows share the same created_at, so build number is the real order).
       const { rows } = service && RELEASE_SERVICES.includes(service as any)
         ? await pool.query(
             `SELECT id, service, tag, image, git_commit, build_number, build_env, created_by, notes, created_at
-             FROM image_releases WHERE service = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+             FROM image_releases WHERE service = $1
+             ORDER BY (CASE WHEN build_number ~ '^[0-9]+$' THEN build_number::bigint END) DESC NULLS LAST,
+                      created_at DESC, id DESC
+             LIMIT $2`,
             [service, limit],
           )
         : await pool.query(
             `SELECT id, service, tag, image, git_commit, build_number, build_env, created_by, notes, created_at
-             FROM image_releases ORDER BY created_at DESC, id DESC LIMIT $1`,
+             FROM image_releases
+             ORDER BY (CASE WHEN build_number ~ '^[0-9]+$' THEN build_number::bigint END) DESC NULLS LAST,
+                      created_at DESC, id DESC
+             LIMIT $1`,
             [limit],
           );
 
@@ -149,7 +116,7 @@ export function createAdminOpsRoutes(
         [service, tag],
       );
       if (!rows.length) {
-        res.status(404).json({ code: 'NOT_FOUND', message: `Image release ${service}:${tag} not found — record it first` });
+        res.status(404).json({ code: 'NOT_FOUND', message: `Image release ${service}:${tag} not found — run a registry sync first` });
         return;
       }
 
@@ -212,7 +179,7 @@ export function createAdminOpsRoutes(
         return;
       }
 
-      // External agent (default tenant → central dealclaw-test agent) wins;
+      // Explicit agent_endpoint wins (e.g. legacy external-agent rows);
       // otherwise fall back to the per-tenant agent in its namespace.
       const agentUrl = rows[0].agent_endpoint
         ? `${String(rows[0].agent_endpoint).replace(/\/$/, '')}/execute`

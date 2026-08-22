@@ -1,5 +1,5 @@
-// 镜像版本 — Jenkins 构建入库的镜像清单，可提升（promote）为滚动发布目标。
-// Data: provisioning-service /v1/admin/image-releases (+ promote / rollout-targets).
+// 镜像版本 — 从镜像仓库自动同步的镜像清单，可提升（promote）为滚动发布目标。
+// Data: provisioning-service /v1/admin/image-releases (+ sync / promote / rollout-targets).
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import type { ImageRelease } from '../lib/types';
@@ -13,6 +13,14 @@ interface RolloutTarget {
   updatedAt?: string;
 }
 
+interface SyncServiceResult {
+  service: string;
+  ok: boolean;
+  discovered: number;
+  inserted: number;
+  error?: string;
+}
+
 const SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 
 export default function ImageReleasesPage() {
@@ -22,12 +30,7 @@ export default function ImageReleasesPage() {
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [busyTag, setBusyTag] = useState('');
-
-  // 手动登记表单
-  const [formService, setFormService] = useState<string>('dealclaw-agent');
-  const [formTag, setFormTag] = useState('');
-  const [formCommit, setFormCommit] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const flash = (text: string) => {
     setMsg(text);
@@ -47,9 +50,33 @@ export default function ImageReleasesPage() {
     }
   }, []);
 
+  const sync = useCallback(async (quiet = false): Promise<boolean> => {
+    setSyncing(true);
+    try {
+      const r = await api<{ ok: boolean; results: SyncServiceResult[] }>(
+        '/v1/admin/image-releases/sync',
+        { method: 'POST' },
+      );
+      const summary = (r.results || [])
+        .map((s) => `${s.service}: ${s.ok ? `发现 ${s.discovered} 个 tag，新增 ${s.inserted}` : `失败（${s.error}）`}`)
+        .join('；');
+      if (!quiet) flash(r.ok ? `同步完成 — ${summary}` : `部分失败 — ${summary}`);
+      return r.ok;
+    } catch (e) {
+      if (!quiet) flash(`同步失败：${errMsg(e)}`);
+      return false;
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    // 打开页面时后台自动同步一次（quiet），然后加载列表；失败不打扰用户。
+    void (async () => {
+      await sync(true);
+      await load();
+    })();
+  }, [sync, load]);
 
   const promote = async (rel: ImageRelease) => {
     if (
@@ -73,32 +100,9 @@ export default function ImageReleasesPage() {
     }
   };
 
-  const recordManual = async () => {
-    const tag = formTag.trim();
-    if (!tag) {
-      flash('镜像 Tag 为必填');
-      return;
-    }
-    setSaving(true);
-    try {
-      const r = await api<{ created: boolean; image: string }>('/v1/admin/image-releases', {
-        method: 'POST',
-        body: {
-          service: formService,
-          tag,
-          gitCommit: formCommit.trim() || undefined,
-          createdBy: 'admin-manual',
-        },
-      });
-      flash(r.created ? `已登记 ${r.image}` : `${formService}:${tag} 已存在，无需重复登记`);
-      setFormTag('');
-      setFormCommit('');
-      await load();
-    } catch (e) {
-      flash(`登记失败：${errMsg(e)}`);
-    } finally {
-      setSaving(false);
-    }
+  const syncAndReload = async () => {
+    const ok = await sync(false);
+    if (ok) await load();
   };
 
   const visible = filter ? releases.filter((r) => r.service === filter) : releases;
@@ -109,7 +113,7 @@ export default function ImageReleasesPage() {
       <div className="page-head">
         <div>
           <div className="section-title">镜像版本</div>
-          <div className="page-sub">Jenkins 构建自动入库；提升后由 ops-agent 滚动更新全部租户</div>
+          <div className="page-sub">镜像 Tag 自动从镜像仓库同步入库；提升后由 ops-agent 滚动更新全部租户</div>
         </div>
         <div className="page-actions">
           <select aria-label="服务筛选" value={filter} onChange={(e) => setFilter(e.target.value)}>
@@ -120,8 +124,11 @@ export default function ImageReleasesPage() {
               </option>
             ))}
           </select>
-          <button className="btn-secondary" onClick={() => void load()}>
-            <IconRefresh /> 刷新
+          <button className="btn-secondary" onClick={() => void load()} disabled={syncing}>
+            <IconRefresh /> 刷新列表
+          </button>
+          <button className="btn-primary" onClick={() => void syncAndReload()} disabled={syncing}>
+            <IconRefresh /> {syncing ? '同步中…' : '从镜像仓库同步'}
           </button>
         </div>
       </div>
@@ -140,42 +147,6 @@ export default function ImageReleasesPage() {
         ))}
       </div>
 
-      {/* ── 手动登记 ── */}
-      <div className="form-card">
-        <div style={{ fontSize: 14, color: '#171c2e', fontWeight: 700, marginBottom: 10 }}>
-          手动登记镜像（Jenkins 构建会自动登记，此处仅作补录）
-        </div>
-        <div className="form-row">
-          <label className="field-label">服务</label>
-          <select value={formService} onChange={(e) => setFormService(e.target.value)}>
-            {SERVICES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            className="mono"
-            style={{ flex: 1, minWidth: 200 }}
-            value={formTag}
-            onChange={(e) => setFormTag(e.target.value)}
-            placeholder="镜像 Tag，如 master.e3d43339.12"
-          />
-          <input
-            type="text"
-            className="mono"
-            style={{ width: 160 }}
-            value={formCommit}
-            onChange={(e) => setFormCommit(e.target.value)}
-            placeholder="Git Commit（可选）"
-          />
-          <button className="btn-primary" onClick={() => void recordManual()} disabled={saving}>
-            {saving ? '登记中…' : '登记入库'}
-          </button>
-        </div>
-      </div>
-
       {/* ── 版本列表 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
         版本列表（{visible.length}）
@@ -183,7 +154,7 @@ export default function ImageReleasesPage() {
       {visible.length === 0 ? (
         <div className="panel">
           <div className="empty">
-            <IconBox size={18} /> 暂无镜像版本记录 — Jenkins 构建推送后将自动出现在这里
+            <IconBox size={18} /> 暂无镜像版本记录 — 点击「从镜像仓库同步」拉取已构建的镜像 Tag
           </div>
         </div>
       ) : (
@@ -194,7 +165,7 @@ export default function ImageReleasesPage() {
                 <th>服务</th>
                 <th>Tag</th>
                 <th>构建信息</th>
-                <th>登记方</th>
+                <th>来源</th>
                 <th>入库时间</th>
                 <th>状态</th>
                 <th style={{ width: 130 }}>操作</th>
@@ -210,16 +181,13 @@ export default function ImageReleasesPage() {
                     {r.tag}
                   </td>
                   <td style={{ fontSize: 12 }}>
-                    {r.buildEnv ? <span className="badge badge-pending">{r.buildEnv}</span> : null}{' '}
                     {r.buildNumber ? `#${r.buildNumber}` : ''}{' '}
                     {r.gitCommit ? <span className="mono" style={{ color: '#888' }}>{r.gitCommit.slice(0, 8)}</span> : ''}
                   </td>
                   <td style={{ fontSize: 12 }}>{r.createdBy || '-'}</td>
                   <td style={{ fontSize: 11, color: '#777' }}>{fmtTime(r.createdAt)}</td>
                   <td>
-                    {r.promoted ? (
-                      <span className="badge badge-active">滚动发布中</span>
-                    ) : targetOf(r.service) === r.tag ? (
+                    {r.promoted || targetOf(r.service) === r.tag ? (
                       <span className="badge badge-active">滚动发布中</span>
                     ) : (
                       <span className="badge">已入库</span>
@@ -245,7 +213,8 @@ export default function ImageReleasesPage() {
         </div>
       )}
       <div className="hint">
-        流程：Jenkins 构建推送镜像 → 自动登记入库 → 在此页「提升发布」→ ops-agent 每 10
+        流程：Jenkins 构建推送镜像 → 镜像 Tag 自动从镜像仓库同步入库（每 30
+        分钟，或手动点击「从镜像仓库同步」）→ 在此页「提升发布」→ ops-agent 每 10
         分钟巡检，把全部租户的对应服务滚动更新到目标版本。单个租户可在其客户详情页单独更新。
       </div>
     </>

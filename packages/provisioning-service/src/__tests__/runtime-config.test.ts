@@ -37,7 +37,6 @@ const baseConfig: ProvisioningConfig = {
   backupImage: 'test/ossutil',
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
-  defaultTenantAgentUrl: 'http://dealclaw-agent.dealclaw-test:18789',
 };
 
 interface FakeQuery { sql: string; params?: unknown[] }

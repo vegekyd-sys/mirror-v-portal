@@ -327,7 +327,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       if (rows[0].is_default) {
         res.status(400).json({
           code: 'DEFAULT_TENANT_IMMUTABLE',
-          message: '内置默认租户不可删除（它复用中央 dealclaw-test agent）',
+          message: '内置默认租户不可删除',
         });
         return;
       }

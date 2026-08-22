@@ -9,7 +9,6 @@ export interface CentralConfig {
   baseUrl: string;
   provisioningServiceUrl: string;
   provisioningApiToken?: string;
-  agentUrl: string;
   /** Shared secret guarding the internal notify relay (ops-agent → central-gateway) */
   internalApiToken?: string;
 }
@@ -20,7 +19,6 @@ export function loadConfig(): CentralConfig {
     baseUrl: process.env.BASE_URL ?? 'https://dealclaw.cn',
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8082',
     provisioningApiToken: process.env.PROVISIONING_API_TOKEN,
-    agentUrl: process.env.DEALCLAW_AGENT_URL ?? 'http://dealclaw-agent:18789',
     internalApiToken: process.env.INTERNAL_API_TOKEN,
   };
 }

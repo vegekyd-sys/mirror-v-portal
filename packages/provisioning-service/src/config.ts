@@ -47,12 +47,6 @@ export interface ProvisioningConfig {
   creditsLedgerUrl: string;
   /** shared service token for credits-ledger admin auth (BILLING_SERVICE_TOKEN) */
   creditsLedgerToken: string;
-  /**
-   * Agent endpoint for the built-in default tenant. The default tenant does
-   * not get its own dealclaw-agent Deployment — it reuses the central
-   * dealclaw-test agent (ArgoCD-managed) in the control-plane namespace.
-   */
-  defaultTenantAgentUrl: string;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -73,8 +67,5 @@ export function loadConfig(): ProvisioningConfig {
     backupImage: process.env.BACKUP_IMAGE || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL || 'http://credits-ledger:8081',
     creditsLedgerToken: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '',
-    defaultTenantAgentUrl:
-      process.env.DEFAULT_TENANT_AGENT_URL
-      || `http://dealclaw-agent.${process.env.RUNTIME_NAMESPACE || DEFAULT_RUNTIME_NAMESPACE}:18789`,
   };
 }
