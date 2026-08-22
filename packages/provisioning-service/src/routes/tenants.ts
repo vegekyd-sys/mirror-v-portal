@@ -148,6 +148,19 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
 
+      // Provisioning succeeded — activate the tenant. The ops-agent state
+      // machine defines no automatic transition out of 'pending', so without
+      // this a successfully provisioned tenant would stay pending forever.
+      await pool.query(
+        `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+         VALUES ($1, 'pending', 'active', 'K8s provisioning completed')`,
+        [tenantId],
+      );
+      await pool.query(
+        `UPDATE tenants SET status = 'active', updated_at = NOW() WHERE tenant_id = $1`,
+        [tenantId],
+      );
+
       res.status(201).json({
         ok: true,
         tenant: {
@@ -155,7 +168,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           companyName: safeName,
           contactEmail: safeEmail,
           planTier: safePlanTier,
-          status: 'pending',
+          status: 'active',
           quotaAgents: safeQuotaAgents,
           quotaCreditsMonthly: safeQuotaCredits,
           k8sNamespace: provisionResult.namespace,
