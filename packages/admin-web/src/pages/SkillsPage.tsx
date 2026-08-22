@@ -124,117 +124,125 @@ export default function SkillsPage() {
 
   return (
     <>
-      <div className="section-title">Skill 管理</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">Skill 管理</div>
+          <div className="page-sub">审核、上线与停用租户可调用的 Skill</div>
+        </div>
+        <div className="page-actions">
+          <button className="btn-secondary" onClick={() => void load()}>
+            <IconRefresh /> 刷新
+          </button>
+          <button className="btn-primary" onClick={() => void sync()} disabled={busy}>
+            {busy ? '扫描中…' : (<><IconSearch /> 扫描 SKILL.md 注册新 Skill</>)}
+          </button>
+        </div>
+      </div>
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
 
-      <div className="action-bar">
-        <button className="btn-secondary" onClick={() => void load()}>
-          <IconRefresh /> 刷新
-        </button>
-        <button className="btn-primary" onClick={() => void sync()} disabled={busy}>
-          {busy ? '扫描中…' : (<><IconSearch /> 扫描 SKILL.md 注册新 Skill</>)}
-        </button>
-      </div>
-
       {/* ── 待审核 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
-        待审核 Skill（新注册）{pending.length > 0 ? ` — ${pending.length} 个` : ''}
+        待审核 Skill（新注册 · {pending.length}）
       </div>
-      {pending.length === 0 ? (
-        <div className="empty">暂无待审核 Skill</div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Skill ID</th>
-              <th>名称</th>
-              <th>分类</th>
-              <th>单价(credits)</th>
-              <th>负责人</th>
-              <th style={{ width: 180 }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((s) => (
-              <tr key={s.skillId}>
-                <td className="mono" style={{ fontSize: 11 }}>
-                  {s.skillId}
-                </td>
-                <td>{s.skillName || '-'}</td>
-                <td>{s.category || '-'}</td>
-                <td className="mono">{fmtNum(s.creditPerUnit)}</td>
-                <td>{s.responsiblePerson || '-'}</td>
-                <td>
-                  <button className="btn-primary btn-sm" onClick={() => void act(s, 'activate')}>
-                    审核通过
-                  </button>{' '}
-                  <button className="btn-danger btn-sm" onClick={() => void act(s, 'reject')}>
-                    拒绝
-                  </button>
-                </td>
+      <div className="panel">
+        {pending.length === 0 ? (
+          <div className="empty">暂无待审核 Skill</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Skill ID</th>
+                <th>名称</th>
+                <th>分类</th>
+                <th>单价(credits)</th>
+                <th>负责人</th>
+                <th style={{ width: 180 }}>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {pending.map((s) => (
+                <tr key={s.skillId}>
+                  <td className="mono" style={{ fontSize: 11 }}>
+                    {s.skillId}
+                  </td>
+                  <td>{s.skillName || '-'}</td>
+                  <td>{s.category || '-'}</td>
+                  <td className="mono">{fmtNum(s.creditPerUnit)}</td>
+                  <td>{s.responsiblePerson || '-'}</td>
+                  <td>
+                    <button className="btn-primary btn-sm" onClick={() => void act(s, 'activate')}>
+                      审核通过
+                    </button>{' '}
+                    <button className="btn-danger btn-sm" onClick={() => void act(s, 'reject')}>
+                      拒绝
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {/* ── 全部 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
-        全部 Skill — {skills.length} 个
+        全部 Skill（{skills.length}）
       </div>
-      {skills.length === 0 ? (
-        <div className="empty">暂无已注册 Skill</div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Skill ID</th>
-              <th>名称</th>
-              <th>分类</th>
-              <th>单价(credits)</th>
-              <th>审核状态</th>
-              <th>计费状态</th>
-              <th>负责人</th>
-              <th>审批人</th>
-              <th style={{ width: 200 }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {skills.map((s) => (
-              <tr key={s.skillId}>
-                <td className="mono" style={{ fontSize: 11 }}>
-                  {s.skillId}
-                </td>
-                <td>{s.skillName || '-'}</td>
-                <td>{s.category || '-'}</td>
-                <td className="mono">{fmtNum(s.creditPerUnit)}</td>
-                <td>{activationBadge(s.activationStatus)}</td>
-                <td>{statusBadge(s.status)}</td>
-                <td>{s.responsiblePerson || '-'}</td>
-                <td>{s.approvedBy || '-'}</td>
-                <td>
-                  {s.activationStatus === 'approved' && s.status !== 'live' && (
-                    <button className="btn-primary btn-sm" onClick={() => void act(s, 'launch')}>
-                      上线计费
-                    </button>
-                  )}{' '}
-                  {s.activationStatus === 'rejected' && (
-                    <button className="btn-secondary btn-sm" onClick={() => void act(s, 'activate')}>
-                      重新审核
-                    </button>
-                  )}{' '}
-                  {s.activationStatus === 'approved' && (
-                    <button className="btn-danger btn-sm" onClick={() => void act(s, 'reject')}>
-                      停用
-                    </button>
-                  )}
-                </td>
+      <div className="panel">
+        {skills.length === 0 ? (
+          <div className="empty">暂无已注册 Skill</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Skill ID</th>
+                <th>名称</th>
+                <th>分类</th>
+                <th>单价(credits)</th>
+                <th>审核状态</th>
+                <th>计费状态</th>
+                <th>负责人</th>
+                <th>审批人</th>
+                <th style={{ width: 200 }}>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {skills.map((s) => (
+                <tr key={s.skillId}>
+                  <td className="mono" style={{ fontSize: 11 }}>
+                    {s.skillId}
+                  </td>
+                  <td>{s.skillName || '-'}</td>
+                  <td>{s.category || '-'}</td>
+                  <td className="mono">{fmtNum(s.creditPerUnit)}</td>
+                  <td>{activationBadge(s.activationStatus)}</td>
+                  <td>{statusBadge(s.status)}</td>
+                  <td>{s.responsiblePerson || '-'}</td>
+                  <td>{s.approvedBy || '-'}</td>
+                  <td>
+                    {s.activationStatus === 'approved' && s.status !== 'live' && (
+                      <button className="btn-primary btn-sm" onClick={() => void act(s, 'launch')}>
+                        上线计费
+                      </button>
+                    )}{' '}
+                    {s.activationStatus === 'rejected' && (
+                      <button className="btn-secondary btn-sm" onClick={() => void act(s, 'activate')}>
+                        重新审核
+                      </button>
+                    )}{' '}
+                    {s.activationStatus === 'approved' && (
+                      <button className="btn-danger btn-sm" onClick={() => void act(s, 'reject')}>
+                        停用
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       <div className="section-title" style={{ fontSize: 14 }}>
         操作日志

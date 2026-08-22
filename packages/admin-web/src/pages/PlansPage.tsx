@@ -128,19 +128,22 @@ export default function PlansPage() {
 
   return (
     <>
-      <div className="section-title">套餐模板</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">套餐模板</div>
+          <div className="page-sub">客户签约套餐的参数模板 · 共 {plans.length} 个</div>
+        </div>
+        <div className="page-actions">
+          <button className="btn-secondary" onClick={() => void load()}>
+            <IconRefresh /> 刷新
+          </button>
+          <button className="btn-primary" onClick={openCreate}>
+            <IconPlus /> 新建套餐
+          </button>
+        </div>
+      </div>
       {error && <div className="msg msg-err">加载失败：{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
-
-      <div className="action-bar">
-        <button className="btn-secondary" onClick={() => void load()}>
-          <IconRefresh /> 刷新
-        </button>
-        <button className="btn-primary" onClick={openCreate}>
-          <IconPlus /> 新建套餐
-        </button>
-        <span style={{ fontSize: 12, color: '#666' }}>{plans.length} 个套餐</span>
-      </div>
 
       <div className="plan-grid">
         {plans.map((p) => (
@@ -175,38 +178,40 @@ export default function PlansPage() {
           <div className="section-title" style={{ fontSize: 14 }}>
             套餐参数总览（plan_templates）
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>planId</th>
-                <th>名称</th>
-                <th>档位</th>
-                <th>年费(¥)</th>
-                <th>初始 Credits</th>
-                <th>席位</th>
-                <th>续费价/10万</th>
-                <th>续费系数</th>
-                <th>月度配额</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plans.map((p) => (
-                <tr key={p.planId}>
-                  <td className="mono">{p.planId}</td>
-                  <td>{p.planName}</td>
-                  <td>{p.tier}</td>
-                  <td className="mono">{fmtNum(p.annualFeeYuan)}</td>
-                  <td className="mono">{fmtNum(p.initialCredit)}</td>
-                  <td className="mono">
-                    {p.seatsMin}–{p.seatsMax}
-                  </td>
-                  <td className="mono">{fmtNum(p.renewalPricePer100k)}</td>
-                  <td className="mono">{p.renewalDiscount}</td>
-                  <td className="mono">{fmtNum(p.monthlyAllowance)}</td>
+          <div className="panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>planId</th>
+                  <th>名称</th>
+                  <th>档位</th>
+                  <th>年费(¥)</th>
+                  <th>初始 Credits</th>
+                  <th>席位</th>
+                  <th>续费价/10万</th>
+                  <th>续费系数</th>
+                  <th>月度配额</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {plans.map((p) => (
+                  <tr key={p.planId}>
+                    <td className="mono">{p.planId}</td>
+                    <td>{p.planName}</td>
+                    <td>{p.tier}</td>
+                    <td className="mono">{fmtNum(p.annualFeeYuan)}</td>
+                    <td className="mono">{fmtNum(p.initialCredit)}</td>
+                    <td className="mono">
+                      {p.seatsMin}–{p.seatsMax}
+                    </td>
+                    <td className="mono">{fmtNum(p.renewalPricePer100k)}</td>
+                    <td className="mono">{p.renewalDiscount}</td>
+                    <td className="mono">{fmtNum(p.monthlyAllowance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
 

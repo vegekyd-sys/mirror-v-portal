@@ -152,7 +152,29 @@ export default function RuntimeConfigsPage() {
 
   return (
     <>
-      <div className="section-title">运行时配置</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">运行时配置</div>
+          <div className="page-sub">租户 Pod 的环境变量来源，敏感值加密入库</div>
+        </div>
+        <div className="page-actions">
+          <select
+            aria-label="作用域"
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+          >
+            <option value="">全局默认</option>
+            {tenants.map((t) => (
+              <option key={t.tenantId} value={t.tenantId}>
+                {t.companyName || t.tenantId}（{t.status}）
+              </option>
+            ))}
+          </select>
+          <button className="btn-secondary" onClick={() => void loadConfigs(scope)}>
+            <IconRefresh /> 刷新
+          </button>
+        </div>
+      </div>
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
       {!keyConfigured && (
@@ -166,23 +188,6 @@ export default function RuntimeConfigsPage() {
           </span>
         </div>
       )}
-
-      <div className="action-bar">
-        <label className="field-label" style={{ minWidth: 'auto' }}>
-          作用域：
-        </label>
-        <select value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option value="">全局默认</option>
-          {tenants.map((t) => (
-            <option key={t.tenantId} value={t.tenantId}>
-              {t.companyName || t.tenantId}（{t.status}）
-            </option>
-          ))}
-        </select>
-        <button className="btn-secondary" onClick={() => void loadConfigs(scope)}>
-          <IconRefresh /> 刷新
-        </button>
-      </div>
 
       {/* ── 表单 ── */}
       <div className="form-card">
@@ -256,49 +261,53 @@ export default function RuntimeConfigsPage() {
         配置列表 — {scope ? `租户覆盖 (${scope})` : '全局默认'}
       </div>
       {items.length === 0 ? (
-        <div className="empty">
-          {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置，请先添加 DEEPSEEK_API_KEY 等必需项'}
+        <div className="panel">
+          <div className="empty">
+            {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置，请先添加 DEEPSEEK_API_KEY 等必需项'}
+          </div>
         </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>值</th>
-              <th>类型</th>
-              <th>说明</th>
-              <th>更新时间</th>
-              <th style={{ width: 150 }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((i) => (
-              <tr key={i.key}>
-                <td className="mono">{i.key}</td>
-                <td className="mono">{i.displayValue ?? '••••••••'}</td>
-                <td>
-                  {i.isSecret ? (
-                    <span className="badge badge-warn">敏感</span>
-                  ) : (
-                    <span className="badge badge-active">明文</span>
-                  )}
-                </td>
-                <td style={{ fontSize: 12 }}>{i.description || '-'}</td>
-                <td style={{ fontSize: 11, color: '#777' }}>
-                  {i.updatedAt ? new Date(i.updatedAt).toLocaleString() : '-'}
-                </td>
-                <td>
-                  <button className="btn-secondary btn-sm" onClick={() => void editValue(i)}>
-                    改值
-                  </button>{' '}
-                  <button className="btn-danger btn-sm" onClick={() => void remove(i)}>
-                    删除
-                  </button>
-                </td>
+        <div className="panel">
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>值</th>
+                <th>类型</th>
+                <th>说明</th>
+                <th>更新时间</th>
+                <th style={{ width: 150 }}>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((i) => (
+                <tr key={i.key}>
+                  <td className="mono">{i.key}</td>
+                  <td className="mono">{i.displayValue ?? '••••••••'}</td>
+                  <td>
+                    {i.isSecret ? (
+                      <span className="badge badge-warn">敏感</span>
+                    ) : (
+                      <span className="badge badge-active">明文</span>
+                    )}
+                  </td>
+                  <td style={{ fontSize: 12 }}>{i.description || '-'}</td>
+                  <td style={{ fontSize: 11, color: '#777' }}>
+                    {i.updatedAt ? new Date(i.updatedAt).toLocaleString() : '-'}
+                  </td>
+                  <td>
+                    <button className="btn-secondary btn-sm" onClick={() => void editValue(i)}>
+                      改值
+                    </button>{' '}
+                    <button className="btn-danger btn-sm" onClick={() => void remove(i)}>
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <div className="hint">
         创建租户时，全局默认与租户覆盖合并生成 tenant-config Secret（envFrom 注入）。

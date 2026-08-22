@@ -197,16 +197,19 @@ export default function SkillPricesPage() {
 
   return (
     <>
-      <div className="section-title">Skill 定价</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">Skill 定价</div>
+          <div className="page-sub">按分类维护 Skill 单价、成本与计费状态 · 共 {prices.length} 个</div>
+        </div>
+        <div className="page-actions">
+          <button className="btn-secondary" onClick={() => void load()}>
+            <IconRefresh /> 刷新
+          </button>
+        </div>
+      </div>
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
-
-      <div className="action-bar">
-        <button className="btn-secondary" onClick={() => void load()}>
-          <IconRefresh /> 刷新
-        </button>
-        <span style={{ fontSize: 12, color: '#666' }}>{prices.length} 个 Skill</span>
-      </div>
 
       {summary.length > 0 && (
         <div className="stat-grid">
@@ -227,61 +230,63 @@ export default function SkillPricesPage() {
       {prices.length === 0 ? (
         <div className="empty">暂无已注册 Skill</div>
       ) : (
-        <table style={{ marginTop: 16 }}>
-          <thead>
-            <tr>
-              <th>Skill ID</th>
-              <th>名称</th>
-              <th>分类 / 服务线</th>
-              <th>负责人</th>
-              <th>Credit/单位</th>
-              <th>成本</th>
-              <th>毛利率</th>
-              <th>计费单位</th>
-              <th>状态</th>
-              <th style={{ width: 220 }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {prices.map((p) => (
-              <tr key={p.skillId}>
-                <td className="mono" style={{ fontSize: 11 }}>
-                  {p.skillId}
-                </td>
-                <td>{p.skillName || '-'}</td>
-                <td>
-                  {p.category || '-'}
-                  <br />
-                  <span style={{ fontSize: 11, color: '#777' }}>{p.serviceLine || ''}</span>
-                </td>
-                <td>{p.responsiblePerson || '-'}</td>
-                <td className="mono">{fmtNum(p.creditPerUnit)}</td>
-                <td className="mono">{p.cost != null ? fmtNum(p.cost) : '-'}</td>
-                <td className="mono">{margin(p)}</td>
-                <td>{p.billingUnit || '-'}</td>
-                <td>{statusBadge(p)}</td>
-                <td>
-                  <button className="btn-secondary btn-sm" onClick={() => void openHistory(p)}>
-                    历史
-                  </button>{' '}
-                  {p.activationStatus !== 'approved' && (
-                    <button className="btn-secondary btn-sm" onClick={() => void activate(p)}>
-                      审核通过
-                    </button>
-                  )}{' '}
-                  {p.activationStatus === 'approved' && p.status === 'shadow' && (
-                    <button className="btn-primary btn-sm" onClick={() => void launch(p)}>
-                      正式上线
-                    </button>
-                  )}{' '}
-                  <button className="btn-secondary btn-sm" onClick={() => openEdit(p)}>
-                    编辑
-                  </button>
-                </td>
+        <div className="panel">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill ID</th>
+                <th>名称</th>
+                <th>分类 / 服务线</th>
+                <th>负责人</th>
+                <th>Credit/单位</th>
+                <th>成本</th>
+                <th>毛利率</th>
+                <th>计费单位</th>
+                <th>状态</th>
+                <th style={{ width: 220 }}>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {prices.map((p) => (
+                <tr key={p.skillId}>
+                  <td className="mono" style={{ fontSize: 11 }}>
+                    {p.skillId}
+                  </td>
+                  <td>{p.skillName || '-'}</td>
+                  <td>
+                    {p.category || '-'}
+                    <br />
+                    <span style={{ fontSize: 11, color: '#777' }}>{p.serviceLine || ''}</span>
+                  </td>
+                  <td>{p.responsiblePerson || '-'}</td>
+                  <td className="mono">{fmtNum(p.creditPerUnit)}</td>
+                  <td className="mono">{p.cost != null ? fmtNum(p.cost) : '-'}</td>
+                  <td className="mono">{margin(p)}</td>
+                  <td>{p.billingUnit || '-'}</td>
+                  <td>{statusBadge(p)}</td>
+                  <td>
+                    <button className="btn-secondary btn-sm" onClick={() => void openHistory(p)}>
+                      历史
+                    </button>{' '}
+                    {p.activationStatus !== 'approved' && (
+                      <button className="btn-secondary btn-sm" onClick={() => void activate(p)}>
+                        审核通过
+                      </button>
+                    )}{' '}
+                    {p.activationStatus === 'approved' && p.status === 'shadow' && (
+                      <button className="btn-primary btn-sm" onClick={() => void launch(p)}>
+                        正式上线
+                      </button>
+                    )}{' '}
+                    <button className="btn-secondary btn-sm" onClick={() => openEdit(p)}>
+                      编辑
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* ── 编辑定价 ── */}

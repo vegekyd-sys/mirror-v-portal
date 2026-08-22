@@ -119,69 +119,75 @@ export default function UsersPage() {
 
   return (
     <>
-      <div className="section-title">用户管理</div>
+      <div className="page-head">
+        <div>
+          <div className="section-title">用户管理</div>
+          <div className="page-sub">管理后台登录账号与口令 · 共 {users.length} 个</div>
+        </div>
+        <div className="page-actions">
+          <button className="btn-secondary" onClick={() => void load()}>
+            <IconRefresh /> 刷新
+          </button>
+          <button className="btn-primary" onClick={() => setShowCreate(true)}>
+            <IconPlus /> 新建管理员
+          </button>
+        </div>
+      </div>
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
 
-      <div className="action-bar">
-        <button className="btn-secondary" onClick={() => void load()}>
-          <IconRefresh /> 刷新
-        </button>
-        <button className="btn-primary" onClick={() => setShowCreate(true)}>
-          <IconPlus /> 新建管理员
-        </button>
-      </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th>用户名</th>
-            <th>显示名称</th>
-            <th>角色</th>
-            <th>状态</th>
-            <th>创建时间</th>
-            <th>最近登录</th>
-            <th style={{ width: 220 }}>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u) => (
-            <tr key={u.id}>
-              <td className="mono">{u.username}</td>
-              <td>{u.displayName || '-'}</td>
-              <td>
-                <span className={`badge ${u.role === 'admin' ? 'badge-plan-pro' : 'badge-dead'}`}>
-                  {u.role || '-'}
-                </span>
-              </td>
-              <td>
-                {u.isActive ? (
-                  <span className="badge badge-active">启用</span>
-                ) : (
-                  <span className="badge badge-failed">禁用</span>
-                )}
-              </td>
-              <td style={{ fontSize: 11, color: '#777' }}>
-                {u.createdAt ? new Date(u.createdAt).toLocaleString() : '-'}
-              </td>
-              <td style={{ fontSize: 11, color: '#777' }}>
-                {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '从未'}
-              </td>
-              <td>
-                <button className="btn-secondary btn-sm" onClick={() => void regenerate(u)}>
-                  重置口令
-                </button>{' '}
-                <button
-                  className={u.isActive ? 'btn-danger btn-sm' : 'btn-primary btn-sm'}
-                  onClick={() => void toggleActive(u)}
-                >
-                  {u.isActive ? '禁用' : '启用'}
-                </button>
-              </td>
+      <div className="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>用户名</th>
+              <th>显示名称</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>创建时间</th>
+              <th>最近登录</th>
+              <th style={{ width: 220 }}>操作</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id}>
+                <td className="mono">{u.username}</td>
+                <td>{u.displayName || '-'}</td>
+                <td>
+                  <span className={`badge ${u.role === 'admin' ? 'badge-plan-pro' : 'badge-dead'}`}>
+                    {u.role || '-'}
+                  </span>
+                </td>
+                <td>
+                  {u.isActive ? (
+                    <span className="badge badge-active">启用</span>
+                  ) : (
+                    <span className="badge badge-failed">禁用</span>
+                  )}
+                </td>
+                <td style={{ fontSize: 11, color: '#777' }}>
+                  {u.createdAt ? new Date(u.createdAt).toLocaleString() : '-'}
+                </td>
+                <td style={{ fontSize: 11, color: '#777' }}>
+                  {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '从未'}
+                </td>
+                <td>
+                  <button className="btn-secondary btn-sm" onClick={() => void regenerate(u)}>
+                    重置口令
+                  </button>{' '}
+                  <button
+                    className={u.isActive ? 'btn-danger btn-sm' : 'btn-primary btn-sm'}
+                    onClick={() => void toggleActive(u)}
+                  >
+                    {u.isActive ? '禁用' : '启用'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="hint">
         登录口令仅在新建 / 重置时显示一次，服务端只保存其 HMAC 哈希，无法找回。
         重置口令使用 ledger <code>POST /v1/admin/users/:id/regenerate-token</code>。
