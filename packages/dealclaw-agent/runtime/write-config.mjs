@@ -243,8 +243,9 @@ const config = {
             groupPolicy: 'allowlist',
             requireMention: true,
             streaming: true,
-            // Quota optimisation: skip typing-indicator reactions.
-            typingIndicator: false,
+            // Show "typing…" indicator while the agent run is in flight.
+            // Set DEALCLAW_FEISHU_TYPING_INDICATOR=false to disable (quota optimisation).
+            typingIndicator: process.env.DEALCLAW_FEISHU_TYPING_INDICATOR !== 'false',
             // D2: full workplace tool suite (requires app scopes).
             tools: { doc: true, chat: true, wiki: true, drive: true, perm: true, bitable: true },
           },
