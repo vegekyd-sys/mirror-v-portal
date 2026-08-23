@@ -310,7 +310,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.get('/v1/tenants', async (_req: Request, res: Response) => {
     try {
       const { rows } = await pool.query(
-        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_credits_monthly, mio_cdp_supplier_id, created_at
+        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_agents, quota_credits_monthly,
+                k8s_namespace, mio_cdp_supplier_id, app_id, agent_endpoint, created_at, updated_at
          FROM tenants ORDER BY created_at DESC LIMIT 100`,
       );
 
@@ -322,9 +323,14 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           contactEmail: t.contact_email,
           planTier: t.plan_tier,
           status: t.status,
+          quotaAgents: t.quota_agents,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
+          k8sNamespace: t.k8s_namespace ?? null,
           mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
+          feishuAppId: t.app_id ?? null,
+          externalAgent: Boolean(t.agent_endpoint),
           createdAt: t.created_at,
+          updatedAt: t.updated_at,
         })),
         total: rows.length,
       });

@@ -6,6 +6,8 @@ import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
 import CustomersPage from './pages/CustomersPage';
 import CustomerDetailPage from './pages/CustomerDetailPage';
+import AgentsPage from './pages/AgentsPage';
+import AgentDetailPage from './pages/AgentDetailPage';
 import PlansPage from './pages/PlansPage';
 import SkillPricesPage from './pages/SkillPricesPage';
 import SkillsPage from './pages/SkillsPage';
@@ -41,6 +43,8 @@ export default function App() {
             <Route path="tenants" element={<Navigate to="/customers" replace />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
+            <Route path="agents" element={<AgentsPage />} />
+            <Route path="agents/:tenantId" element={<AgentDetailPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />
