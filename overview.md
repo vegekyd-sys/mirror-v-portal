@@ -187,3 +187,34 @@ ACR 拒绝直接 Basic auth 调 v2 API，401 响应带 `WWW-Authenticate: Bearer
 | image_releases | 8 条 `created_by='registry-sync'`，含 git_commit/build_number/branch 元数据 |
 | 手动同步 `POST /v1/admin/image-releases/sync` | 200，幂等（inserted=0） |
 | 线上版本 | admin-web/central-gateway=`a116b1a0.45`、provisioning=`a116b1a0.46` |
+
+---
+
+# 2026-08-23（二）：移除内置默认租户
+
+需求：不再需要默认租户——系统初始化不创建任何租户，租户列表保持为空，全部租户经管理后台显式创建。
+
+## 代码改动（commit `a299bcd`，9 文件 +23/-290）
+
+- 删除 `services/default-tenant.ts`（boot + 每 10 分钟周期 ensure 引导逻辑）
+- 删除 `POST /v1/admin/default-tenant/ensure` 管理路由；index.ts 移除调用
+- tenants API：SELECT/响应中去掉 `is_default`，删除 `DEFAULT_TENANT_IMMUTABLE` 删除守卫（DB 列保留仅作历史）
+- admin-web：ChatPage 移除默认租户置顶排序/状态横幅/「（默认租户）」标签，空态引导改为「前往客户管理」；types.ts 删 `isDefault`
+- 注释清理：migrate.ts / provisioning.ts / feishu-binding.ts 中提及默认租户的过时注释
+
+配套（aochi `b02e81b`）：production/test 两个 ingress 删除 `/v1/admin/default-tenant` 路径。
+
+## 上线与销毁（Build #47）
+
+1. Jenkins Build #47（provisioning-service + admin-web）SUCCESS，ArgoCD 同步 `a299bcd1.47`
+2. `DELETE /v1/tenants/default` → 守卫已移除，deprovision 成功，`dealclaw-default` 命名空间完全回收
+3. 租户表：default=destroyed、dealclaw-test=destroyed、飞书租户=active（唯一活跃）
+
+## 验证
+
+| 项目 | 结果 |
+|---|---|
+| `dealclaw-default` 命名空间 | NotFound（完全删除） |
+| `POST /v1/admin/default-tenant/ensure` | 404（路由已删） |
+| provisioning boot 日志 | 无 default-tenant 引导；registry-sync 正常 `+0/2; +0/6`（幂等） |
+| 飞书租户聊天回归 | 200 "pong"（首次闲置后偶发空回复，重试正常，代理代码未改动） |
