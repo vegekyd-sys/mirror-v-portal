@@ -1,6 +1,7 @@
 // 运行时配置 — migrated from legacy admin-dashboard/public/admin-runtime-configs.html.
 // Data: provisioning-service /v1/admin/runtime-configs (+ presets) with the
 // tenant scope list from /v1/tenants.
+// NOTE: LLM 供应商管理已迁出至独立的「模型供应商」页（LlmProvidersPage）。
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
@@ -28,24 +29,6 @@ interface PushSummary {
   hint: string;
 }
 
-interface LlmModel {
-  id: string;
-  reasoning?: boolean;
-}
-
-interface LlmProvider {
-  name: string;
-  label?: string;
-  baseUrl: string;
-  apiKey: string;
-  models: LlmModel[];
-}
-
-interface LlmDoc {
-  providers: LlmProvider[];
-  defaultModel: string | null;
-}
-
 export default function RuntimeConfigsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [scope, setScope] = useState('');
@@ -61,28 +44,6 @@ export default function RuntimeConfigsPage() {
   const [formDesc, setFormDesc] = useState('');
   const [formSecret, setFormSecret] = useState(true);
   const [saving, setSaving] = useState(false);
-
-  // ── 大模型提供商 ──
-  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null });
-  const [llmSource, setLlmSource] = useState<'tenant' | 'global' | 'none'>('none');
-  const [llmBusy, setLlmBusy] = useState(false);
-  const [lpEditing, setLpEditing] = useState<string | null>(null);
-  const [lpName, setLpName] = useState('');
-  const [lpBaseUrl, setLpBaseUrl] = useState('');
-  const [lpApiKey, setLpApiKey] = useState('');
-  const [lpModels, setLpModels] = useState('');
-  const [lpMsg, setLpMsg] = useState('');
-  const [lpMsgErr, setLpMsgErr] = useState(false);
-
-  // 卡片内就地提示（校验错误/成功反馈），避免出现在页面顶部导致用户误以为"无反应"
-  const flashLp = (text: string, isErr = false) => {
-    setLpMsg(text);
-    setLpMsgErr(isErr);
-    window.setTimeout(() => {
-      setLpMsg('');
-      setLpMsgErr(false);
-    }, 6000);
-  };
 
   const flash = (text: string) => {
     setMsg(text);
@@ -116,24 +77,9 @@ export default function RuntimeConfigsPage() {
       .catch(() => {});
   }, []);
 
-  const loadLlm = useCallback(async (tenantId: string) => {
-    try {
-      const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : '';
-      const r = await api<{ source: 'tenant' | 'global' | 'none'; config: LlmDoc | null }>(
-        `/v1/admin/llm-providers${qs}`,
-      );
-      setLlmSource(r.source || 'none');
-      setLlmDoc(r.config || { providers: [], defaultModel: null });
-    } catch {
-      setLlmSource('none');
-      setLlmDoc({ providers: [], defaultModel: null });
-    }
-  }, []);
-
   useEffect(() => {
     void loadConfigs(scope);
-    void loadLlm(scope);
-  }, [scope, loadConfigs, loadLlm]);
+  }, [scope, loadConfigs]);
 
   const save = async () => {
     const key = formKey.trim();
@@ -206,142 +152,6 @@ export default function RuntimeConfigsPage() {
     }
   };
 
-  // ── 大模型提供商：本地增删改 + 整体保存 ──
-
-  const parseModelLines = (text: string): LlmModel[] => {
-    const models: LlmModel[] = [];
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!line) continue;
-      const m = line.match(/^(.+):reasoner$/i);
-      if (m) {
-        models.push({ id: m[1].trim(), reasoning: true });
-      } else {
-        models.push({ id: line });
-      }
-    }
-    return models;
-  };
-
-  const addOrUpdateProvider = () => {
-    const name = lpName.trim().toLowerCase();
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
-      flashLp('提供商 ID 不合法：需小写字母开头，仅小写字母/数字/_/-（最长 32 位），如 qwen、glm-4', true);
-      return;
-    }
-    if (!/^https?:\/\/.+/.test(lpBaseUrl.trim())) {
-      flashLp('Base URL 需以 http:// 或 https:// 开头，如 https://dashscope.aliyuncs.com/compatible-mode/v1', true);
-      return;
-    }
-    if (!lpApiKey.trim()) {
-      flashLp('API Key 不能为空', true);
-      return;
-    }
-    const models = parseModelLines(lpModels);
-    if (models.length === 0) {
-      flashLp('至少填写一个模型 ID（模型列表输入框，一行一个）', true);
-      return;
-    }
-    if (models.some((m) => !/^[A-Za-z0-9._-]{1,100}$/.test(m.id))) {
-      flashLp('模型 ID 只能含字母/数字/./_/-（:reasoner 后缀除外）', true);
-      return;
-    }
-    const exists = llmDoc.providers.some((p) => p.name === name);
-    if (exists && lpEditing !== name) {
-      flashLp(`提供商 ${name} 已存在，请换一个 ID 或用列表中的「编辑」`, true);
-      return;
-    }
-    const next: LlmProvider = {
-      name,
-      baseUrl: lpBaseUrl.trim().replace(/\/+$/, ''),
-      apiKey: lpApiKey,
-      models,
-    };
-    const providers = exists
-      ? llmDoc.providers.map((p) => (p.name === name ? next : p))
-      : [...llmDoc.providers, next];
-    // 默认模型若已不在列表中则清空，交由保存前的必选校验兜底
-    const defaultModel =
-      llmDoc.defaultModel && providers.some((p) => llmDoc.defaultModel!.startsWith(`${p.name}/`))
-        ? llmDoc.defaultModel
-        : null;
-    setLlmDoc({ providers, defaultModel });
-    setLpEditing(null);
-    setLpName('');
-    setLpBaseUrl('');
-    setLpApiKey('');
-    setLpModels('');
-    flashLp(lpEditing ? `已更新提供商 ${name}（尚未保存，请点「保存提供商配置」）` : `已添加提供商 ${name}（尚未保存，请点「保存提供商配置」）`);
-  };
-
-  const editProvider = (p: LlmProvider) => {
-    setLpEditing(p.name);
-    setLpName(p.name);
-    setLpBaseUrl(p.baseUrl);
-    setLpApiKey(p.apiKey);
-    setLpModels(p.models.map((m) => (m.reasoning ? `${m.id}:reasoner` : m.id)).join('\n'));
-  };
-
-  const removeProvider = (name: string) => {
-    if (!window.confirm(`确认从列表移除提供商 ${name}？（需保存后生效）`)) return;
-    const providers = llmDoc.providers.filter((p) => p.name !== name);
-    const defaultModel =
-      llmDoc.defaultModel && llmDoc.defaultModel.startsWith(`${name}/`) ? null : llmDoc.defaultModel;
-    setLlmDoc({ providers, defaultModel });
-    if (lpEditing === name) {
-      setLpEditing(null);
-      setLpName('');
-      setLpBaseUrl('');
-      setLpApiKey('');
-      setLpModels('');
-    }
-  };
-
-  const saveLlm = async () => {
-    if (llmDoc.providers.length === 0) {
-      flashLp('未配置任何提供商；如需清除请用「清除本作用域覆盖/配置」', true);
-      return;
-    }
-    if (!llmDoc.defaultModel) {
-      flashLp('请选择默认模型（agent 主模型，必选）', true);
-      return;
-    }
-    const scopeLabel = scope || '全局默认';
-    if (scope && llmSource !== 'tenant' && !window.confirm(`确认为租户 ${scope} 创建提供商配置覆盖？`)) return;
-    setLlmBusy(true);
-    try {
-      const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
-        method: 'PUT',
-        body: { tenantId: scope || null, providers: llmDoc.providers, defaultModel: llmDoc.defaultModel },
-      });
-      flashLp(`已保存大模型提供商（${scopeLabel}）。${r.push?.hint || ''}`);
-      log(`保存 LLM 提供商 @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
-      await loadLlm(scope);
-    } catch (e) {
-      flashLp(`保存失败：${errMsg(e)}`, true);
-      log(`保存 LLM 提供商失败：${errMsg(e)}`, true);
-    } finally {
-      setLlmBusy(false);
-    }
-  };
-
-  const clearLlm = async () => {
-    const scopeLabel = scope || '全局默认';
-    if (!window.confirm(`确认清除 ${scopeLabel} 的大模型提供商配置？清除后 agent 回退到默认 DeepSeek 配置。`)) return;
-    setLlmBusy(true);
-    try {
-      const qs = scope ? `?tenantId=${encodeURIComponent(scope)}` : '';
-      const r = await api<{ push?: PushSummary }>(`/v1/admin/llm-providers${qs}`, { method: 'DELETE' });
-      flashLp(`已清除（${scopeLabel}）。${r.push?.hint || ''}`);
-      log(`清除 LLM 提供商 @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
-      await loadLlm(scope);
-    } catch (e) {
-      flashLp(`清除失败：${errMsg(e)}`, true);
-    } finally {
-      setLlmBusy(false);
-    }
-  };
-
   const fillPreset = (p: Preset) => {
     setFormKey(p.key);
     setFormDesc(p.description || '');
@@ -355,7 +165,7 @@ export default function RuntimeConfigsPage() {
       <div className="page-head">
         <div>
           <div className="section-title">运行时配置</div>
-          <div className="page-sub">租户 Pod 的环境变量来源，敏感值加密入库</div>
+          <div className="page-sub">租户 Pod 的环境变量来源，敏感值加密入库（大模型供应商请用「模型供应商」页）</div>
         </div>
         <div className="page-actions">
           <select
@@ -415,7 +225,7 @@ export default function RuntimeConfigsPage() {
             className="mono"
             value={formKey}
             onChange={(e) => setFormKey(e.target.value)}
-            placeholder="如 DEEPSEEK_API_KEY（合法环境变量名）"
+            placeholder="如 API_TOKEN（合法环境变量名）"
           />
         </div>
         <div className="form-row">
@@ -456,140 +266,6 @@ export default function RuntimeConfigsPage() {
         </div>
       </div>
 
-      {/* ── 大模型提供商 ── */}
-      <div className="form-card" style={{ marginTop: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ fontSize: 14, color: '#171c2e', fontWeight: 700 }}>大模型提供商</span>
-          {llmSource === 'tenant' && <span className="badge badge-warn">租户覆盖</span>}
-          {llmSource === 'global' && <span className="badge badge-active">全局默认</span>}
-          {llmSource === 'none' && <span className="badge">未配置（使用内置 DeepSeek）</span>}
-        </div>
-        <div className="hint" style={{ marginBottom: 10 }}>
-          为 agent 配置大模型提供商（OpenAI 兼容接口，如 DeepSeek / 通义千问 / 智谱 GLM / Kimi / 豆包等）。
-          保存后写入租户 <span className="mono">tenant-config</span> Secret 并滚动重启 agent，
-          <b>约 1–2 分钟生效</b>（模型配置在容器启动时应用，不支持热更新）。未配置时使用内置 DeepSeek。
-        </div>
-
-        {llmDoc.providers.length > 0 && (
-          <table style={{ marginBottom: 12 }}>
-            <thead>
-              <tr>
-                <th>提供商 ID</th>
-                <th>Base URL</th>
-                <th>API Key</th>
-                <th>模型</th>
-                <th style={{ width: 130 }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {llmDoc.providers.map((p) => (
-                <tr key={p.name}>
-                  <td className="mono">
-                    {p.name}
-                    {llmDoc.defaultModel?.startsWith(`${p.name}/`) && (
-                      <> <span className="badge badge-active">默认</span></>
-                    )}
-                  </td>
-                  <td className="mono" style={{ fontSize: 11, maxWidth: 260, wordBreak: 'break-all' }}>
-                    {p.baseUrl}
-                  </td>
-                  <td className="mono" style={{ fontSize: 11 }}>
-                    {p.apiKey.slice(0, 4)}••••{p.apiKey.slice(-4)}
-                  </td>
-                  <td style={{ fontSize: 11 }}>
-                    {p.models.map((m) => (
-                      <span key={m.id} className="badge" style={{ marginRight: 4 }}>
-                        {m.id}
-                        {m.reasoning ? ' (r)' : ''}
-                      </span>
-                    ))}
-                  </td>
-                  <td>
-                    <button className="btn-secondary btn-sm" disabled={llmBusy} onClick={() => editProvider(p)}>
-                      编辑
-                    </button>{' '}
-                    <button className="btn-danger btn-sm" disabled={llmBusy} onClick={() => removeProvider(p.name)}>
-                      移除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <div className="form-row">
-          <label className="field-label">{lpEditing ? `编辑（${lpEditing}）` : '添加提供商'}</label>
-          <input
-            type="text"
-            className="mono"
-            style={{ flex: '0 1 150px' }}
-            value={lpName}
-            onChange={(e) => setLpName(e.target.value)}
-            placeholder="ID，如 qwen"
-            disabled={lpEditing !== null}
-          />
-          <input
-            type="text"
-            className="mono"
-            style={{ flex: '1 1 260px' }}
-            value={lpBaseUrl}
-            onChange={(e) => setLpBaseUrl(e.target.value)}
-            placeholder="Base URL（OpenAI 兼容），如 https://dashscope.aliyuncs.com/compatible-mode/v1"
-          />
-          <input
-            type="text"
-            className="mono"
-            style={{ flex: '1 1 180px' }}
-            value={lpApiKey}
-            onChange={(e) => setLpApiKey(e.target.value)}
-            placeholder="API Key"
-          />
-        </div>
-        <div className="form-row">
-          <label className="field-label" />
-          <input
-            type="text"
-            className="mono"
-            style={{ flex: 1 }}
-            value={lpModels}
-            onChange={(e) => setLpModels(e.target.value)}
-            placeholder="模型列表：一行一个 ID，推理模型加后缀 :reasoner（如 qwq-plus:reasoner）"
-          />
-          <button className="btn-secondary" disabled={llmBusy} onClick={addOrUpdateProvider}>
-            {lpEditing ? '更新到列表' : '加入列表'}
-          </button>
-        </div>
-        {lpMsg && (
-          <div className={`msg ${lpMsgErr ? 'msg-err' : 'msg-ok'}`} style={{ marginTop: -4 }}>{lpMsg}</div>
-        )}
-        <div className="form-row">
-          <label className="field-label">默认模型</label>
-          <select
-            value={llmDoc.defaultModel || ''}
-            onChange={(e) => setLlmDoc((d) => ({ ...d, defaultModel: e.target.value || null }))}
-            style={{ flex: '0 1 280px' }}
-          >
-            <option value="">— 选择 agent 主模型 —</option>
-            {llmDoc.providers.flatMap((p) =>
-              p.models.map((m) => (
-                <option key={`${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
-                  {p.name}/{m.id}
-                </option>
-              )),
-            )}
-          </select>
-          <button className="btn-primary" disabled={llmBusy} onClick={() => void saveLlm()}>
-            {llmBusy ? '处理中…' : (<><IconSave /> 保存提供商配置（{scope ? '租户覆盖' : '全局默认'}）</>)}
-          </button>
-          {(llmSource !== 'none' || llmDoc.providers.length > 0) && (
-            <button className="btn-danger" disabled={llmBusy} onClick={() => void clearLlm()}>
-              清除本作用域{llmSource === 'tenant' ? '覆盖' : '配置'}
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* ── 列表 ── */}
       <div className="section-title" style={{ fontSize: 14 }}>
         配置列表 — {scope ? `租户覆盖 (${scope})` : '全局默认'}
@@ -597,7 +273,7 @@ export default function RuntimeConfigsPage() {
       {items.length === 0 ? (
         <div className="panel">
           <div className="empty">
-            {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置，请先添加 DEEPSEEK_API_KEY 等必需项'}
+            {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置；大模型供应商请在「模型供应商」页维护'}
           </div>
         </div>
       ) : (
@@ -645,7 +321,7 @@ export default function RuntimeConfigsPage() {
       )}
       <div className="hint">
         保存后自动推送到租户 agent：skill 专用 Key 以 work/mio-api/.env 热下发（免重启，约 1 分钟内生效）；
-        DEEPSEEK_API_KEY 等模型 Key 仅在开通/重启时经 tenant-config Secret（envFrom）注入。
+        模型相关 Key 仅在开通/重启时经 tenant-config Secret（envFrom）注入。
         敏感值保存后无法回显，只能通过「改值」覆盖。
       </div>
 

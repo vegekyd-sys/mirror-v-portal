@@ -15,10 +15,14 @@ import {
 } from '../services/skill-env.js';
 import {
   LLM_PROVIDERS_KEY,
+  LLM_MODEL_SELECTION_KEY,
   LlmProvidersError,
   pushLlmProviders,
-  resolveLlmProviders,
+  getGlobalLlmProviders,
+  getTenantModelSelection,
+  resolveEffectiveLlmProviders,
   validateLlmProviders,
+  modelExistsIn,
 } from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -150,6 +154,13 @@ export function createRuntimeConfigRoutes(
         });
         return;
       }
+      if (String(key) === LLM_MODEL_SELECTION_KEY) {
+        res.status(400).json({
+          code: 'VALIDATION',
+          message: 'LLM_MODEL_SELECTION 请使用 /v1/admin/llm-providers/selection 接口维护',
+        });
+        return;
+      }
 
       await upsertRuntimeConfig(pool, { tenantId: scope, key, value, isSecret, description });
 
@@ -188,6 +199,13 @@ export function createRuntimeConfigRoutes(
         });
         return;
       }
+      if (key === LLM_MODEL_SELECTION_KEY) {
+        res.status(400).json({
+          code: 'VALIDATION',
+          message: 'LLM_MODEL_SELECTION 请使用 PUT /v1/admin/llm-providers/selection 维护',
+        });
+        return;
+      }
       const tenantId = typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
 
       if (tenantId && !(await tenantExists(tenantId))) {
@@ -212,13 +230,17 @@ export function createRuntimeConfigRoutes(
     }
   });
 
-  // ── LLM providers (大模型提供商) ────────────────────────────────────
-  // The provider set lives in ONE runtime_configs row (key LLM_PROVIDERS,
-  // encrypted JSON). These endpoints round-trip the decrypted document so
-  // the admin form can edit real values, then materialise it into the
-  // affected tenants' tenant-config Secrets with a rolling restart.
+  // ── LLM providers (大模型供应商集中管理) ────────────────────────────
+  // The provider library lives in ONE GLOBAL runtime_configs row (key
+  // LLM_PROVIDERS, encrypted JSON): providers with credentials + a global
+  // default model. Tenants never hold credentials — each may store a model
+  // SELECTION (LLM_MODEL_SELECTION, tenant scope) referencing the library.
+  // Pushes materialise the effective blob (library + resolved default) into
+  // the tenant-config Secret with a rolling restart.
 
-  // GET /v1/admin/llm-providers?tenantId=<id> — effective doc for the scope
+  // GET /v1/admin/llm-providers[?tenantId=<id>] — the global library
+  // (decrypted for editing); with tenantId also that tenant's selection and
+  // the effective model.
   router.get('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
       const tenantId =
@@ -227,39 +249,39 @@ export function createRuntimeConfigRoutes(
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
       }
-      const r = await resolveLlmProviders(pool, tenantId);
-      res.json({ ...r, tenantId });
+      const eff = await resolveEffectiveLlmProviders(pool, tenantId);
+      res.json({
+        config: eff.globalConfig,
+        selection: eff.selection,
+        effectiveModel: eff.effectiveModel,
+        tenantId,
+      });
     } catch (err) {
-      console.error('resolveLlmProviders failed:', err);
+      console.error('GET llm-providers failed:', err);
       res.status(500).json({ code: 'INTERNAL' });
     }
   });
 
-  // PUT /v1/admin/llm-providers — save + push the provider doc for one scope
+  // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
-      const { tenantId, providers, defaultModel } = req.body ?? {};
-      const scope = typeof tenantId === 'string' && tenantId ? tenantId : null;
-      if (scope && !(await tenantExists(scope))) {
-        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
-        return;
-      }
+      const { providers, defaultModel } = req.body ?? {};
 
       const doc = validateLlmProviders({ providers, defaultModel });
 
       // Persist as a single encrypted runtime_configs row (empty provider
-      // list is not allowed — use DELETE to clear the scope instead).
+      // list is not allowed — use DELETE to clear the library instead).
       const blob = JSON.stringify(doc);
       await upsertRuntimeConfig(pool, {
-        tenantId: scope,
+        tenantId: null,
         key: LLM_PROVIDERS_KEY,
         value: blob,
         isSecret: true,
-        description: '大模型提供商配置（agent 启动时经 envFrom 注入，改动需滚动重启生效）',
+        description: '大模型供应商库（全局；agent 启动时经 envFrom 注入，改动需滚动重启生效）',
       });
 
-      const push = await pushLlmProviders(pool, config, scope);
-      res.json({ ok: true, tenantId: scope, push });
+      const push = await pushLlmProviders(pool, config, null);
+      res.json({ ok: true, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {
         res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
@@ -274,24 +296,101 @@ export function createRuntimeConfigRoutes(
     }
   });
 
-  // DELETE /v1/admin/llm-providers?tenantId=<id> — clear the scope's doc
-  router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+  // DELETE /v1/admin/llm-providers — clear the global library + push all tenants
+  router.delete('/v1/admin/llm-providers', async (_req: Request, res: Response) => {
     try {
-      const tenantId =
-        typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
-      if (tenantId && !(await tenantExists(tenantId))) {
+      const deleted = await deleteRuntimeConfig(pool, null, LLM_PROVIDERS_KEY);
+      if (deleted === 0) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No LLM provider library configured' });
+        return;
+      }
+      const push = await pushLlmProviders(pool, config, null);
+      res.json({ ok: true, push });
+    } catch (err) {
+      console.error('DELETE llm-providers failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // ── Tenant model selection ─────────────────────────────────────────
+  // GET /v1/admin/llm-providers/selection?tenantId=<id> — raw selection row
+  // (even when it no longer resolves) + effective view, for the agent page.
+  router.get('/v1/admin/llm-providers/selection', async (req: Request, res: Response) => {
+    try {
+      const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId : '';
+      if (!tenantId || !(await tenantExists(tenantId))) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
       }
-      const deleted = await deleteRuntimeConfig(pool, tenantId, LLM_PROVIDERS_KEY);
-      if (deleted === 0) {
-        res.status(404).json({ code: 'NOT_FOUND', message: 'No LLM provider config in this scope' });
+      const library = await getGlobalLlmProviders(pool);
+      const rawSelection = await getTenantModelSelection(pool, tenantId);
+      const eff = await resolveEffectiveLlmProviders(pool, tenantId);
+      res.json({
+        tenantId,
+        rawSelection,
+        selection: eff.selection,
+        effectiveModel: eff.effectiveModel,
+        libraryEmpty: !library || library.providers.length === 0,
+        globalDefaultModel: library?.defaultModel ?? null,
+      });
+    } catch (err) {
+      console.error('GET llm-providers/selection failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // PUT /v1/admin/llm-providers/selection — set/clear a tenant's model
+  // selection (body: { tenantId, defaultModel: '<p>/<m>' | null }) and roll
+  // just that tenant's agent.
+  router.put('/v1/admin/llm-providers/selection', async (req: Request, res: Response) => {
+    try {
+      const { tenantId, defaultModel } = req.body ?? {};
+      if (typeof tenantId !== 'string' || !tenantId || !(await tenantExists(tenantId))) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
       }
+
+      const ref = typeof defaultModel === 'string' ? defaultModel.trim() : '';
+      if (ref) {
+        const library = await getGlobalLlmProviders(pool);
+        if (!library || library.providers.length === 0) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: '供应商库为空：请先在「模型供应商」页添加供应商并设置默认模型',
+          });
+          return;
+        }
+        if (!modelExistsIn(library, ref)) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: `模型 ${ref} 不在全局供应商库中（请重新选择）`,
+          });
+          return;
+        }
+        await upsertRuntimeConfig(pool, {
+          tenantId,
+          key: LLM_MODEL_SELECTION_KEY,
+          value: JSON.stringify({ defaultModel: ref }),
+          isSecret: false,
+          description: '租户模型选择（引用全局供应商库，默认跟随系统默认）',
+        });
+      } else {
+        // Clear the selection — tenant follows the global default again.
+        await deleteRuntimeConfig(pool, tenantId, LLM_MODEL_SELECTION_KEY);
+      }
+
       const push = await pushLlmProviders(pool, config, tenantId);
-      res.json({ ok: true, tenantId, push });
+      res.json({ ok: true, tenantId, selection: ref || null, push });
     } catch (err) {
-      console.error('DELETE llm-providers failed:', err);
+      if (err instanceof MasterKeyError) {
+        res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
+        return;
+      }
+      if (err instanceof LlmProvidersError) {
+        res.status(400).json({ code: 'VALIDATION', message: err.message });
+        return;
+      }
+      console.error('PUT llm-providers/selection failed:', err);
       res.status(500).json({ code: 'INTERNAL' });
     }
   });

@@ -1,26 +1,36 @@
 /**
- * Manually-configured LLM providers for tenant agents.
+ * Centrally-managed LLM provider library for tenant agents.
  *
- * The admin console stores the whole provider set as ONE runtime_configs row
- * (key = LLM_PROVIDERS, encrypted): providers with baseUrl + apiKey + model
- * list plus the default model. At provisioning time the blob is injected via
- * the tenant-config Secret (envFrom), and the agent's write-config.mjs turns
- * it into OpenClaw `models.providers` entries at container boot.
+ * The admin console maintains ONE global provider library as a runtime_configs
+ * row (tenant_id NULL, key = LLM_PROVIDERS, encrypted): providers with
+ * baseUrl + apiKey + model list plus a global default model. Individual
+ * tenants do NOT get their own copy — instead each tenant may store a model
+ * SELECTION (key = LLM_MODEL_SELECTION, tenant scope): a
+ * '<provider>/<modelId>' reference into the global library. At push time the
+ * effective blob (global providers + tenant-selection-or-global default) is
+ * materialised into the tenant-config Secret (envFrom), and the agent's
+ * write-config.mjs turns it into OpenClaw `models.providers` entries at boot.
+ *
+ * There is no built-in fallback provider any more: with an empty library the
+ * agent boots without any model configured (conversations fail until an
+ * admin adds providers and sets a default).
  *
  * Because model-provider credentials are consumed at boot (not from the hot
- * .env), rotating them requires writing the tenant-config Secret followed by
- * a rolling restart of the agent Deployment — see pushLlmProviders().
+ * .env), changing the library or a selection requires writing the
+ * tenant-config Secret followed by a rolling restart of the agent Deployment
+ * — see pushLlmProviders().
  */
 
 import type pg from 'pg';
-import { resolveTenantConfig } from './runtime-config.js';
 import { decryptValue } from './crypto.js';
 import { getSecret, putSecret, restartDeployment, deploymentExists } from './k8s-client.js';
 import { ENV_FROM_ONLY_KEYS } from './skill-env.js';
 import type { ProvisioningConfig } from '../config.js';
 
-/** runtime_configs key holding the provider JSON blob. */
+/** runtime_configs key holding the global provider JSON library. */
 export const LLM_PROVIDERS_KEY = 'LLM_PROVIDERS';
+/** runtime_configs key (tenant scope) holding a tenant's model selection. */
+export const LLM_MODEL_SELECTION_KEY = 'LLM_MODEL_SELECTION';
 
 export interface LlmModelSpec {
   id: string;
@@ -149,46 +159,97 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
   return { providers, defaultModel };
 }
 
-/** Effective provider doc for a tenant: tenant override, else global row. */
-export async function resolveLlmProviders(
-  pool: pg.Pool,
-  tenantId: string | null,
-): Promise<{ source: 'tenant' | 'global' | 'none'; config: LlmProvidersConfig | null }> {
-  let blob: string | undefined;
-  let source: 'tenant' | 'global' | 'none' = 'none';
-  if (tenantId) {
-    const { rows: tenantRows } = await pool.query(
-      `SELECT encrypted_value FROM runtime_configs WHERE tenant_id = $1 AND config_key = $2`,
-      [tenantId, LLM_PROVIDERS_KEY],
-    );
-    if (tenantRows.length) {
-      blob = tenantRows[0].encrypted_value;
-      source = 'tenant';
-    }
-  }
-  if (blob === undefined) {
-    const { rows: globalRows } = await pool.query(
-      `SELECT encrypted_value FROM runtime_configs WHERE tenant_id IS NULL AND config_key = $1`,
-      [LLM_PROVIDERS_KEY],
-    );
-    if (globalRows.length) {
-      blob = globalRows[0].encrypted_value;
-      source = 'global';
-    }
-  }
-  if (blob === undefined) return { source: 'none', config: null };
+/** True when '<provider>/<modelId>' exists in the given provider doc. */
+export function modelExistsIn(doc: LlmProvidersConfig, ref: string): boolean {
+  const [pName, ...rest] = ref.split('/');
+  const modelId = rest.join('/');
+  if (!pName || !modelId) return false;
+  const provider = doc.providers.find((p) => p.name === pName);
+  return !!provider && provider.models.some((m) => m.id === modelId);
+}
 
+/**
+ * The global provider library (decrypted + re-validated). Returns null when
+ * no row exists or the stored data is corrupt — callers treat both as
+ * "library empty".
+ */
+export async function getGlobalLlmProviders(
+  pool: pg.Pool,
+): Promise<LlmProvidersConfig | null> {
+  const { rows } = await pool.query(
+    `SELECT encrypted_value FROM runtime_configs WHERE tenant_id IS NULL AND config_key = $1`,
+    [LLM_PROVIDERS_KEY],
+  );
+  if (!rows.length) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(decryptValue(blob));
+    parsed = JSON.parse(decryptValue(rows[0].encrypted_value));
   } catch {
-    return { source, config: null };
+    return null;
   }
   try {
-    return { source, config: validateLlmProviders(parsed) };
+    return validateLlmProviders(parsed);
   } catch {
-    return { source, config: null };
+    return null;
   }
+}
+
+/**
+ * A tenant's model selection: '<provider>/<modelId>' or null (follow the
+ * global default). A selection that no longer resolves into the library
+ * (provider removed) is ignored — the tenant falls back to the global
+ * default instead of failing.
+ */
+export async function getTenantModelSelection(
+  pool: pg.Pool,
+  tenantId: string,
+): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT encrypted_value FROM runtime_configs WHERE tenant_id = $1 AND config_key = $2`,
+    [tenantId, LLM_MODEL_SELECTION_KEY],
+  );
+  if (!rows.length) return null;
+  try {
+    const parsed = JSON.parse(decryptValue(rows[0].encrypted_value));
+    const ref = typeof parsed?.defaultModel === 'string' ? parsed.defaultModel.trim() : '';
+    return ref || null;
+  } catch {
+    return null;
+  }
+}
+
+export interface EffectiveLlmProviders {
+  /** Global library (null when empty/corrupt). */
+  globalConfig: LlmProvidersConfig | null;
+  /** Tenant's own selection, if it resolves into the library. */
+  selection: string | null;
+  /** selection ?? globalConfig.defaultModel ?? null */
+  effectiveModel: string | null;
+  /** Serialised blob to inject as the LLM_PROVIDERS env var, or null. */
+  blob: string | null;
+}
+
+/**
+ * Effective provider doc for a tenant: the GLOBAL library's providers with
+ * the default model resolved as tenant-selection → global default → none.
+ * The materialised blob is what write-config.mjs parses at container boot.
+ */
+export async function resolveEffectiveLlmProviders(
+  pool: pg.Pool,
+  tenantId: string | null,
+): Promise<EffectiveLlmProviders> {
+  const globalConfig = await getGlobalLlmProviders(pool);
+  if (!globalConfig || globalConfig.providers.length === 0) {
+    return { globalConfig: null, selection: null, effectiveModel: null, blob: null };
+  }
+  let selection: string | null = null;
+  if (tenantId) {
+    const ref = await getTenantModelSelection(pool, tenantId);
+    if (ref && modelExistsIn(globalConfig, ref)) selection = ref;
+  }
+  const effectiveModel = selection ?? globalConfig.defaultModel ?? null;
+  const blob = JSON.stringify({ ...globalConfig, defaultModel: effectiveModel });
+  return { globalConfig, selection, effectiveModel, blob };
 }
 
 export interface LlmPushResult {
@@ -214,6 +275,13 @@ export async function pushLlmProviders(
   if (scope) {
     targets.push(scope);
   } else {
+    // Migration: drop legacy tenant-scoped full LLM_PROVIDERS overrides from
+    // the pre-library era — tenants now only hold a model selection and the
+    // library itself is global.
+    await pool.query(
+      `DELETE FROM runtime_configs WHERE config_key = $1 AND tenant_id IS NOT NULL`,
+      [LLM_PROVIDERS_KEY],
+    );
     const { rows } = await pool.query(
       `SELECT tenant_id FROM tenants
         WHERE status <> 'destroyed' AND k8s_namespace IS NOT NULL AND agent_endpoint IS NULL
@@ -239,11 +307,11 @@ export async function pushLlmProviders(
         continue;
       }
 
-      const merged = await resolveTenantConfig(pool, tenantId);
-      const blob = merged[LLM_PROVIDERS_KEY];
+      // Effective blob = global library + this tenant's resolved default.
+      const { blob } = await resolveEffectiveLlmProviders(pool, tenantId);
 
       // Rewrite tenant-config keeping only envFrom-only keys, then set or
-      // drop LLM_PROVIDERS according to the current effective config.
+      // drop LLM_PROVIDERS according to the effective config.
       const next: Record<string, string> = {};
       const existing = await getSecret(namespace, 'tenant-config');
       if (existing) {

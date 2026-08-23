@@ -189,7 +189,7 @@ export async function provisionTenant(
     }
     if (Object.keys(envFromData).length === 0) {
       result.warnings.push(
-        'Runtime config has no envFrom-only key (DEEPSEEK_API_KEY 或运行时配置页的「大模型提供商」) — the agent Pod will fail its boot check',
+        'Runtime config has no envFrom-only key (大模型供应商页的提供商库) — the agent will boot without any model configured',
       );
     }
     await k8sCreateSecret(nsName, runtimeSecretName, envFromData);

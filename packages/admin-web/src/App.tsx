@@ -12,6 +12,7 @@ import PlansPage from './pages/PlansPage';
 import SkillPricesPage from './pages/SkillPricesPage';
 import SkillsPage from './pages/SkillsPage';
 import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
+import LlmProvidersPage from './pages/LlmProvidersPage';
 import UsersPage from './pages/UsersPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
 import ChatPage from './pages/ChatPage';
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
             <Route path="agents" element={<AgentsPage />} />
             <Route path="agents/:tenantId" element={<AgentDetailPage />} />
+            <Route path="llm-providers" element={<LlmProvidersPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />

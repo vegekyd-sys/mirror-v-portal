@@ -51,13 +51,9 @@ if [[ -f "${OPENCLAW_STATE_DIR}/llm-env.sh" ]]; then
   source "${OPENCLAW_STATE_DIR}/llm-env.sh"
 fi
 
-# Fail-closed boot checks: the default DeepSeek path needs its key. When
-# custom providers are configured (LLM_PROVIDERS), write-config.mjs has
-# already validated them and llm-env.sh provided their keys instead.
-if [[ -z "${LLM_PROVIDERS:-}" && "${DEALCLAW_MODEL:-deepseek/deepseek-chat}" == deepseek/* && -z "${DEEPSEEK_API_KEY:-}" ]]; then
-  echo "[dealclaw-runtime] DEALCLAW_MODEL requires DEEPSEEK_API_KEY" >&2
-  exit 1
-fi
+# No built-in provider any more: with no LLM_PROVIDERS the gateway starts
+# without a model (write-config.mjs warns); conversations fail until an
+# admin configures providers in the console.
 
 openclaw gateway run --port "$OPENCLAW_GATEWAY_PORT" --bind loopback --auth none &
 gateway_pid=$!

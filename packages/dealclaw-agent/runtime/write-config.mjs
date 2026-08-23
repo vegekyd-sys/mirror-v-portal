@@ -46,37 +46,10 @@ function defaultModelSpec(id, reasoning) {
   };
 }
 
-const deepseekModels = [
-  {
-    id: 'deepseek-chat',
-    name: 'DeepSeek Chat',
-    input: ['text'],
-    contextWindow: 131_072,
-    maxTokens: 8_192,
-    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
-    compat: { supportsUsageInStreaming: true, maxTokensField: 'max_tokens' },
-  },
-  {
-    id: 'deepseek-reasoner',
-    name: 'DeepSeek Reasoner',
-    reasoning: true,
-    input: ['text'],
-    contextWindow: 131_072,
-    maxTokens: 65_536,
-    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
-    compat: { supportsUsageInStreaming: true, supportsReasoningEffort: false, maxTokensField: 'max_tokens' },
-  },
-];
-
-const providers = {
-  deepseek: {
-    baseUrl: 'https://api.deepseek.com',
-    api: 'openai-completions',
-    apiKey: { source: 'env', provider: 'default', id: 'DEEPSEEK_API_KEY' },
-    models: deepseekModels,
-  },
-};
-let primaryModel = process.env.DEALCLAW_MODEL || 'deepseek/deepseek-chat';
+// No built-in fallback provider: with an empty library the agent boots with
+// no model configured (admin must add providers in the console first).
+const providers = {};
+let primaryModel = null;
 
 if (llmDoc && llmDoc.providers.length > 0) {
   const exportLines = [];
@@ -129,9 +102,12 @@ if (llmDoc && llmDoc.providers.length > 0) {
     primaryModel = `${first.name}/${first.models[0]?.id ?? ''}`;
   }
 } else {
-  // No custom providers configured — remove any stale exports file so a
-  // previously-configured key can never linger on disk.
+  // No providers configured — remove any stale exports file so a
+  // previously-configured key can never linger on disk. The gateway still
+  // starts, but with no model: conversations will fail until an admin
+  // configures providers in the console.
   try { fs.unlinkSync(llmEnvPath); } catch { /* not present */ }
+  console.warn('[dealclaw-runtime] no LLM providers configured — agent starts WITHOUT a model');
 }
 
 const deniedTools = [
@@ -179,7 +155,7 @@ const config = {
       contextInjection: 'always',
       bootstrapMaxChars: 30_000,
       bootstrapTotalMaxChars: 100_000,
-      model: { primary: primaryModel },
+      ...(primaryModel ? { model: { primary: primaryModel } } : {}),
       timeoutSeconds: 120,
       userTimezone: timezone,
       memorySearch: { enabled: true, provider: 'none' },

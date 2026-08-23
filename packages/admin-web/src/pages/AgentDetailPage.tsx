@@ -441,6 +441,65 @@ export default function AgentDetailPage() {
     }
   };
 
+  // ── 模型选择（从全局供应商库中为本 Agent 选模型） ──
+  interface LlmSelectionView {
+    rawSelection: string | null;
+    selection: string | null;
+    effectiveModel: string | null;
+    libraryEmpty: boolean;
+    globalDefaultModel: string | null;
+  }
+  interface LlmLibraryProvider {
+    name: string;
+    models: Array<{ id: string }>;
+  }
+  const [llmSel, setLlmSel] = useState<LlmSelectionView | null>(null);
+  const [llmLib, setLlmLib] = useState<LlmLibraryProvider[]>([]);
+  const [llmChoice, setLlmChoice] = useState('');
+  const [llmBusy, setLlmBusy] = useState(false);
+
+  const loadLlmSelection = useCallback(async () => {
+    try {
+      const [sel, lib] = await Promise.all([
+        api<LlmSelectionView>(
+          `/v1/admin/llm-providers/selection?tenantId=${encodeURIComponent(tenantId)}`,
+        ),
+        api<{ config: { providers: LlmLibraryProvider[] } | null }>(
+          '/v1/admin/llm-providers',
+        ),
+      ]);
+      setLlmSel(sel);
+      setLlmLib(lib.config?.providers || []);
+      setLlmChoice(sel.selection || '');
+    } catch {
+      setLlmSel(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadLlmSelection();
+  }, [loadLlmSelection]);
+
+  const saveLlmSelection = async () => {
+    setLlmBusy(true);
+    try {
+      const r = await api<{ push?: { hint?: string } }>('/v1/admin/llm-providers/selection', {
+        method: 'PUT',
+        body: { tenantId, defaultModel: llmChoice || null },
+      });
+      flash(
+        llmChoice
+          ? `已设置本 Agent 模型：${llmChoice}。${r.push?.hint || ''}`
+          : `已恢复跟随系统默认。${r.push?.hint || ''}`,
+      );
+      await loadLlmSelection();
+    } catch (e) {
+      flash(`模型选择保存失败：${errMsg(e)}`);
+    } finally {
+      setLlmBusy(false);
+    }
+  };
+
   // ── 运行镜像更新 ──
   const [releases, setReleases] = useState<ImageRelease[]>([]);
   const [imgService, setImgService] = useState<'dealclaw-agent' | 'nexus-gateway'>('dealclaw-agent');
@@ -497,6 +556,7 @@ export default function AgentDetailPage() {
               void loadRuntime();
               void loadBinding();
               void loadSkillEnv();
+              void loadLlmSelection();
             }}
           >
             <IconRefresh /> 刷新
@@ -768,6 +828,69 @@ export default function AgentDetailPage() {
           <div className="hint">
             副本数设为 0 即挂起（节省资源，恢复设回 1）。备份/归档/恢复为后台 Job，进度见状态日志。
           </div>
+        </div>
+      </div>
+
+      {/* ── 模型选择 ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        模型选择
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          {llmSel === null ? (
+            <span className="hint" style={{ margin: 0 }}>加载中…</span>
+          ) : llmSel.libraryEmpty ? (
+            <div className="msg msg-warn" style={{ margin: 0 }}>
+              全局供应商库为空：请先到「模型供应商」页添加供应商并设置系统默认模型，再回到此处选择。
+            </div>
+          ) : (
+            <>
+              <div className="form-row" style={{ marginBottom: 10 }}>
+                <label className="field-label">当前生效</label>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  {llmSel.effectiveModel ? (
+                    <span className="badge badge-active mono">{llmSel.effectiveModel}</span>
+                  ) : (
+                    <span className="badge badge-pending">无默认模型（对话不可用）</span>
+                  )}
+                  {llmSel.selection ? (
+                    <span className="badge badge-warn">本 Agent 指定</span>
+                  ) : (
+                    <span className="hint" style={{ margin: 0 }}>
+                      跟随系统默认（{llmSel.globalDefaultModel || '未设置'}）
+                    </span>
+                  )}
+                  {llmSel.rawSelection && !llmSel.selection && (
+                    <span className="badge badge-warn">原选择已失效（供应商被移除），现跟随系统默认</span>
+                  )}
+                </span>
+              </div>
+              <div className="form-row">
+                <label className="field-label">选择模型</label>
+                <select
+                  value={llmChoice}
+                  onChange={(e) => setLlmChoice(e.target.value)}
+                  style={{ flex: '0 1 320px' }}
+                >
+                  <option value="">跟随系统默认（{llmSel.globalDefaultModel || '未设置'}）</option>
+                  {llmLib.flatMap((p) =>
+                    p.models.map((m) => (
+                      <option key={`${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
+                        {p.name}/{m.id}
+                      </option>
+                    )),
+                  )}
+                </select>
+                <button className="btn-primary" disabled={llmBusy} onClick={() => void saveLlmSelection()}>
+                  {llmBusy ? '处理中…' : '保存（滚动重启生效）'}
+                </button>
+              </div>
+              <div className="hint">
+                保存后写入该 Agent 的 <span className="mono">tenant-config</span> Secret 并滚动重启，约 1–2 分钟生效
+                （模型配置在容器启动时应用，不支持热更新）。供应商与 API Key 在「模型供应商」页集中维护。
+              </div>
+            </>
+          )}
         </div>
       </div>
 

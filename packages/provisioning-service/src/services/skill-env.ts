@@ -42,6 +42,15 @@ export const SKILL_ENV_DEFAULT_MODE = 0o440;
  */
 export const ENV_FROM_ONLY_KEYS = new Set(['DEEPSEEK_API_KEY', 'LLM_PROVIDERS']);
 
+/**
+ * Keys that never reach the agent at all — admin-side bookkeeping consumed
+ * only by the provisioning service (e.g. a tenant's model selection stored in
+ * runtime_configs). Excluded from both the hot .env and the tenant-config
+ * Secret (envFrom): the agent only ever sees the materialised
+ * LLM_PROVIDERS blob.
+ */
+export const ADMIN_ONLY_KEYS = new Set(['LLM_MODEL_SELECTION']);
+
 export class SkillEnvError extends Error {
   constructor(
     public status: number,
@@ -73,6 +82,7 @@ export function buildEnvFileContent(
   const entries = new Map<string, string>();
   for (const [k, v] of Object.entries(merged)) {
     if (ENV_FROM_ONLY_KEYS.has(k)) continue;
+    if (ADMIN_ONLY_KEYS.has(k)) continue;
     entries.set(k, v);
   }
   if (mioCdpSupplierId && !entries.has('MIO_CDP_SUPPLIER_ID')) {

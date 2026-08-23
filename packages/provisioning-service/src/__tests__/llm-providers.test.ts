@@ -21,9 +21,13 @@ vi.mock('../services/crypto.js', () => cryptoMocks);
 
 import {
   validateLlmProviders,
-  resolveLlmProviders,
+  modelExistsIn,
+  getGlobalLlmProviders,
+  getTenantModelSelection,
+  resolveEffectiveLlmProviders,
   pushLlmProviders,
   LLM_PROVIDERS_KEY,
+  LLM_MODEL_SELECTION_KEY,
 } from '../services/llm-providers.js';
 import { buildEnvFileContent } from '../services/skill-env.js';
 import { createApp } from '../app.js';
@@ -74,7 +78,7 @@ interface FakeQuery { sql: string; params?: unknown[] }
 function makeFakePool(opts: {
   tenant?: Record<string, any> | null;
   allTenants?: Array<{ tenant_id: string }>;
-  tenantLlmRow?: { encrypted_value: string }[];
+  tenantSelectionRow?: { encrypted_value: string }[];
   globalLlmRow?: { encrypted_value: string }[];
   globalRows?: any[];
   tenantRows?: any[];
@@ -98,9 +102,13 @@ function makeFakePool(opts: {
         return { rows: opts.tenant ? [opts.tenant] : [], rowCount: opts.tenant ? 1 : 0 };
       }
       if (sql.includes('AND config_key = $1') || sql.includes('AND config_key = $2')) {
-        // LLM_PROVIDERS lookup: tenant scope first when tenantId param present
         if (sql.includes('tenant_id = $1')) {
-          return { rows: opts.tenantLlmRow ?? [], rowCount: (opts.tenantLlmRow ?? []).length };
+          // tenant-scope lookup — distinguish selection vs legacy provider rows
+          const key = params && params[1];
+          if (key === LLM_MODEL_SELECTION_KEY) {
+            return { rows: opts.tenantSelectionRow ?? [], rowCount: (opts.tenantSelectionRow ?? []).length };
+          }
+          return { rows: [], rowCount: 0 };
         }
         return { rows: opts.globalLlmRow ?? [], rowCount: (opts.globalLlmRow ?? []).length };
       }
@@ -186,45 +194,81 @@ describe('validateLlmProviders', () => {
       validateLlmProviders({ ...goodDoc, defaultModel: 'other/m9' }),
     ).toThrow(/默认模型/);
   });
+
+  it('modelExistsIn matches only real provider/model pairs', () => {
+    const doc = validateLlmProviders(goodDoc);
+    expect(modelExistsIn(doc, 'qwen/qwen-max')).toBe(true);
+    expect(modelExistsIn(doc, 'glm/glm-4.5')).toBe(true);
+    expect(modelExistsIn(doc, 'qwen/nope')).toBe(false);
+    expect(modelExistsIn(doc, 'nope/qwen-max')).toBe(false);
+    expect(modelExistsIn(doc, 'dangling')).toBe(false);
+  });
 });
 
-// ── resolveLlmProviders ──────────────────────────────────────────────
+// ── library + selection resolution ───────────────────────────────────
 
-describe('resolveLlmProviders', () => {
-  it('prefers the tenant override over the global row', async () => {
-    const pool = makeFakePool({
-      tenantLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
-      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify({ providers: [], defaultModel: null }) }],
-    });
-    const r = await resolveLlmProviders(pool, 't123');
-    expect(r.source).toBe('tenant');
-    expect(r.config?.providers).toHaveLength(2);
+describe('resolveEffectiveLlmProviders', () => {
+  it('returns an empty result when no global library exists', async () => {
+    const pool = makeFakePool();
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.globalConfig).toBeNull();
+    expect(r.selection).toBeNull();
+    expect(r.effectiveModel).toBeNull();
+    expect(r.blob).toBeNull();
   });
 
-  it('falls back to global when the tenant has no override', async () => {
+  it('uses the global default when the tenant has no selection', async () => {
     const pool = makeFakePool({
       globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
     });
-    const r = await resolveLlmProviders(pool, 't123');
-    expect(r.source).toBe('global');
-    expect(r.config?.defaultModel).toBe('qwen/qwen-max');
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.selection).toBeNull();
+    expect(r.effectiveModel).toBe('qwen/qwen-max');
+    expect(JSON.parse(r.blob!).defaultModel).toBe('qwen/qwen-max');
+    expect(JSON.parse(r.blob!).providers).toHaveLength(2);
   });
 
-  it('reports none when nothing is configured', async () => {
-    const pool = makeFakePool();
-    const r = await resolveLlmProviders(pool, null);
-    expect(r.source).toBe('none');
-    expect(r.config).toBeNull();
+  it('prefers a resolvable tenant selection over the global default', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.selection).toBe('glm/glm-4.5');
+    expect(r.effectiveModel).toBe('glm/glm-4.5');
+  });
+
+  it('ignores a selection whose provider was removed from the library', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'kimi/moonshot' }) }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.selection).toBeNull();
+    expect(r.effectiveModel).toBe('qwen/qwen-max');
+  });
+
+  it('getTenantModelSelection tolerates corrupt rows', async () => {
+    const pool = makeFakePool({
+      tenantSelectionRow: [{ encrypted_value: 'enc:not-json' }],
+    });
+    expect(await getTenantModelSelection(pool, 't123')).toBeNull();
+  });
+
+  it('getGlobalLlmProviders returns null for corrupt data', async () => {
+    const pool = makeFakePool({ globalLlmRow: [{ encrypted_value: 'enc:{broken' }] });
+    expect(await getGlobalLlmProviders(pool)).toBeNull();
   });
 });
 
 // ── pushLlmProviders ─────────────────────────────────────────────────
 
 describe('pushLlmProviders', () => {
-  it('writes the blob into tenant-config and rolls the agent', async () => {
+  it('materialises the effective blob (library + tenant selection) and rolls the agent', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
-      tenantRows: [{ config_key: LLM_PROVIDERS_KEY, encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
     });
     k8sMocks.getSecret.mockResolvedValue({
       data: {
@@ -235,18 +279,20 @@ describe('pushLlmProviders', () => {
     });
     const r = await pushLlmProviders(pool, prodConfig, 't123');
     expect(r.tenants[0]).toMatchObject({ tenantId: 't123', ok: true, restarted: true });
-    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {
-      DEEPSEEK_API_KEY: 'sk-ds',
-      LLM_PROVIDERS: JSON.stringify(goodDoc),
-    });
+    const secretArg = k8sMocks.putSecret.mock.calls[0][2];
+    expect(secretArg.DEEPSEEK_API_KEY).toBe('sk-ds');
+    expect(secretArg.APIFY_TOKEN).toBeUndefined();
+    const blob = JSON.parse(secretArg.LLM_PROVIDERS);
+    expect(blob.defaultModel).toBe('glm/glm-4.5'); // tenant selection wins
+    expect(blob.providers).toHaveLength(2); // library providers, full credentials
     expect(k8sMocks.restartDeployment).toHaveBeenCalledWith('dealclaw-t123', 'dealclaw-agent-t123');
     expect(r.hint).toContain('滚动重启');
   });
 
-  it('removes the blob from tenant-config when no provider config remains', async () => {
+  it('removes the blob from tenant-config when the library is empty', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
-      // no LLM_PROVIDERS row anywhere → removal path
+      // no global library → removal path (agent boots without a model)
     });
     k8sMocks.getSecret.mockResolvedValue({
       data: { DEEPSEEK_API_KEY: b64('sk-ds'), LLM_PROVIDERS: b64('{}') },
@@ -258,25 +304,33 @@ describe('pushLlmProviders', () => {
     });
   });
 
-  it('targets every live tenant for the global scope', async () => {
+  it('targets every live tenant for the global scope and purges legacy tenant rows', async () => {
     const pool = makeFakePool({
       allTenants: [{ tenant_id: 't1' }, { tenant_id: 't2' }],
       tenant: makeTenant({ tenant_id: 't1' }),
       globalRows: [{ config_key: LLM_PROVIDERS_KEY, encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
     });
     const r = await pushLlmProviders(pool, prodConfig, null);
     expect(r.tenants).toHaveLength(2);
     expect(k8sMocks.putSecret).toHaveBeenCalledTimes(2);
+    const legacyDelete = pool.queries.find(
+      (q: FakeQuery) =>
+        q.sql.includes('DELETE FROM runtime_configs') && q.sql.includes('tenant_id IS NOT NULL'),
+    );
+    expect(legacyDelete).toBeTruthy();
+    expect(legacyDelete!.params![0]).toBe(LLM_PROVIDERS_KEY);
   });
 });
 
 // ── .env isolation ───────────────────────────────────────────────────
 
-describe('buildEnvFileContent excludes LLM_PROVIDERS', () => {
-  it('never leaks the provider blob into the hot .env', () => {
+describe('buildEnvFileContent excludes LLM keys', () => {
+  it('never leaks the provider blob or the selection into the hot .env', () => {
     const r = buildEnvFileContent({
       APIFY_TOKEN: 'tok',
       LLM_PROVIDERS: JSON.stringify(goodDoc),
+      LLM_MODEL_SELECTION: JSON.stringify({ defaultModel: 'qwen/qwen-max' }),
     });
     expect(r.content).toBe('APIFY_TOKEN=tok\n');
   });
@@ -301,9 +355,16 @@ describe('llm-providers API', () => {
     expect((await request(app).get('/v1/admin/llm-providers')).status).toBe(401);
     expect((await request(app).put('/v1/admin/llm-providers').send(goodDoc)).status).toBe(401);
     expect((await request(app).delete('/v1/admin/llm-providers')).status).toBe(401);
+    expect(
+      (await request(app).get('/v1/admin/llm-providers/selection?tenantId=t123')).status,
+    ).toBe(401);
+    expect(
+      (await request(app).put('/v1/admin/llm-providers/selection').send({ tenantId: 't123' }))
+        .status,
+    ).toBe(401);
   });
 
-  it('PUT validates and stores the encrypted blob, returning a push hint', async () => {
+  it('PUT validates and stores the encrypted GLOBAL blob, returning a push hint', async () => {
     const pool = makeFakePool({ allTenants: [] });
     const app = createApp(pool, baseConfig);
     const res = await request(app).put('/v1/admin/llm-providers').set(authHeader).send(goodDoc);
@@ -328,30 +389,125 @@ describe('llm-providers API', () => {
     expect(res.body.code).toBe('VALIDATION');
   });
 
-  it('GET returns source none when unconfigured', async () => {
+  it('GET returns the global library (null when unconfigured)', async () => {
     const app = createApp(makeFakePool(), baseConfig);
     const res = await request(app).get('/v1/admin/llm-providers').set(authHeader);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ source: 'none', config: null });
+    expect(res.body).toMatchObject({ config: null, effectiveModel: null, selection: null });
   });
 
-  it('DELETE 404s when the scope has no provider doc', async () => {
+  it('DELETE 404s when no library row exists', async () => {
     const pool = makeFakePool({ deleteRowCount: 0 });
     const app = createApp(pool, baseConfig);
     const res = await request(app).delete('/v1/admin/llm-providers').set(authHeader);
     expect(res.status).toBe(404);
   });
 
-  it('blocks the generic runtime-configs endpoints for LLM_PROVIDERS', async () => {
+  it('selection GET returns raw + effective view for a tenant', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .get('/v1/admin/llm-providers/selection?tenantId=t123')
+      .set(authHeader);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      tenantId: 't123',
+      rawSelection: 'glm/glm-4.5',
+      selection: 'glm/glm-4.5',
+      effectiveModel: 'glm/glm-4.5',
+      libraryEmpty: false,
+      globalDefaultModel: 'qwen/qwen-max',
+    });
+  });
+
+  it('selection GET 404s for an unknown tenant', async () => {
+    const app = createApp(makeFakePool({ tenant: null }), baseConfig);
+    const res = await request(app)
+      .get('/v1/admin/llm-providers/selection?tenantId=nope')
+      .set(authHeader);
+    expect(res.status).toBe(404);
+  });
+
+  it('selection PUT stores a valid reference and pushes the tenant', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'glm/glm-4.5' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, tenantId: 't123', selection: 'glm/glm-4.5' });
+    const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO runtime_configs'));
+    expect(insert).toBeTruthy();
+    // tenant-scope upsert params: [tenantId, key, encryptedValue, ...]
+    expect(insert!.params![0]).toBe('t123');
+    expect(insert!.params![1]).toBe(LLM_MODEL_SELECTION_KEY);
+    expect(JSON.parse(String(insert!.params![2]).replace(/^enc:/, '')).defaultModel).toBe('glm/glm-4.5');
+  });
+
+  it('selection PUT rejects references outside the library', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'kimi/moonshot' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('不在全局供应商库中');
+  });
+
+  it('selection PUT rejects when the library is empty', async () => {
+    const pool = makeFakePool({ tenant: makeTenant() });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'qwen/qwen-max' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('供应商库为空');
+  });
+
+  it('selection PUT with an empty model clears the selection', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: null });
+    expect(res.status).toBe(200);
+    expect(res.body.selection).toBeNull();
+    const del = pool.queries.find(
+      (q: FakeQuery) => q.sql.includes('DELETE FROM runtime_configs') && q.sql.includes('config_key = $2'),
+    );
+    expect(del).toBeTruthy();
+  });
+
+  it('blocks the generic runtime-configs endpoints for LLM keys', async () => {
     const app = createApp(makeFakePool(), baseConfig);
     const put = await request(app)
       .put('/v1/admin/runtime-configs')
       .set(authHeader)
       .send({ key: 'LLM_PROVIDERS', value: '{}' });
     expect(put.status).toBe(400);
-    const del = await request(app)
-      .delete(`/v1/admin/runtime-configs/LLM_PROVIDERS`)
-      .set(authHeader);
+    const putSel = await request(app)
+      .put('/v1/admin/runtime-configs')
+      .set(authHeader)
+      .send({ key: 'LLM_MODEL_SELECTION', value: '{}' });
+    expect(putSel.status).toBe(400);
+    const del = await request(app).delete(`/v1/admin/runtime-configs/LLM_PROVIDERS`).set(authHeader);
     expect(del.status).toBe(400);
   });
 });
