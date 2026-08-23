@@ -244,3 +244,26 @@ ACR 拒绝直接 Basic auth 调 v2 API，401 响应带 `WWW-Authenticate: Bearer
 
 - provisioning-service 测试 70 passed（新增 10：会话生命周期 pending/completed/failed/cancelled/TTL/cap + 路由面）
 - Jenkins Build #48（TEST）→ Build #49（PROD，DEPLOY_ENV=PROD）：provisioning-service + admin-web
+
+---
+
+# 2026-08-23（四）：租户级 Mio CDP 供应商 ID（MIO_CDP_SUPPLIER_ID）
+
+需求：内测阶段每个租户 agent 的 skill 会调用米奥 CDP 接口，凭据为 MIO_CDP_SUPPLIER_ID。创建客户时增加填写（非必填、全局唯一、一个 ID 对应一个客户），并注入该租户 agent 环境供 skill 读取。
+
+## 方案
+
+- 存储：`tenants.mio_cdp_supplier_id` 新列 + 部分唯一索引（`WHERE mio_cdp_supplier_id IS NOT NULL AND status <> 'destroyed'`）——销毁的租户自动释放 ID。
+- 注入：provisioning 时写入 `dealclaw-agent-config-<tenant>` Secret（agent Deployment envFrom），skill 侧 `_client.py` 早已从环境变量读取，无需改动。
+- 已有租户补填/修改：`PATCH /v1/tenants/:id/mio-supplier-id`（services/mio-supplier.ts）——格式校验 → 友好 409 唯一冲突 → 更新 DB → base64 GET + stringData PUT 合并写入 agent-config Secret → 滚动重启 agent Pod。传 null/空即清除（同时从 Secret 删除该 key）。外部（中央）agent 租户只更新 DB 不动 K8s。
+
+## 改动（dealclaw `91495e8`）
+
+- **provisioning-service**：migrate.ts（列+索引）、provisioning.ts（注入）、services/mio-supplier.ts（新）、routes/tenants.ts（POST 接收 mioCdpSupplierId + 23505 区分 SUPPLIER_ID_TAKEN、GET 详情/列表返回、PATCH 新路由）
+- **admin-web**：创建客户表单新增「Mio CDP 供应商 ID」非必填输入；客户详情页开通信息展示 + 补填/修改行（清空保存即解除）
+- ingress 无需改动（复用 /v1/tenants 前缀）
+
+## 测试与上线
+
+- 测试 84 passed | 14 skipped（新增 14：格式、404/400/409、幂等、dry-run、K8s 合并/清除/新建、Deployment 404 容忍、外部 agent）
+- Jenkins Build #50（PROD）：provisioning-service + admin-web
