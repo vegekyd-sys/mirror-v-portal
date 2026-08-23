@@ -32,7 +32,7 @@ function envCandidates() {
   out.push(resolve(process.env.HOME || "", ".openclaw", ".env"));
   return out;
 }
-let API_KEY = process.env.APIFY_API_KEY;
+let API_KEY = process.env.APIFY_API_KEY || process.env.APIFY_TOKEN;
 
 if (!API_KEY) {
   for (const p of envCandidates()) {
@@ -42,7 +42,9 @@ if (!API_KEY) {
     } catch {
       continue;
     }
-    const m = text.match(/APIFY_API_KEY=(\S+)/);
+    // Both preset key names are accepted (APIFY_TOKEN is the canonical one
+    // managed by skill-env; APIFY_API_KEY kept for legacy ~/.openclaw/.env).
+    const m = text.match(/APIFY_API_KEY=(\S+)/) || text.match(/APIFY_TOKEN=(\S+)/);
     if (m) {
       API_KEY = m[1];
       break;
@@ -51,7 +53,7 @@ if (!API_KEY) {
 }
 
 if (!API_KEY) {
-  console.error("❌ APIFY_API_KEY not found. Set it in work/mio-api/.env (managed skill-env) or ~/.openclaw/.env");
+  console.error("❌ APIFY_API_KEY/APIFY_TOKEN not found. Set it in work/mio-api/.env (managed skill-env) or ~/.openclaw/.env");
   process.exit(1);
 }
 
