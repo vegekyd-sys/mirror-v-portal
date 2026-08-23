@@ -11,10 +11,10 @@
  *     and materialized as the `dealclaw-bot-<tenantId>` Secret.
  *  3. A nexus-gateway Deployment+Service is created (or restarted) with
  *     DEALCLAW_PLATFORM=feishu and DEALCLAW_AGENT_URL pointing at the
- *     tenant's agent — the per-tenant dealclaw-agent, or the external /
- *     central agent (agent_endpoint) for external-agent tenants such as the
- *     built-in default tenant. The gateway connects to Feishu via an
- *     outbound WebSocket, so NO ingress change is required.
+ *     tenant's agent — the per-tenant dealclaw-agent, or the external
+ *     agent (agent_endpoint) for external-agent tenants. The gateway
+ *     connects to Feishu via an outbound WebSocket, so NO ingress change
+ *     is required.
  *
  * Unbinding deletes the gateway Deployment/Service (the agent itself is
  * untouched — web chat keeps working) and clears the stored credentials.
@@ -203,8 +203,8 @@ export async function bindTenantFeishuApp(
   );
 
   const centralNs = config.runtimeNamespace;
-  // External-agent tenants (e.g. the default tenant) have no namespace of
-  // their own — their gateway runs next to the central agent.
+  // External-agent tenants have no namespace of their own — their gateway
+  // runs in the control-plane namespace.
   const gatewayNs = tenant.k8s_namespace || centralNs;
   const agentUrl = tenant.agent_endpoint
     ? String(tenant.agent_endpoint).replace(/\/$/, '')

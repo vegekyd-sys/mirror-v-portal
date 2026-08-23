@@ -137,9 +137,8 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
 
       -- External agent endpoint (v0.5): when set, the tenant does NOT get a
       -- per-tenant dealclaw-agent Deployment; chat is proxied straight to this
-      -- URL instead. Used by the built-in default tenant, which reuses the
-      -- central dealclaw-test agent managed by ArgoCD in the control-plane
-      -- namespace.
+      -- URL instead. (Historically used by the built-in default tenant, which
+      -- was removed — the column is kept for compatibility.)
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_endpoint TEXT;
     `);
 

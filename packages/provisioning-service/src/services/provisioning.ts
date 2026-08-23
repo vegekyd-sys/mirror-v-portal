@@ -31,7 +31,7 @@ export interface TenantProvision {
   appId?: string;
   appSecret?: string;
   /** IM platform the tenant's gateway binds to. Defaults to 'feishu';
-   *  tenants served only via web chat (e.g. the default tenant) use 'web'. */
+   *  tenants served only via web chat use 'web'. */
   platform?: string;
 }
 
@@ -168,10 +168,9 @@ export async function provisionTenant(
 
     // 2. nexus-gateway Deployment + Service — IM tenants only.
     // The gateway binds to feishu/dingtalk/wecom and crashes on any other
-    // DEALCLAW_PLATFORM value. Web-platform tenants (e.g. the built-in
-    // default tenant) have no IM channel: admin chat is proxied by
-    // provisioning-service straight to the agent's /execute endpoint, so
-    // no gateway is deployed for them.
+    // DEALCLAW_PLATFORM value. Web-platform tenants have no IM channel:
+    // admin chat is proxied by provisioning-service straight to the
+    // agent's /execute endpoint, so no gateway is deployed for them.
     if (tenant.platform !== 'web') {
       const gwLabels = { ...labels, app: 'nexus-gateway' };
       await createDeployment({

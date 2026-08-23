@@ -1,10 +1,9 @@
 // 对话 — 通过 provisioning-service 聊天代理与租户的 dealclaw-agent 对话。
-// 默认租户（is_default）作为系统内置测试租户置顶；仅 active 租户可聊。
+// 仅 active 租户可聊。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
-import { StatusBadge } from '../components/badges';
 import { IconAlert, IconChat, IconSend } from '../components/icons';
 
 interface ChatMsg {
@@ -26,13 +25,11 @@ export default function ChatPage() {
     api<{ tenants: Tenant[] }>('/v1/tenants')
       .then((r) => {
         const list = r.tenants || [];
-        // Active tenants first; the built-in default tenant on top.
+        // Active tenants first.
         const sorted = [...list].sort((a, b) => {
           const aa = a.status === 'active' ? 0 : 1;
           const bb = b.status === 'active' ? 0 : 1;
-          if (aa !== bb) return aa - bb;
-          if (!!a.isDefault !== !!b.isDefault) return a.isDefault ? -1 : 1;
-          return 0;
+          return aa - bb;
         });
         setTenants(sorted);
         const firstActive = sorted.find((t) => t.status === 'active');
@@ -52,7 +49,6 @@ export default function ChatPage() {
 
   const selected = tenants.find((t) => t.tenantId === tenantId);
   const activeTenants = tenants.filter((t) => t.status === 'active');
-  const defaultTenant = tenants.find((t) => t.isDefault);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -86,7 +82,7 @@ export default function ChatPage() {
         <div className="page-head">
           <div>
             <div className="section-title">对话</div>
-            <div className="page-sub">与租户 Agent 直接对话（内置默认租户用于测试）</div>
+            <div className="page-sub">与租户 Agent 直接对话</div>
           </div>
         </div>
         {error && <div className="msg msg-err">{error}</div>}
@@ -97,21 +93,10 @@ export default function ChatPage() {
             </span>
             <div style={{ fontSize: 13.5, color: '#52627e', lineHeight: 1.9 }}>
               当前没有可对话的租户（需状态为 active）。
-              {defaultTenant ? (
-                <>
-                  <br />
-                  内置默认租户当前状态：<StatusBadge status={defaultTenant.status || 'pending'} />
-                  {defaultTenant.status === 'pending' &&
-                    ' — 请先在「运行时配置」中配置大模型 API Key（DEEPSEEK_API_KEY）与模型 ID（DEALCLAW_MODEL），系统会在 10 分钟内自动完成默认租户的部署。'}
-                </>
-              ) : (
-                <>
-                  <br />
-                  请先在「运行时配置」中配置大模型 API Key（DEEPSEEK_API_KEY），系统会自动初始化内置默认租户。
-                </>
-              )}
               <br />
-              <Link to="/runtime-configs">前往运行时配置 →</Link>
+              请先创建租户，并在「运行时配置」中配置大模型 API Key（DEEPSEEK_API_KEY）与模型 ID（DEALCLAW_MODEL），租户部署完成后即可对话。
+              <br />
+              <Link to="/customers">前往客户管理 →</Link>
             </div>
           </div>
         </div>
@@ -136,7 +121,6 @@ export default function ChatPage() {
             {tenants.map((t) => (
               <option key={t.tenantId} value={t.tenantId} disabled={t.status !== 'active'}>
                 {(t.companyName || t.tenantId) +
-                  (t.isDefault ? '（默认租户）' : '') +
                   (t.status !== 'active' ? `（${t.status}）` : '')}
               </option>
             ))}
@@ -150,7 +134,6 @@ export default function ChatPage() {
           <IconChat size={15} />
           <span style={{ fontWeight: 600, fontSize: 13.5 }}>
             {selected?.companyName || tenantId}
-            {selected?.isDefault ? '（默认租户）' : ''}
           </span>
           <span style={{ fontSize: 12, color: '#8494ad' }}>
             web 频道 · 会话按登录用户自动保持

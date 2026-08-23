@@ -1,6 +1,6 @@
 /**
  * Admin/ops routes: image release registry, rollout promotion, tenant chat
- * proxy, and default-tenant bootstrap trigger.
+ * proxy.
  *
  * Image release flow (registry sync replaces the old Jenkins post-build
  * hook, which was removed):
@@ -16,7 +16,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
-import { ensureDefaultTenant } from '../services/default-tenant.js';
 import { syncImageReleases } from '../services/registry-sync.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
@@ -241,20 +240,6 @@ export function createAdminOpsRoutes(
       const e = err as any;
       console.error('Chat proxy failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Chat failed' });
-    }
-  });
-
-  // POST /v1/admin/default-tenant/ensure — (re)run default-tenant bootstrap.
-  // Called automatically at boot; exposed here for manual retry after the
-  // admin configures the model key in 运行时配置.
-  router.post('/v1/admin/default-tenant/ensure', async (_req: Request, res: Response) => {
-    try {
-      const result = await ensureDefaultTenant(pool, config);
-      res.json({ ok: result.action !== 'failed', ...result });
-    } catch (err: unknown) {
-      const e = err as any;
-      console.error('Ensure default tenant failed:', e);
-      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Ensure failed' });
     }
   });
 

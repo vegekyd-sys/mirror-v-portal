@@ -11,7 +11,6 @@ export interface Tenant {
   creditsAccountId?: string | null;
   quotaAgents?: number | null;
   quotaCreditsMonthly?: number | null;
-  isDefault?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
