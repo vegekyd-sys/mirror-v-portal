@@ -182,7 +182,10 @@ const config = {
       bootstrapMaxChars: 30_000,
       bootstrapTotalMaxChars: 100_000,
       ...(primaryModel ? { model: { primary: primaryModel } } : {}),
-      timeoutSeconds: 120,
+      // Long business runs (multi-round skill tooling + slow SSE generation)
+      // blow past the 120s default and get killed mid-reply. 600s ceiling,
+      // overridable per deployment via env.
+      timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 600),
       userTimezone: timezone,
       memorySearch: { enabled: true, provider: 'none' },
     },
