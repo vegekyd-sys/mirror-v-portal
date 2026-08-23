@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import type pg from 'pg';
 import {
   createNamespace,
   deleteNamespace,
@@ -22,6 +23,7 @@ import {
   SKILL_ENV_MOUNT_PATH,
   SKILL_ENV_SECRET_NAME,
 } from './skill-env.js';
+import { getPromotedTag } from './rollout-targets.js';
 
 /** Per-tenant namespace name — each tenant is fully isolated in its own namespace. */
 export function tenantNamespace(tenantId: string): string {
@@ -65,6 +67,15 @@ export interface ProvisionOptions {
    * hot-rotatable without restarts).
    */
   runtimeSecretData?: Record<string, string>;
+  /**
+   * DB pool used to resolve the promoted rollout target tags
+   * (rollout_targets table — written by the image-release promote flow).
+   * When provided AND a tag is promoted, the promoted tag overrides both
+   * the explicit option tags and env vars, so a freshly provisioned
+   * gateway/agent runs the same version the fleet was rolled to. Failures
+   * fall back silently to the env-configured tags.
+   */
+  dbPool?: Pick<pg.Pool, 'query'>;
 }
 
 export interface ProvisionResult {
@@ -87,8 +98,8 @@ export async function provisionTenant(
 ): Promise<ProvisionResult> {
   const dryRun = options.dryRun ?? (process.env.K8S_DRY_RUN === 'true' || process.env.NODE_ENV !== 'production');
   const registry = options.imageRegistry || process.env.IMAGE_REGISTRY || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealclaw';
-  const gwTag = options.nexusGatewayImageTag || process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest';
-  const agentTag = options.dealclawAgentImageTag || process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest';
+  let gwTag = options.nexusGatewayImageTag || process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest';
+  let agentTag = options.dealclawAgentImageTag || process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest';
   const pvcSize = options.agentPvcSize || process.env.AGENT_PVC_SIZE || '10Gi';
   const pvcStorageClass = options.agentPvcStorageClass || process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas';
   const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
@@ -127,6 +138,16 @@ export async function provisionTenant(
 
   // === Production path: real K8s API calls ===
   try {
+    // 0a. Prefer the promoted rollout targets so a freshly provisioned
+    // gateway and agent pick up the same version the fleet runs (the
+    // image-release promote flow updates rollout_targets; ops-agent rolls
+    // existing tenants, this covers NEW tenants). No promoted tag yet →
+    // keep the env-configured tags above.
+    const promotedGwTag = await getPromotedTag(options.dbPool, 'nexus-gateway');
+    if (promotedGwTag) gwTag = promotedGwTag;
+    const promotedAgentTag = await getPromotedTag(options.dbPool, 'dealclaw-agent');
+    if (promotedAgentTag) agentTag = promotedAgentTag;
+
     // 0. Create per-tenant namespace first
     await createNamespace(nsName);
 

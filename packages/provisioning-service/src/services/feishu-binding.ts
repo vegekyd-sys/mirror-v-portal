@@ -34,6 +34,7 @@ import {
   restartDeployment,
 } from './k8s-client.js';
 import { LLM_PROXY_CONFIG_SECRET } from './llm-providers.js';
+import { getPromotedTag } from './rollout-targets.js';
 
 const FEISHU_APP_ID_PATTERN = /^cli_[a-zA-Z0-9]{4,64}$/;
 const FEISHU_TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
@@ -266,12 +267,8 @@ export async function bindTenantFeishuApp(
   // 4. Gateway Deployment + Service. Prefer the promoted rollout target so a
   // freshly created gateway picks up the same version the fleet runs.
   let gwTag = config.nexusGatewayImageTag;
-  try {
-    const { rows: targets } = await pool.query(
-      `SELECT tag FROM rollout_targets WHERE service = 'nexus-gateway' LIMIT 1`,
-    );
-    if (targets.length) gwTag = targets[0].tag;
-  } catch { /* fall back to env tag */ }
+  const promotedGwTag = await getPromotedTag(pool, 'nexus-gateway');
+  if (promotedGwTag) gwTag = promotedGwTag;
 
   const gatewayName = `nexus-gateway-${tenantId}`;
   const gwLabels = {

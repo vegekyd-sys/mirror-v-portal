@@ -164,6 +164,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           nexusGatewayImageTag: config.nexusGatewayImageTag,
           dealclawAgentImageTag: config.dealclawAgentImageTag,
           runtimeSecretData,
+          // Resolve promoted rollout targets so the new tenant's gateway and
+          // agent run the same image version the fleet was rolled to.
+          dbPool: pool,
         });
       } catch (provErr: unknown) {
         const e = provErr as any;
