@@ -31,7 +31,7 @@ author: ""
 5. 写入 bitable — 按 field_map 逐条写 record，来源「用户导入」
     ↓
 6. 气泡确认 — 「导入了 X 家买家，已写入线索池」+ bitable 链接
-7. 导入完成后，检查线索涉及的国家列表，对展会国批量调 `dc-knowledge-query`，有 upcoming 展会时附加一句推荐（如「你导入的线索里有3个沙特买家，沙特12/20有HOMELIFE」）。
+7. 导入完成后，检查线索涉及的国家列表，对展会国批量查 `work/mio-api/exhibition_plan_*.csv.txt`，有 upcoming 展会时附加一句推荐（如「你导入的线索里有3个沙特买家，沙特12/20有HOMELIFE」）。
 ```
 
 ## 列映射

@@ -6,7 +6,7 @@
 2. 输出早晚报 cron 表达式：
    - 未给 --event：固定北京时区（Asia/Shanghai）9:30 / 17:30
    - 给 --event：从展会城市映射时区，输出展会当地 9:30/17:30 对应的北京时间
-     （展会城市从 dc-knowledge-query 知识库取；当前知识库无该展会记录时会提示）
+     （展会城市从 exhibition_plan_*.csv.txt 展会数据取；当前展会数据无该展会记录时会提示）
 
 用法:
   python3 exhibition_cron.py --company-id <id>
@@ -78,7 +78,7 @@ def event_timezone(event_id: str | None) -> str:
     """展会时区适配：有 event 时尝试映射展会城市时区，否则固定北京。"""
     if not event_id:
         return DEFAULT_TZ
-    # 最小可跑：展会城市数据在 dc-knowledge-query，当前无结构化接口，
+    # 最小可跑：展会城市数据在 exhibition_plan_*.csv.txt，当前无结构化接口，
     # 先用 event_id 里可能带的城市名模糊匹配，匹配不到固定北京。
     e = event_id.lower().replace("-", " ").replace("_", " ")
     for city, tz in CITY_TZ.items():

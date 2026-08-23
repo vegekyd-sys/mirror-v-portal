@@ -23,7 +23,7 @@ author: ""
 4. 匹配 → 关联名片与录音 → 意图分析（高/中/低意向）
 5. 五步完成 → 一条总结气泡
 6. 写入线索池：调 `ensure_company_lead_pool` 获取企业线索池 → OCR 字段写 record，来源「展会线索」；有 ASR 意图时写冷热/阶段
-7. 若名片/录音中涉及展会名称、国家，调 `dc-knowledge-query` 校验展会信息（时间/行业/规模），辅助名片上下文判断。
+7. 若名片/录音中涉及展会名称、国家，查 `work/mio-api/exhibition_plan_*.csv.txt` 校验展会信息（时间/行业/规模），辅助名片上下文判断。
 
 ### Step 6 写入线索池
 
@@ -49,7 +49,7 @@ GDPR 未获同意 → 跳过此步骤，不写入。
 ## 展后跟进
 
 按意图分类生成跟进邮件，走 Growth Send 发送。
-跟进完成后，调 `dc-knowledge-query` 检查该国是否还有其他 upcoming 米奥展会，有则附加短钩子（如「沙特12月也有HOMELIFE，要不要提前搜买家？」）。
+跟进完成后，查 `work/mio-api/exhibition_plan_*.csv.txt` 检查该国是否还有其他 upcoming 米奥展会，有则附加短钩子（如「沙特12月也有HOMELIFE，要不要提前搜买家？」）。
 
 ## 边界
 
