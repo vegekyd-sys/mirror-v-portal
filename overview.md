@@ -153,3 +153,37 @@ ArgoCD production Application 配置了 `automated + prune + selfHeal`，而 Jen
 ## 测试
 
 provisioning-service 56 passed / 14 skipped；central-gateway 47 passed（registry-sync 新增 4 个用例：元数据写入、单服务 401 隔离、dry-run 跳过、匿名同步）。
+
+---
+
+# 上线执行记录（2026-08-23，Build #45/#46）
+
+## 修复：registry-sync 401（commit `a116b1a` / Build #46）
+
+ACR 拒绝直接 Basic auth 调 v2 API，401 响应带 `WWW-Authenticate: Bearer realm=...` 挑战。实现标准 Docker token flow：Basic 请求 tags/list → 401 挑战 → 携凭据到 realm 换 scoped token（service+scope 参数）→ Bearer 重试。已在集群内实测验证（dockerauth-vpc.cn-hangzhou.aliyuncs.com）。测试增至 60 passed。
+
+## 上线顺序实录
+
+1. Build #43（provisioning-service）由用户触发部署，`[default-tenant] migrated from external-agent mode to per-tenant mode`
+2. 用户 push aochi `1eb413d` → ArgoCD prune 中央 dealclaw-agent
+3. **注意**：`dealclaw-agent-default` 首启会 CrashLoopBackOff 若干次（全新 PVC 上安装 deepseek 插件期间 healthz 503，探针周期 15s×3 次杀死容器），重启 7 次后进入稳态——与飞书租户 agent 当初的行为一致，属已知启动竞态，无需干预
+4. Build #45（admin-web + central-gateway）✅；Build #46（provisioning-service，含 401 修复）✅
+5. 销毁 dealclaw-test：kubectl 删中央 ns 的 gateway Deployment/Service + 3 个 Secret → `DELETE /v1/tenants/dealclaw-test` → destroyed
+
+## Jenkins API 触发要点
+
+- 地址 `https://ops-dealclaw.datathink.com:8443/jenkins/`，job `dealclaw-nexus`
+- `DEPLOY_SERVICE_LIST` 是 ExtendedChoiceParameter（PT_CHECKBOX）：**多值必须用重复表单字段**传递（`DEPLOY_SERVICE_LIST=admin-web&DEPLOY_SERVICE_LIST=central-gateway`），逗号拼接字符串会被静默丢弃回退到 SERVICE_NAME（Build #44 因此失败）
+- 首次失败教训：Build #44 用了默认服务列表 `dealclaw-nexus`，Dockerfile 路径不存在报错退出
+
+## 最终验证（全部通过）
+
+| 项目 | 结果 |
+|---|---|
+| 默认租户聊天（per-tenant agent） | 200，"Pong ⚡" |
+| 租户表 | default=active、飞书租户=active、dealclaw-test=destroyed |
+| 中央 ns | 无 nexus-gateway* / dealclaw-agent / dealclaw-test 残留 |
+| registry-sync boot | `ok — dealclaw-agent: +2/2; nexus-gateway: +6/6` |
+| image_releases | 8 条 `created_by='registry-sync'`，含 git_commit/build_number/branch 元数据 |
+| 手动同步 `POST /v1/admin/image-releases/sync` | 200，幂等（inserted=0） |
+| 线上版本 | admin-web/central-gateway=`a116b1a0.45`、provisioning=`a116b1a0.46` |
