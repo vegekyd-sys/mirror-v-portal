@@ -6,6 +6,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
+import FeishuAppScanModal from '../components/FeishuAppScanModal';
 import { IconArrowLeft, IconBox, IconChat, IconRefresh, IconTrash } from '../components/icons';
 
 interface AuditEntry {
@@ -182,6 +183,7 @@ export default function CustomerDetailPage() {
   const [fsAppId, setFsAppId] = useState('');
   const [fsAppSecret, setFsAppSecret] = useState('');
   const [fsBusy, setFsBusy] = useState(false);
+  const [fsScan, setFsScan] = useState(false);
 
   const loadBinding = useCallback(async () => {
     try {
@@ -630,6 +632,14 @@ export default function CustomerDetailPage() {
               onChange={(e) => setFsAppSecret(e.target.value)}
               placeholder="App Secret（仅提交时传输）"
             />
+            <button
+              className="btn-secondary"
+              disabled={fsBusy}
+              style={{ flex: '0 0 auto' }}
+              onClick={() => setFsScan(true)}
+            >
+              扫码获取
+            </button>
             <button className="btn-primary" disabled={fsBusy} onClick={() => void bindFeishu()}>
               <IconChat /> {fsBusy ? '处理中…' : fsBinding?.bound ? '更换绑定' : '绑定'}
             </button>
@@ -640,6 +650,17 @@ export default function CustomerDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* ── 飞书扫码获取应用凭据（回填绑定表单） ── */}
+      <FeishuAppScanModal
+        open={fsScan}
+        onClose={() => setFsScan(false)}
+        onCredentials={(appId, appSecret) => {
+          setFsAppId(appId);
+          setFsAppSecret(appSecret);
+          flash(`已扫码获取凭据（${appId}），请确认后点击绑定`);
+        }}
+      />
 
       {/* ── 运行镜像更新 ── */}
       <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>

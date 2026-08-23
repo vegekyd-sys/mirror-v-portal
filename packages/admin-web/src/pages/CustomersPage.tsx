@@ -7,6 +7,7 @@ import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
 import { fmtNum } from '../components/badges';
 import Modal from '../components/Modal';
+import FeishuAppScanModal from '../components/FeishuAppScanModal';
 import {
   IconChevronDown,
   IconPlus,
@@ -89,6 +90,7 @@ export default function CustomersPage() {
   const [createForm, setCreateForm] = useState({ ...emptyCreate });
   const [createErr, setCreateErr] = useState('');
   const [creating, setCreating] = useState(false);
+  const [showScan, setShowScan] = useState(false);
 
   const [topupFor, setTopupFor] = useState<Customer | null>(null);
   const [topupAmount, setTopupAmount] = useState('100000');
@@ -466,6 +468,13 @@ export default function CustomersPage() {
             onChange={(e) => setCreateForm({ ...createForm, botAppId: e.target.value })}
             placeholder="cli_xxxx（可留空后补）"
           />
+          <button
+            className="btn-secondary"
+            style={{ flex: '0 0 auto' }}
+            onClick={() => setShowScan(true)}
+          >
+            扫码获取
+          </button>
         </div>
         <div className="form-row">
           <label className="field-label">飞书 App Secret</label>
@@ -490,6 +499,15 @@ export default function CustomersPage() {
           </button>
         </div>
       </Modal>
+
+      {/* ── 飞书扫码获取应用凭据（回填创建表单） ── */}
+      <FeishuAppScanModal
+        open={showScan}
+        onClose={() => setShowScan(false)}
+        onCredentials={(appId, appSecret) =>
+          setCreateForm((f) => ({ ...f, botAppId: appId, botAppSecret: appSecret }))
+        }
+      />
 
       {/* ── 续费充值 ── */}
       <Modal

@@ -5,6 +5,7 @@ import pg from 'pg';
 import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
+import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 
@@ -31,6 +32,9 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   app.use(createTenantRoutes(pool, config, auth));
   app.use(createRuntimeConfigRoutes(pool, auth));
   app.use(createAdminOpsRoutes(pool, config, auth));
+  // Feishu app QR-scan (registerApp device flow) — credentials-only,
+  // feeds the customer-creation / feishu-binding forms in the admin SPA.
+  app.use(createFeishuAppScanRoutes(auth));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {
