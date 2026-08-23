@@ -480,6 +480,28 @@ export default function AgentDetailPage() {
     void loadLlmSelection();
   }, [loadLlmSelection]);
 
+  // ── LLM 用量摘要（网关出口代理记账，shadow 不扣 credits） ──
+  interface LlmUsageSummary {
+    totals: { calls: number; inputTokens: number; outputTokens: number; totalTokens: number };
+    byModel: Array<{ provider: string; model: string; calls: number; inputTokens: number; outputTokens: number }>;
+  }
+  const [llmUsage, setLlmUsage] = useState<LlmUsageSummary | null>(null);
+
+  const loadLlmUsage = useCallback(async () => {
+    try {
+      const r = await api<LlmUsageSummary>(
+        `/v1/admin/llm-usage/summary?tenantId=${encodeURIComponent(tenantId)}&days=7`,
+      );
+      setLlmUsage(r);
+    } catch {
+      setLlmUsage(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadLlmUsage();
+  }, [loadLlmUsage]);
+
   const saveLlmSelection = async () => {
     setLlmBusy(true);
     try {
@@ -557,6 +579,7 @@ export default function AgentDetailPage() {
               void loadBinding();
               void loadSkillEnv();
               void loadLlmSelection();
+              void loadLlmUsage();
             }}
           >
             <IconRefresh /> 刷新
@@ -888,6 +911,55 @@ export default function AgentDetailPage() {
               <div className="hint">
                 保存后写入该 Agent 的 <span className="mono">tenant-config</span> Secret 并滚动重启，约 1–2 分钟生效
                 （模型配置在容器启动时应用，不支持热更新）。供应商与 API Key 在「模型供应商」页集中维护。
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── LLM 用量（近 7 天，网关出口代理记账） ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        LLM 用量（近 7 天）
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          {llmUsage === null ? (
+            <span className="hint" style={{ margin: 0 }}>暂无记录（近 7 天没有大模型调用，或记账服务不可达）</span>
+          ) : (
+            <>
+              <div className="form-row" style={{ marginBottom: 10 }}>
+                <label className="field-label">合计</label>
+                <span style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 13 }}>
+                  <span>调用 <b>{llmUsage.totals.calls}</b> 次</span>
+                  <span>输入 <b>{llmUsage.totals.inputTokens.toLocaleString()}</b> tokens</span>
+                  <span>输出 <b>{llmUsage.totals.outputTokens.toLocaleString()}</b> tokens</span>
+                  <span>合计 <b>{llmUsage.totals.totalTokens.toLocaleString()}</b> tokens</span>
+                </span>
+              </div>
+              {llmUsage.byModel.length > 0 && (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>供应商 / 模型</th>
+                      <th>调用次数</th>
+                      <th>输入 tokens</th>
+                      <th>输出 tokens</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {llmUsage.byModel.map((m) => (
+                      <tr key={`${m.provider}/${m.model}`}>
+                        <td className="mono">{m.provider}/{m.model}</td>
+                        <td>{m.calls}</td>
+                        <td>{m.inputTokens.toLocaleString()}</td>
+                        <td>{m.outputTokens.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div className="hint" style={{ marginBottom: 0 }}>
+                数据来自 nexus-gateway LLM 出口代理上报的 <span className="mono">llm_usage_events</span>（shadow 记账，不扣减 credits）。
               </div>
             </>
           )}

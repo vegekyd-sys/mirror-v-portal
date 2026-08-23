@@ -1,6 +1,8 @@
 // 模型供应商 — 集中管理全局大模型供应商库。
 // Data: provisioning-service /v1/admin/llm-providers（全局库，解密回显编辑）。
 // 租户不做库覆盖，只在 Agent 详情页从库中选择模型（LLM_MODEL_SELECTION）。
+// 附「LLM 用量汇总」卡片：/v1/admin/llm-usage（credits-ledger 聚合，
+// nexus-gateway LLM 出口代理上报的 token 记账）。
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { IconAlert, IconRefresh, IconSave } from '../components/icons';
@@ -8,6 +10,17 @@ import { IconAlert, IconRefresh, IconSave } from '../components/icons';
 interface PushSummary {
   status?: 'ok' | 'failed' | 'skipped';
   hint: string;
+}
+
+interface LlmUsageTenant {
+  tenantId: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  blocked: number;
+  synthesized: number;
+  lastCallAt: string | null;
 }
 
 interface LlmModel {
@@ -43,6 +56,11 @@ export default function LlmProvidersPage() {
   const [lpModels, setLpModels] = useState('');
   const [lpMsg, setLpMsg] = useState('');
   const [lpMsgErr, setLpMsgErr] = useState(false);
+  const [usage, setUsage] = useState<LlmUsageTenant[] | null>(null);
+  const [usageDays, setUsageDays] = useState(7);
+
+  const fmtNum = (n: number): string =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n);
 
   const flash = (text: string, isErr = false) => {
     setMsg(text);
@@ -78,9 +96,22 @@ export default function LlmProvidersPage() {
     }
   }, []);
 
+  const loadUsage = useCallback(async () => {
+    try {
+      const r = await api<{ tenants: LlmUsageTenant[] }>(`/v1/admin/llm-usage?days=${usageDays}`);
+      setUsage(r.tenants || []);
+    } catch {
+      setUsage([]); // ledger 未发布/不可达时不阻塞本页
+    }
+  }, [usageDays]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadUsage();
+  }, [loadUsage]);
 
   const parseModelLines = (text: string): LlmModel[] => {
     const models: LlmModel[] = [];
@@ -374,6 +405,66 @@ export default function LlmProvidersPage() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* ── LLM 用量汇总（出口代理记账） ── */}
+      <div className="form-card" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 14, color: '#171c2e', fontWeight: 700 }}>LLM 用量汇总</span>
+          <span className="badge">网关出口代理记账（shadow，不扣 credits）</span>
+          <select
+            value={usageDays}
+            onChange={(e) => setUsageDays(Number(e.target.value))}
+            style={{ marginLeft: 'auto', width: 110 }}
+          >
+            <option value={1}>近 1 天</option>
+            <option value={7}>近 7 天</option>
+            <option value={30}>近 30 天</option>
+          </select>
+          <button className="btn-secondary btn-sm" onClick={() => void loadUsage()}>
+            <IconRefresh /> 刷新
+          </button>
+        </div>
+        {usage === null ? (
+          <span className="hint" style={{ margin: 0 }}>加载中…</span>
+        ) : usage.length === 0 ? (
+          <div className="hint" style={{ margin: 0 }}>
+            近 {usageDays} 天没有大模型调用记录（或记账服务暂不可达）。
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>租户</th>
+                <th>调用次数</th>
+                <th>输入 tokens</th>
+                <th>输出 tokens</th>
+                <th>合计</th>
+                <th>拦截/合成</th>
+                <th>最近调用</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usage.map((t) => (
+                <tr key={t.tenantId}>
+                  <td className="mono">{t.tenantId}</td>
+                  <td>{t.calls}</td>
+                  <td>{fmtNum(t.inputTokens)}</td>
+                  <td>{fmtNum(t.outputTokens)}</td>
+                  <td>{fmtNum(t.totalTokens)}</td>
+                  <td style={{ fontSize: 11 }}>
+                    {t.blocked > 0 && <span className="badge badge-warn" style={{ marginRight: 4 }}>拦截 {t.blocked}</span>}
+                    {t.synthesized > 0 && <span className="badge badge-active">合成 {t.synthesized}</span>}
+                    {t.blocked === 0 && t.synthesized === 0 && <span className="hint" style={{ margin: 0 }}>—</span>}
+                  </td>
+                  <td style={{ fontSize: 11 }}>
+                    {t.lastCallAt ? new Date(t.lastCallAt).toLocaleString() : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="section-title" style={{ fontSize: 14 }}>

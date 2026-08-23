@@ -6,6 +6,7 @@ const k8sMocks = vi.hoisted(() => ({
   putSecret: vi.fn(),
   restartDeployment: vi.fn(),
   deploymentExists: vi.fn(),
+  patchDeploymentEnvFromSecret: vi.fn(),
 }));
 
 vi.mock('../services/k8s-client.js', () => k8sMocks);
@@ -143,6 +144,7 @@ beforeEach(() => {
   k8sMocks.getSecret.mockResolvedValue(null);
   k8sMocks.deploymentExists.mockResolvedValue(true);
   k8sMocks.restartDeployment.mockResolvedValue(true);
+  k8sMocks.patchDeploymentEnvFromSecret.mockResolvedValue(false);
 });
 
 // ── validateLlmProviders ─────────────────────────────────────────────
@@ -264,7 +266,7 @@ describe('resolveEffectiveLlmProviders', () => {
 // ── pushLlmProviders ─────────────────────────────────────────────────
 
 describe('pushLlmProviders', () => {
-  it('materialises the effective blob (library + tenant selection) and rolls the agent', async () => {
+  it('rewrites provider baseUrls to the proxy, writes the upstream map and rolls BOTH agent + gateway', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
       globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
@@ -278,18 +280,39 @@ describe('pushLlmProviders', () => {
       },
     });
     const r = await pushLlmProviders(pool, prodConfig, 't123');
-    expect(r.tenants[0]).toMatchObject({ tenantId: 't123', ok: true, restarted: true });
-    const secretArg = k8sMocks.putSecret.mock.calls[0][2];
-    expect(secretArg.DEEPSEEK_API_KEY).toBe('sk-ds');
-    expect(secretArg.APIFY_TOKEN).toBeUndefined();
-    const blob = JSON.parse(secretArg.LLM_PROVIDERS);
+    expect(r.tenants[0]).toMatchObject({ tenantId: 't123', ok: true, restarted: true, gatewayRestarted: true });
+
+    // call 0: tenant-config — blob with PROXY baseUrls, apiKey untouched
+    const tenantConfigArg = k8sMocks.putSecret.mock.calls[0][2];
+    expect(tenantConfigArg.DEEPSEEK_API_KEY).toBe('sk-ds');
+    expect(tenantConfigArg.APIFY_TOKEN).toBeUndefined();
+    const blob = JSON.parse(tenantConfigArg.LLM_PROVIDERS);
     expect(blob.defaultModel).toBe('glm/glm-4.5'); // tenant selection wins
     expect(blob.providers).toHaveLength(2); // library providers, full credentials
+    expect(blob.providers[0].baseUrl).toBe('http://nexus-gateway-t123:8080/v1/llm/qwen');
+    expect(blob.providers[1].baseUrl).toBe('http://nexus-gateway-t123:8080/v1/llm/glm');
+    expect(blob.providers[0].apiKey).toBe('sk-qwen'); // Authorization passthrough
+
+    // call 1: llm-proxy-config — REAL baseUrls live here
+    expect(k8sMocks.putSecret.mock.calls[1][1]).toBe('llm-proxy-config');
+    const upstreams = JSON.parse(k8sMocks.putSecret.mock.calls[1][2].LLM_UPSTREAMS);
+    expect(upstreams).toEqual({
+      qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      glm: 'https://open.bigmodel.cn/api/paas/v4',
+    });
+
+    // retro-fit envFrom for pre-proxy gateways (idempotent patch)
+    expect(k8sMocks.patchDeploymentEnvFromSecret).toHaveBeenCalledWith(
+      'dealclaw-t123', 'nexus-gateway-t123', 'llm-proxy-config',
+    );
+    // double roll: agent (new blob) + gateway (upstream map)
     expect(k8sMocks.restartDeployment).toHaveBeenCalledWith('dealclaw-t123', 'dealclaw-agent-t123');
+    expect(k8sMocks.restartDeployment).toHaveBeenCalledWith('dealclaw-t123', 'nexus-gateway-t123');
     expect(r.hint).toContain('滚动重启');
+    expect(r.hint).toContain('网关已滚动');
   });
 
-  it('removes the blob from tenant-config when the library is empty', async () => {
+  it('removes the blob from tenant-config when the library is empty (upstream map cleared too)', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
       // no global library → removal path (agent boots without a model)
@@ -302,6 +325,10 @@ describe('pushLlmProviders', () => {
     expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {
       DEEPSEEK_API_KEY: 'sk-ds',
     });
+    // stale upstream mappings must not linger in llm-proxy-config
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'llm-proxy-config', {
+      LLM_UPSTREAMS: '{}',
+    });
   });
 
   it('targets every live tenant for the global scope and purges legacy tenant rows', async () => {
@@ -313,7 +340,8 @@ describe('pushLlmProviders', () => {
     });
     const r = await pushLlmProviders(pool, prodConfig, null);
     expect(r.tenants).toHaveLength(2);
-    expect(k8sMocks.putSecret).toHaveBeenCalledTimes(2);
+    // 2 tenants × 2 secrets (tenant-config + llm-proxy-config)
+    expect(k8sMocks.putSecret).toHaveBeenCalledTimes(4);
     const legacyDelete = pool.queries.find(
       (q: FakeQuery) =>
         q.sql.includes('DELETE FROM runtime_configs') && q.sql.includes('tenant_id IS NOT NULL'),
@@ -509,5 +537,70 @@ describe('llm-providers API', () => {
     expect(putSel.status).toBe(400);
     const del = await request(app).delete(`/v1/admin/runtime-configs/LLM_PROVIDERS`).set(authHeader);
     expect(del.status).toBe(400);
+  });
+});
+
+// ── LLM usage proxy ─────────────────────────────────────────────────
+
+describe('llm-usage admin proxy', () => {
+  const authHeader = { Authorization: 'Bearer test-token' };
+  const savedToken = process.env.PROVISIONING_API_TOKEN;
+
+  beforeEach(() => {
+    process.env.PROVISIONING_API_TOKEN = 'test-token';
+  });
+  afterEach(() => {
+    if (savedToken === undefined) delete process.env.PROVISIONING_API_TOKEN;
+    else process.env.PROVISIONING_API_TOKEN = savedToken;
+    vi.unstubAllGlobals();
+  });
+
+  it('requires bearer auth', async () => {
+    const app = createApp(makeFakePool(), baseConfig);
+    expect((await request(app).get('/v1/admin/llm-usage')).status).toBe(401);
+    expect((await request(app).get('/v1/admin/llm-usage/summary?tenantId=t1')).status).toBe(401);
+  });
+
+  it('proxies the tenants aggregate to credits-ledger with the service token', async () => {
+    const fetchMock = vi.fn(async (url: any, init?: any) => {
+      expect(String(url)).toBe('http://credits-ledger:8081/v1/billing/llm-usage/tenants?days=7');
+      expect(init?.headers?.Authorization).toBe('Bearer ');
+      return new Response(JSON.stringify({ ok: true, tenants: [] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = createApp(makeFakePool(), baseConfig);
+    const res = await request(app).get('/v1/admin/llm-usage').set(authHeader);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('proxies the per-tenant summary and requires tenantId', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) =>
+      new Response(JSON.stringify({ ok: true, totals: { calls: 3 } }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const app = createApp(makeFakePool(), baseConfig);
+    const missing = await request(app).get('/v1/admin/llm-usage/summary').set(authHeader);
+    expect(missing.status).toBe(400);
+    const res = await request(app).get('/v1/admin/llm-usage/summary?tenantId=t1&days=30').set(authHeader);
+    expect(res.status).toBe(200);
+    expect(res.body.totals.calls).toBe(3);
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('tenantId=t1');
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('days=30');
+  });
+
+  it('returns 502 when credits-ledger errors or is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response('{"message":"boom"}', { status: 500 })));
+    const app = createApp(makeFakePool(), baseConfig);
+    const res = await request(app).get('/v1/admin/llm-usage').set(authHeader);
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('LEDGER_ERROR');
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+    const res2 = await request(app).get('/v1/admin/llm-usage').set(authHeader);
+    expect(res2.status).toBe(502);
+    expect(res2.body.code).toBe('LEDGER_UNREACHABLE');
   });
 });

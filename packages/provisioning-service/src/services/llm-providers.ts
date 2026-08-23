@@ -23,7 +23,13 @@
 
 import type pg from 'pg';
 import { decryptValue } from './crypto.js';
-import { getSecret, putSecret, restartDeployment, deploymentExists } from './k8s-client.js';
+import {
+  getSecret,
+  putSecret,
+  restartDeployment,
+  deploymentExists,
+  patchDeploymentEnvFromSecret,
+} from './k8s-client.js';
 import { ENV_FROM_ONLY_KEYS } from './skill-env.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -253,9 +259,26 @@ export async function resolveEffectiveLlmProviders(
 }
 
 export interface LlmPushResult {
-  tenants: Array<{ tenantId: string; ok: boolean; restarted: boolean; error?: string }>;
+  tenants: Array<{
+    tenantId: string;
+    ok: boolean;
+    restarted: boolean;
+    /** gateway rolled so the new upstream map / envFrom took effect */
+    gatewayRestarted?: boolean;
+    error?: string;
+  }>;
   hint: string;
 }
+
+/** LLM egress proxy route prefix the rewritten provider baseUrl points at. */
+export function llmProxyBaseUrl(tenantId: string, providerName: string): string {
+  // Same-namespace short name — the agent and its gateway share the
+  // tenant's namespace, so plain service DNS resolution applies.
+  return `http://nexus-gateway-${tenantId}:8080/v1/llm/${providerName}`;
+}
+
+/** Name of the per-tenant Secret holding the LLM_UPSTREAMS map. */
+export const LLM_PROXY_CONFIG_SECRET = 'llm-proxy-config';
 
 /**
  * Materialise the current effective LLM_PROVIDERS blob into every affected
@@ -308,10 +331,26 @@ export async function pushLlmProviders(
       }
 
       // Effective blob = global library + this tenant's resolved default.
-      const { blob } = await resolveEffectiveLlmProviders(pool, tenantId);
+      const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId);
 
-      // Rewrite tenant-config keeping only envFrom-only keys, then set or
-      // drop LLM_PROVIDERS according to the effective config.
+      // Rewrite each provider's baseUrl to the tenant's LLM egress proxy
+      // (nexus-gateway /v1/llm/<name>). The REAL baseUrl moves into the
+      // llm-proxy-config Secret the gateway reads via envFrom, and the API
+      // key travels unchanged in the blob (Authorization passthrough) —
+      // OpenClaw / write-config.mjs need zero changes.
+      const upstreams: Record<string, string> = {};
+      let proxyBlob: string | null = null;
+      if (globalConfig && blob) {
+        const doc = JSON.parse(blob) as LlmProvidersConfig;
+        doc.providers = doc.providers.map((p) => {
+          upstreams[p.name] = p.baseUrl;
+          return { ...p, baseUrl: llmProxyBaseUrl(tenantId, p.name) };
+        });
+        proxyBlob = JSON.stringify(doc);
+      }
+
+      // tenant-config: keep only envFrom-only keys, then set or drop
+      // LLM_PROVIDERS (rewritten to proxy URLs) according to the config.
       const next: Record<string, string> = {};
       const existing = await getSecret(namespace, 'tenant-config');
       if (existing) {
@@ -324,15 +363,31 @@ export async function pushLlmProviders(
           }
         }
       }
-      if (blob) next[LLM_PROVIDERS_KEY] = blob;
+      if (proxyBlob) next[LLM_PROVIDERS_KEY] = proxyBlob;
       else delete next[LLM_PROVIDERS_KEY];
       await putSecret(namespace, 'tenant-config', next);
 
+      // llm-proxy-config: the gateway's providerName → real baseUrl map.
+      // Written even when the library is empty so stale mappings are
+      // cleared instead of lingering in the Secret.
+      await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, {
+        LLM_UPSTREAMS: JSON.stringify(upstreams),
+      });
+
+      //存量网关可能没有挂 llm-proxy-config envFrom（代理化之前创建）——
+      // 幂等补挂；404（网关不存在）静默跳过。
+      await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
+
+      // envFrom values only apply on pod start — roll BOTH the agent
+      // (rewritten provider blob) and the gateway (upstream map).
       const deployName = `dealclaw-agent-${tenantId}`;
       const restarted = (await deploymentExists(namespace, deployName))
         ? await restartDeployment(namespace, deployName)
         : false;
-      results.push({ tenantId, ok: true, restarted });
+      const gatewayRestarted = (await deploymentExists(namespace, `nexus-gateway-${tenantId}`))
+        ? await restartDeployment(namespace, `nexus-gateway-${tenantId}`)
+        : false;
+      results.push({ tenantId, ok: true, restarted, gatewayRestarted });
     } catch (err) {
       results.push({
         tenantId,
@@ -345,6 +400,7 @@ export async function pushLlmProviders(
 
   const okCount = results.filter((r) => r.ok).length;
   const restartCount = results.filter((r) => r.restarted).length;
+  const gatewayRestartCount = results.filter((r) => r.gatewayRestarted).length;
   const failed = results.filter((r) => !r.ok);
   let hint: string;
   if (results.length === 0) {
@@ -353,10 +409,11 @@ export async function pushLlmProviders(
     hint = `已保存，但推送全部失败（${failed[0]?.tenantId}：${failed[0]?.error}）`;
   } else {
     hint =
-      `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret` +
+      `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret（供应商地址已重写为网关代理）` +
       (restartCount > 0
         ? `，${restartCount} 个 agent 正在滚动重启，重启完成后新模型配置生效（约 1–2 分钟）`
         : '；agent 下次重启时生效') +
+      (gatewayRestartCount > 0 ? `；${gatewayRestartCount} 个网关已滚动（上游映射同步）` : '') +
       (failed.length ? `；${failed.length} 个租户推送失败（${failed[0].tenantId}：${failed[0].error}）` : '');
   }
   return { tenants: results, hint };

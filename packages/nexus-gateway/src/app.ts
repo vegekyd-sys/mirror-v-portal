@@ -7,6 +7,8 @@ import { identityMiddleware, initIdentityConfig } from './middleware/identity.js
 import { initPlanConfig, sceneMiddleware, setPlanConfig, sceneHeaders } from './middleware/scene.js';
 import { agentLimiter, globalLimiter } from './middleware/ratelimit.js';
 import { sendReply, extractAgentReplyText } from './services/feishu-reply.js';
+import { registerLlmProxy } from './services/llm-proxy.js';
+import { fetchCustomerBalance } from './services/balance-helpers.js';
 import { GATEWAY_HEADERS, type GatewayError, type TenantContext } from './types/index.js';
 
 // Shared service token for credits-ledger calls (optional).
@@ -46,6 +48,13 @@ export function createApp(config: GatewayConfig) {
     res.json({ ok: true, service: 'nexus-gateway', tenantId: config.tenantId });
   });
 
+  // LLM egress proxy — MUST be registered before globalLimiter (LLM calls
+  // follow the agent loop, not human pacing) and before the 1MB global JSON
+  // parser (LLM contexts can exceed it; the proxy reads raw bodies itself).
+  // Balance keyword / exhausted-balance interception lives here now — the
+  // message-entry interception in the webhook path was removed.
+  registerLlmProxy(app, config);
+
   app.use(globalLimiter);
   app.use(auditMiddleware);
   app.use(cors({ origin: false }));
@@ -69,7 +78,7 @@ export function createApp(config: GatewayConfig) {
         res.status(400).json({ code: 'CONFIG_MISSING' });
         return;
       }
-      const info = await fetchBalance(config.creditsLedgerUrl, accountId, config.creditsLedgerToken);
+      const info = await fetchCustomerBalance(config.creditsLedgerUrl, accountId, config.creditsLedgerToken);
       if (!info) {
         res.status(404).json({ code: 'NOT_FOUND' });
         return;
@@ -148,26 +157,9 @@ export function createApp(config: GatewayConfig) {
           return;
         }
 
-        // ── Balance query interception ──
-        // If the user is asking about balance/credits/用量, reply directly
-        // without consuming agent credits.
-        const msgText = extractMessageText(body);
-        if (msgText && isBalanceQuery(msgText) && config.creditsLedgerUrl && config.keyConfig?.creditsAccountId) {
-          console.log('[webhook] balance query detected, responding directly');
-          try {
-            const balanceInfo = await fetchBalance(config.creditsLedgerUrl, config.keyConfig.creditsAccountId, config.creditsLedgerToken);
-            if (balanceInfo && config.appId && config.appSecret) {
-              const replyText = formatBalanceReply(balanceInfo);
-              const replyResult = await sendReply(config.appId, config.appSecret, msgId, replyText);
-              console.log('[webhook] balance reply:', replyResult.ok ? 'sent' : `failed(${replyResult.status})`);
-            }
-          } catch (balErr: any) {
-            console.warn('[webhook] balance fetch failed:', balErr.message);
-            // Fall through to agent
-          }
-          res.json({ code: 0 });
-          return;
-        }
+        // Balance keyword interception now lives in the LLM egress proxy
+        // (services/llm-proxy.ts) — it sees every agent loop iteration and
+        // also covers cron/proactive tasks that bypass this webhook path.
 
         const agentRes = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute`, {
           method: 'POST',
@@ -347,89 +339,3 @@ const CREDIT_COSTS: Record<string, number> = {
   query: 2000,
   action: 8000,
 };
-
-// ── Balance query helpers (customer-facing) ──
-
-/** Extract message text from a Feishu event body */
-function extractMessageText(body: any): string | null {
-  try {
-    // Route 1: im.message.receive_v1
-    const content = body?.event?.message?.content;
-    if (typeof content === 'string') {
-      const parsed = JSON.parse(content);
-      if (parsed.text) return parsed.text.trim();
-    }
-    if (typeof content === 'object' && content?.text) {
-      return String(content.text).trim();
-    }
-    // Route 2: direct text field
-    if (body?.text) return String(body.text).trim();
-    return null;
-  } catch {
-    if (typeof body?.event?.message?.content === 'string') {
-      return body.event.message.content.trim();
-    }
-    return null;
-  }
-}
-
-/** Check if the message is asking about balance/credits */
-function isBalanceQuery(text: string): boolean {
-  const patterns = [
-    /^查余额$/, /^余额$/, /^我的余额$/, /^credit/i, /^credits/i,
-    /查.*余额/, /看.*余额/, /还剩/, /剩余.*credit/i, /剩余.*额度/,
-    /有多少.*credit/i, /用量/, /消耗/, /my balance/i,
-  ];
-  return patterns.some(p => p.test(text));
-}
-
-interface BalanceInfo {
-  companyName: string;
-  availableBalance: number;
-  frozenCredits: number;
-  lifetimeConsumed: number;
-  planTier: string;
-  planName: string;
-  status: string;
-  subscriptionEnd: string | null;
-  liveConsumed?: number;
-  shadowConsumed?: number;
-}
-
-async function fetchBalance(ledgerUrl: string, accountId: string, token?: string): Promise<BalanceInfo | null> {
-  // Derive tenant ID from account ID (acct_<tenantId>)
-  const tenantId = accountId.startsWith('acct_') ? accountId.slice(5) : accountId;
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${ledgerUrl.replace(/\/$/, '')}/v1/admin/customers/${encodeURIComponent(tenantId)}`, {
-    signal: AbortSignal.timeout(5_000),
-    headers,
-  });
-  if (!res.ok) return null;
-  return res.json() as Promise<BalanceInfo>;
-}
-
-function formatBalanceReply(info: BalanceInfo): string {
-  const k = (n: number) => n ? `${(n / 1000).toFixed(1)}K` : '0';
-  const statusEmoji = info.status === 'active' ? '✅' : info.status === 'suspended' ? '⏸️' : '🔴';
-  const lines = [
-    `💰 **${info.companyName || '账户'}** · ${statusEmoji} ${info.planName || info.planTier || ''}`,
-    '',
-    `可用余额：**${k(info.availableBalance)}** Credits`,
-  ];
-  if (info.frozenCredits > 0) {
-    lines.push(`（其中冻结 ${k(info.frozenCredits)}：${info.subscriptionEnd ? '慧展权益预留' : '预留'}）`);
-  }
-  if (info.liveConsumed != null) {
-    lines.push(`本月已用：${k(info.liveConsumed)}`);
-  }
-  if (info.shadowConsumed != null && info.shadowConsumed > 0) {
-    lines.push(`内测消耗：${k(info.shadowConsumed)}（不计费）`);
-  }
-  if (info.subscriptionEnd) {
-    const endDate = new Date(info.subscriptionEnd).toLocaleDateString('zh-CN');
-    lines.push(`套餐到期：${endDate}`);
-  }
-  lines.push('', `📊 详情：https://43.156.232.2:8443/credit-info.html`);
-  return lines.join('\n');
-}

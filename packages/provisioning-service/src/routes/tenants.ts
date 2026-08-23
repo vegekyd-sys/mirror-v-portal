@@ -758,12 +758,18 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
-  // DELETE /v1/tenants/:id/feishu-binding — unbind: gateway is removed,
-  // credentials cleared; the agent keeps serving web chat.
+  // DELETE /v1/tenants/:id/feishu-binding — unbind: the Feishu connection is
+  // disabled (bot Secret rotated to placeholders + gateway rolled), but the
+  // gateway itself is KEPT — it doubles as the tenant's LLM egress proxy.
   router.delete('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
     try {
       const result = await unbindTenantFeishuApp(pool, config, req.params.id);
-      res.json({ ...result, message: `已解绑并移除网关 ${result.removedGateway}` });
+      res.json({
+        ...result,
+        message: `已解绑飞书应用；网关 ${result.gatewayKept} 保留（LLM 出口代理）${
+          result.restarted ? '，已滚动重启以断开飞书连接' : ''
+        }`,
+      });
     } catch (err: unknown) {
       const e = err as any;
       if (e instanceof FeishuBindingError) {

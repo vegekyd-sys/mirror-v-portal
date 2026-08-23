@@ -5,6 +5,7 @@ import { query } from './db/pool.js';
 import accountsRouter from './routes/accounts.js';
 import skillPricesRouter from './routes/skill-prices.js';
 import billingRouter from './routes/billing.js';
+import llmUsageRouter from './routes/llm-usage.js';
 import customerAdminRouter from './routes/customer-admin.js';
 import adminAuthRouter, { requireAdmin, requireServiceOrAdmin } from './routes/admin-auth.js';
 import adminSkillsRouter from './routes/admin-skills.js';
@@ -43,6 +44,7 @@ export function createApp() {
   app.use(requireServiceOrAdmin, accountsRouter);
   app.use(requireServiceOrAdmin, skillPricesRouter);
   app.use(requireServiceOrAdmin, billingRouter);
+  app.use(requireServiceOrAdmin, llmUsageRouter);
 
   // ── Customer admin (topup/renew/create-customer/v-command/plans/customers) ──
   // Money-creation + account-management endpoints: service token or admin JWT.

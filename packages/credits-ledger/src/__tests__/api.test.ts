@@ -416,3 +416,125 @@ describe('GET /v1/admin/monthly-reset/status', () => {
     expect(typeof res.body.overdueReset).toBe('number');
   });
 });
+describe('LLM usage accounting (nexus-gateway proxy)', () => {
+  const LLM_TENANT = 'llm-test-tenant';
+
+  beforeAll(async () => {
+    if (!dbAvailable) return;
+    await query('DELETE FROM llm_usage_events WHERE tenant_id = $1', [LLM_TENANT]);
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await query('DELETE FROM llm_usage_events WHERE tenant_id = $1', [LLM_TENANT]);
+  });
+
+  dbIt('POST /v1/billing/llm-usage records a call and computes totals', async () => {
+    const res = await request(app)
+      .post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH)
+      .send({
+        tenantId: LLM_TENANT,
+        provider: 'qwen',
+        model: 'deepseek-v4-pro',
+        inputTokens: 1200,
+        outputTokens: 340,
+        latencyMs: 820,
+        status: 'ok',
+        source: 'proxy',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.id).toBeDefined();
+
+    const { rows } = await query(
+      'SELECT input_tokens, output_tokens, total_tokens, status, account_id FROM llm_usage_events WHERE id = $1',
+      [res.body.id],
+    );
+    expect(Number(rows[0].input_tokens)).toBe(1200);
+    expect(Number(rows[0].output_tokens)).toBe(340);
+    expect(Number(rows[0].total_tokens)).toBe(1540);
+    expect(rows[0].status).toBe('ok');
+    expect(rows[0].account_id).toBe(`acct_${LLM_TENANT}`);
+  });
+
+  dbIt('rejects missing fields with 400', async () => {
+    const res = await request(app)
+      .post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH)
+      .send({ tenantId: LLM_TENANT });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION');
+  });
+
+  dbIt('is idempotent on request_id (duplicate replay)', async () => {
+    const body = {
+      tenantId: LLM_TENANT,
+      provider: 'qwen',
+      model: 'deepseek-v4-pro',
+      inputTokens: 10,
+      outputTokens: 5,
+      requestId: 'req-dedupe-001',
+    };
+    const first = await request(app).post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH).send(body);
+    expect(first.status).toBe(200);
+    expect(first.body.duplicate).toBeUndefined();
+
+    const replay = await request(app).post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH).send(body);
+    expect(replay.status).toBe(200);
+    expect(replay.body.duplicate).toBe(true);
+
+    const { rows } = await query(
+      'SELECT COUNT(*) AS n FROM llm_usage_events WHERE tenant_id = $1 AND request_id = $2',
+      [LLM_TENANT, 'req-dedupe-001'],
+    );
+    expect(Number(rows[0].n)).toBe(1);
+  });
+
+  dbIt('records blocked/synthesized statuses for proxy interceptions', async () => {
+    await request(app).post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH)
+      .send({ tenantId: LLM_TENANT, provider: 'qwen', model: 'm', status: 'blocked', inputTokens: 0, outputTokens: 0 });
+    await request(app).post('/v1/billing/llm-usage')
+      .set('Authorization', SVC_AUTH)
+      .send({ tenantId: LLM_TENANT, provider: 'qwen', model: 'm', status: 'synthesized', inputTokens: 0, outputTokens: 0 });
+    const { rows } = await query(
+      'SELECT COUNT(*) AS n FROM llm_usage_events WHERE tenant_id = $1 AND status IN ($2,$3)',
+      [LLM_TENANT, 'blocked', 'synthesized'],
+    );
+    expect(Number(rows[0].n)).toBe(2);
+  });
+
+  dbIt('GET summary aggregates by model and day', async () => {
+    const res = await request(app)
+      .get(`/v1/billing/llm-usage/summary?tenantId=${LLM_TENANT}&days=1`)
+      .set('Authorization', SVC_AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe(LLM_TENANT);
+    expect(res.body.totals.calls).toBeGreaterThanOrEqual(4);
+    expect(res.body.totals.inputTokens).toBeGreaterThanOrEqual(1210);
+    expect(Array.isArray(res.body.byModel)).toBe(true);
+    expect(res.body.byModel.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body.byDay)).toBe(true);
+  });
+
+  dbIt('GET tenants lists per-tenant totals including blocked/synthesized', async () => {
+    const res = await request(app)
+      .get('/v1/billing/llm-usage/tenants?days=1')
+      .set('Authorization', SVC_AUTH);
+    expect(res.status).toBe(200);
+    const me = res.body.tenants.find((t: any) => t.tenantId === LLM_TENANT);
+    expect(me).toBeDefined();
+    expect(me.calls).toBeGreaterThanOrEqual(4);
+    expect(me.blocked).toBe(1);
+    expect(me.synthesized).toBe(1);
+  });
+
+  dbIt('requires auth (401 without token)', async () => {
+    const res = await request(app).post('/v1/billing/llm-usage')
+      .send({ tenantId: LLM_TENANT, provider: 'qwen', model: 'm' });
+    expect(res.status).toBe(401);
+  });
+});

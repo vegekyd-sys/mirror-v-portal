@@ -164,6 +164,34 @@ export async function migrate() {
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_skill ON skill_billing_events(skill_id, created_at DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_task ON skill_billing_events(task_id)`);
 
+  // ── v3: LLM token usage accounting (nexus-gateway LLM proxy) ──
+  // Shadow accounting only — records raw input/output tokens per provider
+  // model call. Never debits credits (folding tokens into credits is a
+  // separate product decision); kept apart from skill_billing_events on
+  // purpose so billing reports stay clean.
+  await query(`
+    CREATE TABLE IF NOT EXISTS llm_usage_events (
+      id            VARCHAR(64) PRIMARY KEY,
+      tenant_id     VARCHAR(64) NOT NULL,
+      account_id    VARCHAR(64) NOT NULL,
+      provider      VARCHAR(64) NOT NULL,
+      model         VARCHAR(128) NOT NULL,
+      input_tokens  BIGINT NOT NULL DEFAULT 0,
+      output_tokens BIGINT NOT NULL DEFAULT 0,
+      total_tokens  BIGINT NOT NULL DEFAULT 0,
+      latency_ms    INTEGER,
+      status        VARCHAR(16) NOT NULL DEFAULT 'ok',
+      source        VARCHAR(32) NOT NULL DEFAULT 'proxy',
+      request_id    VARCHAR(128),
+      metadata      JSONB DEFAULT '{}',
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant ON llm_usage_events(tenant_id, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage_events(created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage_events(provider, model)`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_usage_request_id ON llm_usage_events(request_id) WHERE request_id IS NOT NULL`);
+
   // ── v2.1: billing_mode column (live/shadow) ──
   await query(`ALTER TABLE skill_billing_events ADD COLUMN IF NOT EXISTS billing_mode VARCHAR(8) DEFAULT 'live'`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_mode ON skill_billing_events(billing_mode, created_at DESC)`);

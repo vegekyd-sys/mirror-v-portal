@@ -150,6 +150,55 @@ export function createAdminOpsRoutes(
     }
   });
 
+  // GET /v1/admin/llm-usage — LLM token usage across all tenants (proxy to
+  // credits-ledger). Powers the admin console's usage summary card.
+  // GET /v1/admin/llm-usage/summary?tenantId= — per-tenant aggregate.
+  const proxyLlmUsage = async (
+    ledgerPath: string,
+    query: URLSearchParams,
+    res: Response,
+  ) => {
+    try {
+      const url = `${config.creditsLedgerUrl.replace(/\/$/, '')}${ledgerPath}?${query.toString()}`;
+      const ledgerRes = await fetch(url, {
+        headers: { Authorization: `Bearer ${config.creditsLedgerToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = await ledgerRes.json().catch(() => ({}));
+      if (!ledgerRes.ok) {
+        res.status(502).json({
+          code: 'LEDGER_ERROR',
+          message: (data as any)?.message || `credits-ledger returned HTTP ${ledgerRes.status}`,
+        });
+        return;
+      }
+      res.json(data);
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(502).json({ code: 'LEDGER_UNREACHABLE', message: `无法访问 credits-ledger：${e?.message || e}` });
+    }
+  };
+
+  const parseDays = (raw: unknown): number =>
+    Math.min(Math.max(Number(raw ?? 7) || 7, 1), 90);
+
+  router.get('/v1/admin/llm-usage', async (req: Request, res: Response) => {
+    await proxyLlmUsage('/v1/billing/llm-usage/tenants', new URLSearchParams({ days: String(parseDays(req.query.days)) }), res);
+  });
+
+  router.get('/v1/admin/llm-usage/summary', async (req: Request, res: Response) => {
+    const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId.trim() : '';
+    if (!tenantId) {
+      res.status(400).json({ code: 'BAD_REQUEST', message: 'tenantId is required' });
+      return;
+    }
+    await proxyLlmUsage(
+      '/v1/billing/llm-usage/summary',
+      new URLSearchParams({ tenantId, days: String(parseDays(req.query.days)) }),
+      res,
+    );
+  });
+
   // POST /v1/admin/tenants/:id/chat — proxy a web-chat message to the
   // tenant's dealclaw-agent bridge (POST /execute, synchronous, no auth on
   // the bridge itself — it lives inside the cluster network only).

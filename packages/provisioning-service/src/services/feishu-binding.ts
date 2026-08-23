@@ -16,21 +16,24 @@
  *     connects to Feishu via an outbound WebSocket, so NO ingress change
  *     is required.
  *
- * Unbinding deletes the gateway Deployment/Service (the agent itself is
- * untouched — web chat keeps working) and clears the stored credentials.
+ * Unbinding DISABLES the Feishu connection without deleting the gateway —
+ * the gateway is also the tenant's LLM egress proxy, so it must stay up.
+ * The bot Secret is rotated to placeholder credentials and the gateway is
+ * rolled: the ws-client fails to obtain a tenant_access_token with the
+ * placeholder and safely skips the Feishu long connection.
  */
 
 import type pg from 'pg';
+import { v4 as uuidv4 } from 'uuid';
 import type { ProvisioningConfig } from '../config.js';
 import {
   createSecret,
   putSecret,
   createDeployment,
   createService,
-  deleteDeployment,
-  deleteService,
   restartDeployment,
 } from './k8s-client.js';
+import { LLM_PROXY_CONFIG_SECRET } from './llm-providers.js';
 
 const FEISHU_APP_ID_PATTERN = /^cli_[a-zA-Z0-9]{4,64}$/;
 const FEISHU_TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
@@ -252,6 +255,12 @@ export async function bindTenantFeishuApp(
     DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantId}`,
   });
 
+  // LLM upstream map for the gateway's egress proxy. createSecret
+  // tolerates 409 and KEEPS the existing content — pushLlmProviders is the
+  // authoritative writer; this just guarantees the Secret exists so the
+  // gateway's envFrom reference resolves.
+  await createSecret(gatewayNs, LLM_PROXY_CONFIG_SECRET, { LLM_UPSTREAMS: '{}' });
+
   // 4. Gateway Deployment + Service. Prefer the promoted rollout target so a
   // freshly created gateway picks up the same version the fleet runs.
   let gwTag = config.nexusGatewayImageTag;
@@ -280,6 +289,7 @@ export async function bindTenantFeishuApp(
       { secretRef: { name: botSecretName } },
       { secretRef: { name: agentConfigName } },
       { secretRef: { name: creditsConfigName } },
+      { secretRef: { name: LLM_PROXY_CONFIG_SECRET } },
     ],
     env: [
       { name: 'DEALCLAW_PLATFORM', value: 'feishu' },
@@ -288,8 +298,8 @@ export async function bindTenantFeishuApp(
       { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
       { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
     ],
-    requests: { cpu: '100m', memory: '128Mi' },
-    limits: { cpu: '300m', memory: '256Mi' },
+    requests: { cpu: '200m', memory: '256Mi' },
+    limits: { cpu: '1000m', memory: '512Mi' },
     imagePullSecrets: [{ name: 'registry-secret-vpc' }],
     livenessPath: '/healthz',
     readinessPath: '/healthz',
@@ -320,14 +330,20 @@ export async function bindTenantFeishuApp(
 export interface UnbindResult {
   ok: true;
   tenantId: string;
-  removedGateway: string | null;
+  /** the gateway Deployment is KEPT (it is the tenant's LLM egress proxy) */
+  gatewayKept: string;
   gatewayNamespace: string | null;
+  /** true when the gateway Pod was rolled to pick up the placeholder creds */
+  restarted: boolean;
 }
 
 /**
- * Remove a tenant's Feishu binding: the gateway Deployment/Service is
- * deleted (the agent itself is untouched — web chat keeps working) and the
- * stored credentials are cleared.
+ * Remove a tenant's Feishu binding. The gateway Deployment/Service is NOT
+ * deleted — the gateway doubles as the tenant's LLM egress proxy (token
+ * billing + balance interception), which must keep running. Instead the bot
+ * Secret is rotated to placeholder credentials and the gateway is rolled:
+ * the ws-client fails to obtain a tenant_access_token with placeholders and
+ * safely skips the Feishu long connection. The agent itself is untouched.
  */
 export async function unbindTenantFeishuApp(
   pool: Queryable & pg.Pool,
@@ -353,10 +369,17 @@ export async function unbindTenantFeishuApp(
 
   const gatewayNs = tenant.k8s_namespace || config.runtimeNamespace;
   const gatewayName = `nexus-gateway-${tenantId}`;
+  const botSecretName = `dealclaw-bot-${tenantId}`;
 
+  let restarted = false;
   if (!config.k8sDryRun) {
-    await deleteDeployment(gatewayNs, gatewayName);
-    await deleteService(gatewayNs, gatewayName);
+    // Rotate the bot Secret to placeholders instead of deleting the
+    // gateway — the LLM egress proxy must survive the unbind.
+    await putSecret(gatewayNs, botSecretName, {
+      DEALCLAW_APP_ID: `placeholder-${tenantId}`,
+      DEALCLAW_APP_SECRET: uuidv4(),
+    });
+    restarted = await restartDeployment(gatewayNs, gatewayName);
   }
 
   await pool.query(
@@ -367,13 +390,14 @@ export async function unbindTenantFeishuApp(
   await pool.query(
     `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
      VALUES ($1, $2, $2, $3)`,
-    [tenantId, tenant.status, `Feishu app unbound: ${tenant.app_id} — gateway ${gatewayName} removed from ${gatewayNs}`],
+    [tenantId, tenant.status, `Feishu app unbound: ${tenant.app_id} — gateway ${gatewayName} kept as LLM egress proxy, bot credentials rotated to placeholder`],
   );
 
   return {
     ok: true,
     tenantId,
-    removedGateway: gatewayName,
+    gatewayKept: gatewayName,
     gatewayNamespace: config.k8sDryRun ? null : gatewayNs,
+    restarted,
   };
 }

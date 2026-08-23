@@ -27,6 +27,7 @@ const testConfig: GatewayConfig = {
     configVersion: '1',
   },
   initialCredits: 10000,
+  llmUpstreams: {},
 };
 
 const app = createApp(testConfig);

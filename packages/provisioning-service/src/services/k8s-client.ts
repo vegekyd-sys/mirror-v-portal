@@ -535,6 +535,39 @@ export async function patchDeployment(
   return true;
 }
 
+/**
+ * Ensure a Deployment's container envFrom includes the given secret.
+ * Idempotent: when the secret is already referenced nothing is patched and
+ * false is returned. Used to retro-fit the llm-proxy-config Secret onto
+ * gateways created before the LLM egress proxy existed.
+ *
+ * NB: envFrom is a plain list without a merge key, so a strategic-merge
+ * patch REPLACES the whole list — the current entries are read first and
+ * resent together with the new one.
+ */
+export async function patchDeploymentEnvFromSecret(
+  namespace: string,
+  name: string,
+  secretName: string,
+): Promise<boolean> {
+  const deploy = await getDeployment(namespace, name);
+  if (!deploy) return false;
+  const containers = deploy?.spec?.template?.spec?.containers ?? [];
+  const container = containers.find((c: any) => c?.name === name);
+  if (!container) return false;
+  const envFrom: Array<{ secretRef: { name: string } }> = container.envFrom ?? [];
+  if (envFrom.some((e: any) => e?.secretRef?.name === secretName)) return false;
+  return patchDeployment(namespace, name, {
+    spec: {
+      template: {
+        spec: {
+          containers: [{ name, envFrom: [...envFrom, { secretRef: { name: secretName } }] }],
+        },
+      },
+    },
+  });
+}
+
 // ── Service ──
 export async function createService(
   namespace: string,

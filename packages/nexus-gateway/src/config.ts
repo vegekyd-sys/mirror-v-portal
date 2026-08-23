@@ -3,7 +3,8 @@ import type { KeyConfig, PlanTier } from './types/index.js';
 export interface GatewayConfig {
   port: number;
   tenantId: string;
-  platform: 'feishu' | 'dingtalk' | 'wecom';
+  /** 'web' = no IM channel; the gateway runs as the tenant's LLM egress proxy only. */
+  platform: 'feishu' | 'dingtalk' | 'wecom' | 'web';
   planTier: PlanTier;
   agentUrl: string;
   // B3 FIX: credits-ledger URL for HTTP debit/balance calls
@@ -22,6 +23,13 @@ export interface GatewayConfig {
   // lifecycle notifications can be delivered (see central-gateway notify relay).
   provisioningServiceUrl?: string;
   provisioningApiToken?: string;
+  /**
+   * LLM egress proxy — provider name → real upstream base URL. Injected via
+   * the `llm-proxy-config` Secret (env LLM_UPSTREAMS, JSON) written by
+   * provisioning-service at provider-library push time. Empty when the tenant
+   * has no library configured (proxy routes then 404).
+   */
+  llmUpstreams: Record<string, string>;
 }
 
 function required(name: string): string {
@@ -34,8 +42,25 @@ export function loadConfig(): GatewayConfig {
   const tenantId = required('DEALCLAW_TENANT_ID');
   const platform = (process.env.DEALCLAW_PLATFORM ?? 'feishu') as GatewayConfig['platform'];
 
-  if (!['feishu', 'dingtalk', 'wecom'].includes(platform)) {
+  if (!['feishu', 'dingtalk', 'wecom', 'web'].includes(platform)) {
     throw new Error(`Unsupported DEALCLAW_PLATFORM: ${platform}`);
+  }
+
+  // LLM egress proxy upstream map — JSON { "<providerName>": "<baseUrl>" }.
+  // Written by provisioning-service into the llm-proxy-config Secret.
+  let llmUpstreams: Record<string, string> = {};
+  const upstreamsRaw = (process.env.LLM_UPSTREAMS || '').trim();
+  if (upstreamsRaw) {
+    try {
+      const parsed = JSON.parse(upstreamsRaw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string' && /^https?:\/\//.test(v)) llmUpstreams[k] = v.replace(/\/+$/, '');
+        }
+      }
+    } catch {
+      console.warn('[config] LLM_UPSTREAMS is not valid JSON — LLM proxy disabled');
+    }
   }
 
   return {
@@ -53,6 +78,7 @@ export function loadConfig(): GatewayConfig {
     appSecret: process.env.DEALCLAW_APP_SECRET,
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL,
     provisioningApiToken: process.env.PROVISIONING_API_TOKEN,
+    llmUpstreams,
     keyConfig: {
       customerKeyRef: required('DEALCLAW_CUSTOMER_KEY_REF'),
       botCredentialRef: required('DEALCLAW_BOT_CREDENTIAL_REF'),

@@ -120,7 +120,7 @@ export async function provisionTenant(
 
   if (dryRun) {
     result.warnings.push(`DRY_RUN: would provision in namespace ${nsName}`);
-    result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config', SKILL_ENV_SECRET_NAME);
+    result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config', 'llm-proxy-config', SKILL_ENV_SECRET_NAME);
     result.pods.push(gatewayName, agentName, agentPvcName);
     return result;
   }
@@ -203,12 +203,23 @@ export async function provisionTenant(
     await k8sCreateSecret(nsName, SKILL_ENV_SECRET_NAME, { '.env': skillEnv.content });
     result.secrets.push(SKILL_ENV_SECRET_NAME);
 
-    // 2. nexus-gateway Deployment + Service — IM tenants only.
-    // The gateway binds to feishu/dingtalk/wecom and crashes on any other
-    // DEALCLAW_PLATFORM value. Web-platform tenants have no IM channel:
-    // admin chat is proxied by provisioning-service straight to the
-    // agent's /execute endpoint, so no gateway is deployed for them.
-    if (tenant.platform !== 'web') {
+    // 1d. llm-proxy-config Secret — the LLM upstream map consumed by the
+    // tenant's nexus-gateway (envFrom, LLM_UPSTREAMS JSON: providerName →
+    // real baseUrl). Created empty here; pushLlmProviders keeps it in sync
+    // with the global provider library. The agent's LLM_PROVIDERS blob
+    // points at the gateway's /v1/llm/<provider> route, so this mapping is
+    // what lets the gateway forward to the real upstream.
+    const llmProxyConfigName = 'llm-proxy-config';
+    await k8sCreateSecret(nsName, llmProxyConfigName, { LLM_UPSTREAMS: '{}' });
+    result.secrets.push(llmProxyConfigName);
+
+    // 2. nexus-gateway Deployment + Service — created for EVERY tenant
+    // (always-create). The gateway is the tenant's LLM egress proxy
+    // (billing + balance interception) regardless of IM platform; for
+    // web-platform tenants DEALCLAW_PLATFORM=web and the ws-client safely
+    // skips the Feishu long connection (bot Secret holds placeholder
+    // credentials).
+    {
       const gwLabels = { ...labels, app: 'nexus-gateway' };
       await createDeployment({
         name: gatewayName,
@@ -220,6 +231,7 @@ export async function provisionTenant(
           { secretRef: { name: botSecretName } },
           { secretRef: { name: agentConfigName } },
           { secretRef: { name: creditsConfigName } },
+          { secretRef: { name: llmProxyConfigName } },
         ],
         env: [
           { name: 'DEALCLAW_PLATFORM', value: tenant.platform || 'feishu' },
@@ -231,16 +243,15 @@ export async function provisionTenant(
           { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
           { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
         ],
-        requests: { cpu: '100m', memory: '128Mi' },
-        limits: { cpu: '300m', memory: '256Mi' },
+        // SSE stream-through headroom for the LLM proxy path
+        requests: { cpu: '200m', memory: '256Mi' },
+        limits: { cpu: '1000m', memory: '512Mi' },
         imagePullSecrets: [{ name: 'registry-secret-vpc' }],
         livenessPath: '/healthz',
         readinessPath: '/healthz',
       });
       await createService(nsName, gatewayName, 8080, gwLabels);
       result.pods.push(gatewayName);
-    } else {
-      result.warnings.push('web-platform tenant: nexus-gateway skipped (chat proxied directly to agent)');
     }
 
     // 3. dealclaw-agent Deployment + Service + per-tenant PVC
@@ -325,6 +336,7 @@ export async function deprovisionTenant(
     `dealclaw-agent-config-${tenantId}`,
     `dealclaw-credits-${tenantId}`,
     'tenant-config',
+    'llm-proxy-config',
     SKILL_ENV_SECRET_NAME,
   ];
 

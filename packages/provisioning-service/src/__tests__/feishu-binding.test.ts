@@ -185,7 +185,7 @@ describe('unbindTenantFeishuApp', () => {
     });
   });
 
-  it('clears credentials and platform (dry-run)', async () => {
+  it('clears credentials and platform; KEEPS the gateway as LLM egress proxy (dry-run)', async () => {
     const tenant = {
       tenant_id: 'default',
       status: 'active',
@@ -196,7 +196,9 @@ describe('unbindTenantFeishuApp', () => {
     };
     const pool = makeFakePool(tenant);
     const r = await unbindTenantFeishuApp(pool, baseConfig, 'default');
-    expect(r.removedGateway).toBe('nexus-gateway-default');
+    expect(r.gatewayKept).toBe('nexus-gateway-default');
+    expect(r.gatewayNamespace).toBeNull(); // dry-run
+    expect(r.restarted).toBe(false);
     const update = pool.queries.find((q: FakeQuery) => q.sql.includes('app_id = NULL'));
     expect(update?.params).toEqual(['default']);
   });

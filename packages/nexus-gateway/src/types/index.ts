@@ -11,7 +11,9 @@
 export interface TenantContext {
   tenantId: string;
   userId: string;
-  platform: 'feishu' | 'dingtalk' | 'wecom';
+  /** 'web' tenants have no IM channel — the gateway still runs as their LLM
+   *  egress proxy (see services/llm-proxy.ts); the Feishu WSClient is skipped. */
+  platform: 'feishu' | 'dingtalk' | 'wecom' | 'web';
   role: 'admin' | 'member' | 'readonly';
 }
 
