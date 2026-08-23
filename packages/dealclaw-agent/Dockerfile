@@ -7,6 +7,13 @@ RUN npm run build && npm prune --omit=dev
 
 FROM ghcr.io/openclaw/openclaw:2026.7.1
 
+# Feishu channel plugin — MUST match the base image's OpenClaw version
+# (plugins are version-coupled to the host runtime). Pinned, not `latest`.
+RUN npm install --omit=dev --no-save --legacy-peer-deps \
+      --prefix /opt/dealclaw/plugins/feishu \
+      @openclaw/feishu@2026.7.1 \
+    && chown -R node:node /opt/dealclaw/plugins
+
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

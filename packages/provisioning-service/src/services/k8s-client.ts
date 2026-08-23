@@ -568,6 +568,37 @@ export async function patchDeploymentEnvFromSecret(
   });
 }
 
+/**
+ * Set (or replace) a single env var on a Deployment's main container.
+ * Container env is a list keyed by `name` for strategic merge, so the patch
+ * merges this one entry into the existing env without dropping the rest.
+ * Patching env changes the pod template → triggers a rolling restart.
+ * Returns false when the deployment does not exist.
+ */
+export async function patchDeploymentEnvVar(
+  namespace: string,
+  name: string,
+  varName: string,
+  value: string,
+): Promise<boolean> {
+  const deploy = await getDeployment(namespace, name);
+  if (!deploy) return false;
+  const containers = deploy?.spec?.template?.spec?.containers ?? [];
+  const container = containers.find((c: any) => c?.name === name);
+  if (!container) return false;
+  const existing = (container.env ?? []).find((e: any) => e?.name === varName);
+  if (existing && existing.value === value) return false;
+  return patchDeployment(namespace, name, {
+    spec: {
+      template: {
+        spec: {
+          containers: [{ name, env: [{ name: varName, value }] }],
+        },
+      },
+    },
+  });
+}
+
 // ── Service ──
 export async function createService(
   namespace: string,

@@ -1,0 +1,14 @@
+{
+  "id": "dealclaw-contact",
+  "name": "DealClaw Contact Writeback",
+  "description": "Reports the sender's im_open_id to provisioning-service on the first inbound message, so lifecycle notifications (expiry/suspension/grace) can be delivered via the central notify relay.",
+  "version": "1.0.0",
+  "contracts": {},
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

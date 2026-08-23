@@ -148,6 +148,15 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       -- URL instead. (Historically used by the built-in default tenant, which
       -- was removed — the column is kept for compatibility.)
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_endpoint TEXT;
+
+      -- Message plane (P2): 'gateway' = nexus-gateway WS bridge (default,
+      -- legacy); 'openclaw' = in-agent @openclaw/feishu plugin owns the
+      -- Feishu long connection (streaming cards, native groups). The gateway
+      -- then serves purely as the LLM egress proxy.
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS message_plane TEXT NOT NULL DEFAULT 'gateway';
+      ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_message_plane_check;
+      ALTER TABLE tenants ADD CONSTRAINT tenants_message_plane_check
+        CHECK (message_plane IN ('gateway','openclaw'));
     `);
 
     console.log(JSON.stringify({

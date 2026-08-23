@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData, tenantNamespace } from '../services/provisioning.js';
+import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData, tenantNamespace, switchTenantMessagePlane } from '../services/provisioning.js';
 import { resolveTenantConfig } from '../services/runtime-config.js';
 import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
@@ -436,6 +436,57 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       if (result.rowCount === 0) { res.status(404).json({ code: "NOT_FOUND" }); return; }
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
+  });
+
+  // PUT /v1/tenants/:id/message-plane — P2: switch the Feishu message plane
+  // between the nexus-gateway WS bridge ('gateway') and the in-agent
+  // @openclaw/feishu plugin ('openclaw'). Ordered rollout guarantees a single
+  // WS client at any time (Feishu load-balances events across connections).
+  router.put('/v1/tenants/:id/message-plane', async (req: Request, res: Response) => {
+    try {
+      const { plane } = req.body ?? {};
+      if (plane !== 'gateway' && plane !== 'openclaw') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: "plane must be 'gateway' or 'openclaw'" });
+        return;
+      }
+      const tenantId = req.params.id;
+
+      // openclaw plane requires real bot credentials (placeholder creds from
+      // web-platform tenants would produce a dead WS client inside the agent).
+      const { rows } = await pool.query(
+        `SELECT app_id, app_secret, platform, status FROM tenants WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      if (rows.length === 0) { res.status(404).json({ code: 'NOT_FOUND' }); return; }
+      const tenant = rows[0];
+      if (plane === 'openclaw') {
+        if (tenant.platform !== 'feishu') {
+          res.status(409).json({ code: 'UNSUPPORTED_PLATFORM', message: `platform ${tenant.platform} has no feishu message plane` });
+          return;
+        }
+        if (!tenant.app_id || !tenant.app_secret || String(tenant.app_id).startsWith('placeholder-')) {
+          res.status(409).json({ code: 'NO_BOT_CREDENTIALS', message: 'Bind a Feishu app (appId/appSecret) before switching to the openclaw plane' });
+          return;
+        }
+      }
+
+      const result = await switchTenantMessagePlane(tenantId, plane);
+      if (!result.ok) {
+        res.status(500).json({ code: 'SWITCH_FAILED', steps: result.steps, warnings: result.warnings });
+        return;
+      }
+      // Persist the desired plane AFTER the rollout patches succeeded, so a
+      // failed switch never records a state the workloads don't reflect.
+      await pool.query(
+        `UPDATE tenants SET message_plane = $1, updated_at = NOW() WHERE tenant_id = $2`,
+        [plane, tenantId],
+      );
+      res.json({ ok: true, plane, steps: result.steps, warnings: result.warnings });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('message-plane switch failed:', e?.message ?? e);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
   });
 
   // PATCH /v1/tenants/:id/profile — update company name / contact info（对话回写）

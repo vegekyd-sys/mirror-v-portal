@@ -110,6 +110,32 @@ if (llmDoc && llmDoc.providers.length > 0) {
   console.warn('[dealclaw-runtime] no LLM providers configured — agent starts WITHOUT a model');
 }
 
+// ── Feishu channel (P2 direct connection) ─────────────────────────────
+// DEALCLAW_MESSAGE_PLANE=openclaw switches the tenant's message plane
+// from the nexus-gateway bridge to the official @openclaw/feishu plugin
+// (pre-baked at /opt/dealclaw/plugins/feishu — version-pinned to the base
+// image). Credentials come from the tenant's bot Secret (envFrom); the
+// appSecret is referenced by env id, never inlined into the config file.
+const FEISHU_PLUGIN_DIR = '/opt/dealclaw/plugins/feishu/node_modules/@openclaw/feishu';
+const messagePlane = process.env.DEALCLAW_MESSAGE_PLANE || 'gateway';
+const feishuAppId = (process.env.DEALCLAW_APP_ID || '').trim();
+const feishuAppSecret = (process.env.DEALCLAW_APP_SECRET || '').trim();
+const feishuDirect =
+  messagePlane === 'openclaw' &&
+  feishuAppId &&
+  feishuAppSecret &&
+  !feishuAppId.startsWith('placeholder-');
+
+if (messagePlane === 'openclaw' && !feishuDirect) {
+  console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but bot credentials missing/placeholder — feishu channel NOT enabled');
+}
+
+const pluginLoadPaths = [
+  path.join(workspace, 'plugins', 'dealclaw-billing'),
+  path.join(workspace, 'plugins', 'dealclaw-contact'),
+];
+if (feishuDirect) pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
+
 const deniedTools = [
   'message',
   'gateway',
@@ -188,14 +214,40 @@ const config = {
   },
   plugins: {
     load: {
-      paths: [path.join(workspace, 'plugins', 'dealclaw-billing')],
+      paths: pluginLoadPaths,
     },
     entries: {
       'dealclaw-billing': {
         enabled: true,
       },
+      'dealclaw-contact': {
+        enabled: true,
+      },
+      ...(feishuDirect ? { feishu: { enabled: true } } : {}),
     },
   },
+  ...(feishuDirect
+    ? {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: feishuAppId,
+            appSecret: { source: 'env', provider: 'default', id: 'DEALCLAW_APP_SECRET' },
+            // D1: per-tenant isolated Feishu app — open DMs, zero onboarding.
+            dmPolicy: 'open',
+            allowFrom: ['*'],
+            // Groups off by default; enable per tenant via config push.
+            groupPolicy: 'allowlist',
+            requireMention: true,
+            streaming: true,
+            // Quota optimisation: skip typing-indicator reactions.
+            typingIndicator: false,
+            // D2: full workplace tool suite (requires app scopes).
+            tools: { doc: true, chat: true, wiki: true, drive: true, perm: true, bitable: true },
+          },
+        },
+      }
+    : {}),
   logging: {
     redactSensitive: 'tools',
   },

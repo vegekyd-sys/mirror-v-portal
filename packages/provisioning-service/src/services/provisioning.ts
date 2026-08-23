@@ -14,6 +14,10 @@ import {
   deleteDeployment,
   deleteService,
   deletePersistentVolumeClaim,
+  getDeployment,
+  patchDeployment,
+  patchDeploymentEnvFromSecret,
+  patchDeploymentEnvVar,
 } from './k8s-client.js';
 import { DEFAULT_RUNTIME_NAMESPACE, type ProvisioningConfig } from '../config.js';
 import {
@@ -48,6 +52,12 @@ export interface TenantProvision {
   /** IM platform the tenant's gateway binds to. Defaults to 'feishu';
    *  tenants served only via web chat use 'web'. */
   platform?: string;
+  /**
+   * Message plane (P2): 'gateway' = nexus-gateway WS bridge (default);
+   * 'openclaw' = in-agent @openclaw/feishu plugin owns the Feishu WS
+   * connection and the gateway serves purely as the LLM egress proxy.
+   */
+  messagePlane?: 'gateway' | 'openclaw';
 }
 
 export interface ProvisionOptions {
@@ -108,6 +118,7 @@ export async function provisionTenant(
   // Central control-plane namespace where provisioning-service / credits-ledger / ops-agent run
   const centralNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || DEFAULT_RUNTIME_NAMESPACE;
   const tenantLabel = tenant.tenantId;
+  const messagePlane = tenant.messagePlane === 'openclaw' ? 'openclaw' : 'gateway';
 
   const result: ProvisionResult = {
     namespace: nsName,
@@ -259,6 +270,9 @@ export async function provisionTenant(
         ],
         env: [
           { name: 'DEALCLAW_PLATFORM', value: tenant.platform || 'feishu' },
+          // P2: 'openclaw' → the in-agent feishu plugin owns the message
+          // plane; the gateway must not hold a competing WS client.
+          { name: 'DEALCLAW_MESSAGE_PLANE', value: messagePlane },
           { name: 'DEALCLAW_AGENT_URL', value: `http://dealclaw-agent-${tenantLabel}:18789` },
           { name: 'NODE_ENV', value: 'production' },
           // Contact writeback — lets nexus-gateway report the sender's im_open_id
@@ -302,10 +316,19 @@ export async function provisionTenant(
         // Runtime provider/tool credentials — the tenant-config Secret is
         // created in this tenant's namespace by provisionTenant (step 1b).
         { secretRef: { name: 'tenant-config' } },
+        // P2 openclaw plane: the agent's feishu channel needs the bot
+        // credentials (write-config reads DEALCLAW_APP_ID/SECRET via envFrom).
+        ...(messagePlane === 'openclaw' ? [{ secretRef: { name: botSecretName } }] : []),
       ],
       env: [
         { name: 'NODE_ENV', value: 'production' },
         { name: 'DEALCLAW_MODEL', value: 'deepseek/deepseek-chat' },
+        // P2 message plane switch for write-config.mjs (channels.feishu).
+        { name: 'DEALCLAW_MESSAGE_PLANE', value: messagePlane },
+        // Contact writeback — the dealclaw-contact plugin reports the
+        // sender's im_open_id so lifecycle notifications can be delivered.
+        { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
+        { name: 'PROVISIONING_API_TOKEN', value: process.env.PROVISIONING_API_TOKEN || '' },
         // credits-ledger 地址 + 服务令牌（确定性计费 plugin 依赖）
         // Cross-namespace: credits-ledger runs in the central namespace.
         { name: 'DC_BILLING_URL', value: process.env.CREDITS_LEDGER_URL || `http://credits-ledger.${centralNs}:8081` },
@@ -393,6 +416,83 @@ export async function deprovisionTenant(
       warnings: [`Failed to delete tenant ${tenantId} resources: ${err instanceof Error ? err.message : String(err)}`],
     };
   }
+}
+
+// ── P2: message-plane switch ──────────────────────────────────────────────
+
+export type MessagePlane = 'gateway' | 'openclaw';
+
+export interface SwitchPlaneResult {
+  ok: boolean;
+  plane: MessagePlane;
+  steps: string[];
+  warnings: string[];
+}
+
+/**
+ * Switch a tenant's Feishu message plane between the nexus-gateway WS bridge
+ * ('gateway') and the in-agent @openclaw/feishu plugin ('openclaw').
+ *
+ * Ordering matters: Feishu load-balances WS events across connections, so
+ * exactly one client may hold the long connection at a time.
+ *   gateway → openclaw: stop the gateway WS FIRST (roll gateway), then
+ *                        enable channels on the agent (roll agent).
+ *   openclaw → gateway: disable agent channels FIRST (roll agent), then
+ *                        restore the gateway WS (roll gateway).
+ *
+ * Each patch changes the pod template → K8s rolls the deployment; env-var
+ * patches are no-ops when the value is already set (idempotent re-runs).
+ */
+export async function switchTenantMessagePlane(
+  tenantId: string,
+  plane: MessagePlane,
+): Promise<SwitchPlaneResult> {
+  const ns = tenantNamespace(tenantId);
+  const gatewayName = `nexus-gateway-${tenantId}`;
+  const agentName = `dealclaw-agent-${tenantId}`;
+  const botSecretName = `dealclaw-bot-${tenantId}`;
+  const steps: string[] = [];
+  const warnings: string[] = [];
+
+  if (plane === 'openclaw') {
+    // 1. Gateway stops holding the Feishu WS (rolls the deployment).
+    const gwStopped = await patchDeploymentEnvVar(ns, gatewayName, 'DEALCLAW_MESSAGE_PLANE', 'openclaw');
+    steps.push(gwStopped ? 'gateway: DEALCLAW_MESSAGE_PLANE=openclaw (rolling, WS stops)' : 'gateway: already on openclaw plane');
+    if (!gwStopped) {
+      // Distinguish "already set" from "deployment missing".
+      const deploy = await getDeployment(ns, gatewayName);
+      if (!deploy) warnings.push(`gateway deployment not found in ${ns}`);
+    }
+
+    // 2. Agent gets bot credentials + plane flag (write-config generates
+    //    channels.feishu on next boot). envFrom patch is idempotent.
+    const envFromOk = await patchDeploymentEnvFromSecret(ns, agentName, botSecretName);
+    if (!envFromOk) {
+      const deploy = await getDeployment(ns, agentName);
+      if (!deploy) warnings.push(`agent deployment not found in ${ns}`);
+      // else: secret already referenced — fine.
+    }
+    const agentRolled = await patchDeploymentEnvVar(ns, agentName, 'DEALCLAW_MESSAGE_PLANE', 'openclaw');
+    steps.push(agentRolled ? 'agent: DEALCLAW_MESSAGE_PLANE=openclaw (rolling, feishu channel enabled)' : 'agent: already on openclaw plane');
+  } else {
+    // 1. Agent drops channels.feishu first (write-config no longer emits it).
+    const agentRolled = await patchDeploymentEnvVar(ns, agentName, 'DEALCLAW_MESSAGE_PLANE', 'gateway');
+    steps.push(agentRolled ? 'agent: DEALCLAW_MESSAGE_PLANE=gateway (rolling, feishu channel disabled)' : 'agent: already on gateway plane');
+
+    // 2. Gateway restores the Feishu WS long connection.
+    const gwStarted = await patchDeploymentEnvVar(ns, gatewayName, 'DEALCLAW_MESSAGE_PLANE', 'gateway');
+    steps.push(gwStarted ? 'gateway: DEALCLAW_MESSAGE_PLANE=gateway (rolling, WS starts)' : 'gateway: already on gateway plane');
+    if (!gwStarted) {
+      const deploy = await getDeployment(ns, gatewayName);
+      if (!deploy) warnings.push(`gateway deployment not found in ${ns}`);
+    }
+    // NB: the bot Secret stays in the agent's envFrom — harmless (the agent
+    // ignores the credentials unless plane=openclaw) and keeps re-switching
+    // to a single-patch operation.
+    warnings.push('agent keeps bot-secret envFrom attached (ignored on gateway plane)');
+  }
+
+  return { ok: warnings.filter(w => w.includes('not found')).length === 0, plane, steps, warnings };
 }
 
 /**

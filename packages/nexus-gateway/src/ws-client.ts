@@ -82,6 +82,21 @@ async function reportContact(config: GatewayConfig, openId: string): Promise<boo
 
 // ── Main: start WSClient ──
 
+/**
+ * Whether this gateway pod should hold the Feishu WS long connection.
+ * P2: when the tenant's message plane is the in-agent @openclaw/feishu
+ * plugin ('openclaw'), the gateway must NOT start a second WS client —
+ * Feishu load-balances events across connections, so two clients compete
+ * for delivery. The gateway then serves purely as the LLM egress proxy.
+ */
+export function shouldStartWSClient(
+  platform: string,
+  messagePlane: string | undefined,
+): boolean {
+  if ((messagePlane || 'gateway') === 'openclaw') return false;
+  return platform === 'feishu';
+}
+
 export async function startWSClient(config: GatewayConfig) {
   const { tenantId, appId, appSecret, agentUrl } = config;
 
