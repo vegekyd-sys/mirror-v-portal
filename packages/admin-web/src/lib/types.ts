@@ -11,6 +11,8 @@ export interface Tenant {
   creditsAccountId?: string | null;
   quotaAgents?: number | null;
   quotaCreditsMonthly?: number | null;
+  /** Mio CDP supplier id — optional tenant credential for Mio CDP skills. */
+  mioCdpSupplierId?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

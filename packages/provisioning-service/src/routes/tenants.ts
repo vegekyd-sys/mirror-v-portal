@@ -11,6 +11,11 @@ import {
   bindTenantFeishuApp,
   unbindTenantFeishuApp,
 } from '../services/feishu-binding.js';
+import {
+  MioSupplierError,
+  MIO_SUPPLIER_ID_PATTERN,
+  updateTenantMioSupplier,
+} from '../services/mio-supplier.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -37,7 +42,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   // POST /v1/tenants — create new tenant
   router.post('/v1/tenants', async (req: Request, res: Response) => {
     try {
-      const { companyName, contactEmail, contactPhone, planTier, quotaAgents, quotaCreditsMonthly, botAppId, botAppSecret } = req.body;
+      const { companyName, contactEmail, contactPhone, planTier, quotaAgents, quotaCreditsMonthly, botAppId, botAppSecret, mioCdpSupplierId } = req.body;
 
       // Validate required fields
       // companyName: optional for QR-flow tenants (collected later by agent)
@@ -55,6 +60,14 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const safePhone = contactPhone ? contactPhone.replace(/[^0-9+ -]/g, '').slice(0, 30) : null;
       const safeAppId = botAppId && typeof botAppId === 'string' && botAppId.trim() ? botAppId.trim().slice(0, 64) : null;
       const safeAppSecret = botAppSecret && typeof botAppSecret === 'string' && botAppSecret.trim() ? botAppSecret.trim().slice(0, 128) : null;
+      // Mio CDP supplier id — optional, unique among live tenants, injected
+      // into the tenant agent's environment as MIO_CDP_SUPPLIER_ID.
+      const rawSupplierId = typeof mioCdpSupplierId === 'string' ? mioCdpSupplierId.trim() : '';
+      if (rawSupplierId && !MIO_SUPPLIER_ID_PATTERN.test(rawSupplierId)) {
+        res.status(400).json({ code: 'BAD_SUPPLIER_ID', message: 'Mio CDP 供应商 ID 格式不正确（1–64 位字母、数字、下划线或连字符）' });
+        return;
+      }
+      const safeSupplierId = rawSupplierId || null;
       // Tenant workloads are fully isolated in a per-tenant namespace.
       const k8sNs = `dealclaw-${tenantId}`;
       const creditsAccountId = `acct_${tenantId}`;
@@ -66,9 +79,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         await client.query('BEGIN');
 
         await client.query(
-          `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret],
+          `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret, mio_cdp_supplier_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId],
         );
 
         await client.query(
@@ -81,7 +94,11 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         const e = dbErr as any;
         await client.query('ROLLBACK').catch(() => {});
         if (e?.code === '23505') {
-          res.status(409).json({ code: 'DUPLICATE', message: 'Tenant with this email already exists' });
+          if (e?.constraint === 'tenants_mio_supplier_uq') {
+            res.status(409).json({ code: 'SUPPLIER_ID_TAKEN', message: '该 Mio CDP 供应商 ID 已绑定其他客户' });
+          } else {
+            res.status(409).json({ code: 'DUPLICATE', message: 'Tenant with this email already exists' });
+          }
           return;
         }
         throw dbErr;
@@ -133,6 +150,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           quotaCreditsMonthly: safeQuotaCredits,
           appId: safeAppId || undefined,
           appSecret: safeAppSecret || undefined,
+          mioCdpSupplierId: safeSupplierId || undefined,
         }, {
           dryRun: config.k8sDryRun,
           runtimeNamespace: config.runtimeNamespace,
@@ -177,6 +195,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           status: 'active',
           quotaAgents: safeQuotaAgents,
           quotaCreditsMonthly: safeQuotaCredits,
+          mioCdpSupplierId: safeSupplierId,
           k8sNamespace: provisionResult.namespace,
           secretsCreated: provisionResult.secrets,
           podsScheduled: provisionResult.pods,
@@ -200,7 +219,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, contact_phone, plan_tier, status,
                 k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly,
-                created_at, updated_at
+                mio_cdp_supplier_id, created_at, updated_at
          FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
@@ -232,6 +251,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           creditsAccountId: t.credits_account_id,
           quotaAgents: t.quota_agents,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
+          mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
           createdAt: t.created_at,
           updatedAt: t.updated_at,
         },
@@ -284,7 +304,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.get('/v1/tenants', async (_req: Request, res: Response) => {
     try {
       const { rows } = await pool.query(
-        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_credits_monthly, created_at
+        `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_credits_monthly, mio_cdp_supplier_id, created_at
          FROM tenants ORDER BY created_at DESC LIMIT 100`,
       );
 
@@ -297,6 +317,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           planTier: t.plan_tier,
           status: t.status,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
+          mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
           createdAt: t.created_at,
         })),
         total: rows.length,
@@ -739,6 +760,36 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
       console.error('Unbind feishu app failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || '解绑失败' });
+    }
+  });
+
+  // PATCH /v1/tenants/:id/mio-supplier-id — set or clear the tenant's Mio CDP
+  // supplier id (optional, unique per live tenant). Persists on the tenants
+  // row, injects MIO_CDP_SUPPLIER_ID into the agent-config Secret and rolls
+  // the agent Pod so skills pick it up from the environment. Empty string or
+  // null clears it.
+  router.patch('/v1/tenants/:id/mio-supplier-id', async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.body ?? {};
+      if (supplierId !== undefined && supplierId !== null && typeof supplierId !== 'string') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'supplierId must be a string or null' });
+        return;
+      }
+      const result = await updateTenantMioSupplier(pool, config, req.params.id, supplierId ?? null);
+      res.json({
+        ...result,
+        message: result.restarted
+          ? `供应商 ID 已${result.supplierId ? `设为 ${result.supplierId}` : '清除'}，agent 已滚动重启（约 10–30 秒生效）`
+          : `供应商 ID 已${result.supplierId ? `设为 ${result.supplierId}` : '清除'}`,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      if (e instanceof MioSupplierError) {
+        res.status(e.status).json({ code: e.code, message: e.message });
+        return;
+      }
+      console.error('Update mio supplier id failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || '更新失败' });
     }
   });
 

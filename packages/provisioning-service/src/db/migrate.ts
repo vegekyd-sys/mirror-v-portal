@@ -135,6 +135,14 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
 
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
 
+      -- Mio CDP supplier identity (v0.7): per-tenant credential for skills
+      -- calling the Mio CDP API (X-Supplier-Id). Optional; unique among
+      -- live tenants so one supplier maps to exactly one customer.
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS mio_cdp_supplier_id TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS tenants_mio_supplier_uq
+        ON tenants(mio_cdp_supplier_id)
+        WHERE mio_cdp_supplier_id IS NOT NULL AND status <> 'destroyed';
+
       -- External agent endpoint (v0.5): when set, the tenant does NOT get a
       -- per-tenant dealclaw-agent Deployment; chat is proxied straight to this
       -- URL instead. (Historically used by the built-in default tenant, which

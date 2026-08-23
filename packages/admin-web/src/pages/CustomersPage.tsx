@@ -53,6 +53,7 @@ const emptyCreate = {
   quotaCreditsMonthly: '1000000',
   botAppId: '',
   botAppSecret: '',
+  mioSupplierId: '',
 };
 
 const dotTone = (status?: string | null): string => {
@@ -162,6 +163,7 @@ export default function CustomersPage() {
       quotaCreditsMonthly: Number(createForm.quotaCreditsMonthly) || 1000000,
       botAppId: createForm.botAppId.trim(),
       botAppSecret: createForm.botAppSecret.trim(),
+      mioCdpSupplierId: createForm.mioSupplierId.trim(),
     };
     if (!window.confirm(`确认创建客户「${body.companyName || '未命名'}」？将立即开通 K8s 资源与计费账户。`))
       return;
@@ -484,6 +486,16 @@ export default function CustomersPage() {
             value={createForm.botAppSecret}
             onChange={(e) => setCreateForm({ ...createForm, botAppSecret: e.target.value })}
             placeholder="可留空后补"
+          />
+        </div>
+        <div className="form-row">
+          <label className="field-label">Mio CDP 供应商 ID</label>
+          <input
+            type="text"
+            className="mono"
+            value={createForm.mioSupplierId}
+            onChange={(e) => setCreateForm({ ...createForm, mioSupplierId: e.target.value })}
+            placeholder="可选，如 SUP12345；将注入该租户 agent 环境变量 MIO_CDP_SUPPLIER_ID"
           />
         </div>
         <div className="hint">

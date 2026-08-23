@@ -30,6 +30,12 @@ export interface TenantProvision {
   quotaCreditsMonthly: number;
   appId?: string;
   appSecret?: string;
+  /**
+   * Optional per-tenant Mio CDP supplier identifier. Injected into the
+   * agent-config Secret as MIO_CDP_SUPPLIER_ID so tenant skills calling
+   * the Mio CDP API pick it up from the environment.
+   */
+  mioCdpSupplierId?: string;
   /** IM platform the tenant's gateway binds to. Defaults to 'feishu';
    *  tenants served only via web chat use 'web'. */
   platform?: string;
@@ -141,6 +147,7 @@ export async function provisionTenant(
       DEALCLAW_TENANT_ID: tenantLabel,
       DEALCLAW_PLAN_TIER: tenant.planTier,
       DEALCLAW_INITIAL_CREDITS: String(tenant.quotaCreditsMonthly),
+      ...(tenant.mioCdpSupplierId ? { MIO_CDP_SUPPLIER_ID: tenant.mioCdpSupplierId } : {}),
     });
     result.secrets.push(agentConfigName);
 

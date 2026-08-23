@@ -91,6 +91,8 @@ export default function CustomerDetailPage() {
   const [dReason, setDReason] = useState('');
   const [dCompany, setDCompany] = useState('');
   const [dEmail, setDEmail] = useState('');
+  const [dSupplier, setDSupplier] = useState('');
+  const [supplierBusy, setSupplierBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
   const flash = (text: string) => {
@@ -108,6 +110,7 @@ export default function CustomerDetailPage() {
       setDStatus(r.tenant.status || 'pending');
       setDCompany(r.tenant.companyName || '');
       setDEmail(r.tenant.contactEmail || '');
+      setDSupplier(r.tenant.mioCdpSupplierId || '');
       setTenantErr('');
     } catch (e) {
       setTenant(null);
@@ -151,6 +154,34 @@ export default function CustomerDetailPage() {
       await loadTenant();
     } catch (e) {
       flash(`资料更新失败：${errMsg(e)}`);
+    }
+  };
+
+  const saveSupplier = async () => {
+    const supplierId = dSupplier.trim();
+    if (supplierId && !/^[A-Za-z0-9_-]{1,64}$/.test(supplierId)) {
+      flash('Mio CDP 供应商 ID 格式不正确（1–64 位字母、数字、下划线或连字符）');
+      return;
+    }
+    if (
+      supplierId &&
+      !window.confirm(
+        `确认将租户 ${tenantId} 的 Mio CDP 供应商 ID 设为 ${supplierId}？\n将写入该租户 agent 的环境变量 MIO_CDP_SUPPLIER_ID 并滚动重启 agent。`,
+      )
+    )
+      return;
+    setSupplierBusy(true);
+    try {
+      const r = await api<{ message?: string; supplierId?: string | null }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/mio-supplier-id`,
+        { method: 'PATCH', body: { supplierId: supplierId || null } },
+      );
+      flash(r.message || '供应商 ID 已更新');
+      await loadTenant();
+    } catch (e) {
+      flash(`供应商 ID 更新失败：${errMsg(e)}`);
+    } finally {
+      setSupplierBusy(false);
     }
   };
 
@@ -493,6 +524,10 @@ export default function CustomerDetailPage() {
                 <div className="v">{tenant.k8sNamespace || '-'}</div>
               </div>
               <div className="detail-item">
+                <div className="k">Mio CDP 供应商 ID</div>
+                <div className="v mono">{tenant.mioCdpSupplierId || '—'}</div>
+              </div>
+              <div className="detail-item">
                 <div className="k">Credits 账户</div>
                 <div className="v">{tenant.creditsAccountId || '-'}</div>
               </div>
@@ -544,6 +579,24 @@ export default function CustomerDetailPage() {
               />
               <button className="btn-secondary" onClick={() => void saveProfile()}>
                 保存
+              </button>
+            </div>
+            <div className="form-row">
+              <label className="field-label">Mio 供应商 ID</label>
+              <input
+                type="text"
+                className="mono"
+                style={{ flex: 1, minWidth: 180 }}
+                value={dSupplier}
+                onChange={(e) => setDSupplier(e.target.value)}
+                placeholder="如 SUP12345（清空后保存即解除绑定）"
+              />
+              <button
+                className="btn-secondary"
+                disabled={supplierBusy}
+                onClick={() => void saveSupplier()}
+              >
+                {supplierBusy ? '更新中…' : '保存'}
               </button>
             </div>
             <div className="form-row">
