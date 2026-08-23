@@ -180,10 +180,8 @@ describe('runtime-config validation & merge (pure)', () => {
     expect(merged['APOLLO_API_KEY']).toBe('global-apollo');
   });
 
-  it('presets include the mandatory DeepSeek key', () => {
-    const keys = PRESET_RUNTIME_KEYS.map(p => p.key);
-    expect(keys).toContain('DEEPSEEK_API_KEY');
-    expect(keys.length).toBeGreaterThanOrEqual(6);
+  it('presets are intentionally empty — any key:value is allowed', () => {
+    expect(PRESET_RUNTIME_KEYS).toHaveLength(0);
   });
 });
 
@@ -225,11 +223,11 @@ describe('runtime-config admin API', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns the preset key list', async () => {
+  it('returns an empty preset list (any key allowed)', async () => {
     const { app } = buildApp();
     const res = await request(app).get('/v1/admin/runtime-configs/presets').set(authHeader);
     expect(res.status).toBe(200);
-    expect(res.body.presets.map((p: any) => p.key)).toContain('DEEPSEEK_API_KEY');
+    expect(res.body.presets).toEqual([]);
   });
 
   it('rejects invalid keys with 400', async () => {

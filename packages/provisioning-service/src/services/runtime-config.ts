@@ -15,18 +15,13 @@ import { encryptValue, decryptValue } from './crypto.js';
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const MAX_VALUE_LENGTH = 8192;
 
-/** Known runtime keys (from docs/openclaw-runtime.md). Custom keys are allowed too. */
-export const PRESET_RUNTIME_KEYS: Array<{ key: string; description: string; isSecret: boolean }> = [
-  { key: 'DEEPSEEK_API_KEY', description: 'DeepSeek 模型 API Key（必需，缺失时 agent 拒绝启动；仅开通/重启时经 envFrom 注入）', isSecret: true },
-  { key: 'APIFY_TOKEN', description: 'Apify 集成 Token（skill 经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'APIFY_API_KEY', description: 'Apify API Key（skill 经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'MIO_CDP_APP_KEY', description: 'Mio CDP AppKey（skill 经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'MIO_CDP_APP_SECRET', description: 'Mio CDP AppSecret（skill 经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'APOLLO_API_KEY', description: 'Apollo.io 获客数据 API Key（skill 经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'WEBHOOK_ADMIN_TOKEN', description: '邮箱绑定等 skill 的 X-Admin-Token（经 work/mio-api/.env 读取，改动免重启）', isSecret: true },
-  { key: 'UN_COMTRADE_API_KEY', description: 'UN Comtrade 数据 API Key（市场报告 skill，经 .env 读取）', isSecret: true },
-  { key: 'WTO_API_KEY', description: 'WTO 数据 API Key（市场报告 skill，经 .env 读取）', isSecret: true },
-];
+/**
+ * Preset key suggestions for the admin UI (purely informational chips).
+ * Intentionally empty: admins may configure ANY key:value pair — key names
+ * only need to be valid env-var names (KEY_PATTERN). DEEPSEEK_API_KEY remains
+ * envFrom-only and is not managed through the .env pipeline.
+ */
+export const PRESET_RUNTIME_KEYS: Array<{ key: string; description: string; isSecret: boolean }> = [];
 
 export interface RuntimeConfigInput {
   /** null = global default scope */

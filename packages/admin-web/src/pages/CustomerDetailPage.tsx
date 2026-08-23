@@ -91,8 +91,6 @@ export default function CustomerDetailPage() {
   const [dReason, setDReason] = useState('');
   const [dCompany, setDCompany] = useState('');
   const [dEmail, setDEmail] = useState('');
-  const [dSupplier, setDSupplier] = useState('');
-  const [supplierBusy, setSupplierBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
   const flash = (text: string) => {
@@ -110,7 +108,6 @@ export default function CustomerDetailPage() {
       setDStatus(r.tenant.status || 'pending');
       setDCompany(r.tenant.companyName || '');
       setDEmail(r.tenant.contactEmail || '');
-      setDSupplier(r.tenant.mioCdpSupplierId || '');
       setTenantErr('');
     } catch (e) {
       setTenant(null);
@@ -154,34 +151,6 @@ export default function CustomerDetailPage() {
       await loadTenant();
     } catch (e) {
       flash(`资料更新失败：${errMsg(e)}`);
-    }
-  };
-
-  const saveSupplier = async () => {
-    const supplierId = dSupplier.trim();
-    if (supplierId && !/^[A-Za-z0-9_-]{1,64}$/.test(supplierId)) {
-      flash('Mio CDP 供应商 ID 格式不正确（1–64 位字母、数字、下划线或连字符）');
-      return;
-    }
-    if (
-      supplierId &&
-      !window.confirm(
-        `确认将租户 ${tenantId} 的 Mio CDP 供应商 ID 设为 ${supplierId}？\n将写入该租户 agent 的环境变量 MIO_CDP_SUPPLIER_ID 并滚动重启 agent。`,
-      )
-    )
-      return;
-    setSupplierBusy(true);
-    try {
-      const r = await api<{ message?: string; supplierId?: string | null }>(
-        `/v1/tenants/${encodeURIComponent(tenantId)}/mio-supplier-id`,
-        { method: 'PATCH', body: { supplierId: supplierId || null } },
-      );
-      flash(r.message || '供应商 ID 已更新');
-      await loadTenant();
-    } catch (e) {
-      flash(`供应商 ID 更新失败：${errMsg(e)}`);
-    } finally {
-      setSupplierBusy(false);
     }
   };
 
@@ -304,7 +273,6 @@ export default function CustomerDetailPage() {
   const [seValue, setSeValue] = useState('');
   const [seBusy, setSeBusy] = useState(false);
   const [seSyncBusy, setSeSyncBusy] = useState(false);
-  const [sePresets, setSePresets] = useState<{ key: string; description?: string }[]>([]);
 
   const loadSkillEnv = useCallback(async () => {
     try {
@@ -319,18 +287,38 @@ export default function CustomerDetailPage() {
 
   useEffect(() => {
     void loadSkillEnv();
-    api<{ presets: { key: string; description?: string }[] }>(
-      '/v1/admin/runtime-configs/presets',
-    )
-      .then((r) => setSePresets((r.presets || []).filter((p) => p.key !== 'DEEPSEEK_API_KEY')))
-      .catch(() => {});
   }, [loadSkillEnv]);
+
+  // MIO_CDP_SUPPLIER_ID 存在客户档案（tenants 行），走独立 API：
+  // 会同步刷新 skill-env .env 并滚动重启 agent 一次。
+  const saveMioSupplier = async (supplierId: string | null) => {
+    setSeBusy(true);
+    try {
+      const r = await api<{ message?: string }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/mio-supplier-id`,
+        { method: 'PATCH', body: { supplierId } },
+      );
+      flash(r.message || '供应商 ID 已更新');
+      await Promise.all([loadTenant(), loadSkillEnv()]);
+    } catch (e) {
+      flash(`供应商 ID 更新失败：${errMsg(e)}`);
+    } finally {
+      setSeBusy(false);
+    }
+  };
 
   const saveSkillEnvKey = async (keyOverride?: string, valueOverride?: string) => {
     const key = (keyOverride ?? seKey).trim();
     const value = valueOverride ?? seValue;
     if (!key || !value) {
       flash('Key 与 Value 为必填');
+      return;
+    }
+    if (key === 'MIO_CDP_SUPPLIER_ID') {
+      // 统一入口：供应商 ID 落客户档案而非 runtime_configs（有唯一性校验）
+      await saveMioSupplier(value.trim());
+      setSeKey('');
+      setSeValue('');
       return;
     }
     setSeBusy(true);
@@ -351,17 +339,38 @@ export default function CustomerDetailPage() {
     }
   };
 
+  const isMasked = (v: string) => !v || v === '••••••••' || v === '(解密失败)';
+
   const editSkillEnvValue = async (entry: SkillEnvEntry) => {
     if (entry.source === 'tenant-record') {
-      flash('MIO_CDP_SUPPLIER_ID 来自客户档案，请在上方「Mio 供应商 ID」处修改');
+      const value = window.prompt(
+        `为「MIO_CDP_SUPPLIER_ID」输入新的供应商 ID（1–64 位字母/数字/下划线/连字符）：`,
+        isMasked(entry.displayValue) ? '' : entry.displayValue,
+      );
+      if (value === null) return;
+      if (!value.trim()) {
+        flash('供应商 ID 不能为空；如需清除请点「清除」');
+        return;
+      }
+      await saveMioSupplier(value.trim());
       return;
     }
     const value = window.prompt(
-      `为「${entry.key}」输入该租户的新值（原值已加密，无法回显）：`,
-      '',
+      `为「${entry.key}」输入该租户的新值：`,
+      isMasked(entry.displayValue) ? '' : entry.displayValue,
     );
     if (value === null || value === '') return;
     await saveSkillEnvKey(entry.key, value);
+  };
+
+  const clearMioSupplier = async () => {
+    if (
+      !window.confirm(
+        `确认清除该客户的 Mio CDP 供应商 ID？\n将从 work/mio-api/.env 移除 MIO_CDP_SUPPLIER_ID，并滚动重启 agent 一次。`,
+      )
+    )
+      return;
+    await saveMioSupplier(null);
   };
 
   const removeSkillEnvOverride = async (entry: SkillEnvEntry) => {
@@ -708,24 +717,6 @@ export default function CustomerDetailPage() {
               </button>
             </div>
             <div className="form-row">
-              <label className="field-label">Mio 供应商 ID</label>
-              <input
-                type="text"
-                className="mono"
-                style={{ flex: 1, minWidth: 180 }}
-                value={dSupplier}
-                onChange={(e) => setDSupplier(e.target.value)}
-                placeholder="如 SUP12345（清空后保存即解除绑定）"
-              />
-              <button
-                className="btn-secondary"
-                disabled={supplierBusy}
-                onClick={() => void saveSupplier()}
-              >
-                {supplierBusy ? '更新中…' : '保存'}
-              </button>
-            </div>
-            <div className="form-row">
               <label className="field-label" />
               <button className="btn-danger" onClick={() => void destroyTenant()}>
                 <IconTrash /> 销毁租户
@@ -849,8 +840,9 @@ export default function CustomerDetailPage() {
         <div className="panel-body">
           <div className="hint" style={{ marginBottom: 10 }}>
             这些 Key 以 <span className="mono">work/mio-api/.env</span> 形式下发到该租户 agent
-            （每个租户可单独设值，未覆盖的 Key 沿用全局默认）。保存后由 Secret 卷自动热更新，
-            <b>通常无需重启 agent，约 1 分钟内生效</b>；首次挂载会滚动重启一次。
+            （每个租户可单独设值，未覆盖的 Key 沿用全局默认，可添加任意 KEY=VALUE）。
+            保存后由 Secret 卷自动热更新，<b>通常无需重启 agent，约 1 分钟内生效</b>；首次挂载会滚动重启一次。
+            MIO_CDP_SUPPLIER_ID 在此一并管理（存客户档案，修改后 agent 滚动重启一次生效）。
             DEEPSEEK_API_KEY 不在此管理（仅开通/重启时经 envFrom 注入）。
           </div>
 
@@ -901,6 +893,15 @@ export default function CustomerDetailPage() {
                           删除覆盖
                         </button>
                       )}
+                      {entry.source === 'tenant-record' && (
+                        <button
+                          className="btn-danger btn-sm"
+                          disabled={seBusy}
+                          onClick={() => void clearMioSupplier()}
+                        >
+                          清除
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -913,21 +914,13 @@ export default function CustomerDetailPage() {
             <input
               type="text"
               className="mono"
-              list="skill-env-presets"
               style={{ flex: '0 1 240px' }}
               value={seKey}
               onChange={(e) => setSeKey(e.target.value)}
-              placeholder="如 APIFY_TOKEN"
+              placeholder="任意 KEY_NAME，如 APIFY_TOKEN"
             />
-            <datalist id="skill-env-presets">
-              {sePresets.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.description || ''}
-                </option>
-              ))}
-            </datalist>
             <input
-              type="password"
+              type="text"
               className="mono"
               style={{ flex: 1, minWidth: 200 }}
               value={seValue}

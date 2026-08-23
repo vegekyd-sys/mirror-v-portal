@@ -428,6 +428,9 @@ describe('getTenantSkillEnvView', () => {
     expect(byKey.MIO_CDP_APP_KEY.source).toBe('tenant');
     expect(byKey.MIO_CDP_SUPPLIER_ID.source).toBe('tenant-record');
     expect(byKey.MIO_CDP_SUPPLIER_ID.displayValue).toBe('SUP1');
+    // secret entries are decrypted and shown as-is (admin sees the real .env)
+    expect(byKey.APIFY_TOKEN.displayValue).toBe('tok');
+    expect(byKey.MIO_CDP_APP_KEY.displayValue).toBe('own');
     expect(view.entries.map((e) => e.key)).toEqual([
       'APIFY_TOKEN',
       'MIO_CDP_APP_KEY',

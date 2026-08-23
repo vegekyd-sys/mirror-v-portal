@@ -129,8 +129,9 @@ export interface SkillEnvView {
 
 /**
  * Effective skill-env view for the admin detail card: merged global defaults
- * + tenant overrides, each entry tagged with its scope. Values are masked
- * for secret entries (same policy as the runtime-configs list API).
+ * + tenant overrides, each entry tagged with its scope. Values are decrypted
+ * and returned as-is — the admin console shows exactly what the agent's
+ * work/mio-api/.env contains (masked only when the master key is unavailable).
  */
 export async function getTenantSkillEnvView(
   pool: pg.Pool,
@@ -151,7 +152,7 @@ export async function getTenantSkillEnvView(
   const entries = new Map<string, SkillEnvViewEntry>();
   const add = (r: any, source: 'tenant' | 'global') => {
     let displayValue = '••••••••';
-    if (!r.is_secret && canDecrypt) {
+    if (canDecrypt) {
       try {
         displayValue = decryptValue(r.encrypted_value);
       } catch {
