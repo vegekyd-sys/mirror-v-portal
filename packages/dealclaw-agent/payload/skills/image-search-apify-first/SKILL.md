@@ -14,7 +14,7 @@ Use when the user asks for image search, reference images, product photos, socia
 2. Network crawling / social-platform discovery / TikTok / Instagram / XHS / Bilibili / video references → Apify first when a suitable Actor exists.
 3. Browser/Playwright/direct scraping/yt-dlp are fallbacks only after Apify fails, lacks coverage, or login/private content is explicitly required.
 4. Apify actor id format is `username~actor-name`, not `username/actor-name`.
-5. Load credentials from `APIFY_TOKEN` first, then `APIFY_API_KEY`; token is in `~/.openclaw/.env`. Never expose it.
+5. Load credentials from `APIFY_TOKEN` first, then `APIFY_API_KEY`; token is managed in `work/mio-api/.env` (hot-reloaded from the admin console; legacy fallback `~/.openclaw/.env`). Never expose it.
 
 ## Quick Reference
 

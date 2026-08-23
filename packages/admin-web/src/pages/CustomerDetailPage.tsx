@@ -282,6 +282,132 @@ export default function CustomerDetailPage() {
     }
   };
 
+  // ── Skill 环境变量（.env）──
+  interface SkillEnvEntry {
+    key: string;
+    source: 'tenant' | 'global' | 'tenant-record';
+    isSecret: boolean;
+    description: string | null;
+    updatedAt: string;
+    displayValue: string;
+  }
+
+  interface SkillEnvPush {
+    status?: 'ok' | 'failed' | 'skipped';
+    rollout?: string;
+    detail?: string;
+    hint: string;
+  }
+
+  const [skillEnv, setSkillEnv] = useState<SkillEnvEntry[] | null>(null);
+  const [seKey, setSeKey] = useState('');
+  const [seValue, setSeValue] = useState('');
+  const [seBusy, setSeBusy] = useState(false);
+  const [seSyncBusy, setSeSyncBusy] = useState(false);
+  const [sePresets, setSePresets] = useState<{ key: string; description?: string }[]>([]);
+
+  const loadSkillEnv = useCallback(async () => {
+    try {
+      const r = await api<{ entries: SkillEnvEntry[] }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/skill-env`,
+      );
+      setSkillEnv(r.entries || []);
+    } catch {
+      setSkillEnv([]);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadSkillEnv();
+    api<{ presets: { key: string; description?: string }[] }>(
+      '/v1/admin/runtime-configs/presets',
+    )
+      .then((r) => setSePresets((r.presets || []).filter((p) => p.key !== 'DEEPSEEK_API_KEY')))
+      .catch(() => {});
+  }, [loadSkillEnv]);
+
+  const saveSkillEnvKey = async (keyOverride?: string, valueOverride?: string) => {
+    const key = (keyOverride ?? seKey).trim();
+    const value = valueOverride ?? seValue;
+    if (!key || !value) {
+      flash('Key 与 Value 为必填');
+      return;
+    }
+    setSeBusy(true);
+    try {
+      const r = await api<{ push: SkillEnvPush }>('/v1/admin/runtime-configs', {
+        method: 'PUT',
+        body: { tenantId, key, value, isSecret: true },
+      });
+      // 生效时间提示由服务端按推送结果返回（热生效 / 首次挂载重启 / 失败重试）
+      flash(r.push?.hint || `已保存 ${key}（租户覆盖）`);
+      setSeKey('');
+      setSeValue('');
+      await loadSkillEnv();
+    } catch (e) {
+      flash(`保存失败：${errMsg(e)}`);
+    } finally {
+      setSeBusy(false);
+    }
+  };
+
+  const editSkillEnvValue = async (entry: SkillEnvEntry) => {
+    if (entry.source === 'tenant-record') {
+      flash('MIO_CDP_SUPPLIER_ID 来自客户档案，请在上方「Mio 供应商 ID」处修改');
+      return;
+    }
+    const value = window.prompt(
+      `为「${entry.key}」输入该租户的新值（原值已加密，无法回显）：`,
+      '',
+    );
+    if (value === null || value === '') return;
+    await saveSkillEnvKey(entry.key, value);
+  };
+
+  const removeSkillEnvOverride = async (entry: SkillEnvEntry) => {
+    if (
+      !window.confirm(
+        `确认删除该租户对「${entry.key}」的覆盖值？删除后将回退使用全局默认值（如存在）。`,
+      )
+    )
+      return;
+    setSeBusy(true);
+    try {
+      const r = await api<{ push: SkillEnvPush }>(
+        `/v1/admin/runtime-configs/${encodeURIComponent(entry.key)}?tenantId=${encodeURIComponent(tenantId)}`,
+        { method: 'DELETE' },
+      );
+      flash(r.push?.hint || `已删除 ${entry.key} 的租户覆盖`);
+      await loadSkillEnv();
+    } catch (e) {
+      flash(`删除失败：${errMsg(e)}`);
+    } finally {
+      setSeBusy(false);
+    }
+  };
+
+  const syncSkillEnv = async () => {
+    setSeSyncBusy(true);
+    try {
+      const r = await api<{ message?: string; hint?: string; warnings?: string[] }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/skill-env/sync`,
+        { method: 'POST' },
+      );
+      flash([r.message, ...(r.warnings || [])].filter(Boolean).join('；'));
+      await loadSkillEnv();
+    } catch (e) {
+      flash(`同步失败：${errMsg(e)}`);
+    } finally {
+      setSeSyncBusy(false);
+    }
+  };
+
+  const SE_SOURCE_BADGE: Record<SkillEnvEntry['source'], { cls: string; text: string }> = {
+    tenant: { cls: 'badge badge-warn', text: '租户覆盖' },
+    global: { cls: 'badge badge-active', text: '全局默认' },
+    'tenant-record': { cls: 'badge badge-pending', text: '客户档案' },
+  };
+
   // ── 运行镜像更新（单租户） ──
   const [releases, setReleases] = useState<ImageRelease[]>([]);
   const [imgService, setImgService] = useState<'dealclaw-agent' | 'nexus-gateway'>('dealclaw-agent');
@@ -714,6 +840,123 @@ export default function CustomerDetailPage() {
           flash(`已扫码获取凭据（${appId}），请确认后点击绑定`);
         }}
       />
+
+      {/* ── Skill 环境变量（.env） ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        Skill 环境变量（.env）
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="hint" style={{ marginBottom: 10 }}>
+            这些 Key 以 <span className="mono">work/mio-api/.env</span> 形式下发到该租户 agent
+            （每个租户可单独设值，未覆盖的 Key 沿用全局默认）。保存后由 Secret 卷自动热更新，
+            <b>通常无需重启 agent，约 1 分钟内生效</b>；首次挂载会滚动重启一次。
+            DEEPSEEK_API_KEY 不在此管理（仅开通/重启时经 envFrom 注入）。
+          </div>
+
+          {skillEnv === null ? (
+            <div className="empty">加载中…</div>
+          ) : skillEnv.length === 0 ? (
+            <div className="empty">暂无配置：在下方添加该租户的专属 Key，或到「运行时配置」页设置全局默认</div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>来源</th>
+                  <th>当前值</th>
+                  <th>说明</th>
+                  <th>更新时间</th>
+                  <th style={{ width: 150 }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillEnv.map((entry) => (
+                  <tr key={entry.key}>
+                    <td className="mono">{entry.key}</td>
+                    <td>
+                      <span className={SE_SOURCE_BADGE[entry.source].cls}>
+                        {SE_SOURCE_BADGE[entry.source].text}
+                      </span>
+                    </td>
+                    <td className="mono">{entry.displayValue}</td>
+                    <td style={{ fontSize: 12 }}>{entry.description || '-'}</td>
+                    <td style={{ fontSize: 11, color: '#777' }}>
+                      {entry.updatedAt ? fmtTime(entry.updatedAt) : '-'}
+                    </td>
+                    <td>
+                      <button
+                        className="btn-secondary btn-sm"
+                        disabled={seBusy}
+                        onClick={() => void editSkillEnvValue(entry)}
+                      >
+                        改值
+                      </button>{' '}
+                      {entry.source === 'tenant' && (
+                        <button
+                          className="btn-danger btn-sm"
+                          disabled={seBusy}
+                          onClick={() => void removeSkillEnvOverride(entry)}
+                        >
+                          删除覆盖
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="form-row" style={{ marginTop: 12 }}>
+            <label className="field-label">添加 / 覆盖</label>
+            <input
+              type="text"
+              className="mono"
+              list="skill-env-presets"
+              style={{ flex: '0 1 240px' }}
+              value={seKey}
+              onChange={(e) => setSeKey(e.target.value)}
+              placeholder="如 APIFY_TOKEN"
+            />
+            <datalist id="skill-env-presets">
+              {sePresets.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.description || ''}
+                </option>
+              ))}
+            </datalist>
+            <input
+              type="password"
+              className="mono"
+              style={{ flex: 1, minWidth: 200 }}
+              value={seValue}
+              onChange={(e) => setSeValue(e.target.value)}
+              placeholder="该租户的专属值（保存时加密入库）"
+            />
+            <button
+              className="btn-primary"
+              disabled={seBusy}
+              onClick={() => void saveSkillEnvKey()}
+            >
+              {seBusy ? '保存中…' : '保存'}
+            </button>
+          </div>
+          <div className="form-row">
+            <label className="field-label" />
+            <button
+              className="btn-secondary"
+              disabled={seSyncBusy}
+              onClick={() => void syncSkillEnv()}
+            >
+              <IconRefresh /> {seSyncBusy ? '同步中…' : '同步到 agent'}
+            </button>
+          </div>
+          <div className="hint">
+            「同步到 agent」会重写该租户的 skill-env Secret 并确保已挂载；当推送失败或修改后未生效时可手动触发。
+          </div>
+        </div>
+      </div>
 
       {/* ── 运行镜像更新 ── */}
       <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>

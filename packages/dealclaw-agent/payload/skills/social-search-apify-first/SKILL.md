@@ -270,7 +270,9 @@ The local environment should expose both names for compatibility:
 - `APIFY_TOKEN`
 - `APIFY_API_KEY`
 
-Both should point to the same token value. Never print or store the actual token in reports, skills, or chat.
+Both should point to the same token value. The token is managed in `work/mio-api/.env`
+(hot-reloaded from the admin console; legacy fallback `~/.openclaw/.env`).
+Never print or store the actual token in reports, skills, or chat.
 
 ## Douyin search + video download
 

@@ -18,6 +18,7 @@ import {
   putSecret,
   restartDeployment,
 } from './k8s-client.js';
+import { updateSkillEnvSecret } from './skill-env.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export const MIO_SUPPLIER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -162,6 +163,15 @@ export async function updateTenantMioSupplier(
     delete data.MIO_CDP_SUPPLIER_ID;
   }
   await putSecret(namespace, agentSecretName, data);
+
+  // Also refresh the skill-env Secret (.env) — shell skill scripts read
+  // MIO_CDP_SUPPLIER_ID from work/mio-api/.env and pick the new value up on
+  // their next invocation without waiting for the rollout below.
+  try {
+    await updateSkillEnvSecret(pool, config, tenantId);
+  } catch (err) {
+    console.warn(`skill-env refresh after supplier-id update failed for ${tenantId}:`, err);
+  }
 
   // Roll the agent Pod so the running container picks up the new env var.
   const agentDeployment = `dealclaw-agent-${tenantId}`;

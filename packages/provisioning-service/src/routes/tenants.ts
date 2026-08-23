@@ -16,6 +16,12 @@ import {
   MIO_SUPPLIER_ID_PATTERN,
   updateTenantMioSupplier,
 } from '../services/mio-supplier.js';
+import {
+  SkillEnvError,
+  getTenantSkillEnvView,
+  pushTenantSkillEnv,
+} from '../services/skill-env.js';
+import { getMasterKey } from '../services/crypto.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -760,6 +766,53 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
       console.error('Unbind feishu app failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || '解绑失败' });
+    }
+  });
+
+  // GET /v1/tenants/:id/skill-env — effective skill-env view for the detail
+  // card (merged global defaults + tenant overrides + supplier id).
+  router.get('/v1/tenants/:id/skill-env', async (req: Request, res: Response) => {
+    try {
+      let canDecrypt = false;
+      try {
+        canDecrypt = getMasterKey() !== null;
+      } catch {
+        canDecrypt = false;
+      }
+      const view = await getTenantSkillEnvView(pool, req.params.id, canDecrypt);
+      res.json(view);
+    } catch (err: unknown) {
+      const e = err as any;
+      if (e instanceof SkillEnvError) {
+        res.status(e.status).json({ code: e.code, message: e.message });
+        return;
+      }
+      console.error('Get skill-env view failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: 'Failed to load skill-env' });
+    }
+  });
+
+  // POST /v1/tenants/:id/skill-env/sync — manually (re)push the skill-env
+  // Secret to this tenant's agent and ensure the volume mount exists.
+  router.post('/v1/tenants/:id/skill-env/sync', async (req: Request, res: Response) => {
+    try {
+      const result = await pushTenantSkillEnv(pool, config, req.params.id);
+      res.json({
+        ...result,
+        message: result.rollout === 'restarted'
+          ? '已推送并挂载：agent 滚动重启一次后生效（首次挂载），此后改 Key 免重启'
+          : result.rollout === 'skipped'
+            ? '该租户无独立 agent（或 dry-run），未推送'
+            : '已推送：约 1 分钟内自动生效（skill 下次调用即用新值）',
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      if (e instanceof SkillEnvError) {
+        res.status(e.status).json({ code: e.code, message: e.message });
+        return;
+      }
+      console.error('Push skill-env failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || '推送失败' });
     }
   });
 

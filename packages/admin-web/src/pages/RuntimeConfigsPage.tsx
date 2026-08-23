@@ -21,6 +21,13 @@ interface Preset {
   isSecret?: boolean;
 }
 
+interface PushSummary {
+  status?: 'ok' | 'failed' | 'skipped';
+  rollout?: string;
+  detail?: string;
+  hint: string;
+}
+
 export default function RuntimeConfigsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [scope, setScope] = useState('');
@@ -84,7 +91,7 @@ export default function RuntimeConfigsPage() {
     if (scope && !window.confirm(`确认为租户 ${scope} 设置覆盖值？`)) return;
     setSaving(true);
     try {
-      await api('/v1/admin/runtime-configs', {
+      const r = await api<{ push?: PushSummary }>('/v1/admin/runtime-configs', {
         method: 'PUT',
         body: {
           tenantId: scope || null,
@@ -94,8 +101,9 @@ export default function RuntimeConfigsPage() {
           description: formDesc.trim() || undefined,
         },
       });
-      flash(`已保存 ${key}（作用域：${scopeLabel}）`);
-      log(`保存 ${key} @ ${scopeLabel}`);
+      // 生效时间提示（热生效约 1 分钟 / 首次挂载滚动重启 / 推送失败重试）
+      flash(`已保存 ${key}（作用域：${scopeLabel}）。${r.push?.hint || ''}`);
+      log(`保存 ${key} @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
       setFormValue('');
       await loadConfigs(scope);
     } catch (e) {
@@ -113,12 +121,12 @@ export default function RuntimeConfigsPage() {
     );
     if (value === null || value === '') return;
     try {
-      await api('/v1/admin/runtime-configs', {
+      const r = await api<{ push?: PushSummary }>('/v1/admin/runtime-configs', {
         method: 'PUT',
         body: { tenantId: scope || null, key: item.key, value },
       });
-      flash(`已更新 ${item.key}`);
-      log(`更新 ${item.key} @ ${scope || '全局默认'}`);
+      flash(`已更新 ${item.key}。${r.push?.hint || ''}`);
+      log(`更新 ${item.key} @ ${scope || '全局默认'}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
       await loadConfigs(scope);
     } catch (e) {
       flash(`更新失败：${errMsg(e)}`);
@@ -131,11 +139,12 @@ export default function RuntimeConfigsPage() {
       return;
     try {
       const qs = scope ? `?tenantId=${encodeURIComponent(scope)}` : '';
-      await api(`/v1/admin/runtime-configs/${encodeURIComponent(item.key)}${qs}`, {
-        method: 'DELETE',
-      });
-      flash(`已删除 ${item.key}`);
-      log(`删除 ${item.key} @ ${scopeLabel}`);
+      const r = await api<{ push?: PushSummary }>(
+        `/v1/admin/runtime-configs/${encodeURIComponent(item.key)}${qs}`,
+        { method: 'DELETE' },
+      );
+      flash(`已删除 ${item.key}。${r.push?.hint || ''}`);
+      log(`删除 ${item.key} @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
       await loadConfigs(scope);
     } catch (e) {
       flash(`删除失败：${errMsg(e)}`);
@@ -310,7 +319,8 @@ export default function RuntimeConfigsPage() {
         </div>
       )}
       <div className="hint">
-        创建租户时，全局默认与租户覆盖合并生成 tenant-config Secret（envFrom 注入）。
+        保存后自动推送到租户 agent：skill 专用 Key 以 work/mio-api/.env 热下发（免重启，约 1 分钟内生效）；
+        DEEPSEEK_API_KEY 等模型 Key 仅在开通/重启时经 tenant-config Secret（envFrom）注入。
         敏感值保存后无法回显，只能通过「改值」覆盖。
       </div>
 

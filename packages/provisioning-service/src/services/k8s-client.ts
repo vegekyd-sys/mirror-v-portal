@@ -312,8 +312,12 @@ export interface DeploymentSpec {
   automountServiceAccountToken?: boolean;
   imagePullSecrets?: Array<{ name: string }>;
   securityContext?: Record<string, unknown>;
-  volumes?: Array<{ name: string; persistentVolumeClaim: { claimName: string } }>;
-  volumeMounts?: Array<{ name: string; mountPath: string }>;
+  volumes?: Array<{
+    name: string;
+    persistentVolumeClaim?: { claimName: string };
+    secret?: { secretName: string; defaultMode?: number };
+  }>;
+  volumeMounts?: Array<{ name: string; mountPath: string; readOnly?: boolean }>;
 }
 
 export async function createDeployment(spec: DeploymentSpec): Promise<void> {
@@ -490,6 +494,44 @@ export async function deploymentExists(namespace: string, name: string): Promise
   const res = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
   if (res.status === 404) return false;
   if (!res.ok) throw new Error(`deploymentExists ${namespace}/${name} failed: ${res.status}`);
+  return true;
+}
+
+/**
+ * Read a Deployment's full object. Returns null when it does not exist.
+ * Used by the skill-env mount check (volumes / volumeMounts inspection).
+ */
+export async function getDeployment(
+  namespace: string,
+  name: string,
+): Promise<Record<string, any> | null> {
+  const res = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`getDeployment ${namespace}/${name} failed: ${res.status}`);
+  return res.body as Record<string, any>;
+}
+
+/**
+ * Strategic-merge patch on a Deployment (partial spec body, same shape as
+ * the K8s API). Callers use it to add volumes / volumeMounts without
+ * replacing the rest of the pod template.
+ */
+export async function patchDeployment(
+  namespace: string,
+  name: string,
+  body: Record<string, unknown>,
+): Promise<boolean> {
+  const res = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
+    body,
+    'application/strategic-merge-patch+json',
+  );
+  if (!res.ok) {
+    if (res.status === 404) return false;
+    throw new Error(`patchDeployment ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment patched: ${namespace}/${name}`);
   return true;
 }
 

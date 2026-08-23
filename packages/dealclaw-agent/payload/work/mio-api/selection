@@ -7,6 +7,25 @@ import os
 from agent_cli_common import emit, fail, safe_call
 from mio_cdp_client import MioCdpClient
 
+
+# ── 自动加载 .env（含 entrypoint 建立的 work/mio-api/.env 符号链接）──────────
+def _load_env_file() -> None:
+    d = os.path.dirname(os.path.abspath(__file__))
+    while d and d != os.path.dirname(d):
+        for env_file in (os.path.join(d, "work", "mio-api", ".env"), os.path.join(d, ".env")):
+            if os.path.isfile(env_file):
+                with open(env_file, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            if k not in os.environ:
+                                os.environ[k] = v.strip()
+        d = os.path.dirname(d)
+
+
+_load_env_file()
+
 VERSION="agent-friendly-selection-cli/3.0.0"
 INDUSTRY_DICT={"宠物":{"dictCode":"PET","keywords":["宠物","pet"]},"工业":{"dictCode":"INDUSTRIAL","keywords":["工业"]},"家纺":{"dictCode":"TEXTILE","keywords":["家纺","textile"]}}
 COUNTRY_ALIASES={"印尼":"Indonesia","印度":"India","越南":"Vietnam","巴西":"Brazil","沙特":"Saudi Arabia"}

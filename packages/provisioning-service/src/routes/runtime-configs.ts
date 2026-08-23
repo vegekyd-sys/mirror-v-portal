@@ -8,6 +8,12 @@ import {
   validateConfigKey,
 } from '../services/runtime-config.js';
 import { getMasterKey, MasterKeyError } from '../services/crypto.js';
+import {
+  pushSkillEnvToAllTenants,
+  pushTenantSkillEnv,
+  ENV_FROM_ONLY_KEYS,
+} from '../services/skill-env.js';
+import type { ProvisioningConfig } from '../config.js';
 
 /**
  * Admin API for per-tenant runtime configuration.
@@ -18,9 +24,15 @@ import { getMasterKey, MasterKeyError } from '../services/crypto.js';
  * Scope semantics: tenantId omitted/null → global defaults; tenantId set →
  * per-tenant override. Resolution at provisioning time merges the two,
  * tenant rows winning.
+ *
+ * After every write, the affected skill-env Secret(s) are pushed so existing
+ * tenants pick the new value up hot (kubelet refreshes the mounted .env —
+ * see services/skill-env.ts). The response carries a `push` summary and a
+ * human-readable `hint` about the effective time for the admin UI.
  */
 export function createRuntimeConfigRoutes(
   pool: pg.Pool,
+  config: ProvisioningConfig,
   authMiddleware?: (req: Request, res: Response, next: NextFunction) => void,
 ) {
   const router = Router();
@@ -40,6 +52,46 @@ export function createRuntimeConfigRoutes(
   async function tenantExists(tenantId: string): Promise<boolean> {
     const { rows } = await pool.query('SELECT 1 FROM tenants WHERE tenant_id = $1', [tenantId]);
     return rows.length > 0;
+  }
+
+  /**
+   * Push the affected skill-env Secret(s) after a write. Best-effort: the
+   * config row is already saved, so a push failure must not fail the request
+   * — it is surfaced in the response for the UI to display.
+   */
+  async function pushAfterWrite(scope: string | null): Promise<{
+    status: 'ok' | 'failed' | 'skipped';
+    rollout?: string;
+    detail?: string;
+    hint: string;
+    tenants?: Array<{ tenantId: string; ok: boolean }>;
+  }> {
+    try {
+      if (scope) {
+        const r = await pushTenantSkillEnv(pool, config, scope);
+        return {
+          status: 'ok',
+          rollout: r.rollout,
+          detail: r.warnings.join('；') || undefined,
+          hint: r.hint,
+        };
+      }
+      const r = await pushSkillEnvToAllTenants(pool, config);
+      const failed = r.tenants.filter((t) => !t.ok);
+      return {
+        status: 'ok',
+        hint: r.hint + (failed.length ? `；${failed.length} 个租户推送失败（${failed[0].tenantId}：${failed[0].error}）` : ''),
+        tenants: r.tenants.map((t) => ({ tenantId: t.tenantId, ok: t.ok })),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('skill-env push failed:', message);
+      return {
+        status: 'failed',
+        detail: message,
+        hint: '已保存，但推送到租户失败：可稍后在客户详情页点「同步到 agent」重试',
+      };
+    }
   }
 
   // GET /v1/admin/runtime-configs/presets — known keys for UI hints
@@ -83,7 +135,17 @@ export function createRuntimeConfigRoutes(
       }
 
       await upsertRuntimeConfig(pool, { tenantId: scope, key, value, isSecret, description });
-      res.json({ ok: true, key, tenantId: scope });
+
+      // Model-provider keys (envFrom-only) intentionally skip the skill-env
+      // push — they are consumed at container boot, not from .env.
+      let push: Awaited<ReturnType<typeof pushAfterWrite>> = {
+        status: 'skipped',
+        hint: '该 key 仅在开通/重启时经 envFrom 注入，本次不推送（skill .env 不含此 key）',
+      };
+      if (!ENV_FROM_ONLY_KEYS.has(String(key))) {
+        push = await pushAfterWrite(scope);
+      }
+      res.json({ ok: true, key, tenantId: scope, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {
         res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
@@ -114,7 +176,8 @@ export function createRuntimeConfigRoutes(
         res.status(404).json({ code: 'NOT_FOUND', message: 'Config entry not found in this scope' });
         return;
       }
-      res.json({ ok: true, key, tenantId });
+      const push = await pushAfterWrite(tenantId);
+      res.json({ ok: true, key, tenantId, push });
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Invalid config key')) {
         res.status(400).json({ code: 'VALIDATION', message: err.message });

@@ -16,9 +16,23 @@ mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_WORKSPACE_DIR" "$OPEN
 rsync -a --delete \
   --exclude='/memory/customer/' \
   --exclude='/work/mio-api/data/' \
+  --exclude='/work/mio-api/.env' \
   /opt/dealclaw/payload/ "$OPENCLAW_WORKSPACE_DIR/"
 rm -rf "$OPENCLAW_WORKSPACE_DIR/node_modules"
 ln -s /opt/dealclaw/runtime/dependencies/node_modules "$OPENCLAW_WORKSPACE_DIR/node_modules"
+
+# Skill credentials (.env) are delivered via the skill-env Secret mounted at
+# /run/secrets/skill-env and hot-reloaded by kubelet. Keep a stable symlink
+# at the conventional path work/mio-api/.env so skill scripts (shell
+# resolve_env helpers, Python clients, apify tooling) always find it — the
+# symlink survives pod restarts because rsync excludes it above.
+if [[ -f /run/secrets/skill-env/.env ]]; then
+  ln -sfn /run/secrets/skill-env/.env "$OPENCLAW_WORKSPACE_DIR/work/mio-api/.env"
+else
+  # No Secret mounted (pre-provisioning or envFrom-only setups): leave any
+  # existing file untouched rather than pointing at a dead target.
+  echo "[dealclaw-runtime] skill-env Secret not mounted; work/mio-api/.env left as-is" >&2
+fi
 
 # A customer-specific ConfigMap/volume may supply company knowledge, but it
 # cannot overwrite the immutable identity, safety rules, Skills, or scripts.

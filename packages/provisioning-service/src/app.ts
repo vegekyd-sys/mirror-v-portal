@@ -30,7 +30,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // JWT (pure-frontend admin SPA calling directly, no proxy in front).
   const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
   app.use(createTenantRoutes(pool, config, auth));
-  app.use(createRuntimeConfigRoutes(pool, auth));
+  app.use(createRuntimeConfigRoutes(pool, config, auth));
   app.use(createAdminOpsRoutes(pool, config, auth));
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.

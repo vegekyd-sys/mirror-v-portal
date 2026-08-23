@@ -15,6 +15,13 @@ import {
   deletePersistentVolumeClaim,
 } from './k8s-client.js';
 import { DEFAULT_RUNTIME_NAMESPACE, type ProvisioningConfig } from '../config.js';
+import {
+  buildEnvFileContent,
+  ENV_FROM_ONLY_KEYS,
+  SKILL_ENV_DEFAULT_MODE,
+  SKILL_ENV_MOUNT_PATH,
+  SKILL_ENV_SECRET_NAME,
+} from './skill-env.js';
 
 /** Per-tenant namespace name — each tenant is fully isolated in its own namespace. */
 export function tenantNamespace(tenantId: string): string {
@@ -52,8 +59,10 @@ export interface ProvisionOptions {
   agentPvcAccessMode?: 'ReadWriteOnce' | 'ReadWriteMany';
   /**
    * Merged runtime config (global defaults + tenant overrides, decrypted).
-   * Materialized as the `tenant-config` Secret in the tenant namespace,
-   * which the dealclaw-agent Deployment consumes via envFrom.
+   * Split at provisioning time: envFrom-only keys (DEEPSEEK_API_KEY…) are
+   * materialized as the `tenant-config` Secret (envFrom of dealclaw-agent),
+   * the rest as the `skill-env` Secret's single `.env` key (mounted file,
+   * hot-rotatable without restarts).
    */
   runtimeSecretData?: Record<string, string>;
 }
@@ -111,7 +120,7 @@ export async function provisionTenant(
 
   if (dryRun) {
     result.warnings.push(`DRY_RUN: would provision in namespace ${nsName}`);
-    result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config');
+    result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config', SKILL_ENV_SECRET_NAME);
     result.pods.push(gatewayName, agentName, agentPvcName);
     return result;
   }
@@ -160,18 +169,39 @@ export async function provisionTenant(
     });
     result.secrets.push(creditsConfigName);
 
-    // 1b. tenant-config Secret — runtime provider/tool credentials for
+    // 1b. tenant-config Secret — runtime provider credentials for
     // dealclaw-agent (envFrom). Built from the runtime_configs table
     // (global defaults + per-tenant overrides), managed via admin-web.
     // Fail closed: without it the agent Pod cannot start.
+    // Only envFrom-only keys (model provider keys like DEEPSEEK_API_KEY,
+    // consumed at container boot) belong here — skill/tool keys live in the
+    // skill-env Secret (step 1c) so they can be rotated without a restart
+    // and cannot shadow the hot .env file via envFrom.
     const runtimeSecretName = 'tenant-config';
     if (!options.runtimeSecretData || Object.keys(options.runtimeSecretData).length === 0) {
       throw new Error(
         'Runtime config is empty — configure global defaults (e.g. DEEPSEEK_API_KEY) via the admin console before provisioning',
       );
     }
-    await k8sCreateSecret(nsName, runtimeSecretName, options.runtimeSecretData);
+    const envFromData: Record<string, string> = {};
+    for (const [k, v] of Object.entries(options.runtimeSecretData)) {
+      if (ENV_FROM_ONLY_KEYS.has(k)) envFromData[k] = v;
+    }
+    if (Object.keys(envFromData).length === 0) {
+      result.warnings.push(
+        'Runtime config has no envFrom-only key (DEEPSEEK_API_KEY) — the agent Pod will fail its boot check',
+      );
+    }
+    await k8sCreateSecret(nsName, runtimeSecretName, envFromData);
     result.secrets.push(runtimeSecretName);
+
+    // 1c. skill-env Secret — the single `.env` file mounted at
+    // /run/secrets/skill-env and symlinked into the agent workspace as
+    // work/mio-api/.env by entrypoint.sh. Skill scripts read it at
+    // invocation time, so key rotation = Secret update, no restart.
+    const skillEnv = buildEnvFileContent(options.runtimeSecretData, tenant.mioCdpSupplierId);
+    await k8sCreateSecret(nsName, SKILL_ENV_SECRET_NAME, { '.env': skillEnv.content });
+    result.secrets.push(SKILL_ENV_SECRET_NAME);
 
     // 2. nexus-gateway Deployment + Service — IM tenants only.
     // The gateway binds to feishu/dingtalk/wecom and crashes on any other
@@ -254,9 +284,16 @@ export async function provisionTenant(
       readinessPath: '/healthz',
       volumes: [
         { name: 'runtime-data', persistentVolumeClaim: { claimName: agentPvcName } },
+        // Per-tenant skill-env (.env) — hot-rotatable credentials for skill
+        // scripts; kubelet refreshes the mounted file automatically.
+        {
+          name: 'skill-env',
+          secret: { secretName: SKILL_ENV_SECRET_NAME, defaultMode: SKILL_ENV_DEFAULT_MODE },
+        },
       ],
       volumeMounts: [
         { name: 'runtime-data', mountPath: '/data' },
+        { name: 'skill-env', mountPath: SKILL_ENV_MOUNT_PATH, readOnly: true },
       ],
     });
     await createService(nsName, agentName, 18789, agentLabels);
@@ -288,6 +325,7 @@ export async function deprovisionTenant(
     `dealclaw-agent-config-${tenantId}`,
     `dealclaw-credits-${tenantId}`,
     'tenant-config',
+    SKILL_ENV_SECRET_NAME,
   ];
 
   if (dryRun) {
