@@ -121,7 +121,7 @@ class EmailGatewayTests(unittest.TestCase):
         self.assertEqual(get_provider("gmail").imap_port, 993)
 
     def test_sync_skips_accounts_without_imap_host(self):
-        account = self.add_account(provider="resend", email_address="proxy@mail.dealclaw.io")
+        account = self.add_account(provider="resend", email_address="agent@example.com")
         result = ImapSynchronizer(
             self.store,
             client_factory=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not connect")),
@@ -132,7 +132,7 @@ class EmailGatewayTests(unittest.TestCase):
     def test_notification_text_contains_headers_not_body(self):
         text = format_notifications(
             [{"events": [{
-                "email_address": "owner@163.com",
+                "email_address": "user@example.com",
                 "from": "buyer@example.net",
                 "subject": "Re: Catalog",
                 "text_preview": "must not leak",
@@ -144,12 +144,12 @@ class EmailGatewayTests(unittest.TestCase):
 
     def test_card_presentation_contains_headers_not_body(self):
         card = _build_webhook_card([{
-                "email_address": "owner@163.com",
+                "email_address": "user@example.com",
                 "from": "buyer@example.net",
                 "subject": "Re: Catalog",
                 "text_preview": "must not leak",
             }]
-            
+
         )
         encoded = str(card)
         self.assertIn("buyer@example.net", encoded)
@@ -160,12 +160,12 @@ class EmailGatewayTests(unittest.TestCase):
 
     def test_card_presentation_truncates_body_to_200_characters(self):
         card = _build_webhook_card([{
-                "email_address": "owner@163.com",
+                "email_address": "user@example.com",
                 "from": "buyer@example.net",
                 "subject": "Long reply",
                 "preview": "正" * 250,
             }]
-            
+
         )
         body_block = next(
             b for b in card["card"]["elements"]
@@ -176,7 +176,7 @@ class EmailGatewayTests(unittest.TestCase):
 
     def test_netease_sync_sends_imap_id_before_select(self):
         account = self.add_account(
-            email_address="owner@163.com",
+            email_address="user@example.com",
             provider="netease_163",
         )
         fake = FakeImap(all_uids=[])
@@ -418,4 +418,3 @@ class EmailGatewayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

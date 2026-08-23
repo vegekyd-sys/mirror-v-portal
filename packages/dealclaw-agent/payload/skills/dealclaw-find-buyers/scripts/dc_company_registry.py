@@ -55,6 +55,18 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_memory_leads(company_id: str, feishu_fields: list) -> None:
+    """改 A：写飞书后直写 memory leads.json（权威数据）。失败不阻断飞书，仅告警。"""
+    try:
+        mio_dir = Path(__file__).resolve().parents[3] / "work" / "mio-api"
+        if str(mio_dir) not in sys.path:
+            sys.path.insert(0, str(mio_dir))
+        from dc_memory_data import write_leads_to_memory
+        write_leads_to_memory(company_id, feishu_fields)
+    except Exception as e:
+        print(f"[memory-leads] 直写 memory 失败（飞书已写入）: {e}", file=sys.stderr)
+
+
 def _run_lark(*args, **kwargs) -> Dict[str, Any]:
     """执行 lark-cli 命令，返回解析后的 JSON。失败抛 RuntimeError。"""
     cmd = ["lark-cli"] + list(args)
@@ -500,11 +512,16 @@ def sync_leads_to_pool(
     source: str = "引擎搜索",
     chat_id: Optional[str] = None,
     enterprise_products: Optional[list] = None,
+    exclude_manufacturer: bool = False,
 ) -> Dict:
     """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。
 
     enterprise_products: 企业真实产品列表 [{name, keywords}]，用于把买家采购标签
     对齐到企业产品（用户没有的产品不写入匹配产品）。缺省时匹配产品留空。
+
+    exclude_manufacturer: 企业产品为「成品」时传 True。判定买家身份为制造商
+    （自产自用型/与买方自产线重叠）时直接跳过，不写入线索池。该布尔值由
+    上层（模型搜索前置判断产品类型）决定，本函数不做产品类型语义判断。
     """
     pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
     app_token = pool["app_token"]
@@ -514,8 +531,12 @@ def sync_leads_to_pool(
     creates = []
     updates = []
     skipped = 0
+    excluded_manufacturer = 0
     for record in records or []:
         fields = _record_fields(record, source, enterprise_products=enterprise_products)
+        if exclude_manufacturer and fields.get("买家类型") == "制造商":
+            excluded_manufacturer += 1
+            continue
         company_key = _normalize_key(fields.get("公司名", ""))
         website_key = _normalize_key(fields.get("官网", ""))
         if not company_key and not website_key:
@@ -552,10 +573,13 @@ def sync_leads_to_pool(
             "--as", "bot",
         )
 
+    _write_memory_leads(company_id, creates + [f for _, f in updates])
+
     return {
         "created": len(creates),
         "updated": len(updates),
         "skipped": skipped,
+        "excluded_manufacturer": excluded_manufacturer,
         "record_ids": [x for x in created_ids if x],
         "app_token": app_token,
         "table_id": table_id,
@@ -610,8 +634,13 @@ def sync_buyerleads_to_pool(
     *,
     enterprise_products: Optional[list] = None,
     chat_id: Optional[str] = None,
+    exclude_manufacturer: bool = False,
 ) -> Dict:
-    """把 buyerLeadsPlaza 猎客线索映射并幂等写入统一线索池（来源=AI猎客）。"""
+    """把 buyerLeadsPlaza 猎客线索映射并幂等写入统一线索池（来源=AI猎客）。
+
+    exclude_manufacturer: 企业产品为「成品」时传 True，判定买家身份为制造商时
+    直接跳过不写入。布尔值由上层（模型搜索前置判断产品类型）决定。
+    """
     pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
     app_token = pool["app_token"]
     table_id = pool["table_id"]
@@ -620,8 +649,12 @@ def sync_buyerleads_to_pool(
     creates = []
     updates = []
     skipped = 0
+    excluded_manufacturer = 0
     for record in records or []:
         fields = _buyerleads_fields(record, enterprise_products=enterprise_products)
+        if exclude_manufacturer and fields.get("买家类型") == "制造商":
+            excluded_manufacturer += 1
+            continue
         company_key = _normalize_key(fields.get("公司名", ""))
         website_key = _normalize_key(fields.get("官网", ""))
         if not company_key and not website_key:
@@ -658,10 +691,13 @@ def sync_buyerleads_to_pool(
             "--as", "bot",
         )
 
+    _write_memory_leads(company_id, creates + [f for _, f in updates])
+
     return {
         "created": len(creates),
         "updated": len(updates),
         "skipped": skipped,
+        "excluded_manufacturer": excluded_manufacturer,
         "record_ids": [x for x in created_ids if x],
         "app_token": app_token,
         "table_id": table_id,

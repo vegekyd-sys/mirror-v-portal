@@ -29,45 +29,45 @@ Answer these to help your agent understand you. Leave blank to skip.
 
 ### 1. Identity
 **What should I call you?**
-> 
+>
 
 **What's your timezone?**
-> 
+>
 
 ### 2. Communication
 **How do you prefer I communicate? (direct/detailed/brief/casual)**
-> 
+>
 
 **Any pet peeves I should avoid?**
-> 
+>
 
 ### 3. Goals
 **What's your primary goal right now? (1-3 sentences)**
-> 
+>
 
 **What does "winning" look like for you in 1 year?**
-> 
+>
 
 **What does ideal life look/feel like when you've succeeded?**
-> 
+>
 
 ### 4. Work Style
 **When are you most productive? (morning/afternoon/evening)**
-> 
+>
 
 **Do you prefer async communication or real-time?**
-> 
+>
 
 ### 5. Context
 **What are you currently working on? (projects, job, etc.)**
-> 
+>
 
 **Who are the key people in your work/life I should know about?**
-> 
+>
 
 ### 6. Agent Preferences
 **What kind of personality should your agent have?**
-> 
+>
 
 ---
 

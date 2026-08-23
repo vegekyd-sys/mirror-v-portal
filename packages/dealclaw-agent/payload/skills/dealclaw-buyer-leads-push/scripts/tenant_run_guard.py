@@ -228,6 +228,7 @@ def validate_context(payload: Any) -> dict[str, Any]:
         {
             "chat_id",
             "company_name",
+            "company_id",
             "knowledge_doc_token",
             "base_app_token",
             "base_table_id",
@@ -241,15 +242,27 @@ def validate_context(payload: Any) -> dict[str, Any]:
     if require_text(binding.get("chat_id"), "binding.chat_id") != chat_id:
         raise RunGuardError("Binding crosses the invocation chat_id boundary")
     company = require_text(binding.get("company_name"), "binding.company_name")
-    doc_token = require_text(binding.get("knowledge_doc_token"), "binding.knowledge_doc_token")
+    company_id = binding.get("company_id")
+    if company_id is not None:
+        company_id = require_text(company_id, "binding.company_id")
+    origin = require_text(binding.get("document_origin"), "binding.document_origin")
+    if origin not in {"group_supplied_formal", "formalized_from_group_history", "user_intent_profile"}:
+        raise RunGuardError("binding.document_origin is unsupported")
+    intent_mode = origin == "user_intent_profile"
+    raw_doc_token = binding.get("knowledge_doc_token")
+    if not isinstance(raw_doc_token, str):
+        raise RunGuardError("binding.knowledge_doc_token must be a string")
+    doc_token = raw_doc_token.strip()
+    if intent_mode:
+        if doc_token:
+            raise RunGuardError("user_intent_profile binding must not carry a knowledge document token")
+    else:
+        doc_token = require_text(raw_doc_token, "binding.knowledge_doc_token")
     base_token = require_text(binding.get("base_app_token"), "binding.base_app_token")
     table_id = require_text(binding.get("base_table_id"), "binding.base_table_id")
     supplier_id = require_text(binding.get("tradechina_supplier_id"), "binding.tradechina_supplier_id")
     if normalized(supplier_id) in PLACEHOLDER_SUPPLIER_IDS:
         raise RunGuardError("binding.tradechina_supplier_id is a placeholder")
-    origin = require_text(binding.get("document_origin"), "binding.document_origin")
-    if origin not in {"group_supplied_formal", "formalized_from_group_history"}:
-        raise RunGuardError("binding.document_origin is unsupported")
 
     permissions = require_object(state.get("resource_permissions"), "state.resource_permissions")
     reject_extra(
@@ -261,13 +274,19 @@ def validate_context(payload: Any) -> dict[str, Any]:
         raise RunGuardError("Resource permission policy is missing or unsupported")
     if permissions.get("permission_chat_id") != chat_id:
         raise RunGuardError("Resource permissions cross the invocation chat_id boundary")
-    formal_permission = validate_permission_proof(
-        permissions.get("formal_document"),
-        "state.resource_permissions.formal_document",
-        chat_id,
-        "docx",
-        doc_token,
-    )
+    formal_proof_raw = permissions.get("formal_document")
+    if intent_mode:
+        if formal_proof_raw is not None:
+            raise RunGuardError("user_intent_profile state must not carry a formal-document permission proof")
+        formal_permission = None
+    else:
+        formal_permission = validate_permission_proof(
+            formal_proof_raw,
+            "state.resource_permissions.formal_document",
+            chat_id,
+            "docx",
+            doc_token,
+        )
     base_permission = validate_permission_proof(
         permissions.get("base"),
         "state.resource_permissions.base",
@@ -276,14 +295,20 @@ def validate_context(payload: Any) -> dict[str, Any]:
         base_token,
     )
 
-    formal = require_object(payload.get("formal_document"), "formal_document")
-    reject_extra(formal, {"token", "title", "profile_hash"}, "formal_document")
-    if require_text(formal.get("token"), "formal_document.token") != doc_token:
-        raise RunGuardError("The document read by the host is not the bound formal document token")
-    expected_title = f"{company}｜企业知识库"
-    if require_text(formal.get("title"), "formal_document.title") != expected_title:
-        raise RunGuardError("Formal document title does not exactly match the bound company")
-    doc_profile_hash = require_text(formal.get("profile_hash"), "formal_document.profile_hash")
+    doc_profile_hash = None
+    if intent_mode:
+        formal_payload = payload.get("formal_document")
+        if formal_payload is not None:
+            raise RunGuardError("user_intent_profile runs must not read a formal document")
+    else:
+        formal = require_object(payload.get("formal_document"), "formal_document")
+        reject_extra(formal, {"token", "title", "profile_hash"}, "formal_document")
+        if require_text(formal.get("token"), "formal_document.token") != doc_token:
+            raise RunGuardError("The document read by the host is not the bound formal document token")
+        expected_title = f"{company}｜企业知识库"
+        if require_text(formal.get("title"), "formal_document.title") != expected_title:
+            raise RunGuardError("Formal document title does not exactly match the bound company")
+        doc_profile_hash = require_text(formal.get("profile_hash"), "formal_document.profile_hash")
 
     profile = require_object(state.get("profile"), "state.profile")
     reject_extra(
@@ -296,17 +321,45 @@ def validate_context(payload: Any) -> dict[str, Any]:
             "normalized_hash",
             "confirmed_draft_version",
             "confirmed_draft_hash",
+            "intent_confirmation",
             "updated_at",
         },
         "state.profile",
     )
     if require_text(profile.get("status"), "profile.status") != "active":
         raise RunGuardError("Formal profile is not active")
-    if require_text(profile.get("source_doc_token"), "profile.source_doc_token") != doc_token:
-        raise RunGuardError("Profile source token differs from the bound formal document")
     profile_hash = require_text(profile.get("normalized_hash"), "profile.normalized_hash")
-    if profile_hash != doc_profile_hash:
-        raise RunGuardError("Stored profile hash differs from the direct formal-document projection")
+    if intent_mode:
+        if profile.get("source_kind") != "user_intent":
+            raise RunGuardError("user_intent_profile state must carry a user_intent profile")
+        source_doc = profile.get("source_doc_token", "")
+        if not isinstance(source_doc, str) or source_doc.strip():
+            raise RunGuardError("user_intent profile must not reference a knowledge document")
+        intent_confirmation = require_object(
+            profile.get("intent_confirmation"), "profile.intent_confirmation"
+        )
+        reject_extra(
+            intent_confirmation,
+            {"actor_open_id", "signal", "confirmed_at"},
+            "profile.intent_confirmation",
+        )
+        if set(intent_confirmation) != {"actor_open_id", "signal", "confirmed_at"}:
+            raise RunGuardError("profile.intent_confirmation is missing fields")
+        require_text(
+            intent_confirmation.get("actor_open_id"), "profile.intent_confirmation.actor_open_id"
+        )
+        if intent_confirmation.get("signal") not in {"user_stated", "approved"}:
+            raise RunGuardError("profile.intent_confirmation.signal is unsupported")
+        require_text(
+            intent_confirmation.get("confirmed_at"), "profile.intent_confirmation.confirmed_at"
+        )
+    else:
+        if "intent_confirmation" in profile:
+            raise RunGuardError("document-bound profiles must not carry intent_confirmation")
+        if require_text(profile.get("source_doc_token"), "profile.source_doc_token") != doc_token:
+            raise RunGuardError("Profile source token differs from the bound formal document")
+        if profile_hash != doc_profile_hash:
+            raise RunGuardError("Stored profile hash differs from the direct formal-document projection")
 
     if origin == "formalized_from_group_history":
         onboarding = require_object(state.get("onboarding"), "state.onboarding")
@@ -340,19 +393,23 @@ def validate_context(payload: Any) -> dict[str, Any]:
     context_material = "\n".join(
         [chat_id, str(revision), company, doc_token, base_token, table_id, supplier_id, profile_hash, run_at]
     )
+    verified_marks = [base_permission["verified_at"]]
+    if formal_permission is not None:
+        verified_marks.append(formal_permission["verified_at"])
     return {
         "chat_id": chat_id,
         "run_at": run_at,
         "source_timezone": source_timezone,
         "state_revision": revision,
         "company_name": company,
+        "company_id": company_id,
         "knowledge_doc_token": doc_token,
         "base_app_token": base_token,
         "base_table_id": table_id,
         "supplier_id": supplier_id,
         "document_origin": origin,
         "permission_policy_version": PERMISSION_POLICY_VERSION,
-        "permission_verified_at": min(formal_permission["verified_at"], base_permission["verified_at"]),
+        "permission_verified_at": min(verified_marks),
         "profile_hash": profile_hash,
         "profile": score_profile,
         "penalty_rules": learned_rules,
@@ -473,6 +530,28 @@ def fixture() -> dict[str, Any]:
     }
 
 
+def intent_fixture() -> dict[str, Any]:
+    """A user_intent_profile binding: no knowledge document, intent-confirmed profile."""
+    payload = fixture()
+    payload["formal_document"] = None
+    state = payload["state"]
+    state["binding"]["document_origin"] = "user_intent_profile"
+    state["binding"]["knowledge_doc_token"] = ""
+    state["binding"]["company_id"] = "cmp_intent_a"
+    del state["resource_permissions"]["formal_document"]
+    profile = state["profile"]
+    profile["source_doc_token"] = ""
+    profile["source_kind"] = "user_intent"
+    del profile["confirmed_draft_version"]
+    del profile["confirmed_draft_hash"]
+    profile["intent_confirmation"] = {
+        "actor_open_id": "ou_user1",
+        "signal": "user_stated",
+        "confirmed_at": "2026-08-12T09:05:00+08:00",
+    }
+    return payload
+
+
 def self_test() -> None:
     context = validate_context(fixture())
     assert context["company_name"] == "真实企业"
@@ -480,7 +559,48 @@ def self_test() -> None:
     assert context["query_jobs"] == [{"country_name": "巴西", "product_keyword": "绗缝被"}]
     assert "supplier_id" not in public_plan(context)
 
+    intent_context = validate_context(intent_fixture())
+    assert intent_context["document_origin"] == "user_intent_profile"
+    assert intent_context["knowledge_doc_token"] == ""
+    assert intent_context["company_id"] == "cmp_intent_a"
+    assert intent_context["query_jobs"] == [{"country_name": "巴西", "product_keyword": "绗缝被"}]
+
     invalid = []
+    missing_confirmation = intent_fixture()
+    del missing_confirmation["state"]["profile"]["intent_confirmation"]
+    invalid.append(missing_confirmation)
+    bad_signal = intent_fixture()
+    bad_signal["state"]["profile"]["intent_confirmation"]["signal"] = "pending"
+    invalid.append(bad_signal)
+    stray_doc = intent_fixture()
+    stray_doc["formal_document"] = {"token": "docx_formal_a", "title": "真实企业｜企业知识库", "profile_hash": "sha256:profile-a"}
+    invalid.append(stray_doc)
+    stray_token = intent_fixture()
+    stray_token["state"]["binding"]["knowledge_doc_token"] = "docx_formal_a"
+    invalid.append(stray_token)
+    empty_doc_origin = fixture()
+    empty_doc_origin["state"]["binding"]["knowledge_doc_token"] = ""
+    invalid.append(empty_doc_origin)
+    doc_with_intent_confirmation = fixture()
+    doc_with_intent_confirmation["state"]["profile"]["intent_confirmation"] = {
+        "actor_open_id": "ou_user1",
+        "signal": "user_stated",
+        "confirmed_at": "2026-08-12T09:05:00+08:00",
+    }
+    invalid.append(doc_with_intent_confirmation)
+    intent_wrong_kind = intent_fixture()
+    intent_wrong_kind["state"]["profile"]["source_kind"] = "group_history"
+    invalid.append(intent_wrong_kind)
+    intent_stale_permission = intent_fixture()
+    intent_stale_permission["state"]["resource_permissions"]["formal_document"] = fixture()["state"]["resource_permissions"]["formal_document"]
+    invalid.append(intent_stale_permission)
+    for payload in invalid:
+        try:
+            validate_context(payload)
+        except RunGuardError:
+            pass
+        else:
+            raise AssertionError("Unsafe intent-mode run context was not rejected")
     crossed = fixture()
     crossed["invocation_chat_id"] = "oc_b"
     invalid.append(crossed)

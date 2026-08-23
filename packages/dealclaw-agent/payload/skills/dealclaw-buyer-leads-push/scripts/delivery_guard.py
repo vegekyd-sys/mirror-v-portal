@@ -127,12 +127,25 @@ def validate(payload: Any) -> dict[str, Any]:
     profile = obj(state.get("profile"), "current_state.profile")
     if binding.get("chat_id") != chat_id or profile.get("source_chat_id") != chat_id:
         raise DeliveryGuardError("Current binding/profile crosses the invocation group")
-    doc_token = text(binding.get("knowledge_doc_token"), "current_state.binding.knowledge_doc_token")
+    doc_token_raw = binding.get("knowledge_doc_token")
+    if not isinstance(doc_token_raw, str):
+        raise DeliveryGuardError("current_state.binding.knowledge_doc_token must be a string")
+    intent_mode = binding.get("document_origin") == "user_intent_profile"
+    doc_token = doc_token_raw.strip()
+    if intent_mode:
+        if doc_token:
+            raise DeliveryGuardError("user_intent_profile binding must not carry a knowledge document token")
+    else:
+        doc_token = text(doc_token_raw, "current_state.binding.knowledge_doc_token")
     base_token = text(binding.get("base_app_token"), "current_state.binding.base_app_token")
     permissions = obj(state.get("resource_permissions"), "current_state.resource_permissions")
     if permissions.get("policy_version") != PERMISSION_POLICY_VERSION or permissions.get("permission_chat_id") != chat_id:
         raise DeliveryGuardError("Current resource permission policy is missing or cross-group")
-    permission_proof(permissions.get("formal_document"), "formal_document permission", chat_id, "docx", doc_token)
+    if intent_mode:
+        if permissions.get("formal_document") is not None:
+            raise DeliveryGuardError("user_intent_profile state must not carry a formal-document permission proof")
+    else:
+        permission_proof(permissions.get("formal_document"), "formal_document permission", chat_id, "docx", doc_token)
     permission_proof(permissions.get("base"), "Base permission", chat_id, "bitable", base_token)
     target = obj(payload.get("delivery_target"), "delivery_target")
     if set(target) != {"chat_id", "base_app_token", "base_table_id"}:
@@ -155,18 +168,12 @@ def validate(payload: Any) -> dict[str, Any]:
     if profile_hash != profile.get("normalized_hash"):
         raise DeliveryGuardError("Pipeline profile hash differs from the current profile")
     live_permissions = obj(payload.get("live_permission_proofs"), "live_permission_proofs")
-    if set(live_permissions) != {"formal_document", "base"}:
-        raise DeliveryGuardError("live_permission_proofs must contain only formal_document and base")
+    expected_live = {"base"} if intent_mode else {"formal_document", "base"}
+    if set(live_permissions) != expected_live:
+        raise DeliveryGuardError(
+            "live_permission_proofs must contain exactly: " + ", ".join(sorted(expected_live))
+        )
     delivery_at = instant(payload.get("delivery_at"), "delivery_at")
-    formal_observation_id = permission_proof(
-        live_permissions.get("formal_document"),
-        "live formal_document permission",
-        chat_id,
-        "docx",
-        doc_token,
-        run_context_id=run_context_id,
-        delivery_at=delivery_at,
-    )
     base_observation_id = permission_proof(
         live_permissions.get("base"),
         "live Base permission",
@@ -176,8 +183,18 @@ def validate(payload: Any) -> dict[str, Any]:
         run_context_id=run_context_id,
         delivery_at=delivery_at,
     )
-    if formal_observation_id == base_observation_id:
-        raise DeliveryGuardError("Live Docx and Base proofs must come from distinct permission readbacks")
+    if not intent_mode:
+        formal_observation_id = permission_proof(
+            live_permissions.get("formal_document"),
+            "live formal_document permission",
+            chat_id,
+            "docx",
+            doc_token,
+            run_context_id=run_context_id,
+            delivery_at=delivery_at,
+        )
+        if formal_observation_id == base_observation_id:
+            raise DeliveryGuardError("Live Docx and Base proofs must come from distinct permission readbacks")
     records = result.get("records")
     if not isinstance(records, list):
         raise DeliveryGuardError("pipeline_result.records must be an array")
@@ -322,10 +339,35 @@ def fixture() -> dict[str, Any]:
     return payload
 
 
+def intent_fixture() -> dict[str, Any]:
+    """Intent-mode delivery: no knowledge document, Base-only permission proofs."""
+    payload = json.loads(json.dumps(fixture(), ensure_ascii=False))
+    binding = payload["current_state"]["binding"]
+    binding["document_origin"] = "user_intent_profile"
+    binding["knowledge_doc_token"] = ""
+    del payload["current_state"]["resource_permissions"]["formal_document"]
+    payload["live_permission_proofs"] = {"base": payload["live_permission_proofs"]["base"]}
+    return payload
+
+
 def self_test() -> None:
     payload = fixture()
     assert validate(payload)["record_counts"]["push"] == 1
+    assert validate(intent_fixture())["record_counts"]["push"] == 1
     invalid = []
+    intent_with_token = intent_fixture()
+    intent_with_token["current_state"]["binding"]["knowledge_doc_token"] = "docx-a"
+    invalid.append(intent_with_token)
+    intent_with_stored_doc_proof = intent_fixture()
+    intent_with_stored_doc_proof["current_state"]["resource_permissions"]["formal_document"] = (
+        fixture()["current_state"]["resource_permissions"]["formal_document"]
+    )
+    invalid.append(intent_with_stored_doc_proof)
+    intent_with_live_doc_proof = intent_fixture()
+    intent_with_live_doc_proof["live_permission_proofs"]["formal_document"] = (
+        fixture()["live_permission_proofs"]["formal_document"]
+    )
+    invalid.append(intent_with_live_doc_proof)
     stale = json.loads(json.dumps(payload, ensure_ascii=False))
     stale["current_state"]["revision"] = 9
     invalid.append(stale)

@@ -64,7 +64,7 @@ def validate_replacement(input_path, output_path, content_map, table_data=None):
     found = set()
     overflows = []
     missing = []
-    
+
     def check(shape):
         if shape.name in content_map:
             found.add(shape.name)
@@ -77,13 +77,13 @@ def validate_replacement(input_path, output_path, content_map, table_data=None):
                     'new_len': len(new_text),
                     'overflow_ratio': len(new_text) / max(original_len, 1)
                 })
-    
+
     walk_shapes(slide.shapes, check)
-    
+
     for name in content_map:
         if name not in found:
             missing.append(name)
-    
+
     report = {
         'ok': len(missing) == 0 and len(overflows) == 0,
         'total_shapes': len(content_map),
@@ -101,10 +101,10 @@ def run_replacement(input_path, output_path, content_map, table_data=None):
         print(json.dumps(validation, ensure_ascii=False, indent=2))
         if validation['missing']:
             raise ValueError(f"Missing shapes: {validation['missing']}")
-    
+
     prs = Presentation(input_path)
     slide = prs.slides[0]
-    
+
     def process(shape):
         if shape.name in content_map:
             new_text = content_map[shape.name]
@@ -116,7 +116,7 @@ def run_replacement(input_path, output_path, content_map, table_data=None):
             else:
                 replace_text(shape, new_text)
             print(f"✅ {shape.name} ({len(new_text)}字)")
-        
+
         if shape.has_table and table_data:
             table = shape.table
             for key, text in table_data.items():
@@ -127,7 +127,7 @@ def run_replacement(input_path, output_path, content_map, table_data=None):
             for row in table.rows:
                 row.height = max(MIN_TABLE_ROW_HEIGHT, content_row_height(row, table))
             print(f"✅ {shape.name} 表格已替换 + 行高自适应")
-    
+
     walk_shapes(slide.shapes, process)
     prs.save(output_path)
     print(f"🎉 完成：{output_path} ({os.path.getsize(output_path):,} bytes)")
@@ -141,15 +141,15 @@ if __name__ == '__main__':
     parser.add_argument('--table', help='表格数据 JSON 文件路径')
     parser.add_argument('--dry-run', action='store_true', help='仅校验不输出')
     args = parser.parse_args()
-    
+
     with open(args.content) as f:
         content_map = json.load(f)
-    
+
     table_data = None
     if args.table:
         with open(args.table) as f:
             table_data = json.load(f)
-    
+
     if args.dry_run:
         report = validate_replacement(args.input, args.output, content_map, table_data)
         print(json.dumps(report, ensure_ascii=False, indent=2))

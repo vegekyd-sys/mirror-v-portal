@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-KB_DIR = DATA_DIR / "kb"
+KB_DIR = Path(__file__).resolve().parents[2] / "data" / "memory"
 PORT = 8820
 
 def _now():
@@ -19,11 +19,11 @@ def list_enterprises():
     """扫描 data/kb/ 目录，返回所有企业列表"""
     ents = []
     if KB_DIR.exists():
-        for f in KB_DIR.glob("*.json"):
+        for f in KB_DIR.glob("*/kb.json"):
             try:
                 d = json.loads(f.read_text())
-                name = d.get("profile",{}).get("name") or d.get("enterprise", f.stem)
-                ents.append({"key": d.get("enterprise", f.stem), "name": name[:30], "file": str(f)})
+                name = d.get("profile",{}).get("name") or d.get("enterprise", f.parent.name)
+                ents.append({"key": d.get("enterprise", f.parent.name), "name": name[:30], "file": str(f)})
             except: pass
     if not ents:
         ents = [{"key":"solarunis.com","name":"Solarunis Energy","file":""}]
@@ -308,8 +308,9 @@ class KBHandler(BaseHTTPRequestHandler):
             ent = body.get('enterprise', 'solarunis.com')
             data = body.get('data', {})
             slug = ''.join(c for c in ent.lower() if c.isalnum())
-            KB_DIR.mkdir(parents=True, exist_ok=True)
-            kb_file = KB_DIR / f"{slug}.json"
+            kb_dir = KB_DIR / slug
+            kb_dir.mkdir(parents=True, exist_ok=True)
+            kb_file = kb_dir / "kb.json"
             data['updated_at'] = _now()
             data['enterprise'] = ent
             kb_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))

@@ -19,6 +19,7 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
   "binding": {
     "chat_id": "oc_xxx",
     "company_name": "示例企业",
+    "company_id": "cmp_0123456789abcdef",
     "knowledge_doc_token": "docx_xxx",
     "base_app_token": "bascn_xxx",
     "base_table_id": "tbl_xxx",
@@ -194,6 +195,10 @@ The state store must survive process restarts, encrypt data at rest, restrict ac
 }
 ```
 
+The optional `binding.company_id` is the deterministic 企业键 (`cmp_` + SHA-256 prefix of the normalized company name, as computed by `lead_pool_guard.py`); it is required for pool-layout Bases and stamped onto every pool record.
+
+`binding.document_origin` is one of `group_supplied_formal`, `formalized_from_group_history`, or `user_intent_profile`. A `user_intent_profile` binding is the intent path: it carries **no** knowledge document — `knowledge_doc_token` is `""`, `resource_permissions` contains only the `base` proof, and runs pass `formal_document = null` to `tenant_run_guard.py`. Its profile must have `source_kind = user_intent`, an empty `source_doc_token`, and an `intent_confirmation` object `{actor_open_id, signal, confirmed_at}` where `signal` is `user_stated` (the user stated all core slots themselves) or `approved` (an inferred profile received an explicit same-group approval signal). See [profile-confirmation.md](profile-confirmation.md) "Intent confirmation". The knowledge-document paths remain available as an optional enhancement; upgrading an intent binding to a document binding is an explicit administrator action that replaces `document_origin`, tokens, and provenance atomically.
+
 The optional `binding_recovery` object is additive to schema v10 and defaults to `null`. When a direct-token read proves that the formal knowledge Docx is deleted or not found, `binding_resource_guard.py` sets state `status = rebind_required` and stores only `reason`, the failed token fingerprint, detection time, and reminder-delivery metadata. Keep the full inactive token only in the existing binding; never put it in reminder text or routine logs. No buyer retrieval, scoring, feedback read, Base write, push, or unlock sweep is permitted while `status = rebind_required`.
 
 The `unlocks` map is additive to schema v10 and defaults to `{}` for states created before it existed. It is keyed by `线索ID` and scoped by the state record's own `chat_id`; require `unlocks[<id>].chat_id == state.chat_id` before use. It stores only unlock metadata (authorization ID, actor, trigger, timestamps, delivery status, message ID). Never store contact values, buyer names, or raw detail responses inside `unlocks`. Persist `pending_push` before the contact-card send and finalize with `contact_unlock_guard.py complete`; a lead whose entry already holds `contact_pushed` or `pending_push` must not be released again — send the duplicate-unlock notice instead.
@@ -202,14 +207,24 @@ Before formalization, `binding` and active `resource_permissions` are absent, `p
 
 ## First binding
 
+The default entry is the **intent path** — no knowledge document required:
+
+1. Acquire the initialization lock for the exact `chat_id`. Collect the group's hunting intent from the triggering message, quoted context, and same-group history.
+2. Run `intent_profile_builder.py assess`. The minimum viable profile is 主营产品（含类目）+ 目标国家. `needs_input` → ask the group exactly once with the guard's question, asking only for the missing slots, and wait; never ask again on every daily run. `needs_confirmation` (core slots inferred rather than user-stated) → post the summary and wait for one same-group approval signal recognized by `intent_profile_builder.py confirm`; a rejection signal restarts slot collection. `ready` (all core slots user-stated) → proceed without further confirmation.
+3. Create the company lead pool through `lead_pool_guard.py ensure` and reconcile its tables/fields through `base_schema_guard.py plan --schema pool`, applying the resource access policy with the authorized creator's identity.
+4. Require exactly one administrator-confirmed `tradechina_supplier_id` for this `chat_id`, then persist the binding atomically with `document_origin = user_intent_profile`, `knowledge_doc_token = ""`, `company_id`, the Base tokens, and the active profile including `intent_confirmation`. Start matching immediately; do not wait for a knowledge document.
+5. A knowledge document (`group_supplied_formal` / `formalized_from_group_history`) remains an optional enhancement: when the group supplies or later formalizes `企业名称｜企业知识库`, bind it through the document path below and upgrade the existing binding atomically, preserving the pool, feedback, and unlock state.
+
+The document path (optional enhancement):
+
 1. Acquire the initialization lock for the exact `chat_id`. Read only the current invocation's group-scoped content: the triggering message or quoted context and pinned items from the same `chat_id`.
 2. Extract Feishu document and Base URLs from those sources. Treat a URL as explicit only when its token is present in that content; title-only mentions are not candidates.
 3. Stop before resolution when there are multiple document URL candidates. Report candidate titles when available and masked token fingerprints only to an authorized administrator; never expose full tokens or choose the first.
 4. With exactly one candidate, require its source message/pin actor to be an authorized enterprise approver, resolve its token, require an accessible formal Docx title matching `企业名称｜企业知识库`, and apply [resource-access-policy.md](resource-access-policy.md); then handle the Base as steps 7–9 below and record `document_origin = group_supplied_formal`. A title containing `草稿` is not a formal candidate and cannot be bound.
 5. With zero candidates, follow [history-profile-generation.md](history-profile-generation.md): resolve exactly one company from same-group evidence, generate `企业名称｜企业画像草稿｜v1`, apply the resource access policy, and atomically store its returned token plus validated proof under onboarding. Do not post the draft URL until the proof succeeds. Zero or multiple company candidates stop without creating a draft.
 6. Follow [profile-confirmation.md](profile-confirmation.md). Do not create a formal binding or Base until an authorized enterprise approver confirms the exact current version/hash and the draft is `ready_for_confirmation`.
-7. After confirmation, create a separate formal `企业名称｜企业知识库`. Require exactly one supplier ID explicitly configured for this `chat_id` by an authorized administrator; never copy it from a global environment variable, another group, company name, or example. Require zero or one group-supplied Base URL candidate. Stop before resolution when multiple Base URLs are present. If one was supplied, require an accessible Base whose title is `企业名称｜企业线索池`.
-8. If no Base URL was supplied, create one Base for the confirmed company using user identity, create/validate `买家线索`, delete only the verified untouched default table, and capture its app/table tokens.
+7. After confirmation, create a separate formal `企业名称｜企业知识库`. Require exactly one supplier ID explicitly configured for this `chat_id` by an authorized administrator; never copy it from a global environment variable, another group, company name, or example. Require zero or one group-supplied Base URL candidate. Stop before resolution when multiple Base URLs are present. If one was supplied, require an accessible Base whose title is `企业名称｜企业线索池` (or the pre-v19 legacy title `企业名称｜AI猎客商机池`).
+8. If no Base URL was supplied, provision the company's unified lead pool through `lead_pool_guard.py ensure` using user identity — create the Base `企业名称｜企业线索池` with the `线索池` / `评分明细` / `参展行为` tables, reconcile fields with `base_schema_guard.py plan --schema pool`, delete only the verified untouched default table, and capture its app/table tokens.
 9. Require the formal document and Base company prefixes to match after trimming whitespace and normalizing the separator to `｜`. Apply the resource access policy to each resource and validate live readback independently.
 10. Write the complete formal binding, `resource_permissions`, this group's `tradechina_supplier_id`, active profile, and confirmation/formalization provenance with compare-and-set against the pending onboarding revision. If another initializer/formalizer won the race, do not overwrite it; keep duplicate resources private and quarantine them for administrator review.
 
@@ -235,6 +250,7 @@ For v7–v9, stop that group's scheduler and atomically change the exact legacy 
 
 ## Normal runs
 
+- For a `user_intent_profile` binding there is no formal document: skip the document read and `binding_resource_guard.py` evaluation, require the `base`-only permission proofs, and treat the stored intent profile (`source_kind = user_intent` with `intent_confirmation`) as the profile source. Re-assess the intent only when the user replies to a pending question or posts new hunting requirements; otherwise reuse the active profile.
 - Read tokens from the binding and address resources directly by token.
 - Normalize the direct formal-document read as `accessible`, `deleted`, `not_found`, `permission_denied`, `type_mismatch`, or `transient_error`, then run `binding_resource_guard.py evaluate`. Only `deleted` and `not_found` may create `rebind_required`; permission and transient failures remain repair/retry errors.
 - Commit the returned `rebind_required` patch with compare-and-set before sending its exact same-group reminder. Persist the returned reminder message ID with `binding_resource_guard.py complete-reminder`. A later scheduled run must suppress another reminder after `reminder_status = sent`.

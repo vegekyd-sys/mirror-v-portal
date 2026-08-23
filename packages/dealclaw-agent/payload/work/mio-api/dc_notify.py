@@ -197,30 +197,38 @@ class FeishuSender(Sender):
         return self._send_via_cli(rec)
 
     def _send_via_cli(self, rec: dict) -> SendResult:
-        """通过 `openclaw message send` 统一发送。禁止内部硬编码 webhook。"""
-        cmd = [
-            "openclaw", "message", "send",
-            "--channel", "feishu",
-            "--target", rec["target"],
-            "--message", rec["message"],
-            "--json",
-        ]
+        """通过 `lark-cli im +messages-send` 统一发送（文本 + 交互卡片都支持，单租户无 account 歧义）。
+
+        群 oc_ 走 --chat-id，用户 ou_ 走 --user-id；文本用 --text。
+        """
+        target = rec["target"]
+        cmd = ["lark-cli", "im", "+messages-send", "--as", "bot", "--json"]
+        if target.startswith("oc_"):
+            cmd += ["--chat-id", target]
+        elif target.startswith("ou_"):
+            cmd += ["--user-id", target]
+        else:
+            return SendResult(ok=False, error=f"invalid target format: {target[:16]}", backend="feishu")
+        if rec.get("idempotency_key"):
+            cmd += ["--idempotency-key", str(rec["idempotency_key"])[:50]]
+        cmd += ["--text", rec["message"]]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         except FileNotFoundError:
-            return SendResult(ok=False, error="openclaw CLI not found", backend="feishu")
+            return SendResult(ok=False, error="lark-cli not found", backend="feishu")
         except subprocess.TimeoutExpired:
-            return SendResult(ok=False, error="openclaw message send timeout", backend="feishu")
+            return SendResult(ok=False, error="lark-cli send timeout", backend="feishu")
 
         if p.returncode != 0:
             return SendResult(ok=False, error=(p.stderr or p.stdout or "send failed")[-200:],
                               backend="feishu")
         self.sent.append({**rec, "dry_run": False})
-        # 从 JSON 输出尽力提取 message_id（失败不阻塞）
+        # 从 JSON 输出尽力提取 message_id（lark-cli 返回 {ok, data:{message_id}}）
         mid = ""
         try:
             data = json.loads(p.stdout or "{}")
-            mid = str(data.get("messageId") or data.get("message_id") or "")
+            mid = str((data.get("data") or {}).get("message_id")
+                      or data.get("message_id") or data.get("messageId") or "")
         except Exception:
             pass
         return SendResult(ok=True, sent=True, backend="feishu", message_id=mid)
@@ -396,6 +404,19 @@ class RouteMap:
         return self._load()
 
 
+def get_default_target() -> str:
+    """单租户主接收方：notify_routes.json 的 default 键。
+
+    返回 oc_（群）/ ou_（用户）target，未配置返回空串。供 lead push 等其它推送
+    路径复用，与 dc_notify.resolve_target 共用同一份配置，避免各自维护目标。
+    """
+    try:
+        r = RouteMap().get("default")
+        return (r.get("chat_id") or r.get("target_id") or "").strip()
+    except Exception:
+        return ""
+
+
 class NotifyEngine:
     """DealClaw 唯一通知出口。"""
 
@@ -429,18 +450,25 @@ class NotifyEngine:
         return data[company_id]
 
     def resolve_target(self, company_id: str) -> dict:
-        """解析 company_id → 飞书 target。company_id 不得直接作 target。
+        """解析 company_id → 飞书 target。
+
+        单租户单接收方：notify_routes.json 的 "default" 键存主接收方（oc_ 群 / ou_ 用户）。
+        company_id 不是路由主键（初始化时不知道），但保留 company_id 专属路由作兼容。
 
         返回：
           status="ok"             → 有合法 chat_id/open_id，可发送
           status="route_missing"  → 无映射，禁止发送
           status="route_invalid"  → 映射值非法，禁止发送
         """
+        # 1) company_id 专属路由（兼容多租户测试环境）
         r = self.routes.get(company_id)
+        # 2) 默认主接收方（单租户，初始化时不知道 company_id）
+        if not r:
+            r = self.routes.get("default")
         if not r:
             return {"company_id": company_id, "status": "route_missing",
-                    "error": "no chat_id/open_id route for company_id"}
-        target = (r.get("chat_id") or "").strip()
+                    "error": "notify_routes.json 无 default 主接收方，也无 company_id 映射"}
+        target = (r.get("chat_id") or r.get("target_id") or "").strip()
         if not target:
             return {"company_id": company_id, "status": "route_invalid",
                     "error": "empty chat_id in route"}
@@ -448,7 +476,7 @@ class NotifyEngine:
             return {"company_id": company_id, "status": "route_invalid",
                     "error": f"invalid target format: {target[:16]}"}
         return {"company_id": company_id, "chat_id": target,
-                "label": r.get("label", ""), "status": "ok"}
+                "label": r.get("label", ""), "status": "ok", "source": "notify_routes"}
 
     def resolve_notification_route(self, company_id: str) -> dict:
         """解析 company_id → 通知路由（扩展契约，供 signal_item 使用）。
@@ -458,6 +486,8 @@ class NotifyEngine:
         - route 缺失禁止把 company_id 当 target。
         """
         r = self.routes.get(company_id)
+        if not r:
+            r = self.routes.get("default")
         if not r:
             return {"company_id": company_id, "status": "route_missing",
                     "error": "no notification route for company_id"}
@@ -475,7 +505,7 @@ class NotifyEngine:
                 return {"company_id": company_id, "status": "route_invalid", "error": "invalid open_id"}
             if not r.get("app_id"):
                 return {"company_id": company_id, "status": "route_invalid", "error": "open_id requires app_id"}
-            expected_app = os.getenv("DC_NOTIFY_FEISHU_APP_ID", "cli_a9365919fc3a1bd6")
+            expected_app = os.getenv("DC_NOTIFY_FEISHU_APP_ID", "<APP_ID>")
             if r.get("app_id") != expected_app:
                 return {"company_id": company_id, "status": "route_invalid", "error": "open_id app_id mismatch"}
         else:

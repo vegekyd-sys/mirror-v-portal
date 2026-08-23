@@ -201,7 +201,7 @@ class BillingClient:
     def wrap_skill(self, skill_id: str, quantity: int = 1):
         """
         Context manager for skill billing.
-        
+
         Usage:
             with billing.wrap_skill("dealclaw-find-buyers", quantity=3) as ctx:
                 # execute skill

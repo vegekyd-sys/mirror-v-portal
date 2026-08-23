@@ -35,7 +35,7 @@ const transporter = createTransport({
   port: 465,
   secure: true,
   auth: {
-    user: process.env.SMTP_USER || 'aarkissu@163.com',
+    user: process.env.SMTP_USER || 'user@example.com',
     pass: process.env.SMTP_PASS || '',
   },
 });
@@ -44,7 +44,7 @@ const results = [];
 for (const recipient of to) {
   try {
     const info = await transporter.sendMail({
-      from: '"Aarkissu / Emma" <aarkissu@163.com>',
+      from: '"Aarkissu / Emma" <user@example.com>',
       to: recipient,
       subject,
       html: trackedHtml,

@@ -13,8 +13,8 @@ from typing import Any
 
 
 COUNTRIES_URL = (
-    "https://micro.tradechina.com/blade-purchaser/"
-    "buyerLeadsPlaza/countries"
+    "https://micro.tradechina.com/blade-system/"
+    "api/getAllCountry.json"
 )
 BUYERS_URL = (
     "https://micro.tradechina.com/blade-purchaser/"
@@ -34,6 +34,16 @@ class ContractError(RuntimeError):
 
 class RecordRejected(ContractError):
     """Raised when one buyer record cannot produce a safe unique lead."""
+
+
+class CountryUnresolved(ContractError):
+    """Raised when a country name has zero matches in the live dictionary.
+
+    The pipeline treats this as a per-country skip (audited), not a fatal
+    error: the TradeChina dictionary's coverage is dynamic, so one absent
+    country must never abort pushes for the remaining target countries.
+    Ambiguity (more than one exact match) stays a fatal ContractError.
+    """
 
 
 def require_supplier_id(value: str | None) -> str:
@@ -86,15 +96,21 @@ def get_countries() -> list[dict[str, Any]]:
     if not isinstance(data, list):
         raise ContractError("Country data must be an array")
     approved = []
+    seen_ids: set[str] = set()
     for item in data:
         if not isinstance(item, dict):
             continue
-        country_id = item.get("countryId")
+        # getAllCountry.json 按语言返回同一国家的多行，必须按 id 去重，
+        # 否则精确匹配会重复命中而被判为歧义
+        if item.get("isDeleted") not in (0, "0", None):
+            continue
+        country_id = item.get("id")
         if not isinstance(country_id, (str, int)) or isinstance(country_id, bool):
             continue
         country_id_text = str(country_id).strip()
-        if not country_id_text:
+        if not country_id_text or country_id_text in seen_ids:
             continue
+        seen_ids.add(country_id_text)
         approved.append(
             {
                 "countryId": country_id_text,
@@ -137,6 +153,9 @@ def resolve_country(name: str, countries: list[dict[str, Any]]) -> dict[str, Any
     matches = exact_matches(needle)
     if len(matches) == 1:
         return matches[0]
+    if len(matches) > 1:
+        raise ContractError(
+            f"Country name '{name}' resolved to {len(matches)} ambiguous exact matches")
 
     # 别名映射：简称/缩写 → 精确名
     if needle in COUNTRY_ALIASES:
@@ -146,8 +165,11 @@ def resolve_country(name: str, countries: list[dict[str, Any]]) -> dict[str, Any
         matches = exact_matches(mapped.casefold())
         if len(matches) == 1:
             return matches[0]
+        if len(matches) > 1:
+            raise ContractError(
+                f"Country name '{name}' resolved to {len(matches)} ambiguous exact matches")
 
-    raise ContractError(f"Country name '{name}' resolved to {len(matches)} exact matches")
+    raise CountryUnresolved(f"Country name '{name}' is absent from the live country dictionary")
 
 
 def approved_text(value: Any) -> str:
@@ -531,8 +553,11 @@ def self_test() -> dict[str, Any]:
             return {
                 "success": True,
                 "data": [
-                    {"countryId": "country-1", "cnName": "示例国", "enName": "Example"},
-                    {"countryId": None, "cnName": "无效国", "enName": "Invalid"},
+                    {"id": "country-1", "cnName": "示例国", "enName": "Example", "isDeleted": 0},
+                    # getAllCountry.json 按语言重复同一国家，必须去重
+                    {"id": "country-1", "cnName": "示例国", "enName": "Example", "isDeleted": 0},
+                    {"id": "country-2", "cnName": "已删除国", "enName": "Deleted", "isDeleted": 1},
+                    {"id": None, "cnName": "无效国", "enName": "Invalid", "isDeleted": 0},
                 ],
             }
         if url == DETAIL_URL:
@@ -558,6 +583,15 @@ def self_test() -> dict[str, Any]:
         countries = get_countries()
         assert len(countries) == 1
         assert resolve_country("示例国", countries)["countryId"] == "country-1"
+        # 字典未收录的国家抛出 CountryUnresolved（ContractError 子类），
+        # 由管线按国家跳过；歧义多命中仍是普通 ContractError（致命）。
+        try:
+            resolve_country("字典不存在的国家", countries)
+        except CountryUnresolved:
+            pass
+        else:
+            raise AssertionError("Unresolved country did not raise CountryUnresolved")
+        assert issubclass(CountryUnresolved, ContractError)
         fetched = fetch_buyers(
             supplier_id="explicit-supplier",
             country_id="country-1",

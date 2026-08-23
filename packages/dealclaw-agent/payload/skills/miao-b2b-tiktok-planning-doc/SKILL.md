@@ -103,7 +103,7 @@ aliases:
 
 ## 文档输出方式
 
-1. 本地写 markdown → 
+1. 本地写 markdown →
 2. `cat file.md | lark-cli docs +create --doc-format markdown --title "标题" --as user --content -` →
 3. 开编辑权限给小明
 

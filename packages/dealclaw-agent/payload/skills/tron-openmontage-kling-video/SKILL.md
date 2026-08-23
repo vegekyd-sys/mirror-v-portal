@@ -328,7 +328,7 @@ Points are prepaid; check https://kling.ai/dev/pricing for Tron's account rates.
 
 ```
 Pipeline: animation (stills-only)
-Tools: Kling images (free tier or cheap) + Piper TTS (local, free) + 
+Tools: Kling images (free tier or cheap) + Piper TTS (local, free) +
        Pexels/Pixabay music (free) + Remotion (free)
 Output: image slideshow with Ken Burns, narration, subtitles
 Cost: $0.00 (if using free stock images) or ~$0.02-0.20 (Kling images)

@@ -74,7 +74,7 @@ An older confirmation never applies to a newer draft. A bare “确认”, emoji
 
 1. Create a new Feishu Docx from the confirmed snapshot, titled `企业名称｜企业知识库`. Remove the draft warning and add `企业确认版本：vN`, confirmer display name, and confirmation time. Do not rename or reuse the draft token.
 2. Grant the originating group access and capture the returned formal document token.
-3. Create or validate `企业名称｜企业线索池` and capture its app/table tokens only now.
+3. Create or validate the company's unified lead pool `企业名称｜企业线索池` (`线索池` / `评分明细` / `参展行为`) through `lead_pool_guard.py ensure` and capture its app/table tokens only now.
 4. Require an authorized administrator to provide the TradeChina supplier ID for this exact `chat_id`. Validate it with a filtered contract check. Do not read a global environment fallback or copy another group's value.
 5. Apply the group-isolated resource access policy to the separate formal Docx and Base. Atomically persist the complete binding `chat_id -> company_name + knowledge_doc_token + base_app_token + base_table_id + tradechina_supplier_id`, both validated permission proofs, set profile status `active`, and store confirmation/formalization provenance. Any permission failure leaves the state inactive.
 6. Retain the draft as review history; do not treat it as a runtime source. After activation, call `post_confirmation_flow.py start` with the exact confirmation result and canonical formal document/Base URLs. Compare-and-set its `state_patch` under `post_confirmation`, then send its exact progress message to the same group with its idempotency key. Persist the returned message ID and set `post_confirmation.status = progress_notified` before any buyer API call.
@@ -85,6 +85,17 @@ An older confirmation never applies to a newer draft. A bare “确认”, emoji
 All later reads/writes use only the formal stored tokens and this group's supplier binding. Buyer query, scoring, Base upsert, and push may start only after the `active` state and normal preflight both pass.
 
 Persist a pending external-operation record before document/Base creation. When creation delivery is unknown, set formalization status `unknown` and require reconciliation; do not blindly create a second formal document or Base. If compare-and-set loses after creation, quarantine the duplicate resource for administrator review and never select it by title.
+
+## Intent confirmation
+
+The intent path (`document_origin = user_intent_profile`) replaces the two-document workflow when the group has no knowledge document. It is handled by `scripts/intent_profile_builder.py`:
+
+1. Collect the hunting intent from the triggering message and same-group history and run `intent_profile_builder.py assess`. Core slots are `products` (each with at least one 类目) and `target_countries`.
+2. `needs_input` — send the guard's follow-up question to the group exactly once, asking only for the missing slots, and wait for the user's reply. Merge the reply into the intent and re-assess. Never re-ask on a schedule.
+3. `needs_confirmation` — one or more core slots carry `origin = inferred`. Post the profile summary with the guard's confirmation question and wait for exactly one same-group approval signal recognized by `intent_profile_builder.py confirm` (`这批没问题`, `继续`, `就按这个方向`, …). Rejection signals (`不对`, `别推`, `停止`, …) take priority over any approval word in the same message and restart slot collection. Ambiguous messages change nothing.
+4. `ready` — every core slot is `user_stated`; no confirmation round is needed.
+5. Activate the profile with `source_kind = user_intent`, empty `source_doc_token`, and `intent_confirmation = {actor_open_id, signal, confirmed_at}` where `signal` is `user_stated` for a ready profile or `approved` after a recognized approval. Only an `active` intent profile passes `tenant_run_guard.py`; a `pending_confirmation` profile blocks buyer runs.
+6. New user messages that change core slots produce a new assessment and a new `intent_confirmation`; the old confirmation never carries over.
 
 ## Changes after activation
 

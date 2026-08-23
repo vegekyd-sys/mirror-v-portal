@@ -855,12 +855,12 @@ def publish(title, content, enterprise="", grant_to=""):
             subprocess.run(
                 ["lark-cli", "drive", "permission.members", "create",
                  "--token", doc_token, "--type", "docx",
-                 "--data", '{"member_id":"ou_2b516abcb05aa539ff0056bc839d3d3a","member_type":"openid","perm":"full_access"}',
+                 "--data", '{"member_id":"<OPEN_ID>","member_type":"openid","perm":"full_access"}',
                  "--yes", "--as", "bot"],
                 capture_output=True, timeout=10
             )
             # 如果指定了单独授权用户(销售个人)
-            if grant_to and grant_to != "ou_2b516abcb05aa539ff0056bc839d3d3a":
+            if grant_to and grant_to != "<OPEN_ID>":
                 subprocess.run(
                     ["lark-cli", "drive", "permission.members", "create",
                      "--token", doc_token, "--type", "docx",

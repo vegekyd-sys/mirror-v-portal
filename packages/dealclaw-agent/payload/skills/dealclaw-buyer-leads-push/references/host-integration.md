@@ -39,7 +39,9 @@ Do not depend on drive-wide title search. Bot group membership is a prerequisite
 
 ## Binding
 
-Follow [binding-and-state.md](binding-and-state.md). Accept existing tokens only from URLs explicitly supplied in the current group invocation or pinned in that same group. Resolve and validate candidates by token. Stop on multiple candidates.
+Follow [binding-and-state.md](binding-and-state.md). The default entry is the intent path: collect the group's hunting intent, run `intent_profile_builder.py assess`, ask once for missing core slots (产品含类目 / 目标国家) or one approval signal for inferred slots, then provision the unified lead pool with `lead_pool_guard.py ensure` and bind with `document_origin = user_intent_profile`. A knowledge document remains an optional enhancement, not a prerequisite.
+
+Accept existing tokens only from URLs explicitly supplied in the current group invocation or pinned in that same group. Resolve and validate candidates by token. Stop on multiple candidates.
 
 When there is no formal document candidate, follow [history-profile-generation.md](history-profile-generation.md). The host must read only the current group's history, validate exactly one company candidate, create the draft form of [company-profile-document.md](company-profile-document.md), and post its link to the same group. Store the token only in onboarding state; do not bind it or create the Base.
 
@@ -67,17 +69,17 @@ The Skill's unlock chain (`contact_unlock_guard.py authorize` → `buyer-detail`
 
 ### Option A — Base automation (primary, real-time)
 
-Configure one automation inside each bound Base's `买家线索` table (Base → 自动化 → 创建自动化):
+Configure one automation inside each bound Base's main table (`线索池`, or legacy `买家线索`) (Base → 自动化 → 创建自动化):
 
 1. **Trigger**: 当记录内容修改后，满足条件 `是否解锁 = 已解锁` 且 `解锁推送消息ID 为空`。
 2. **Action**: 通过机器人「发送飞书消息」到该 Base 绑定的群（`binding.chat_id`），消息文本为 `解锁线索 {线索ID}`，其中 `{线索ID}` 插入记录的线索ID字段值。
 3. Enable the automation and verify the bot is a member of the bound group.
 
-Sender routing rule: a group message `解锁线索 <线索ID>` whose sender is an application/automation (`sender_type = app`) must **not** be treated as a `group_command`. The host discards the message as an actor source, re-reads the live `买家线索` record by `线索ID`, and runs the `base_field` path with `actor_open_id` taken from the record's last-modifier (修改人) person field. Only human-authored (`sender_type = user`) commands may use `group_command`, with the author as `actor_open_id`, after verifying group membership. This prevents automation messages from bypassing the live-record check and keeps 解锁人 attribution accurate.
+Sender routing rule: a group message `解锁线索 <线索ID>` whose sender is an application/automation (`sender_type = app`) must **not** be treated as a `group_command`. The host discards the message as an actor source, re-reads the live main-table record by `线索ID`, and runs the `base_field` path with `actor_open_id` taken from the record's last-modifier (修改人) person field. Only human-authored (`sender_type = user`) commands may use `group_command`, with the author as `actor_open_id`, after verifying group membership. This prevents automation messages from bypassing the live-record check and keeps 解锁人 attribution accurate.
 
 ### Option B — Scheduled sweep (fallback, reconciliation)
 
-Inside every daily run, after normal matching completes, read the bound `买家线索` table projecting only `线索ID`, `飞书群ID`, `是否解锁`, `解锁推送消息ID`, and the last-modifier person field, filtered to `飞书群ID == current chat_id`. Pass the projection with the current `state.unlocks` to:
+Inside every daily run, after normal matching completes, read the bound main table (`线索池`, or legacy `买家线索`) projecting only `线索ID`, `飞书群ID`, `是否解锁`, `解锁推送消息ID`, and the last-modifier person field, filtered to `飞书群ID == current chat_id`. Pass the projection with the current `state.unlocks` to:
 
 ```text
 python "<skill-root>/contact_unlock_guard.py" sweep < "<sweep-input.json>"
@@ -127,6 +129,8 @@ Validate in this order:
 24. Configure the Option A Base automation on a test Base; set `是否解锁 = 已解锁` on a test record and verify the automation posts `解锁线索 <线索ID>` to the bound group, the host routes it to the `base_field` path (never `group_command`), the contact card arrives once, and the record converges to `已解锁` with `解锁方式 = 线索池下拉` and a non-empty `解锁推送消息ID`. Verify a human-authored `解锁线索` command uses `group_command` with the author as actor and converges with `解锁方式 = 群内指令`. Verify a repeated unlock sends only the duplicate notice.
 25. Disable the automation, mark another test record `已解锁`, and run the Option B sweep; verify `contact_unlock_guard.py sweep` returns it as a candidate, the contact card is delivered by the daily run, and a second sweep skips it. Verify cross-group, `未解锁`, already-released, and missing-actor records are skipped with reasons and never processed.
 26. Bind a legacy test Base missing the v15 unlock fields; run `base_schema_guard.py plan`, apply its add-only plan, and verify the five unlock fields appear with exact types and `是否解锁` options `未解锁`/`已解锁`. Verify a same-named field with a wrong type or a select missing a mandated option stops Base writes with an administrator-facing report instead of an automatic conversion, and that user-added fields/options survive reconciliation untouched.
-27. Enable the schedule only after all previous checks pass.
+27. Verify the unified lead pool: run `lead_pool_guard.py ensure` for a test company and confirm a new pool `企业名称｜企业线索池` is planned with tables `线索池`/`评分明细`/`参展行为`; run it again against the created pool and confirm `reuse`; remove one sub-table and confirm `reconcile_tables` names it. Verify a pool titled for another company is rejected. Run `lead_pool_guard.py map` over guarded test records: confirm `唯一去重键 = company_id:线索ID`, `来源 = AI猎客`, exhibition rows appear only for leads with 报名参展展会, and contact-like/cross-group/duplicate-key inputs are rejected. Run `base_schema_guard.py plan --schema pool` against the live `线索池` field list and apply its add-only plan.
+28. Verify the intent path end to end: in a test group with no document, state 主营产品（含类目）+ 目标国家 in one message, confirm `intent_profile_builder.py assess` returns `ready` and the binding activates with `document_origin = user_intent_profile`, empty `knowledge_doc_token`, Base-only permission proofs, and an immediate first match. Test a message missing the target country: exactly one follow-up question is sent asking only for 目标国家, and the reply completes activation. Test an inferred profile: `needs_confirmation` blocks matching until one same-group approval signal arrives, and a rejection signal restarts slot collection. Verify `tenant_run_guard.py` rejects an intent profile missing `intent_confirmation` or carrying a document token.
+29. Enable the schedule only after all previous checks pass.
 
 Real Feishu permission, Base, and message tests require a designated test group and authorized identities.

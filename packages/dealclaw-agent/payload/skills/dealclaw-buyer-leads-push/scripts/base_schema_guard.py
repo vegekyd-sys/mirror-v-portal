@@ -100,8 +100,74 @@ REQUIRED_FIELDS: list[dict[str, Any]] = [
 VALID_TYPES = {"text", "long_text", "number", "checkbox", "person",
                "datetime", "single_select", "multi_select"}
 
+# Unified company lead pool main table (线索池), mirrored from
+# references/base-schema.md. Interface facts + feedback + unlock + system
+# fields; score details live in the linked 评分明细 sub-table and exhibition
+# activity in 参展行为.
+POOL_MAIN_FIELDS: list[dict[str, Any]] = [
+    # System identity
+    {"name": "唯一去重键", "type": "text", "primary": True},
+    {"name": "企业键", "type": "text"},
+    {"name": "来源", "type": "single_select", "options": ["AI猎客"]},
+    # Interface fact fields
+    {"name": "线索ID", "type": "text"},
+    {"name": "买家CDPID", "type": "text"},
+    {"name": "联系人ID", "type": "text"},
+    {"name": "买家公司名称", "type": "text"},
+    {"name": "买家公司简介", "type": "long_text"},
+    {"name": "买家国家", "type": "text"},
+    {"name": "产品类别T1", "type": "text"},
+    {"name": "产品类别T2", "type": "text"},
+    {"name": "需求意向", "type": "long_text"},
+    {"name": "关注产品", "type": "long_text"},
+    {"name": "买家类型", "type": "text"},
+    {"name": "买家特征", "type": "text"},
+    {"name": "需求时间", "type": "text"},
+    # AI summary fields (details in 评分明细 sub-table)
+    {"name": "AI匹配分", "type": "number"},
+    {"name": "AI匹配等级", "type": "single_select", "options": ["高", "中", "低"]},
+    {"name": "核心匹配通过", "type": "checkbox"},
+    # User-feedback fields
+    {"name": "是否匹配", "type": "single_select",
+     "options": ["待确认", "✅ 匹配", "❌ 不匹配"]},
+    {"name": "不匹配原因", "type": "multi_select", "options": [
+        "产品名称不匹配", "产品类别不匹配", "买家类型不匹配", "国家不匹配",
+        "MOQ不匹配", "买家标签不匹配", "买家简介不匹配", "需求意向不匹配",
+        "需求已过期", "线索质量低", "重复线索", "其他",
+    ]},
+    {"name": "反馈说明", "type": "long_text"},
+    {"name": "反馈人", "type": "person"},
+    {"name": "反馈时间", "type": "datetime"},
+    {"name": "跟进状态", "type": "single_select",
+     "options": ["未跟进", "已联系", "已回复", "已转化", "关闭"]},
+    {"name": "跟进备注", "type": "long_text"},
+    # Unlock fields
+    {"name": "是否解锁", "type": "single_select", "options": ["未解锁", "已解锁"]},
+    {"name": "解锁人", "type": "person"},
+    {"name": "解锁时间", "type": "datetime"},
+    {"name": "解锁方式", "type": "text"},
+    {"name": "解锁推送消息ID", "type": "text"},
+    # System fields
+    {"name": "飞书群ID", "type": "text"},
+    {"name": "首次入池时间", "type": "datetime"},
+    {"name": "最近更新时间", "type": "datetime"},
+    {"name": "首次推送时间", "type": "datetime"},
+    {"name": "最近推送时间", "type": "datetime"},
+    {"name": "推送次数", "type": "number"},
+    {"name": "最近推送批次ID", "type": "text"},
+    {"name": "推送消息ID", "type": "text"},
+]
 
-def plan(payload: Any) -> dict[str, Any]:
+SCHEMAS: dict[str, tuple[list[dict[str, Any]], str]] = {
+    "legacy": (REQUIRED_FIELDS, "线索ID"),
+    "pool": (POOL_MAIN_FIELDS, "唯一去重键"),
+}
+
+
+def plan(payload: Any, schema: str = "legacy") -> dict[str, Any]:
+    if schema not in SCHEMAS:
+        raise SchemaGuardError(f"unsupported schema: {schema!r}")
+    required_fields, primary_name = SCHEMAS[schema]
     if not isinstance(payload, dict) or set(payload) != {"fields"}:
         raise SchemaGuardError('input must be an object with only "fields"')
     live = payload.get("fields")
@@ -129,7 +195,7 @@ def plan(payload: Any) -> dict[str, Any]:
 
     missing: list[dict[str, Any]] = []
     incompatible: list[dict[str, Any]] = []
-    for spec in REQUIRED_FIELDS:
+    for spec in required_fields:
         name = spec["name"]
         live_field = live_by_name.get(name)
         if live_field is None:
@@ -157,9 +223,11 @@ def plan(payload: Any) -> dict[str, Any]:
                     "reason": "missing_options",
                 })
 
-    primary_ok = "线索ID" in live_by_name and live_by_name["线索ID"]["type"] == "text"
+    primary_ok = primary_name in live_by_name and live_by_name[primary_name]["type"] == "text"
     return {
         "ok": not missing and not incompatible and primary_ok,
+        "schema": schema,
+        "primary_field": primary_name,
         "primary_field_ok": primary_ok,
         "missing_fields": missing,
         "add_plan": missing,  # add-only: create exactly these fields with these types/options
@@ -176,9 +244,18 @@ def fixture_full() -> dict[str, Any]:
     ]}
 
 
+def fixture_pool_full() -> dict[str, Any]:
+    return {"fields": [
+        {**{k: v for k, v in spec.items() if k != "primary"},
+         "options": list(spec.get("options", []))}
+        for spec in POOL_MAIN_FIELDS
+    ]}
+
+
 def self_test() -> None:
     result = plan(fixture_full())
     assert result["ok"] is True and result["primary_field_ok"] is True
+    assert result["schema"] == "legacy" and result["primary_field"] == "线索ID"
     assert result["missing_fields"] == [] and result["incompatible_fields"] == []
 
     # Legacy v14 Base: the five v15 unlock fields are absent.
@@ -238,18 +315,48 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError(f"unsafe input was not rejected: {bad}")
+
+    # Unified lead pool schema.
+    pool = plan(fixture_pool_full(), schema="pool")
+    assert pool["ok"] is True and pool["primary_field_ok"] is True
+    assert pool["primary_field"] == "唯一去重键"
+
+    # A pool missing identity/unlock columns gets an add-only plan.
+    pool_partial = {"fields": [f for f in fixture_pool_full()["fields"]
+                               if f["name"] not in ("企业键", "来源", "是否解锁")]}
+    pool_result = plan(pool_partial, schema="pool")
+    assert pool_result["ok"] is False
+    assert [f["name"] for f in pool_result["add_plan"]] == ["企业键", "来源", "是否解锁"]
+    source_spec = next(f for f in pool_result["add_plan"] if f["name"] == "来源")
+    assert source_spec["type"] == "single_select" and source_spec["options"] == ["AI猎客"]
+
+    # The pool primary field is 唯一去重键; 线索ID alone does not satisfy it.
+    pool_no_primary = {"fields": [f for f in fixture_pool_full()["fields"]
+                                  if f["name"] != "唯一去重键"]}
+    pool_primary = plan(pool_no_primary, schema="pool")
+    assert pool_primary["primary_field_ok"] is False and pool_primary["ok"] is False
+
+    # An unknown schema name is rejected.
+    try:
+        plan(fixture_pool_full(), schema="unknown")
+    except SchemaGuardError:
+        pass
+    else:
+        raise AssertionError("unknown schema was not rejected")
     print("base_schema_guard self-test: ok")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("plan", "self-test"))
+    parser.add_argument("--schema", choices=sorted(SCHEMAS), default="legacy",
+                        help="approved schema to diff against (default: legacy)")
     args = parser.parse_args()
     if args.command == "self-test":
         self_test()
         return 0
     try:
-        result = plan(json.load(sys.stdin))
+        result = plan(json.load(sys.stdin), schema=args.schema)
     except (SchemaGuardError, json.JSONDecodeError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

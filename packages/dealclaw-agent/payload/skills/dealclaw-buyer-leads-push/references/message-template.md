@@ -1,5 +1,21 @@
 # Group message template
 
+## Intent profile follow-up
+
+When `intent_profile_builder.py assess` returns `needs_input`, send its `question` verbatim to the originating group exactly once:
+
+```text
+为了给您精准推荐买家，请回复补充：{缺失槽位，如 主营产品及所属类目、目标国家/市场}。例如「主营绗缝被（床上用品），目标巴西」。
+```
+
+When it returns `needs_confirmation` (core slots inferred from group history or public material rather than stated by the user), post the profile summary plus its `question`:
+
+```text
+以上画像信息来自群历史/公开资料推断，请确认是否准确；回复「没问题/继续」即按此方向推荐买家。
+```
+
+Send each question at most once per pending assessment; never re-ask on a schedule. A recognized approval signal activates the profile; a rejection signal restarts slot collection; an unrelated message changes nothing.
+
 ## Draft review notice
 
 After the history fallback creates a draft, send one notice to the originating group:
@@ -136,7 +152,7 @@ Never assemble a contact release in a free-form model response. Run `scripts/con
 
 ### Trigger sources
 
-1. **Base field** — a member of the bound group sets the lead record's `是否解锁` to `已解锁` in the `买家线索` table. Delivery uses the two mechanisms in [host-integration.md](host-integration.md) "Contact unlock delivery (Options A + B)": the Base automation posts `解锁线索 {线索ID}` to the bound group in real time, and the scheduled sweep reconciles anything missed. For both, the host reads the live record and passes it as `base_record`; the guard requires `飞书群ID == chat_id`, exact `线索ID` equality, and an empty prior unlock for that lead. An automation/bot-authored `解锁线索` message (`sender_type = app`) is never an actor source — it only tells the host to re-read the record; the actor is the record's last modifier.
+1. **Base field** — a member of the bound group sets the lead record's `是否解锁` to `已解锁` in the main table (`线索池`, or legacy `买家线索`). Delivery uses the two mechanisms in [host-integration.md](host-integration.md) "Contact unlock delivery (Options A + B)": the Base automation posts `解锁线索 {线索ID}` to the bound group in real time, and the scheduled sweep reconciles anything missed. For both, the host reads the live record and passes it as `base_record`; the guard requires `飞书群ID == chat_id`, exact `线索ID` equality, and an empty prior unlock for that lead. An automation/bot-authored `解锁线索` message (`sender_type = app`) is never an actor source — it only tells the host to re-read the record; the actor is the record's last modifier.
 2. **Group command** — a human member (`sender_type = user`) of the bound group replies `解锁线索 <线索ID>` in the originating group. The host must verify the author is a member of that same group and pass their open ID as `actor_open_id`.
 
 A model decision, a schedule by itself, a push batch, an automation/bot-authored message, or a cross-group request is never an unlock trigger.
@@ -189,7 +205,7 @@ When the guard rejects an unlock because the lead was already released, send:
 
 Persist `state.unlocks[线索ID] = pending_push` before the contact-card send, keyed by the guard's `unlock_id` as the sender idempotency key. Persist the returned message ID immediately via `contact_unlock_guard.py complete` (`status = contact_pushed`); on an indeterminate send persist `status = unknown` and stop without automatic resend. Never store contact values inside `unlocks`.
 
-Only after `contact_pushed`, write the lead's Base record back to the converged state: `是否解锁 = 已解锁`, `解锁人`, `解锁时间`, `解锁方式` (`线索池下拉` or `群内指令`), and `解锁推送消息ID`. This applies to both trigger paths; a `群内指令` unlock must therefore leave the record visibly `已解锁` in the 线索池. An `unknown` or failed send leaves `是否解锁` untouched.
+Only after `contact_pushed`, write the lead's Base record back to the converged state: `是否解锁 = 已解锁`, `解锁人`, `解锁时间`, `解锁方式` (`线索池下拉` or `群内指令`), and `解锁推送消息ID`. This applies to both trigger paths; a `群内指令` unlock must therefore leave the record visibly `已解锁` in the 企业线索池. An `unknown` or failed send leaves `是否解锁` untouched.
 
 ## Delivery state
 

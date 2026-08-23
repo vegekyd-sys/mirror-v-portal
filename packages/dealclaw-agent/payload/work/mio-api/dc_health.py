@@ -21,7 +21,7 @@ from pathlib import Path
 from collections import defaultdict
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-KB_DIR = DATA_DIR / "kb"
+KB_DIR = Path(__file__).resolve().parents[2] / "data" / "memory"
 ENGINE_DIR = Path(__file__).resolve().parent
 
 ENGINES = [
@@ -89,7 +89,7 @@ def check_kb():
         results.append(("⬜", "KB目录", "不存在, 尚未初始化"))
         return results
 
-    kb_files = list(KB_DIR.glob("*.json"))
+    kb_files = list(KB_DIR.glob("*/kb.json"))
     if not kb_files:
         results.append(("⬜", "KB", "无企业知识库"))
         return results
@@ -97,7 +97,7 @@ def check_kb():
     for path in kb_files:
         try:
             kb = json.loads(path.read_text())
-            enterprise = kb.get("enterprise", path.stem)
+            enterprise = kb.get("enterprise", path.parent.name)
             modules = {
                 "profile": bool(kb.get("profile", {}).get("name")),
                 "persona": bool(kb.get("persona", {}).get("version")),
@@ -115,7 +115,7 @@ def check_kb():
                 f"IQ{modules['iq_memory']}次"
             ))
         except Exception as e:
-            results.append(("❌", f"KB: {path.stem}", str(e)[:60]))
+            results.append(("❌", f"KB: {path.parent.name}", str(e)[:60]))
     return results
 
 
@@ -142,10 +142,10 @@ def check_consistency():
         enterprises_in_leads = set(l.get("enterprise", "") for l in leads if l.get("enterprise"))
         kb_enterprises = set()
         if KB_DIR.exists():
-            for p in KB_DIR.glob("*.json"):
+            for p in KB_DIR.glob("*/kb.json"):
                 kb = json.loads(p.read_text())
                 if kb.get("persona", {}).get("version"):
-                    kb_enterprises.add(kb.get("enterprise", p.stem))
+                    kb_enterprises.add(kb.get("enterprise", p.parent.name))
         orphaned = enterprises_in_leads - kb_enterprises
         if orphaned:
             results.append(("⚠️", f"一致性", f"{len(orphaned)} 个企业有线索但无画像"))

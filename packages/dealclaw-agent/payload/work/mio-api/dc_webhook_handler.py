@@ -33,7 +33,7 @@ SIGNING_SECRET = os.getenv("RESEND_SIGNING_SECRET", "")
 
 # 代理邮箱 → 企业映射
 PROXY_MAP = {
-    "thia@mail.dealclaw.io": {"enterprise": "meorient.com", "owner": "田耕郡", "open_id": "ou_3fe4922d138f37c5a9fbd6ce7aa89570"},
+    "agent@example.com": {"enterprise": "meorient.com", "owner": "田耕郡", "open_id": "<OPEN_ID>"},
 }
 
 def _now():
@@ -127,7 +127,7 @@ def match_lead(from_email, to_email):
     buyer_domain = from_email.split("@")[1].lower() if "@" in from_email else ""
     buyer_name = from_email.split("@")[0] if "@" in from_email else ""
     proxy = to_email.lower().strip()
-    
+
     proxy_info = PROXY_MAP.get(proxy, {})
     return {
         "buyer_email": from_email,
@@ -145,16 +145,16 @@ def iq_decide(parsed_email, lead_info):
     """判断是否需要自动回复以及回复内容"""
     body = (parsed_email.get("text", "") or "").lower()
     subject = parsed_email.get("subject", "").lower()
-    
+
     # 自动回复关键词
     auto_reply_triggers = [
         ("catalog", "catalogue", "产品目录", "price list", "quotation", "报价",
          "spec", "specification", "规格", "datasheet", "brochure"),
     ]
-    
+
     # 拒收/退订
     unsubscribe = ["unsubscribe", "退订", "stop", "remove"]
-    
+
     for word in unsubscribe:
         if word in body or word in subject:
             return {
@@ -162,7 +162,7 @@ def iq_decide(parsed_email, lead_info):
                 "reason": f"买家请求退订: {word}",
                 "auto_reply": None,
             }
-    
+
     # 需要材料 → 自动回复
     requested = []
     for trigger_group in auto_reply_triggers:
@@ -170,14 +170,14 @@ def iq_decide(parsed_email, lead_info):
             if t in body or t in subject:
                 requested.append(trigger_group[0])
                 break
-    
+
     if requested:
         return {
             "action": "auto_reply",
             "reason": f"买家索要资料: {', '.join(requested)}",
             "auto_reply": f"<p>Hi,</p><p>Thanks for your interest! Our product catalog and specifications are available here: <a href=\"https://solarunis.com\">Solarunis.com</a></p><p>Feel free to ask any questions.</p><p>Best,<br>Thia</p>",
         }
-    
+
     # 一般询盘 → 通知人工跟进
     return {
         "action": "notify_human",
@@ -190,38 +190,38 @@ def iq_decide(parsed_email, lead_info):
 def inbound():
     """Receive Resend webhook events"""
     payload = request.get_data(as_text=True)
-    
+
     # 签名验证
     signature = request.headers.get("Resend-Signature", "")
     timestamp = request.headers.get("Resend-Timestamp", "")
     if not verify_signature(payload, signature, timestamp):
         return jsonify({"error": "invalid signature"}), 403
-    
+
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
         return jsonify({"error": "invalid JSON"}), 400
-    
+
     event_type = data.get("type", "unknown")
     print(f"[{_now()}] Event: {event_type}")
-    
+
     # 只处理 inbound email 事件
     if event_type not in ("email.received", "inbound", "email.inbound"):
         print(f"  Skipping event type: {event_type}")
         return jsonify({"status": "skipped", "reason": f"event type: {event_type}"}), 200
-    
+
     # 解析邮件
     email = parse_email_content(data)
     print(f"  From: {email['from']}")
     print(f"  To: {email['to']}")
     print(f"  Subject: {email['subject']}")
-    
+
     # 匹配线索
     lead = match_lead(email["from"], email["to"])
     if not lead["matched"]:
         print(f"  ⚠️  No proxy match for {email['to']}")
         return jsonify({"status": "unmatched", "to": email["to"]}), 200
-    
+
     # IQ 决策
     decision = iq_decide(email, lead)
     result = {
@@ -230,13 +230,13 @@ def inbound():
         "decision": decision,
         "timestamp": _now(),
     }
-    
+
     notify_msg = ""
-    
+
     if decision["action"] == "unsubscribe":
         print(f"  🚫 Unsubscribe from {lead['buyer_email']}")
         notify_msg = f"🚫 **退订通知**\n\n{lead['buyer_email']} 请求退订。\n已停止自动发送。"
-    
+
     elif decision["action"] == "auto_reply":
         from_addr = f"Thia <{lead['proxy_email']}>"
         reply_result = send_auto_reply(
@@ -250,7 +250,7 @@ def inbound():
             f"原因: {decision['reason']}\n"
             f"Resend ID: {reply_result.get('id', '?')}"
         )
-    
+
     elif decision["action"] == "notify_human":
         print(f"  📩 Human follow-up needed")
         body_preview = (email.get("text", "") or "")[:200]
@@ -261,12 +261,12 @@ def inbound():
             f"主题: {email['subject']}\n"
             f"内容: {body_preview}..."
         )
-    
+
     # 飞书通知
     if notify_msg and lead.get("owner_open_id"):
-        chat_id = "oc_85133ad5814bc9d17cd53f649acc091b"  # V x 格格群
+        chat_id = "<GROUP_ID>"  # V x 格格群
         send_feishu_notify(chat_id, notify_msg)
-    
+
     print(f"  Result: {json.dumps(result, ensure_ascii=False)[:300]}")
     return jsonify(result), 200
 

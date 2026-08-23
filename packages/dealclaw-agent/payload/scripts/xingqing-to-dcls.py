@@ -37,7 +37,7 @@ LEADS_FILE = os.path.join(MIO_API, "data", "leads.json")
 sys.path.insert(0, MIO_API)
 
 # ── Feishu 通知目标 ───────────────────────────────────────
-NOTIFY_GROUP = "chat:oc_f5d14db9efca0bb049d36a0f4e8a9a88"  # 小元 x 星擎线索
+NOTIFY_GROUP = "chat:<GROUP_ID>"  # 小元 x 星擎线索
 
 # ── 字段映射 ──────────────────────────────────────────────
 def map_xingqing_to_dcls(clue: dict, enterprise: str) -> dict:
@@ -78,7 +78,7 @@ def map_xingqing_to_dcls(clue: dict, enterprise: str) -> dict:
 
 
 # ── 星擎 API 封装 ─────────────────────────────────────────
-def call_clue_agent(cmd: str, open_id: str = "ou_9737509fa952d8427acc05454c47fb99", *args) -> dict:
+def call_clue_agent(cmd: str, open_id: str = "<OPEN_ID>", *args) -> dict:
     """调用 clue-agent.js 返回 JSON"""
     argv = ["node", CLUE_AGENT, cmd, open_id] + list(args)
     try:
@@ -97,7 +97,7 @@ def call_clue_agent(cmd: str, open_id: str = "ou_9737509fa952d8427acc05454c47fb9
 
 def pull_xingqing_leads(page: int = 0, size: int = 50) -> list[dict]:
     """拉取星擎已验证/精品线索"""
-    result = call_clue_agent("list", "ou_9737509fa952d8427acc05454c47fb99", str(page), str(size))
+    result = call_clue_agent("list", "<OPEN_ID>", str(page), str(size))
     if not result.get("ok"):
         print(f"[星擎] 拉取失败: {result.get('error')}", file=sys.stderr)
         return []

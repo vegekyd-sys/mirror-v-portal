@@ -13,81 +13,143 @@ from __future__ import annotations
 
 
 def _signals(company_id: str) -> list[dict]:
-    from dc_email_controller.dc_email_signals import list_signals
-    try:
-        return list_signals(company_id)
-    except Exception:
-        return []
+    from dc_memory_data import read_signals
+    return read_signals(company_id)
 
 
 def _outbounds(company_id: str) -> list[dict]:
-    from email_gateway.store import EmailStore
-    try:
-        return EmailStore().list_outbound_records(company_id=company_id)
-    except Exception:
-        return []
+    from dc_memory_data import read_emails
+    return [e for e in read_emails(company_id) if e.get("direction") == "out"]
 
 
 def _inbounds(company_id: str) -> list[dict]:
-    from email_gateway.store import EmailStore
-    try:
-        return EmailStore().list_inbound_records(company_id=company_id)
-    except Exception:
-        return []
+    from dc_memory_data import read_emails
+    return [e for e in read_emails(company_id) if e.get("direction") == "in"]
 
 
 def _leads(company_id: str) -> list[dict]:
-    try:
-        from dc_ls_store import LeadStore
-        ls = LeadStore()
-        return [l for l in getattr(ls, "_leads", [])
-                if (l.get("enterprise") or "") in (company_id, "", "testco")]
-    except Exception:
-        return []
+    from dc_memory_data import read_leads_internal
+    return read_leads_internal(company_id)
 
 
 def _campaign(company_id: str):
-    try:
-        from dc_campaign import get_active_campaign
-        return get_active_campaign(company_id)
-    except Exception:
-        return None
+    from dc_memory_data import read_campaign
+    return read_campaign(company_id)
+
+
+def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str) -> bool:
+    for ib in inbounds:
+        if ib.get("binding_status") != "bound":
+            continue
+        if thread_id and ib.get("thread_id") == thread_id:
+            return True
+        if contact_id and ib.get("contact_id") == contact_id \
+                and (ib.get("received_at") or "") >= (sent_at or ""):
+            return True
+    return False
+
+
+def _review_candidates(company_id: str) -> list[dict]:
+    """第三轮 delivered 仍无回复的 outbound（策略复盘候选），从 memory emails 重算。"""
+    out = _outbounds(company_id)
+    inb = _inbounds(company_id)
+    result = []
+    for ob in out:
+        if ob.get("provider_status") != "delivered":
+            continue
+        if int(ob.get("touch_number", 0) or 0) < 3:
+            continue
+        if _has_reply(inb, ob.get("thread_id") or ob.get("local_message_id", ""),
+                      ob.get("contact_id", ""), ob.get("sent_at") or ob.get("created_at", "")):
+            continue
+        result.append({"resend_id": ob.get("resend_id", ""),
+                       "buyer_email": (ob.get("recipients") or [""])[0],
+                       "touch_number": ob.get("touch_number"),
+                       "campaign_id": ob.get("campaign_id", "")})
+    return result
 
 
 # ── 1. 触达漏斗 ──────────────────────────────────────────
+def _company_set(recipients, email_to_company) -> set:
+    """收件人邮箱 → 企业标识集合（公司名精确映射，无映射兑底用 domain）。"""
+    cs = set()
+    for r in (recipients or []):
+        e = str(r).strip().lower()
+        if "@" not in e:
+            continue
+        d = e.split("@")[-1]
+        if d.endswith(("dealclaw.io", "meorient.com")):
+            continue
+        cs.add(email_to_company.get(e, d))
+    return cs
+
+
 def build_funnel(company_id: str) -> dict:
-    out = _outbounds(company_id)
-    signals = _signals(company_id)
-    sent = len(out)
-    delivered = sum(1 for o in out if o.get("provider_status") == "delivered")
-    bounced = sum(1 for o in out if o.get("provider_status") == "bounced")
-    # 回复/有效询盘/会议意向：按唯一 source_message_id（回复 message_id）计数，
-    # 因为 Resend 接收路径生成信号而非 inbound bound 记录。
-    reply_ids = {s.get("source_message_id") for s in signals if s.get("source_message_id")
-                 and s.get("signal_type") in ("quote_request", "sample_request", "meeting_interest", "missing_info")}
-    inquiry_ids = {s.get("source_message_id") for s in signals if s.get("source_message_id")
-                   and s.get("signal_type") in ("quote_request", "sample_request")}
-    meeting_ids = {s.get("source_message_id") for s in signals if s.get("source_message_id")
-                   and s.get("signal_type") == "meeting_interest"}
+    """触达漏斗（企业数口径，去重）+ total_emails（邮件总数）。"""
+    import re
+    from dc_memory_data import read_emails, read_signals, read_leads
+    out = [e for e in read_emails(company_id) if e.get("direction") == "out"]
+    signals = read_signals(company_id)
+    # 邮箱 -> 公司名 映射（线索池公司名 = 企业唯一标识）
+    email_to_company = {}
+    for l in read_leads(company_id):
+        c = (l.get("company") or "").strip()
+        if not c:
+            continue
+        for e in re.findall(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", str(l.get("contact", ""))):
+            email_to_company.setdefault(e.lower(), c)
+    # outbound 企业去重 + id→企业映射（供信号关联）
+    id_to_companies: dict[str, set] = {}
+    sent: set = set()
+    delivered: set = set()
+    bounced: set = set()
+    for o in out:
+        cs = _company_set(o.get("recipients"), email_to_company)
+        sent |= cs
+        st = o.get("provider_status", "")
+        if st == "delivered":
+            delivered |= cs
+        elif st == "bounced":
+            bounced |= cs
+        for iid in (o.get("thread_id"), o.get("local_message_id"), o.get("resend_id"), o.get("smtp_message_id")):
+            if iid:
+                id_to_companies.setdefault(iid, set()).update(cs)
+    # 回复/有效询盘/会议意向：按企业去重（信号关联 outbound 后取收件人企业）
+    replied: set = set()
+    inquiry: set = set()
+    meeting: set = set()
+    for s in signals:
+        st = s.get("signal_type")
+        if st not in ("quote_request", "sample_request", "meeting_interest", "missing_info"):
+            continue
+        cs = set()
+        for iid in (s.get("thread_id"), s.get("source_resend_id"), s.get("source_message_id")):
+            if iid and iid in id_to_companies:
+                cs |= id_to_companies[iid]
+        if st == "meeting_interest":
+            meeting |= cs
+        elif st in ("quote_request", "sample_request"):
+            inquiry |= cs
+        replied |= cs
     return {
-        "sent": sent,
-        "delivered": delivered,
-        "replied": len(reply_ids),
-        "valid_inquiry": len(inquiry_ids),
-        "meeting_intent": len(meeting_ids),
-        "bounced": bounced,
+        "sent": len(sent),
+        "delivered": len(delivered),
+        "replied": len(replied),
+        "valid_inquiry": len(inquiry),
+        "meeting_intent": len(meeting),
+        "bounced": len(bounced),
+        "total_emails": len(out),
     }
 
 
 # ── 2. 当前跟进 ──────────────────────────────────────────
 def build_followup_status(company_id: str) -> dict:
-    from dc_email_controller.dc_reply_draft import list_drafts
-    from dc_email_controller.dc_followup import list_strategy_review_candidates
-    drafts = list_drafts(company_id=company_id, status="pending_confirmation")
+    from dc_memory_data import read_drafts
+    drafts = [d for d in read_drafts(company_id) if d.get("status") == "pending_confirmation"]
     followup2 = [d for d in drafts if d.get("category") == "followup" and d.get("touch_number") == 2]
     followup3 = [d for d in drafts if d.get("category") == "followup" and d.get("touch_number") == 3]
     reply_drafts = [d for d in drafts if d.get("category") != "followup"]
-    paused = list_strategy_review_candidates(company_id)
+    paused = _review_candidates(company_id)
     return {
         "pending_drafts": len(drafts),
         "second_round": len(followup2),
@@ -190,8 +252,7 @@ def build_buyer_status(company_id: str) -> list[dict]:
 def build_strategy_effect(company_id: str) -> dict:
     f = build_funnel(company_id)
     camp = _campaign(company_id)
-    from dc_email_controller.dc_followup import list_strategy_review_candidates
-    paused = list_strategy_review_candidates(company_id)
+    paused = _review_candidates(company_id)
     delivery_rate = round(f["delivered"] / f["sent"] * 100, 1) if f["sent"] else 0
     reply_rate = round(f["replied"] / f["delivered"] * 100, 1) if f["delivered"] else 0
     return {
@@ -217,7 +278,7 @@ def build_dashboard(company_id: str) -> dict:
     }
 
 
-_DASHBOARD_QUERIES = ["看一下邮件情况", "邮件情况", "展会进展", "邮件漏斗", "哪些买家需要跟进", "当前营销效果", "营销效果", "邮件看板", "看板", "触达漏斗"]
+_DASHBOARD_QUERIES = ["看一下邮件情况", "邮件情况", "展会进展", "邮件漏斗", "哪些买家需要跟进", "当前营销效果", "营销效果", "邮件看板", "看板", "触达漏斗", "线索池", "线索看板", "在跟的买家", "买家线索"]
 
 
 def detect_dashboard_intent(text: str) -> bool:
@@ -255,6 +316,134 @@ def format_dashboard(d: dict) -> str:
         lines.append("|---|---|---|---|---|---|---|")
         for b in buyers:
             lines.append(f"| {b['company']} | {b['contact']} | {b['country']} | {b['touch_number']} | {b['last_action']} | {b['next_action']} | {b['status_reason']} |")
+    return "\n".join(lines)
+
+
+# ── 5. 线索池看板 ──────────────────────────────────────────
+# 线索池字段清单（说明线索池有哪些字段；展示规则见 format_lead_pool_dashboard）
+LEAD_POOL_FIELDS = [
+    ("company", "公司名"),
+    ("website", "官网"),
+    ("country", "国家"),
+    ("buyer_type", "买家类型"),
+    ("recommend", "推荐理由"),
+    ("contact", "联系人"),
+    ("match_product", "匹配产品"),
+    ("stage", "阶段"),
+    ("source", "来源"),
+    ("hot_cold", "冷热"),
+]
+
+
+def build_lead_pool_dashboard(company_id: str, backfill_first: bool = True) -> dict:
+    """线索池看板：读 memory 的 leads.json（权威数据），只读。
+
+    backfill_first=True 时先回写触达状态（发送/回复 → 阶段）并 re-sync memory，
+    保证看板反映最新触达状态。回写失败不影响看板生成。
+    """
+    if backfill_first:
+        try:
+            from dc_touch_backfill import backfill
+            from dc_memory_data import sync_leads_to_memory
+            backfill(company_id)
+            sync_leads_to_memory(company_id)
+        except Exception:
+            pass
+    from dc_memory_data import read_leads
+    leads = read_leads(company_id)
+    company_name = company_id
+    bitable_url = ""
+    try:
+        from dc_company_registry import CompanyRegistry
+        entry = CompanyRegistry().get(company_id)
+        if entry:
+            company_name = entry.get("company_name") or company_id
+            bitable_url = entry.get("bitable_url") or ""
+    except Exception:
+        pass
+    if not leads:
+        return {"company_id": company_id, "company_name": company_name,
+                "bitable_url": bitable_url, "total": 0, "rows": [],
+                "error": "memory 无线索数据（先 sync-leads 归集）"}
+    return {"company_id": company_id, "company_name": company_name,
+            "bitable_url": bitable_url, "total": len(leads), "rows": leads}
+
+
+def _website_link(site) -> str:
+    """把官网值转成可跳转的 markdown 链接（统一 https）。
+
+    官网值可能是纯域名（cafecalupoh.mx），也可能已经是 markdown 链接格式
+    （飞书 style=url 后自动包装成 [域名](http://域名)），这里统一解析并 https。
+    """
+    import re
+    site = (site or "").strip()
+    if not site:
+        return "—"
+    m = re.match(r"^\[(.*)\]\((.*)\)$", site)
+    if m:
+        text = m.group(1).strip()
+        url = m.group(2).strip()
+    else:
+        text = site
+        url = site
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
+    elif not url.startswith("http"):
+        url = "https://" + url
+    return f"[{text}]({url})"
+
+
+def format_lead_pool_dashboard(d: dict) -> str:
+    """线索池展示（遵循 AGENTS.md 展示规则）。
+
+    ≤5 条：气泡逐条（公司名/官网可跳转/联系人/推荐理由）+ 底部表格链接。
+    >5 条：气泡总结（类型/国家分布 + 优先跟进）+ 底部表格链接。
+    """
+    title = d.get("company_name") or d.get("company_id", "")
+    total = d.get("total", 0)
+    rows = d.get("rows", [])
+    bitable_url = d.get("bitable_url", "")
+
+    lines = [f"📋 线索池 · {title}（共 {total} 条）", ""]
+    if d.get("error"):
+        lines.append(f"⚠️ {d['error']}")
+        return "\n".join(lines)
+    if not rows:
+        lines.append("暂无数据")
+        return "\n".join(lines)
+
+    if total <= 5:
+        for i, r in enumerate(rows, 1):
+            site_link = _website_link(r.get("website"))
+            head = f"{i}. {r.get('company','')}"
+            meta = " · ".join(x for x in [r.get('country',''), r.get('buyer_type','')] if x)
+            if meta:
+                head += f" · {meta}"
+            lines.append(head)
+            lines.append(f"   🌐 {site_link}")
+            contact = (r.get("contact") or "").strip()
+            if contact:
+                lines.append(f"   👤 {contact}")
+            rec = (r.get("recommend") or "").strip()
+            if rec:
+                lines.append(f"   💡 {rec}")
+            lines.append("")
+    else:
+        from collections import Counter
+        types = Counter((r.get("buyer_type") or "未知").strip() or "未知" for r in rows)
+        countries = Counter((r.get("country") or "未知").strip() or "未知" for r in rows)
+        type_str = "、".join(f"{t} {c}" for t, c in types.most_common(3))
+        country_str = "、".join(f"{c} {n}" for c, n in countries.most_common(3))
+        lines.append(f"买家类型：{type_str}；国家：{country_str}")
+        lines.append("")
+        lines.append("优先跟进（推荐理由较强者）：")
+        for r in rows[:3]:
+            rec = (r.get("recommend") or "").strip()
+            lines.append(f"· {r.get('company','')}（{rec}）")
+
+    if bitable_url:
+        lines.append("")
+        lines.append(f"📋 完整线索池：[打开飞书表格]({bitable_url})")
     return "\n".join(lines)
 
 

@@ -99,7 +99,7 @@ Agent: "No problem! We can pick this up anytime."
 ```
 Session 1: Answered 4 questions, got interrupted
 [3 days pass]
-Session 2: "Hey! Last time we were getting to know each other. 
+Session 2: "Hey! Last time we were getting to know each other.
            Want to continue, or should I just ask occasionally?"
 ```
 
@@ -141,7 +141,7 @@ When status changes to "complete":
    - You're working on [Project] toward [Goal]
    - You prefer [communication style]
    - Key people: [list]
-   
+
    Anything I got wrong or missed?"
    ```
 
@@ -151,7 +151,7 @@ When status changes to "complete":
    - Check in during heartbeats
    - Look for ways to help without being asked
    - Build things I think you'll find useful
-   
+
    I'll always check before doing anything external."
    ```
 

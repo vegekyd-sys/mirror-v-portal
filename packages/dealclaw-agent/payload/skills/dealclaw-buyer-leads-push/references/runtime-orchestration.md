@@ -6,10 +6,10 @@ Use the bundled executable guard and pipeline for every preview and scheduled ru
 
 1. Obtain exactly one invocation `chat_id`.
 2. Load `dealclaw-buyer-leads-push/v10/<chat_id>` directly and capture its revision.
-3. Require current formal Docx and Base permission proofs whose `permission_chat_id` and token fingerprints match this state; refresh them from live readback when the host policy requires revalidation.
-4. Read the formal Docx directly through `binding.knowledge_doc_token`; never search by title.
-5. Parse the scoring projection from that fresh read and compute its canonical `profile_hash` using the binding-time canonicalization.
-6. Supply the invocation, v10 state, formal token/title/profile hash, fixed `run_at`, and timezone to `scoped_lead_pipeline.py run`.
+3. Require current formal Docx and Base permission proofs whose `permission_chat_id` and token fingerprints match this state; refresh them from live readback when the host policy requires revalidation. A `user_intent_profile` binding has no formal document — require only the Base proof.
+4. For document-bound state, read the formal Docx directly through `binding.knowledge_doc_token`; never search by title. For intent-bound state (`document_origin = user_intent_profile`), pass `formal_document = null` and take the profile from state (`source_kind = user_intent` with a valid `intent_confirmation`).
+5. Parse the scoring projection from that fresh read (or reuse the intent profile's stored projection) and compute its canonical `profile_hash` using the binding-time canonicalization.
+6. Supply the invocation, v10 state, formal token/title/profile hash (or the intent profile hash), fixed `run_at`, and timezone to `scoped_lead_pipeline.py run`.
 
 The pipeline invokes `tenant_run_guard.py` before network retrieval. The host may also run the guard separately for a redacted preview.
 
@@ -17,15 +17,17 @@ The pipeline invokes `tenant_run_guard.py` before network retrieval. The host ma
 
 ```text
 invocation_chat_id = state.chat_id = binding.chat_id = profile.source_chat_id
-binding.knowledge_doc_token = formal_document.token = profile.source_doc_token
-binding.company_name + "｜企业知识库" = formal_document.title
-formal_document.profile_hash = profile.normalized_hash
+binding.knowledge_doc_token = formal_document.token = profile.source_doc_token   # document-bound only
+binding.company_name + "｜企业知识库" = formal_document.title                      # document-bound only
+formal_document.profile_hash = profile.normalized_hash                            # document-bound only
 resource_permissions.permission_chat_id = invocation_chat_id
-resource_permissions.formal_document.token_fingerprint = fingerprint(binding.knowledge_doc_token)
+resource_permissions.formal_document.token_fingerprint = fingerprint(binding.knowledge_doc_token)   # document-bound only
 resource_permissions.base.token_fingerprint = fingerprint(binding.base_app_token)
 ```
 
-Also require v10 active state, valid origin/confirmation provenance, non-empty Base tokens, one non-placeholder `binding.tradechina_supplier_id`, and `chat-isolation-v3` proofs showing both exact-group edit access and DealClaw owner/full-access management for both active resources. Any mismatch is terminal.
+For `user_intent_profile` bindings the document-bound equalities do not apply; instead require `binding.knowledge_doc_token = ""`, no `formal_document` permission proof, `profile.source_kind = user_intent`, an empty `profile.source_doc_token`, and a complete `profile.intent_confirmation`.
+
+Also require v10 active state, valid origin/confirmation provenance, non-empty Base tokens, one non-placeholder `binding.tradechina_supplier_id`, and `chat-isolation-v3` proofs showing both exact-group edit access and DealClaw owner/full-access management for every active resource. Any mismatch is terminal.
 
 ## Retrieval and scoring
 
@@ -59,7 +61,7 @@ For an immediate post-confirmation run, call `post_confirmation_flow.py complete
 
 A contact unlock is an event-driven flow, never part of a scheduled matching run, and never triggered by a model decision. Accepted triggers are exactly:
 
-1. A live `买家线索` record read showing `是否解锁 = 已解锁`, `飞书群ID = invocation chat_id`, and an empty `解锁推送消息ID` (`trigger = base_field`).
+1. A live main-table (`线索池`, or legacy `买家线索`) record read showing `是否解锁 = 已解锁`, `飞书群ID = invocation chat_id`, and an empty `解锁推送消息ID` (`trigger = base_field`).
 2. A verified same-group member command `解锁线索 <线索ID>` (`trigger = group_command`).
 
 Enforced equalities for every unlock:

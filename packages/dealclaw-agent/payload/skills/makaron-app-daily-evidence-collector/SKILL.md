@@ -67,7 +67,7 @@ The collector must not send messages, edit cards, trigger Makaron, mutate regist
 node scripts/makaron-card-runner/collect-daily-evidence.cjs \
   --date 2026-06-15 \
   --out work/makaron-daily-evidence/2026-06-15 \
-  --chat oc_d0fdd37a3b118472b0af71a04566d693
+  --chat <GROUP_ID>
 ```
 
 Options:

@@ -6,7 +6,7 @@ Both endpoints use `POST` with JSON bodies.
 
 ### Countries
 
-`https://micro.tradechina.com/blade-purchaser/buyerLeadsPlaza/countries`
+`https://micro.tradechina.com/blade-system/api/getAllCountry.json`
 
 Request body:
 
@@ -16,13 +16,15 @@ Request body:
 
 Expected root keys: `code`, `success`, `data`, `msg`.
 
-Each `data` item contains:
+Each `data` item carries many fields; use only:
 
-- `countryId`
+- `id` → country ID passed to the buyer-leads `page` endpoint as `countryId`
 - `enName`
 - `cnName`
 
-Resolve a knowledge-document market name by exact trimmed, case-insensitive match against `cnName` or `enName`. Do not use fuzzy country matching. Cache the list for one daily run.
+Skip rows whose `isDeleted` is not `0`, and **deduplicate by `id`**: this dictionary returns one row per language per country (about four duplicate rows each), so exact matching without dedup produces false ambiguity errors.
+
+Resolve a knowledge-document market name by exact trimmed, case-insensitive match against `cnName` or `enName`. Do not use fuzzy country matching. Cache the list for one daily run. A curated alias map (for example `沙特` → `沙特阿拉伯`, `阿联酋` → `阿拉伯联合酋长国`) resolves common short names to their exact dictionary entry; aliases mapped to `None` are confirmed no-data countries and are skipped. A name absent from the live dictionary raises `CountryUnresolved`: the pipeline audits it in `unresolved_countries` and skips only that country's query jobs, never aborting the run for the remaining target countries. More than one exact match is ambiguous and remains fatal.
 
 ### Buyer leads
 

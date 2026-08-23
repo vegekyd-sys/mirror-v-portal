@@ -74,7 +74,7 @@ if [ -f "$CONFIG_FILE" ]; then
     else
         warn "Gateway may not be bound to loopback - check config"
     fi
-    
+
     # Check if Telegram uses pairing
     if grep -q '"dmPolicy".*"pairing"' "$CONFIG_FILE"; then
         pass "Telegram DM policy uses pairing"
@@ -92,7 +92,7 @@ if [ -f "AGENTS.md" ]; then
     else
         warn "AGENTS.md may be missing prompt injection defense"
     fi
-    
+
     if grep -qi "deletion\|confirm.*delet\|trash" "AGENTS.md"; then
         pass "AGENTS.md contains deletion confirmation rules"
     else
@@ -123,7 +123,7 @@ if [ -f ".gitignore" ]; then
     else
         fail ".credentials is NOT in .gitignore"
     fi
-    
+
     if grep -q "\.env" ".gitignore"; then
         pass ".env files are gitignored"
     else

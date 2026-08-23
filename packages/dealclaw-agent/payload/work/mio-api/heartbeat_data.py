@@ -10,7 +10,6 @@ heartbeat_data.py — DealClaw Heartbeat 数据写入层
         append_email_reply,
         upsert_lead_status,
         append_pending_reply,
-        init_company_profile,
     )
 """
 
@@ -250,112 +249,6 @@ def append_pending_reply(
 
 
 
-def append_company_profile(
-    *,
-    company_id: str = "",
-    company_name: str = "",
-    products: str = "",
-    target_markets: str = "",
-    buyer_types: str = "",
-    profile_version: str = "1",
-    confirmed_at: str = "",
-) -> None:
-    """企业画像确认后调用。幂等: company_id+profile_version 去重。"""
-    path = _MEMORY_ROOT / "company" / "profile.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 幂等检查
-    if path.exists():
-        existing = path.read_text(encoding="utf-8")
-        key = f"profile_version: {profile_version}"
-        if key in existing and f"company_id: {company_id}" in existing:
-            return  # 已存在，跳过
-
-    path.write_text(
-        f"# Company Profile\n\n"
-        f"company_id: {company_id}\n"
-        f"company_name: {company_name}\n"
-        f"products: {products}\n"
-        f"target_markets: {target_markets}\n"
-        f"buyer_types: {buyer_types}\n"
-        f"profile_version: {profile_version}\n"
-        f"confirmed_at: {confirmed_at or _now()}\n"
-        f"timezone: Asia/Shanghai\n",
-        encoding="utf-8",
-    )
-
-
-def append_company_basic_info(
-    *,
-    company_id: str = "",
-    company_name: str = "",
-    company_name_en: str = "",
-    website: str = "",
-    email: str = "",
-    phone: str = "",
-    whatsapp: str = "",
-    product_tags: str = "",
-    business_model: str = "",
-    founded: str = "",
-    employees: str = "",
-) -> None:
-    """从 supplier id（getBasicInfo）写入企业基本信息层。
-
-    与 append_company_profile（解析画像）分层：这里只存 supplier id 直接返回的
-    公司名/联系方式/产品标签等基础字段，不与 analyze-company 解析画像冲突。
-    幂等：company_id 相同则跳过。
-    """
-    if not company_id or not company_id.strip():
-        return
-    path = _MEMORY_ROOT / "company" / "profile.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 读取现有内容，合并「基本信息」段（不覆盖画像解析段）
-    if path.exists():
-        existing = path.read_text(encoding="utf-8")
-        if "## Basic Info" in existing and f"supplier_id: {company_id}" in existing:
-            return  # 已存在，跳过
-    else:
-        existing = "# Company Profile\n\n"
-
-    basic_block = (
-        "## Basic Info\n"
-        f"supplier_id: {company_id}\n"
-        f"company_name: {company_name}\n"
-        f"company_name_en: {company_name_en}\n"
-        f"website: {website}\n"
-        f"email: {email}\n"
-        f"phone: {phone}\n"
-        f"whatsapp: {whatsapp}\n"
-        f"product_tags: {product_tags}\n"
-        f"business_model: {business_model}\n"
-        f"founded: {founded}\n"
-        f"employees: {employees}\n"
-        f"updated_at: {_now()}\n"
-    )
-
-    if "## Basic Info" in existing:
-        # 替换已有的 basic info 段
-        import re as _re
-        existing = _re.sub(r"## Basic Info\n(?:.*\n)*?(?=\n\n|\Z)", basic_block.rstrip() + "\n", existing, count=1)
-    else:
-        existing = existing.rstrip() + "\n\n" + basic_block
-
-    path.write_text(existing, encoding="utf-8")
-
-
-def init_company_profile(
-    company_name: str = "",
-    tenant_id: str = "",
-    owner_user_id: str = "",
-    timezone: str = "Asia/Shanghai",
-) -> None:
-    """项目首次使用时调用一次。"""
-    append_company_profile(
-        company_id=tenant_id or "default",
-        company_name=company_name,
-        profile_version="1",
-    )
 
 
 # ── CLI 测试 ──────────────────────────────────────────────
@@ -364,7 +257,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("用法: python3 heartbeat_data.py <test|init>")
+        print("用法: python3 heartbeat_data.py <test>")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -400,11 +293,3 @@ if __name__ == "__main__":
         print("  ✅ pending-replies")
 
         print("\n[test] 数据写入函数验证完成（提醒脚本已移除）")
-
-    elif cmd == "init":
-        init_company_profile(
-            company_name=sys.argv[2] if len(sys.argv) > 2 else "TestCo",
-            tenant_id=sys.argv[3] if len(sys.argv) > 3 else "t001",
-            owner_user_id=sys.argv[4] if len(sys.argv) > 4 else "ou_test",
-        )
-        print("✅ company/profile.md 已初始化")

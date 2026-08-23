@@ -90,8 +90,15 @@ def run_pipeline(
     countries = get_countries_fn()
     profile = copy.deepcopy(context["profile"])
     country_by_key: dict[str, dict[str, Any]] = {}
+    unresolved_countries: list[str] = []
     for target in profile["target_countries"]:
-        resolved = tradechina_buyer_leads.resolve_country(target["name"], countries)
+        try:
+            resolved = tradechina_buyer_leads.resolve_country(target["name"], countries)
+        except tradechina_buyer_leads.CountryUnresolved:
+            # 国家字典当前无此条目（如字典覆盖范围变动）：审计记录后跳过，
+            # 绝不让一个未收录国家中断其余目标国家的推送
+            unresolved_countries.append(target["name"])
+            continue
         if resolved is None:
             # 明确无数据的国家（如科威特/卡塔尔/巴林），跳过，不中断整个推送
             continue
@@ -192,6 +199,7 @@ def run_pipeline(
         "supplier_binding_fingerprint": plan["supplier_binding_fingerprint"],
         "weight_version": scored["weight_version"],
         "query_audit": query_audit,
+        "unresolved_countries": unresolved_countries,
         "records": output,
     }
     if post_confirmation_execution is not None:
@@ -239,6 +247,18 @@ def self_test() -> None:
     assert result["records"][0]["买家公司名称"] == "巴西买家有限公司"
     assert result["records"][0]["核心匹配通过"] is True
     assert "supplier_id" not in result
+    assert result["unresolved_countries"] == []
+
+    # 国家字典未收录的目标国家（如当前字典缺沙特）：跳过并审计，
+    # 其余目标国家的查询和推送不受影响，绝不整单中断。
+    saudi_context = json.loads(json.dumps(context, ensure_ascii=False))
+    saudi_context["state"]["profile"]["target_countries"].append(
+        {"name": "沙特", "aliases": ["Saudi Arabia"]})
+    saudi_result = run_pipeline({"context": saudi_context}, fake_countries, fake_fetch)
+    assert saudi_result["unresolved_countries"] == ["沙特"]
+    assert len(saudi_result["records"]) == 1
+    saudi_jobs = [a for a in saudi_result["query_audit"] if a["country_name"] == "沙特"]
+    assert len(saudi_jobs) == 1 and saudi_jobs[0]["skipped_no_data"] is True
 
     post_context = tenant_run_guard.fixture()
     post_context["state"]["onboarding"]["formalization_id"] = "sha256:formalize-a"

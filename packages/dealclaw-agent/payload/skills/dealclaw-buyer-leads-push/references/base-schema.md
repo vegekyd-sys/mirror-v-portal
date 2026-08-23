@@ -1,6 +1,6 @@
 # Feishu Base schema
 
-Reuse the unified lead pool via `ensure_company_lead_pool`（企业名称线索池，主表「线索池」）。评分明细、参展行为作为关联子表（双向关联）。
+Create one Base per company named `企业名称｜企业线索池` — the unified company lead pool. New pools use the **pool layout**: one primary table `线索池` plus the linked sub-tables `评分明细` and `参展行为` (see "Unified lead pool layout" below). Bases created before v19 keep the **legacy layout**: one primary table `买家线索` carrying all columns below. Never mix the two layouts in one Base; `lead_pool_guard.py ensure` decides create/reuse/reconcile for pools, and `base_schema_guard.py plan --schema pool|legacy` reconciles the live field list of the active layout.
 
 ## Interface fact fields
 
@@ -86,7 +86,7 @@ The two triggers converge on the same final record state: after a successful `�
 | 最近推送批次ID | Text |
 | 推送消息ID | Text |
 
-Build `唯一去重键` as `chat_id + ":" + 线索ID`. Upsert by this key. Never create a second record for the same key.
+Build `唯一去重键` as `chat_id + ":" + 线索ID` in the legacy layout and `company_id + ":" + 线索ID` in the pool layout. Upsert by this key. Never create a second record for the same key.
 
 Reject a record before Base write when `线索ID` is empty. Never create the partial key `chat_id + ":"`.
 
@@ -116,13 +116,29 @@ Set `画像企业名称` only from the guarded binding/formal title. Set `运行
 
 Set `核心匹配通过` only for the product-name, product-category, and target-market-country gate. Buyer type is a 10-point secondary bonus and must not change the checkbox directly.
 
+## Unified lead pool layout
+
+New pools (v19+) are provisioned through `scripts/lead_pool_guard.py`:
+
+1. `lead_pool_guard.py ensure` derives the deterministic `企业键` (`company_id = "cmp_" + sha256(normalized company name)[:16]`), expects the Base title `企业名称｜企业线索池`, and returns `create`, `reuse`, or `reconcile_tables` with the missing table names. An existing pool whose title does not exactly match the bound company is rejected; never reuse another company's pool.
+2. A pool Base contains exactly these tables:
+   - `线索池` — the main table, one row per lead. Its approved field list is `base_schema_guard.py --schema pool` (`POOL_MAIN_FIELDS`): system identity (`唯一去重键` primary, `企业键`, `来源 = AI猎客`), the interface fact fields except `报名参展展会`, the AI summary fields (`AI匹配分`, `AI匹配等级`, `核心匹配通过`), all user-feedback fields, all unlock fields, and all system fields from the legacy layout.
+   - `评分明细` — one row per lead keyed by the same `唯一去重键`, carrying the full scoring detail (`AI原始分`, `反馈扣分`, `AI匹配理由`, `评分明细` JSON, `线索明确MOQ`, `评分权重版本`, `企业画像版本`, `企业画像群ID`, `画像企业名称`, `运行上下文ID`, `AI处理时间`).
+   - `参展行为` — one row per lead with a non-empty `报名参展展会`, carrying `展会名称` and `记录时间`. No row is created when the lead has no exhibition registration.
+3. `lead_pool_guard.py map` projects guarded pipeline records into pool upsert payloads. In the pool layout `唯一去重键` is `company_id + ":" + 线索ID`; every row carries `企业键` and `来源 = AI猎客`; any contact-like field or cross-group record aborts the whole sync; a duplicated key aborts the whole sync.
+4. Contact values are never written to any pool table — the pool records unlock state only, exactly as in the legacy layout.
+
+## Legacy layout (买家线索)
+
+The sections "Interface fact fields" through "System fields" describe the legacy single-table layout. It remains fully valid for Bases bound before v19 and is reconciled with `base_schema_guard.py plan` (default `--schema legacy`); the pool layout is reconciled with `--schema pool`. A bound Base keeps its layout for its lifetime; migration from legacy to pool is an explicit administrator decision, never automatic.
+
 ## Schema reconciliation
 
 A bound Base may predate the current schema (for example, a historical 线索池 without the v15 unlock columns). Reconcile it **additively**:
 
-1. Run reconciliation when an existing Base is bound and at the start of every daily run, before the first record upsert or unlock sweep. Read the live `买家线索` field list and pass it to `scripts/base_schema_guard.py plan`.
+1. Run reconciliation when an existing Base is bound and at the start of every daily run, before the first record upsert or unlock sweep. Read the live main-table field list (`线索池` for pools, `买家线索` for legacy Bases) and pass it to `scripts/base_schema_guard.py plan` with the matching `--schema`.
 2. The guard emits an add-only `add_plan`: create exactly the listed fields with the listed types and select options. For `是否解锁`, create the single-select with options `未解锁`、`已解锁` and default new records to `未解锁`.
 3. Never rename, retype, reorder, or delete existing fields, and never remove user-added options. Extra user fields and extra options are tolerated.
 4. A same-named field with a different type, or a select field missing a mandated option, is `incompatible_fields`: stop the run's Base writes and unlock flows, and report the exact field and expectation to the group administrator for a manual decision. Do not auto-convert user data.
-5. A missing or non-text `线索ID` primary field is terminal for that Base; it cannot be reconciled automatically.
+5. A missing or non-text primary field (`线索ID` for legacy, `唯一去重键` for pool) is terminal for that Base; it cannot be reconciled automatically.
 6. Record writes, upserts, feedback reads, and unlock sweeps may proceed only when the guard reports `ok` or its `add_plan` has been fully applied to the live table.

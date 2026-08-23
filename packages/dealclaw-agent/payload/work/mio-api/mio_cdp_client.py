@@ -305,20 +305,6 @@ class MioCdpClient:
 if __name__ == "__main__":
     import os
 
-    def _load_env_file() -> None:
-        """加载同目录 .env（含 entrypoint 建立的 skill-env 符号链接），不覆盖已有环境变量。"""
-        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-        if not os.path.isfile(env_file):
-            return
-        with open(env_file, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    if k not in os.environ:
-                        os.environ[k] = v.strip()
-
-    _load_env_file()
     app_key = os.environ.get("MIO_CDP_APP_KEY", "tradechina")
     app_secret = os.environ.get("MIO_CDP_APP_SECRET", "")
     env = os.environ.get("MIO_CDP_ENV", "test")

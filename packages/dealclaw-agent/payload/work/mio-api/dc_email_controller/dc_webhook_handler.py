@@ -40,13 +40,13 @@ STATUS_EVENT_TYPES = {
 INBOUND_EVENT_TYPES = ("email.received", "inbound", "email.inbound")
 
 # 本 handler 所属飞书应用（open_id 是 app 级，路由键需含 app_id）
-HANDLER_APP_ID = os.getenv("DEALCLAW_FEISHU_APP_ID", "cli_a9365919fc3a1bd6")
+HANDLER_APP_ID = os.getenv("DEALCLAW_FEISHU_APP_ID", "<APP_ID>")
 
 # 代理邮箱 → 企业映射（legacy 硬编码，仅入站通知路由 fallback；不得覆盖动态绑定）
 PROXY_MAP = {
-    "thia@mail.dealclaw.io": {"enterprise": "meorient.com", "owner": "田耕郡",
-                               "open_id": "ou_3fe4922d138f37c5a9fbd6ce7aa89570",
-                               "app_id": "cli_a9365919fc3a1bd6"},
+    "agent@example.com": {"enterprise": "meorient.com", "owner": "田耕郡",
+                               "open_id": "<OPEN_ID>",
+                               "app_id": "<APP_ID>"},
 }
 
 

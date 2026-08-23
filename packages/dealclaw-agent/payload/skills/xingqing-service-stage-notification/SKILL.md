@@ -142,7 +142,7 @@ If multiple assets are still coming:
 
 ```text
 收到这批素材了。为避免我抢跑漏掉后续内容，想确认一下：素材和具体要求都已经发齐了吗？
-确认发齐后我再开始整理方案/制作。 
+确认发齐后我再开始整理方案/制作。
 ```
 
 ### 2. Planning started

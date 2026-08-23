@@ -80,7 +80,6 @@ def require_confirm(action, context=None):
 {
   "_ts": "2026-07-24T07:08:00.000Z",
   "user_open_id": "ou_xxx",
-  "enterprise": "solarunis.com",
   "action": "lead.annotate",
   "target": "ecori.com.br",
   "detail": "我的买家 → 不是我的买家",
@@ -125,7 +124,6 @@ class AuditLog:
 ### 老板看板示例
 
 ```
-本周企业 solarunis.com 操作统计
 
 田耕郡: 搜索 8 次 | 入库 5 条 | 发送 12 封 | 标注 3 条
 张三:   搜索 3 次 | 入库 1 条 | 发送 5 封  | IQ处理 2 次

@@ -44,7 +44,6 @@ DealClaw:   1 个销售 + AI = 同时管 50 个买家，且越做越准
 | 企业老板 | 看全局漏斗、管销售绩效 | 知道谁在干活、线索转化怎么样、物料缺什么 |
 | 运营/产品经理 | 管知识库、补物料、看数据 | 产品和竞品信息结构化、买家反馈可追溯 |
 
-### 2.2 用户画像（以 Solarunis 为例）
 
 ```
 角色: 微逆出口销售
@@ -214,15 +213,12 @@ DealClaw 的 A/B 测试不是传统 SaaS 的流量分割（样本量太小），
 
 ```bash
 # 发起测试
-python3 dc_abtest.py start email_subject solarunis.com \
   --variant "简短版标题" --baseline "默认标题"
 
 # 查看状态
-python3 dc_abtest.py status solarunis.com
 # → 变体B打开率31%(5/16) vs 基线13%(2/15)，建议锁定B
 
 # 锁定
-python3 dc_abtest.py lock solarunis.com
 # → Copy 引擎自动切换默认模板
 ```
 
@@ -262,7 +258,6 @@ A/B 测试不是独立功能——测试结果直接进入进化回路:
 ✅ 冒烟测试 — 搜→发→收→跟 全链路通过
 ✅ PRD v2 完成
 ✅ 用户快速上手卡
-✅ Solarunis 首次真实跑通
 ```
 
 ### 下周 (2026-07-28 ~ 08-02)
@@ -319,5 +314,4 @@ data:        work/mio-api/data/
 ### D. 联系人与角色
 
 - 田耕郡: 产品负责人 + DealClaw Owner
-- V-for-meorient: AI 顾问 Agent
 - 运维管理员: 服务器运维

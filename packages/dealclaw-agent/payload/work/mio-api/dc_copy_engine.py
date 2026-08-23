@@ -463,11 +463,10 @@ if __name__ == "__main__":
     from dc_iq_engine import load_company_profile
 
     ce = CopyEngine()
-    profile = load_company_profile(profile_path=str(
-        Path(__file__).parents[2] / "memory/projects/mio/dealclaw/profiles/kmlbelt.md"))
+    profile = load_company_profile(enterprise="kmlbeltcom")
 
     buyer = {"name":"Bonnie","company":"Pacific Transmission","domain":"pacifictransmission.com",
-             "country":"MY","email":"bonnie.ptsb@gmail.com"}
+             "country":"MY","email":"user@example.com"}
 
     result = ce.generate(buyer, profile)
 

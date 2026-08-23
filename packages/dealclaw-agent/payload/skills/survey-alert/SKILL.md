@@ -69,7 +69,7 @@ def parse_weekly(data):
         eff = r[18][0] if isinstance(r[18], list) and r[18] else ''
         status = r[23][0] if isinstance(r[23], list) and r[23] else ''
         weekly_surveys = int(r[20]) if r[20] else 0
-        
+
         if status == '在职' and dept in TARGET_DEPTS and name not in EXCLUDED:
             employees.append({
                 'name': name, 'dept': dept, 'eff': eff,
@@ -85,7 +85,7 @@ def merge_daily(employees, data):
         name = r[0]  # 今日表姓名在 index 0
         daily_count = int(r[-5]) if len(r) > 5 else 0  # 今日收回调研表量
         daily_map[name] = daily_count
-    
+
     for e in employees:
         e['daily'] = daily_map.get(e['name'], 0)
 
@@ -117,7 +117,7 @@ def classify(e):
 生成飞书卡片消息并通过 CLI 发送：
 
 ```bash
-lark-cli message send --chat oc_c6d49820d64ea1c17deb01c6bdfa6f9c \
+lark-cli message send --chat <GROUP_ID> \
   --card @/tmp/survey_alert_card.json --as bot
 ```
 
@@ -148,7 +148,7 @@ lark-cli message send --chat oc_c6d49820d64ea1c17deb01c6bdfa6f9c \
 
 ## 输出规范
 
-- 预警卡片发送到 `chat_id=oc_c6d49820d64ea1c17deb01c6bdfa6f9c`
+- 预警卡片发送到 `chat_id=<GROUP_ID>`
 - 摘要回复触发所在的群/人
 - 时间段映射：11:30=「上午预警」、14:00=「午后预警」、16:00=「下午预警」、18:00=「收盘预警」
 

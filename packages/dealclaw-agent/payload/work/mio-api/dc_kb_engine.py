@@ -2,7 +2,7 @@
 """
 DC-KB v2 — DealClaw 统一知识库引擎
 
-每个企业一个知识库文件: data/kb/{enterprise_slug}.json
+每个企业一个知识库文件: data/memory/{supplier_id}/kb.json
 
 六模块:
   🏢 profile     企业画像 (analyze-company)
@@ -23,8 +23,8 @@ import json, os, re, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-KB_DIR = DATA_DIR / "kb"
+# 画像/知识库 canonical 统一进 data/memory/<企业>/kb.json（与线索/邮件/信号同目录）
+KB_DIR = Path(__file__).resolve().parents[2] / "data" / "memory"
 DEFAULT_MATERIAL_TYPES = ["catalog", "price", "spec", "certificate", "sample", "case_study", "video"]
 MATERIAL_LABELS = {
     "catalog": "产品目录", "price": "报价单", "spec": "技术规格",
@@ -35,6 +35,20 @@ MATERIAL_LABELS = {
 # ── helpers ──
 def _slug(s):
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def _resolve_supplier_id() -> str:
+    """单租户 supplier id：动态从 MIO_CDP_SUPPLIER_ID 环境变量 / .env 读（不做硬编码占位）。"""
+    sid = os.environ.get("MIO_CDP_SUPPLIER_ID", "").strip()
+    if sid:
+        return sid
+    env_path = Path(__file__).resolve().parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("MIO_CDP_SUPPLIER_ID="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -79,10 +93,13 @@ class KBEngine:
             degrade.decide("audit_write", enterprise=enterprise)
 
     def _key(self, enterprise):
+        sid = _resolve_supplier_id()
+        if sid:
+            return sid  # 单租户：路径统一用 supplier id，不用网址/企业名 slug
         return _slug(enterprise)
 
     def _path(self, enterprise):
-        return KB_DIR / f"{self._key(enterprise)}.json"
+        return KB_DIR / self._key(enterprise) / "kb.json"
 
     def _load(self, enterprise):
         key = self._key(enterprise)
@@ -101,6 +118,7 @@ class KBEngine:
         kb["version"] = kb.get("version", 1) + 1
         self._cache[key] = kb
         path = self._path(enterprise)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(kb, ensure_ascii=False, indent=2))
 
     def ensure(self, enterprise):
@@ -152,19 +170,6 @@ class KBEngine:
         }
         self._save(enterprise, kb)
         self._audit_log("kb.profile", enterprise, enterprise, f"画像更新: {kb['profile'].get('name','')[:30]}")
-        # 🔗 Heartbeat: 企业画像确认 → 落盘 company/profile.md
-        try:
-            from heartbeat_data import append_company_profile
-            append_company_profile(
-                company_id=enterprise,
-                company_name=kb["profile"].get("name", ""),
-                products=kb["profile"].get("product", ""),
-                target_markets=", ".join(kb["profile"].get("target_markets", [])) if isinstance(kb["profile"].get("target_markets"), list) else kb["profile"].get("target_markets", ""),
-                buyer_types=str(p.get("buyer_types", "")),
-                profile_version=p.get("profile_version", str(hash(str(_product)+str(p.get("target_markets",""))))[:8]),
-            )
-        except Exception as _hb_err:
-            print(f"[heartbeat] append_company_profile failed: {_hb_err}")
         # 🔄 回路1: analyze-company → Persona — 自动播种买家画像
         markets = p.get("target_markets") or []
         if markets:
@@ -284,6 +289,12 @@ class KBEngine:
             "status": "ready", "updated_at": _now(),
         }
         self._save(enterprise, kb)
+        # 双写：同步物料到 data/memory/<企业>/materials.json（agent 读卡片/发营销内容用）
+        try:
+            mats_path = self._path(enterprise).parent / "materials.json"
+            mats_path.write_text(json.dumps(kb.get("materials", {}), ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def seed_materials_from_company_analysis(self, enterprise, profile):
         """从企业分析自动播种物料"""
@@ -857,7 +868,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;background:#f0f2f5;padding:
                     subprocess.run(
                         ["lark-cli", "drive", "permission.members", "create",
                          "--token", doc_token, "--type", "docx",
-                         "--data", '{"member_id":"ou_2b516abcb05aa539ff0056bc839d3d3a","member_type":"openid","perm":"full_access"}',
+                         "--data", '{"member_id":"<OPEN_ID>","member_type":"openid","perm":"full_access"}',
                          "--yes", "--as", "bot"],
                         capture_output=True, timeout=10
                     )

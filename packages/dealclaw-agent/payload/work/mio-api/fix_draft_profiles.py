@@ -44,7 +44,7 @@ def C(name, aliases=()):
     return {"name": name, "aliases": list(aliases)}
 
 PLANS = {
-    "oc_90abc4a437858d5aa2a2ea64faae8820": {  # 杭州金洢纺织
+    "<GROUP_ID>": {  # 杭州金洢纺织
         "products": [
             P("polyester fabric", ["全涤面料"], ["纺织面料"]),
             P("taffeta fabric", ["窗帘塔夫绸"], ["纺织面料"]),
@@ -60,7 +60,7 @@ PLANS = {
         "target_countries": [C("墨西哥", ["Mexico"])],
         "keywords": ["polyester fabric", "taffeta fabric", "oxford fabric", "synthetic leather", "bag fabric"],
     },
-    "oc_e15af31367d012ded5450f6625d1d347": {  # 领艺智能家居
+    "<GROUP_ID>": {  # 领艺智能家居
         "products": [
             P("office furniture", ["办公家具"], ["办公家具"]),
             P("executive desk", ["班台"], ["办公家具"]),
@@ -74,7 +74,7 @@ PLANS = {
         "target_countries": [C("南非", ["South Africa"]), C("墨西哥", ["Mexico"])],
         "keywords": ["office furniture", "executive desk", "standing desk", "nursing bed"],
     },
-    "oc_1d5d5e9f8deae458aef67ad9328c1cee": {  # 雪特朗电器
+    "<GROUP_ID>": {  # 雪特朗电器
         "products": [
             P("coffee machine", ["咖啡机", "coffee maker"], ["咖啡机"]),
             P("kitchen appliance", ["厨房小家电"], ["小家电"]),

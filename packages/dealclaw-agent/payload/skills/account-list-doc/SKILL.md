@@ -7,7 +7,7 @@ description: "查客户账号→生成飞书文档清单（序号/客户/国家/
 
 ## 触发条件
 
-曹雨凡（ou_5eac3ecd615ffdd55fab15cdc3412210）要求查客户账号信息或生成账号清单时触发。关键词：账号、账号清单、账号信息、账号邮箱密码。
+曹雨凡（<OPEN_ID>）要求查客户账号信息或生成账号清单时触发。关键词：账号、账号清单、账号信息、账号邮箱密码。
 
 ## 执行流程
 
@@ -65,7 +65,7 @@ cd /tmp && lark-cli docs +update --doc {id} --command overwrite --doc-format mar
 lark-cli drive permission.public patch --token {id} --type docx --data '{"security_entity":"anyone_can_view","comment_entity":"anyone_can_view","share_entity":"anyone","link_share_entity":"anyone_readable","external_access_entity":"open","invite_external_entity":true}' --yes
 
 # 授 管理员 管理权
-lark-cli drive permission.members create --token {id} --type docx --data '{"member_id":"ou_48fd0d8dea2bb1ad6a8c111d6d1a01da","member_type":"openid","perm":"full_access","type":"user"}' --yes
+lark-cli drive permission.members create --token {id} --type docx --data '{"member_id":"<OPEN_ID>","member_type":"openid","perm":"full_access","type":"user"}' --yes
 ```
 
 ## 输出规则

@@ -8,13 +8,13 @@ tccli OAuth 登录辅助工具
 用法:
   # 第一步: 生成授权链接
   python3 tccli-oauth-helper.py --get-url
-  
+
   # 第二步: 用户访问链接登录后，获取 base64 验证码，然后:
   python3 tccli-oauth-helper.py --code "验证码字符串"
-  
+
   # 或者一步完成（如果已有验证码）:
   python3 tccli-oauth-helper.py --code "eyJhY2Nlc3NUb2tlbi..."
-  
+
   # 检查凭证状态:
   python3 tccli-oauth-helper.py --status
 """
@@ -49,7 +49,7 @@ def get_temp_cred(access_token, site):
     """获取临时凭证（从 tccli/oauth.py 复制）"""
     import uuid
     import requests
-    
+
     api_endpoint = _API_ENDPOINT + "/get_temp_cred"
     body = {
         "TraceId": str(uuid.uuid4()),
@@ -143,7 +143,7 @@ def get_auth_url(state, language=_DEFAULT_LANG):
     }
     redirect_query = urlencode(redirect_params)
     redirect_url = _REDIRECT_URL + "?" + redirect_query
-    
+
     url_params = {
         "scope": "login",
         "app_id": _APP_ID,
@@ -152,12 +152,12 @@ def get_auth_url(state, language=_DEFAULT_LANG):
     }
     url_query = urlencode(url_params)
     auth_url = _AUTH_URL + "?" + url_query
-    
+
     # 将 URL 中的 "_" 替换为 "%5F"，避免被 Markdown 解析器误解析为
     # 斜体标记（某些客户端的 markdownToPlainText 会吃掉下划线）。
     # "%5F" 是 "_" 的合法 URL 编码，HTTP 服务器会自动解码，功能完全等价。
     auth_url = auth_url.replace("_", "%5F")
-    
+
     return auth_url
 
 
@@ -165,9 +165,9 @@ def do_get_url(args):
     """生成授权链接"""
     state = generate_state()
     save_state(state)
-    
+
     auth_url = get_auth_url(state)
-    
+
     print("━" * 60)
     print("🔐 腾讯云 OAuth 授权登录")
     print("━" * 60)
@@ -186,7 +186,7 @@ def do_get_url(args):
     print("━" * 60)
     print()
     print(f"📌 State: {state} (10分钟内有效)")
-    
+
     return 0
 
 
@@ -194,10 +194,10 @@ def do_login_with_code(args):
     """使用验证码完成登录"""
     code = args.code.strip()
     profile = args.profile or "default"
-    
+
     # 尝试加载保存的 state
     saved_state = load_state()
-    
+
     try:
         # 解码验证码
         token_json = base64.b64decode(code)
@@ -207,7 +207,7 @@ def do_login_with_code(args):
         print()
         print("请确保复制了完整的 base64 验证码字符串。")
         return 1
-    
+
     # 验证 state（如果有保存的话）
     token_state = token.get("state")
     if saved_state and token_state != saved_state:
@@ -216,18 +216,18 @@ def do_login_with_code(args):
         print(f"   实际: {token_state}")
         print()
         print("可能是使用了旧的授权链接。继续尝试...")
-    
+
     try:
         # 获取临时凭证
         print("🔄 正在获取临时凭证...")
         cred = get_temp_cred(token["accessToken"], token.get("site", _SITE))
-        
+
         # 保存凭证
         save_credential(token, cred, profile)
         clear_state()
-        
+
         cred_path = cred_path_of_profile(profile)
-        
+
         print()
         print("━" * 60)
         print("✅ OAuth 登录成功!")
@@ -240,9 +240,9 @@ def do_login_with_code(args):
         print("现在可以使用 tccli 了，例如：")
         print("  tccli cvm DescribeInstances --region ap-guangzhou")
         print()
-        
+
         return 0
-        
+
     except Exception as e:
         print(f"❌ 登录失败: {e}")
         return 1
@@ -252,32 +252,32 @@ def do_status(args):
     """检查凭证状态"""
     profile = args.profile or "default"
     cred_path = cred_path_of_profile(profile)
-    
+
     print("━" * 60)
     print("🔍 tccli 凭证状态检查")
     print("━" * 60)
     print(f"📌 配置文件: {profile}")
     print(f"📌 凭证路径: {cred_path}")
     print()
-    
+
     if not os.path.exists(cred_path):
         print("❌ 凭证文件不存在")
         print()
         print("请先运行 OAuth 登录:")
         print("  python3 tccli-oauth-helper.py --get-url")
         return 1
-    
+
     try:
         with open(cred_path, 'r') as f:
             cred = json.load(f)
-        
+
         cred_type = cred.get("type", "unknown")
         print(f"📌 凭证类型: {cred_type}")
-        
+
         if cred_type == "oauth":
             expires_at = cred.get("expiresAt", 0)
             now = time.time()
-            
+
             if expires_at > now:
                 remaining = expires_at - now
                 hours = int(remaining // 3600)
@@ -303,11 +303,11 @@ def do_status(args):
             else:
                 print("❌ 凭证文件格式异常")
                 return 1
-                
+
     except Exception as e:
         print(f"❌ 读取凭证失败: {e}")
         return 1
-    
+
     print("━" * 60)
     return 0
 
@@ -320,18 +320,18 @@ def main():
 示例:
   # 生成授权链接
   python3 tccli-oauth-helper.py --get-url
-  
+
   # 使用验证码完成登录
   python3 tccli-oauth-helper.py --code "eyJhY2Nlc3NUb2tlbi..."
-  
+
   # 检查凭证状态
   python3 tccli-oauth-helper.py --status
-  
+
   # 指定配置文件
   python3 tccli-oauth-helper.py --code "验证码" --profile myprofile
 """
     )
-    
+
     parser.add_argument("--get-url", action="store_true",
                         help="生成 OAuth 授权链接")
     parser.add_argument("--code", type=str,
@@ -340,9 +340,9 @@ def main():
                         help="检查当前凭证状态")
     parser.add_argument("--profile", type=str, default="default",
                         help="配置文件名称 (默认: default)")
-    
+
     args = parser.parse_args()
-    
+
     if args.get_url:
         return do_get_url(args)
     elif args.code:

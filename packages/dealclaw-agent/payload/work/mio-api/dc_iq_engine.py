@@ -6,7 +6,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-PROFILE_DIR = BASE_DIR / "memory" / "projects" / "mio" / "dealclaw" / "profiles"
+# 画像 canonical 已统一到 data/memory/<企业>/kb.json（与线索/邮件/信号同目录）
+KB_DIR = BASE_DIR / "data" / "memory"
+
+
+def _resolve_supplier_id() -> str:
+    """单租户 supplier id：动态从 MIO_CDP_SUPPLIER_ID 环境变量 / .env 读。"""
+    sid = os.environ.get("MIO_CDP_SUPPLIER_ID", "").strip()
+    if sid:
+        return sid
+    env_path = Path(__file__).resolve().parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("MIO_CDP_SUPPLIER_ID="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
 
 INTENT_PATTERNS = {
     "自动回复": [r"out of office",r"on leave",r"vacation",r"ooo",r"自动回复",r"休假"],
@@ -192,14 +207,18 @@ def load_company_profile(enterprise="", enterprise_domain="", profile_path=""):
     """读取 企业画像 markdown/json，返回邮件可用字段。"""
     path = Path(profile_path) if profile_path else None
     if not path or not path.exists():
-        for slug in _slug_candidates(enterprise_domain) + _slug_candidates(enterprise):
-            for ext in (".md", ".json"):
-                cand = PROFILE_DIR / (slug + ext)
-                if cand.exists():
-                    path = cand
+        # 单租户：supplier id 优先（路径统一用 MIO_CDP_SUPPLIER_ID，不用网址/企业名 slug）
+        sid = _resolve_supplier_id()
+        if sid:
+            kb_cand = KB_DIR / sid / "kb.json"
+            if kb_cand.exists():
+                path = kb_cand
+        if not path or not path.exists():
+            for slug in _slug_candidates(enterprise_domain) + _slug_candidates(enterprise):
+                kb_cand = KB_DIR / slug / "kb.json"
+                if kb_cand.exists():
+                    path = kb_cand
                     break
-            if path and path.exists():
-                break
     if not path or not path.exists():
         return {"source":"missing", "missing":["企业画像"], "materials":{}}
 
@@ -239,11 +258,17 @@ def load_company_profile(enterprise="", enterprise_domain="", profile_path=""):
 def normalize_profile(data, source):
     profile = {"source": source, "materials": data.get("materials", {}) if isinstance(data, dict) else {}}
     if isinstance(data, dict):
-        profile["enterprise_external"] = data.get("enterprise_external") or data.get("company_external") or data.get("company") or ""
-        profile["enterprise_internal"] = data.get("enterprise_internal") or data.get("company_internal") or ""
-        profile["product"] = data.get("product") or data.get("main_product") or ""
-        profile["usp"] = data.get("usp") or data.get("value_prop") or data.get("positioning") or ""
-        profile["certifications"] = data.get("certifications") or ""
+        # kb.json 嵌套结构：profile 子对象优先，平铺字段兜底（兼容旧平铺 json）
+        p = data.get("profile", {}) if isinstance(data.get("profile"), dict) else {}
+        profile["enterprise_external"] = (p.get("name_en") or p.get("name")
+                                           or data.get("enterprise_external") or data.get("company_external")
+                                           or data.get("company") or "")
+        profile["enterprise_internal"] = (p.get("name") or data.get("enterprise_internal")
+                                           or data.get("company_internal") or "")
+        profile["product"] = (p.get("product") or data.get("product") or data.get("main_product") or "")
+        profile["usp"] = (p.get("usp") or data.get("usp") or data.get("value_prop")
+                           or data.get("positioning") or "")
+        profile["certifications"] = (p.get("certifications") or data.get("certifications") or "")
     profile["missing"] = [k for k in PROFILE_REQUIRED if not profile.get(k)]
     return profile
 

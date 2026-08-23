@@ -27,6 +27,7 @@ from dc_campaign import (
 )
 
 DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
 PLANS_DIR = DATA_DIR / "daily-plans"
 EXPERIMENTS_DIR = DATA_DIR / "experiments"
 
@@ -43,6 +44,28 @@ CONFIRMED_SEARCH_CAP = 20
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _load_long_term_context(company_id: str, user_open_id: str) -> dict:
+    """读长期规则（rules.md）+ 行为偏好（people/<open_id>.md），供 Todo 计划体现「记住了直接做」。"""
+    rules, behaviors = [], []
+    try:
+        rules_path = MEMORY_DIR / "company" / company_id / "rules.md"
+        if rules_path.exists():
+            for ln in rules_path.read_text(encoding="utf-8").splitlines():
+                s = ln.strip()
+                if s.startswith("- [active"):
+                    rules.append(s)
+        if user_open_id:
+            people_path = MEMORY_DIR / "people" / f"{user_open_id}.md"
+            if people_path.exists():
+                for ln in people_path.read_text(encoding="utf-8").splitlines():
+                    s = ln.strip()
+                    if s.startswith("- [行为"):
+                        behaviors.append(s)
+    except Exception:
+        pass
+    return {"rules": rules, "behaviors": behaviors}
 
 
 def _plan_id(company_id: str, date: str) -> str:
@@ -164,6 +187,7 @@ def _gen_todos(campaign: dict, eval_result: dict, metrics: dict, user_open_id: s
         })
 
     # 买家搜索 Todo（每天最多 1 个）
+    long_term = _load_long_term_context(campaign["company_id"], user_open_id)
     sample_size, limit_reason = _buyer_search_sample_size(campaign, buyer_readiness)
     if phase in ("calibration", "scale", "sprint"):
         if buyer_readiness == "confirmed":
@@ -173,12 +197,16 @@ def _gen_todos(campaign: dict, eval_result: dict, metrics: dict, user_open_id: s
                 "sprint": f"集中高匹配买家，补邀约缺口 {gap['invites_gap']}",
             }[phase]
             add("campaign", action, "P1", action_type="buyer_search", auto=True,
-                input={"sample_size": sample_size, "limit_reason": limit_reason})
+                input={"sample_size": sample_size, "limit_reason": limit_reason,
+                       "long_term_rules": long_term["rules"],
+                       "behaviors": long_term["behaviors"]})
         else:
             # learning：等待画像确认，不自动执行
             add("campaign", "校准买家样本（等待画像确认）", "P1", action_type="buyer_search",
                 auto=False, status="waiting_confirmation",
-                input={"sample_size": sample_size, "limit_reason": limit_reason})
+                input={"sample_size": sample_size, "limit_reason": limit_reason,
+                       "long_term_rules": long_term["rules"],
+                       "behaviors": long_term["behaviors"]})
 
     # scale 阶段其它任务
     if phase == "scale":
@@ -240,13 +268,103 @@ def _resolve_user_open_id(company_id: str, user_open_id: str = "", camp: dict | 
     return ""
 
 
+def _ensure_campaign_dynamic(company_id: str) -> dict | None:
+    """无 active campaign 时，从 CDP 动态创建（orderRecords → selectAllExhibition 对账）。
+
+    成功返回 campaign dict；拿不到参数/失败返回 None（交给降级路径）。
+    """
+    try:
+        from dc_auto_campaign import ensure_campaign
+        r = ensure_campaign(company_id)
+        if r.get("status") in ("existing", "created") and r.get("campaign"):
+            return r["campaign"]
+        return None
+    except Exception:
+        return None
+
+
+def _morning_without_campaign(company_id: str, date: str, dry_run: bool = True) -> dict:
+    """无 campaign 的早报降级：不生成展会 Todo，只发 metrics/漏斗/跟进/草稿/KB。"""
+    from dc_notify import NotifyEngine
+    from dc_daily_report import build_morning_report
+    try:
+        rep = build_morning_report(company_id)
+    except Exception:
+        rep = {}
+    notify_result = None
+    if not dry_run:
+        try:
+            notify_result = NotifyEngine().publish(
+                company_id, "plan_item", {
+                    "plan_id": _plan_id(company_id, date),
+                    "phase": "no_campaign",
+                    "urgency": "normal",
+                    "todo_count": 0,
+                    "waiting_confirmation": [],
+                    "auto_todos": [],
+                    "report_text": rep.get("text", ""),
+                    "metrics": rep.get("metrics", {}),
+                    "pending_draft_count": rep.get("pending_draft_count", 0),
+                    "due_followup_count": rep.get("due_followup_count", 0),
+                },
+                dedupe_key=f"morning:{company_id}:{date}",
+            )
+        except Exception as e:
+            notify_result = {"status": "error", "error": str(e)}
+    return {
+        "status": "no_campaign_report",
+        "plan_id": _plan_id(company_id, date),
+        "company_id": company_id,
+        "date": date,
+        "report": rep,
+        "notify": notify_result,
+    }
+
+
+def _evening_without_campaign(company_id: str, date: str, dry_run: bool = True) -> dict:
+    """无 plan（无 campaign）的晚报降级。"""
+    from dc_notify import NotifyEngine
+    from dc_daily_report import build_evening_report
+    try:
+        rep = build_evening_report(company_id)
+    except Exception:
+        rep = {}
+    notify_result = None
+    if not dry_run:
+        try:
+            notify_result = NotifyEngine().publish(
+                company_id, "summary_item", {
+                    "report_text": rep.get("text", ""),
+                    "metrics": rep.get("metrics", {}),
+                    "pending_draft_count": rep.get("pending_draft_count", 0),
+                    "due_followup_count": rep.get("due_followup_count", 0),
+                },
+                dedupe_key=f"evening:{company_id}:{date}",
+            )
+        except Exception as e:
+            notify_result = {"status": "error", "error": str(e)}
+    return {
+        "status": "no_campaign_report",
+        "company_id": company_id,
+        "date": date,
+        "report": rep,
+        "notify": notify_result,
+    }
+
+
 def build_morning_plan(company_id: str, date: str | None = None, dry_run: bool = True,
                        user_open_id: str = "") -> dict:
-    """生成今日 Todo 计划。只生成计划，不执行真实外部动作。"""
+    """生成今日 Todo 计划。只生成计划，不执行真实外部动作。
+
+    无 active campaign 时：先尝试从 CDP 动态创建（orderRecords→selectAllExhibition 对账）；
+    仍拿不到参数则降级为无 campaign 早报。
+    """
     date = date or _today()
     camp = get_active_campaign(company_id)
     if not camp:
-        return {"status": "error", "error": "no active campaign", "company_id": company_id}
+        camp = _ensure_campaign_dynamic(company_id)
+    if not camp:
+        return _morning_without_campaign(company_id, date, dry_run=dry_run)
 
     # P0-E5：先跑跟进循环，生成到期的第二轮/第三轮跟进草稿（幂等，不发送）
     try:
@@ -468,7 +586,7 @@ def evaluate_evening(company_id: str, date: str | None = None, dry_run: bool = T
     date = date or _today()
     plan = _read_plan(company_id, date)
     if not plan:
-        return {"status": "error", "error": "no plan for date", "company_id": company_id, "date": date}
+        return _evening_without_campaign(company_id, date, dry_run=dry_run)
 
     evidence = evidence or {}
     completed = []

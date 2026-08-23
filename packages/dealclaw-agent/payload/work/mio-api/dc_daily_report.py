@@ -8,11 +8,51 @@ dc_daily_report.py — 早报/晚报内容构建（展会邮件增长闭环）
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _distill_brief(company_id: str) -> str:
+    """读取该企业用户的上周行为偏好（蒸馏产物），用于周一早报。"""
+    try:
+        open_id = ""
+        # 1. Campaign.owner_open_id（优先）
+        try:
+            from dc_campaign import get_active_campaign
+            camp = get_active_campaign(company_id)
+            if camp and camp.get("owner_open_id"):
+                open_id = camp["owner_open_id"]
+        except Exception:
+            pass
+        # 2. registry campaign_owner_open_id（兜底）
+        if not open_id:
+            from dc_company_registry import CompanyRegistry
+            entry = CompanyRegistry().get(company_id)
+            open_id = (entry or {}).get("campaign_owner_open_id", "")
+        if not open_id:
+            return ""
+        path = MEMORY_DIR / "people" / f"{open_id}.md"
+        if not path.exists():
+            return ""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        import re
+        lines = []
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("- [行为") and "蒸馏" in ln:
+                m = re.search(r"\| (\d{4}-\d{2}-\d{2}) \|", ln)
+                if m and m.group(1) >= cutoff:
+                    lines.append(ln)
+        if lines:
+            return "上周记住的行为偏好：\n" + "\n".join(lines)
+    except Exception:
+        pass
+    return ""
 
 
 def collect_metrics(company_id: str, campaign_id: str = None) -> dict:
@@ -104,6 +144,12 @@ def build_morning_report(company_id: str) -> dict:
     drafts = collect_pending_drafts(company_id)
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
+    text = _format_morning(company_id, m, drafts, followups, funnel)
+    # 周一早报：体现上周蒸馏的行为偏好（让用户感知「越来越懂」）
+    if datetime.now(timezone.utc).weekday() == 0:
+        distill = _distill_brief(company_id)
+        if distill:
+            text += "\n\n" + distill
     return {
         "company_id": company_id,
         "slot": "morning",
@@ -113,7 +159,7 @@ def build_morning_report(company_id: str) -> dict:
         "due_followup_count": len(followups),
         "campaign": _campaign_brief(company_id),
         "kb": _kb_brief(company_id),
-        "text": _format_morning(company_id, m, drafts, followups, funnel),
+        "text": text,
         "generated_at": _now(),
     }
 
