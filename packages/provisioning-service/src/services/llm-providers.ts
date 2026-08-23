@@ -1,0 +1,295 @@
+/**
+ * Manually-configured LLM providers for tenant agents.
+ *
+ * The admin console stores the whole provider set as ONE runtime_configs row
+ * (key = LLM_PROVIDERS, encrypted): providers with baseUrl + apiKey + model
+ * list plus the default model. At provisioning time the blob is injected via
+ * the tenant-config Secret (envFrom), and the agent's write-config.mjs turns
+ * it into OpenClaw `models.providers` entries at container boot.
+ *
+ * Because model-provider credentials are consumed at boot (not from the hot
+ * .env), rotating them requires writing the tenant-config Secret followed by
+ * a rolling restart of the agent Deployment — see pushLlmProviders().
+ */
+
+import type pg from 'pg';
+import { resolveTenantConfig } from './runtime-config.js';
+import { decryptValue } from './crypto.js';
+import { getSecret, putSecret, restartDeployment, deploymentExists } from './k8s-client.js';
+import { ENV_FROM_ONLY_KEYS } from './skill-env.js';
+import type { ProvisioningConfig } from '../config.js';
+
+/** runtime_configs key holding the provider JSON blob. */
+export const LLM_PROVIDERS_KEY = 'LLM_PROVIDERS';
+
+export interface LlmModelSpec {
+  id: string;
+  reasoning?: boolean;
+}
+
+export interface LlmProviderSpec {
+  /** Provider id used by OpenClaw (`<name>/<model>` refs) and env-var derivation. */
+  name: string;
+  label?: string;
+  baseUrl: string;
+  apiKey: string;
+  models: LlmModelSpec[];
+}
+
+export interface LlmProvidersConfig {
+  providers: LlmProviderSpec[];
+  /** '<providerName>/<modelId>' — becomes the agent's primary model. */
+  defaultModel: string | null;
+}
+
+const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
+const MAX_PROVIDERS = 10;
+const MAX_MODELS = 20;
+
+export class LlmProvidersError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LlmProvidersError';
+  }
+}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * Validate and normalise the provider document coming from the admin UI.
+ * Throws LlmProvidersError with a user-readable Chinese message on problems.
+ */
+export function validateLlmProviders(input: unknown): LlmProvidersConfig {
+  if (typeof input !== 'object' || input === null) {
+    throw new LlmProvidersError('请求体不合法');
+  }
+  const raw = input as Record<string, unknown>;
+  const providersRaw = raw.providers;
+  if (!Array.isArray(providersRaw)) {
+    throw new LlmProvidersError('providers 必须是数组');
+  }
+  if (providersRaw.length > MAX_PROVIDERS) {
+    throw new LlmProvidersError(`最多支持 ${MAX_PROVIDERS} 个提供商`);
+  }
+
+  const seenNames = new Set<string>();
+  const providers: LlmProviderSpec[] = [];
+  for (const p of providersRaw) {
+    if (typeof p !== 'object' || p === null) {
+      throw new LlmProvidersError('提供商条目不合法');
+    }
+    const item = p as Record<string, unknown>;
+    const name = str(item.name);
+    if (!NAME_PATTERN.test(name)) {
+      throw new LlmProvidersError(
+        `提供商 ID「${name || '(空)'}」不合法：小写字母开头，仅含小写字母/数字/_/-，最长 32 位`,
+      );
+    }
+    if (seenNames.has(name)) {
+      throw new LlmProvidersError(`提供商 ID 重复：${name}`);
+    }
+    seenNames.add(name);
+
+    const baseUrl = str(item.baseUrl).replace(/\/+$/, '');
+    if (!/^https?:\/\/[^\s]+$/.test(baseUrl)) {
+      throw new LlmProvidersError(`提供商 ${name} 的 Base URL 不合法（需 http(s):// 开头）`);
+    }
+    const apiKey = typeof item.apiKey === 'string' ? item.apiKey : '';
+    if (!apiKey || apiKey.length > 1024) {
+      throw new LlmProvidersError(`提供商 ${name} 缺少 API Key`);
+    }
+    const modelsRaw = item.models;
+    if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
+      throw new LlmProvidersError(`提供商 ${name} 至少需要 1 个模型`);
+    }
+    if (modelsRaw.length > MAX_MODELS) {
+      throw new LlmProvidersError(`提供商 ${name} 的模型数超过上限 ${MAX_MODELS}`);
+    }
+    const seenModels = new Set<string>();
+    const models: LlmModelSpec[] = [];
+    for (const m of modelsRaw) {
+      if (typeof m === 'string') {
+        if (!MODEL_ID_PATTERN.test(m)) throw new LlmProvidersError(`模型 ID「${m}」不合法`);
+        if (seenModels.has(m)) throw new LlmProvidersError(`提供商 ${name} 模型重复：${m}`);
+        seenModels.add(m);
+        models.push({ id: m });
+      } else if (typeof m === 'object' && m !== null) {
+        const spec = m as Record<string, unknown>;
+        const id = str(spec.id);
+        if (!MODEL_ID_PATTERN.test(id)) throw new LlmProvidersError(`模型 ID「${id || '(空)'}」不合法`);
+        if (seenModels.has(id)) throw new LlmProvidersError(`提供商 ${name} 模型重复：${id}`);
+        seenModels.add(id);
+        models.push({ id, reasoning: spec.reasoning === true });
+      } else {
+        throw new LlmProvidersError(`提供商 ${name} 的模型条目不合法`);
+      }
+    }
+    providers.push({
+      name,
+      ...(str(item.label) ? { label: str(item.label).slice(0, 64) } : {}),
+      baseUrl,
+      apiKey,
+      models,
+    });
+  }
+
+  const defaultModel = str(raw.defaultModel) || null;
+  if (defaultModel) {
+    const [pName, ...rest] = defaultModel.split('/');
+    const modelId = rest.join('/');
+    const provider = providers.find((p) => p.name === pName);
+    if (!provider || !provider.models.some((m) => m.id === modelId)) {
+      throw new LlmProvidersError(`默认模型 ${defaultModel} 不在已配置的提供商/模型列表中`);
+    }
+  }
+
+  return { providers, defaultModel };
+}
+
+/** Effective provider doc for a tenant: tenant override, else global row. */
+export async function resolveLlmProviders(
+  pool: pg.Pool,
+  tenantId: string | null,
+): Promise<{ source: 'tenant' | 'global' | 'none'; config: LlmProvidersConfig | null }> {
+  let blob: string | undefined;
+  let source: 'tenant' | 'global' | 'none' = 'none';
+  if (tenantId) {
+    const { rows: tenantRows } = await pool.query(
+      `SELECT encrypted_value FROM runtime_configs WHERE tenant_id = $1 AND config_key = $2`,
+      [tenantId, LLM_PROVIDERS_KEY],
+    );
+    if (tenantRows.length) {
+      blob = tenantRows[0].encrypted_value;
+      source = 'tenant';
+    }
+  }
+  if (blob === undefined) {
+    const { rows: globalRows } = await pool.query(
+      `SELECT encrypted_value FROM runtime_configs WHERE tenant_id IS NULL AND config_key = $1`,
+      [LLM_PROVIDERS_KEY],
+    );
+    if (globalRows.length) {
+      blob = globalRows[0].encrypted_value;
+      source = 'global';
+    }
+  }
+  if (blob === undefined) return { source: 'none', config: null };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decryptValue(blob));
+  } catch {
+    return { source, config: null };
+  }
+  try {
+    return { source, config: validateLlmProviders(parsed) };
+  } catch {
+    return { source, config: null };
+  }
+}
+
+export interface LlmPushResult {
+  tenants: Array<{ tenantId: string; ok: boolean; restarted: boolean; error?: string }>;
+  hint: string;
+}
+
+/**
+ * Materialise the current effective LLM_PROVIDERS blob into every affected
+ * tenant's tenant-config Secret (envFrom) and roll the agent so the new
+ * providers are picked up at boot. Global writes target all live tenants;
+ * tenant-scoped writes target just that tenant.
+ *
+ * Key rotation here is NOT hot: envFrom values only apply on pod start, so
+ * each affected agent is rolling-restarted (restartDeployment).
+ */
+export async function pushLlmProviders(
+  pool: pg.Pool,
+  config: ProvisioningConfig,
+  scope: string | null,
+): Promise<LlmPushResult> {
+  const targets: string[] = [];
+  if (scope) {
+    targets.push(scope);
+  } else {
+    const { rows } = await pool.query(
+      `SELECT tenant_id FROM tenants
+        WHERE status <> 'destroyed' AND k8s_namespace IS NOT NULL AND agent_endpoint IS NULL
+        ORDER BY created_at`,
+    );
+    targets.push(...rows.map((r: any) => r.tenant_id));
+  }
+
+  const results: LlmPushResult['tenants'] = [];
+  for (const tenantId of targets) {
+    try {
+      if (config.k8sDryRun) {
+        results.push({ tenantId, ok: true, restarted: false });
+        continue;
+      }
+      const { rows: tenantRows } = await pool.query(
+        `SELECT k8s_namespace FROM tenants WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      const namespace = tenantRows[0]?.k8s_namespace;
+      if (!namespace) {
+        results.push({ tenantId, ok: true, restarted: false });
+        continue;
+      }
+
+      const merged = await resolveTenantConfig(pool, tenantId);
+      const blob = merged[LLM_PROVIDERS_KEY];
+
+      // Rewrite tenant-config keeping only envFrom-only keys, then set or
+      // drop LLM_PROVIDERS according to the current effective config.
+      const next: Record<string, string> = {};
+      const existing = await getSecret(namespace, 'tenant-config');
+      if (existing) {
+        for (const [k, v] of Object.entries(existing.data)) {
+          if (!ENV_FROM_ONLY_KEYS.has(k)) continue;
+          try {
+            next[k] = Buffer.from(v, 'base64').toString('utf8');
+          } catch {
+            next[k] = v;
+          }
+        }
+      }
+      if (blob) next[LLM_PROVIDERS_KEY] = blob;
+      else delete next[LLM_PROVIDERS_KEY];
+      await putSecret(namespace, 'tenant-config', next);
+
+      const deployName = `dealclaw-agent-${tenantId}`;
+      const restarted = (await deploymentExists(namespace, deployName))
+        ? await restartDeployment(namespace, deployName)
+        : false;
+      results.push({ tenantId, ok: true, restarted });
+    } catch (err) {
+      results.push({
+        tenantId,
+        ok: false,
+        restarted: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const okCount = results.filter((r) => r.ok).length;
+  const restartCount = results.filter((r) => r.restarted).length;
+  const failed = results.filter((r) => !r.ok);
+  let hint: string;
+  if (results.length === 0) {
+    hint = '没有需要推送的租户';
+  } else if (okCount === 0) {
+    hint = `已保存，但推送全部失败（${failed[0]?.tenantId}：${failed[0]?.error}）`;
+  } else {
+    hint =
+      `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret` +
+      (restartCount > 0
+        ? `，${restartCount} 个 agent 正在滚动重启，重启完成后新模型配置生效（约 1–2 分钟）`
+        : '；agent 下次重启时生效') +
+      (failed.length ? `；${failed.length} 个租户推送失败（${failed[0].tenantId}：${failed[0].error}）` : '');
+  }
+  return { tenants: results, hint };
+}

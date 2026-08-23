@@ -13,6 +13,13 @@ import {
   pushTenantSkillEnv,
   ENV_FROM_ONLY_KEYS,
 } from '../services/skill-env.js';
+import {
+  LLM_PROVIDERS_KEY,
+  LlmProvidersError,
+  pushLlmProviders,
+  resolveLlmProviders,
+  validateLlmProviders,
+} from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
 
 /**
@@ -133,6 +140,16 @@ export function createRuntimeConfigRoutes(
         res.status(400).json({ code: 'VALIDATION', message: 'description must be string' });
         return;
       }
+      // The LLM provider blob has a dedicated endpoint that also pushes the
+      // tenant-config Secret + rolls the agent; block the generic path so it
+      // can never be saved without being materialised.
+      if (String(key) === LLM_PROVIDERS_KEY) {
+        res.status(400).json({
+          code: 'VALIDATION',
+          message: 'LLM_PROVIDERS 请使用 /v1/admin/llm-providers 接口维护',
+        });
+        return;
+      }
 
       await upsertRuntimeConfig(pool, { tenantId: scope, key, value, isSecret, description });
 
@@ -164,6 +181,13 @@ export function createRuntimeConfigRoutes(
   router.delete('/v1/admin/runtime-configs/:key', async (req: Request, res: Response) => {
     try {
       const key = validateConfigKey(req.params.key);
+      if (key === LLM_PROVIDERS_KEY) {
+        res.status(400).json({
+          code: 'VALIDATION',
+          message: 'LLM_PROVIDERS 请使用 DELETE /v1/admin/llm-providers 维护',
+        });
+        return;
+      }
       const tenantId = typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
 
       if (tenantId && !(await tenantExists(tenantId))) {
@@ -184,6 +208,90 @@ export function createRuntimeConfigRoutes(
         return;
       }
       console.error('deleteRuntimeConfig failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // ── LLM providers (大模型提供商) ────────────────────────────────────
+  // The provider set lives in ONE runtime_configs row (key LLM_PROVIDERS,
+  // encrypted JSON). These endpoints round-trip the decrypted document so
+  // the admin form can edit real values, then materialise it into the
+  // affected tenants' tenant-config Secrets with a rolling restart.
+
+  // GET /v1/admin/llm-providers?tenantId=<id> — effective doc for the scope
+  router.get('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    try {
+      const tenantId =
+        typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
+      if (tenantId && !(await tenantExists(tenantId))) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      const r = await resolveLlmProviders(pool, tenantId);
+      res.json({ ...r, tenantId });
+    } catch (err) {
+      console.error('resolveLlmProviders failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // PUT /v1/admin/llm-providers — save + push the provider doc for one scope
+  router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    try {
+      const { tenantId, providers, defaultModel } = req.body ?? {};
+      const scope = typeof tenantId === 'string' && tenantId ? tenantId : null;
+      if (scope && !(await tenantExists(scope))) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+
+      const doc = validateLlmProviders({ providers, defaultModel });
+
+      // Persist as a single encrypted runtime_configs row (empty provider
+      // list is not allowed — use DELETE to clear the scope instead).
+      const blob = JSON.stringify(doc);
+      await upsertRuntimeConfig(pool, {
+        tenantId: scope,
+        key: LLM_PROVIDERS_KEY,
+        value: blob,
+        isSecret: true,
+        description: '大模型提供商配置（agent 启动时经 envFrom 注入，改动需滚动重启生效）',
+      });
+
+      const push = await pushLlmProviders(pool, config, scope);
+      res.json({ ok: true, tenantId: scope, push });
+    } catch (err) {
+      if (err instanceof MasterKeyError) {
+        res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
+        return;
+      }
+      if (err instanceof LlmProvidersError) {
+        res.status(400).json({ code: 'VALIDATION', message: err.message });
+        return;
+      }
+      console.error('PUT llm-providers failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // DELETE /v1/admin/llm-providers?tenantId=<id> — clear the scope's doc
+  router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    try {
+      const tenantId =
+        typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
+      if (tenantId && !(await tenantExists(tenantId))) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      const deleted = await deleteRuntimeConfig(pool, tenantId, LLM_PROVIDERS_KEY);
+      if (deleted === 0) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No LLM provider config in this scope' });
+        return;
+      }
+      const push = await pushLlmProviders(pool, config, tenantId);
+      res.json({ ok: true, tenantId, push });
+    } catch (err) {
+      console.error('DELETE llm-providers failed:', err);
       res.status(500).json({ code: 'INTERNAL' });
     }
   });

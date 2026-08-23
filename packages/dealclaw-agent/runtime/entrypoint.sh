@@ -42,7 +42,19 @@ fi
 
 node /opt/dealclaw/runtime/write-config.mjs
 
-if [[ "${DEALCLAW_MODEL:-deepseek/deepseek-chat}" == deepseek/* && -z "${DEEPSEEK_API_KEY:-}" ]]; then
+# Custom LLM providers (managed from the admin console via the LLM_PROVIDERS
+# envFrom blob): write-config.mjs materialised their API keys as shell
+# exports in <stateDir>/llm-env.sh. Source them BEFORE starting the gateway
+# so the config's env-referenced apiKeys resolve.
+if [[ -f "${OPENCLAW_STATE_DIR}/llm-env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${OPENCLAW_STATE_DIR}/llm-env.sh"
+fi
+
+# Fail-closed boot checks: the default DeepSeek path needs its key. When
+# custom providers are configured (LLM_PROVIDERS), write-config.mjs has
+# already validated them and llm-env.sh provided their keys instead.
+if [[ -z "${LLM_PROVIDERS:-}" && "${DEALCLAW_MODEL:-deepseek/deepseek-chat}" == deepseek/* && -z "${DEEPSEEK_API_KEY:-}" ]]; then
   echo "[dealclaw-runtime] DEALCLAW_MODEL requires DEEPSEEK_API_KEY" >&2
   exit 1
 fi

@@ -37,9 +37,10 @@ export const SKILL_ENV_DEFAULT_MODE = 0o440;
 /**
  * Keys that never enter the .env file — model-provider credentials consumed
  * at container boot (write-config.mjs / entrypoint fail-closed check) via
- * the tenant-config Secret (envFrom).
+ * the tenant-config Secret (envFrom). LLM_PROVIDERS is the admin-managed
+ * provider blob (JSON: providers + defaultModel) parsed by write-config.mjs.
  */
-export const ENV_FROM_ONLY_KEYS = new Set(['DEEPSEEK_API_KEY']);
+export const ENV_FROM_ONLY_KEYS = new Set(['DEEPSEEK_API_KEY', 'LLM_PROVIDERS']);
 
 export class SkillEnvError extends Error {
   constructor(
