@@ -20,7 +20,7 @@ COPY payload /opt/dealclaw/payload
 COPY runtime /opt/dealclaw/runtime
 RUN npm ci --omit=dev --legacy-peer-deps \
       --prefix /opt/dealclaw/runtime/dependencies \
-    && chmod 0755 /opt/dealclaw/runtime/entrypoint.sh \
+    && chmod 0755 /opt/dealclaw/runtime/*.sh \
     && mkdir -p /data/home /data/state /data/workspace \
     && chown -R node:node /data /opt/dealclaw
 

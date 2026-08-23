@@ -61,8 +61,46 @@ gateway_pid=$!
 node /opt/dealclaw/bridge/dist/index.js &
 bridge_pid=$!
 
+# ── 租户初始化（后台顺序执行，不阻塞 supervise 主流程）──
+# 等 gateway 就绪 → 写 .env → 注册 cron → agent 预加载画像/线索池
+init_runtime() {
+  local url="http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/readyz"
+  local max_attempts="${DEALCLAW_GATEWAY_READY_ATTEMPTS:-90}"
+  local delay="${DEALCLAW_GATEWAY_READY_DELAY:-2}"
+  local attempt=0
+
+  # 1. 轮询等 gateway 就绪（/readyz 返回 200）
+  while [[ $attempt -lt $max_attempts ]]; do
+    if python3 -c "import urllib.request; urllib.request.urlopen('$url', timeout=2)" >/dev/null 2>&1; then
+      echo "[dealclaw-runtime] gateway 就绪（${url}）"
+      break
+    fi
+    attempt=$((attempt+1))
+    sleep "$delay"
+  done
+  if [[ $attempt -ge $max_attempts ]]; then
+    echo "[dealclaw-runtime] gateway 未就绪（${max_attempts} 次 × ${delay}s），跳过初始化" >&2
+    return 1
+  fi
+
+  # 2. 写 work/mio-api/.env
+  bash /opt/dealclaw/runtime/dc-env-config.sh || echo "[dealclaw-runtime] dc-env-config.sh 失败" >&2
+
+  # 3. 注册 cron（幂等）
+  bash /opt/dealclaw/runtime/dc-cron-daily.sh       || echo "[dealclaw-runtime] dc-cron-daily.sh 失败" >&2
+  bash /opt/dealclaw/runtime/dc-cron-resend-poll.sh || echo "[dealclaw-runtime] dc-cron-resend-poll.sh 失败" >&2
+  bash /opt/dealclaw/runtime/dc-cron-leads-push.sh  || echo "[dealclaw-runtime] dc-cron-leads-push.sh 失败" >&2
+
+  # 4. agent 预加载：画像 + 线索池
+  bash /opt/dealclaw/runtime/dc-ensure-agent-preload.sh || echo "[dealclaw-runtime] dc-ensure-agent-preload.sh 失败" >&2
+
+  echo "[dealclaw-runtime] 初始化完成"
+}
+init_runtime &
+init_pid=$!
+
 terminate() {
-  kill -TERM "$bridge_pid" "$gateway_pid" 2>/dev/null || true
+  kill -TERM "$bridge_pid" "$gateway_pid" "$init_pid" 2>/dev/null || true
   wait "$bridge_pid" "$gateway_pid" 2>/dev/null || true
 }
 trap terminate TERM INT EXIT
