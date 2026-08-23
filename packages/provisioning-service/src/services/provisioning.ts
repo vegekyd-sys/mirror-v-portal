@@ -164,6 +164,9 @@ export async function provisionTenant(
       DEALCLAW_CREDITS_ACCOUNT_ID: `acct_${tenantLabel}`,
       // Cross-namespace: credits-ledger runs in the central namespace
       DEALCLAW_CREDITS_LEDGER_URL: `http://credits-ledger.${centralNs}:8081`,
+      // Shared service token so the gateway's LLM usage reports and balance
+      // lookups pass credits-ledger's requireServiceOrAdmin.
+      CREDITS_LEDGER_TOKEN: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '',
       DEALCLAW_CUSTOMER_KEY_REF: `tenant-keys/${tenantLabel}`,
       DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantLabel}`,
     });

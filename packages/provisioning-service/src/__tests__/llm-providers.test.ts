@@ -52,7 +52,7 @@ const baseConfig: ProvisioningConfig = {
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
 };
-const prodConfig = { ...baseConfig, k8sDryRun: false };
+const prodConfig = { ...baseConfig, k8sDryRun: false, creditsLedgerToken: 'svc-token' };
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
 
@@ -301,6 +301,10 @@ describe('pushLlmProviders', () => {
       glm: 'https://open.bigmodel.cn/api/paas/v4',
     });
 
+    // call 2: credits backfill — shared ledger token for usage reports
+    expect(k8sMocks.putSecret.mock.calls[2][1]).toBe('dealclaw-credits-t123');
+    expect(k8sMocks.putSecret.mock.calls[2][2].CREDITS_LEDGER_TOKEN).toBeTruthy();
+
     // retro-fit envFrom for pre-proxy gateways (idempotent patch)
     expect(k8sMocks.patchDeploymentEnvFromSecret).toHaveBeenCalledWith(
       'dealclaw-t123', 'nexus-gateway-t123', 'llm-proxy-config',
@@ -338,10 +342,11 @@ describe('pushLlmProviders', () => {
       globalRows: [{ config_key: LLM_PROVIDERS_KEY, encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
       globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
     });
+    k8sMocks.getSecret.mockResolvedValue({ data: { DEEPSEEK_API_KEY: b64('sk-ds') } });
     const r = await pushLlmProviders(pool, prodConfig, null);
     expect(r.tenants).toHaveLength(2);
-    // 2 tenants × 2 secrets (tenant-config + llm-proxy-config)
-    expect(k8sMocks.putSecret).toHaveBeenCalledTimes(4);
+    // 2 tenants × 3 secrets (tenant-config + llm-proxy-config + credits backfill)
+    expect(k8sMocks.putSecret).toHaveBeenCalledTimes(6);
     const legacyDelete = pool.queries.find(
       (q: FakeQuery) =>
         q.sql.includes('DELETE FROM runtime_configs') && q.sql.includes('tenant_id IS NOT NULL'),

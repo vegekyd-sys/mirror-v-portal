@@ -378,6 +378,22 @@ export async function pushLlmProviders(
       // 幂等补挂；404（网关不存在）静默跳过。
       await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
 
+      // 存量租户的 dealclaw-credits Secret 缺 CREDITS_LEDGER_TOKEN（网关
+      // 记账上报/余额查询的共享 token）——幂等 backfill，已有或本服务未
+      // 配置 token 时跳过。
+      const creditsSecretName = `dealclaw-credits-${tenantId}`;
+      if (config.creditsLedgerToken) {
+        const creditsSecret = await getSecret(namespace, creditsSecretName);
+        if (creditsSecret && !(creditsSecret.data && 'CREDITS_LEDGER_TOKEN' in creditsSecret.data)) {
+          const merged: Record<string, string> = {};
+          for (const [k, v] of Object.entries(creditsSecret.data ?? {})) {
+            merged[k] = Buffer.from(v, 'base64').toString('utf8');
+          }
+          merged['CREDITS_LEDGER_TOKEN'] = config.creditsLedgerToken;
+          await putSecret(namespace, creditsSecretName, merged);
+        }
+      }
+
       // envFrom values only apply on pod start — roll BOTH the agent
       // (rewritten provider blob) and the gateway (upstream map).
       const deployName = `dealclaw-agent-${tenantId}`;

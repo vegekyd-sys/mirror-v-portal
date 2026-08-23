@@ -251,6 +251,8 @@ export async function bindTenantFeishuApp(
   await createSecret(gatewayNs, creditsConfigName, {
     DEALCLAW_CREDITS_ACCOUNT_ID: tenant.credits_account_id || `acct_${tenantId}`,
     DEALCLAW_CREDITS_LEDGER_URL: `http://credits-ledger.${centralNs}:8081`,
+    // Shared token for the gateway's ledger calls (usage reports / balance)
+    CREDITS_LEDGER_TOKEN: config.creditsLedgerToken,
     DEALCLAW_CUSTOMER_KEY_REF: `tenant-keys/${tenantId}`,
     DEALCLAW_BOT_CREDENTIAL_REF: `bot/${tenantId}`,
   });
