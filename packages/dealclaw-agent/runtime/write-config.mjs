@@ -186,8 +186,39 @@ const config = {
       // blow past the 120s default and get killed mid-reply. 600s ceiling,
       // overridable per deployment via env.
       timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 600),
+      // Multi-user tenants: each Feishu peer gets its own concurrent budget
+      // instead of one global run slot.
+      maxConcurrent: Number(process.env.DEALCLAW_AGENT_MAX_CONCURRENT || 5),
       userTimezone: timezone,
       memorySearch: { enabled: true, provider: 'none' },
+      // Trim stale cache-tagged tool results so long single sessions don't
+      // balloon towards the 131k window (mirrors the V/Makaron workstation).
+      contextPruning: {
+        mode: 'cache-ttl',
+        ttl: '1m',
+        keepLastAssistants: 1,
+        softTrimRatio: 0.15,
+        hardClearRatio: 0.25,
+        minPrunableToolChars: 12_000,
+      },
+      // Safeguard compaction: summarise history instead of hard-failing when
+      // the context overflows. Uses the primary model (tenant gateway proxy).
+      compaction: {
+        mode: 'safeguard',
+        reserveTokens: 16_384,
+        keepRecentTokens: 8_192,
+        reserveTokensFloor: 4_096,
+        maxHistoryShare: 0.35,
+        recentTurnsPreserve: 3,
+        truncateAfterCompaction: true,
+        timeoutSeconds: 360,
+        ...(primaryModel ? { model: primaryModel } : {}),
+        notifyUser: true,
+        qualityGuard: { enabled: true, maxRetries: 1 },
+      },
+      contextLimits: {
+        toolResultMaxChars: 32_000,
+      },
     },
     list: [
       {
@@ -252,6 +283,35 @@ const config = {
         },
       }
     : {}),
+  // In-flight user messages steer the current run (merged after a 1s
+  // debounce) instead of queueing behind it — mirrors the workstation
+  // config; kills the "second message waits minutes" UX. Set
+  // DEALCLAW_MESSAGE_QUEUE_MODE=off to restore strict FIFO queueing.
+  ...(process.env.DEALCLAW_MESSAGE_QUEUE_MODE !== 'off'
+    ? {
+        messages: {
+          queue: {
+            mode: process.env.DEALCLAW_MESSAGE_QUEUE_MODE || 'steer',
+            debounceMs: 1_000,
+            cap: 20,
+            drop: 'summarize',
+          },
+        },
+      }
+    : {}),
+  // One session per channel peer: each Feishu user gets an independent
+  // conversation instead of sharing agent:dealclaw:main. Sessions are pruned
+  // after 14d to bound PVC growth. DEALCLAW_SESSION_DM_SCOPE=shared restores
+  // the legacy single-session behaviour.
+  session: {
+    dmScope: process.env.DEALCLAW_SESSION_DM_SCOPE || 'per-channel-peer',
+    maintenance: {
+      mode: 'enforce',
+      pruneAfter: '14d',
+      maxEntries: 500,
+      resetArchiveRetention: '14d',
+    },
+  },
   logging: {
     redactSensitive: 'tools',
   },

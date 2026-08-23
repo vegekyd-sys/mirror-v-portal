@@ -98,3 +98,30 @@ describe('write-config channels.feishu (P2)', () => {
     expect(config.plugins.load.paths.some((p: string) => p.includes('dealclaw-contact'))).toBe(true);
   });
 });
+
+describe('write-config runtime tuning (queue / pruning / compaction / session)', () => {
+  it('emits steer message queue, per-peer sessions and context safeguards by default', () => {
+    const { config } = runWriteConfig({ LLM_PROVIDERS: PROVIDERS });
+    expect(config.messages?.queue).toEqual({
+      mode: 'steer', debounceMs: 1000, cap: 20, drop: 'summarize',
+    });
+    expect(config.session?.dmScope).toBe('per-channel-peer');
+    expect(config.session?.maintenance?.pruneAfter).toBe('14d');
+    const d = config.agents.defaults;
+    expect(d.contextPruning?.mode).toBe('cache-ttl');
+    expect(d.compaction?.mode).toBe('safeguard');
+    expect(d.compaction?.model).toBe('deepseek/deepseek-chat');
+    expect(d.contextLimits?.toolResultMaxChars).toBe(32000);
+    expect(d.maxConcurrent).toBeGreaterThan(0);
+  });
+
+  it('honours escape-hatch envs (queue off, shared dmScope)', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_MESSAGE_QUEUE_MODE: 'off',
+      DEALCLAW_SESSION_DM_SCOPE: 'shared',
+    });
+    expect(config.messages).toBeUndefined();
+    expect(config.session?.dmScope).toBe('shared');
+  });
+});

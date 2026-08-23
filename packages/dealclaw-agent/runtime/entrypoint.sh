@@ -42,6 +42,27 @@ fi
 
 node /opt/dealclaw/runtime/write-config.mjs
 
+# ── lark-cli 初始化（bot 身份，非交互、幂等）─────────────────────────
+# openclaw plane 下租户 bot 凭据已在 env 中：写入 lark-cli 配置，让
+# lark-cli docs/base/drive 等技能可用（bot identity）。用户身份
+# （--as user，设备码流程）无法自动开通，需租户管理员后续自行绑定。
+# HOME 指向临时目录，配置不落 PVC，每次启动重建（幂等）。
+if command -v lark-cli >/dev/null 2>&1 \
+   && [[ -n "${DEALCLAW_APP_ID:-}" && -n "${DEALCLAW_APP_SECRET:-}" ]] \
+   && [[ "${DEALCLAW_MESSAGE_PLANE:-gateway}" == "openclaw" ]] \
+   && ! [[ "${DEALCLAW_APP_ID}" == placeholder-* ]]; then
+  if printf '%s' "$DEALCLAW_APP_SECRET" \
+      | lark-cli config init --app-id "$DEALCLAW_APP_ID" \
+          --app-secret-stdin --brand feishu --force-init >/dev/null 2>&1; then
+    echo "[dealclaw-runtime] lark-cli 已绑定租户 bot（appId=$DEALCLAW_APP_ID）"
+  else
+    echo "[dealclaw-runtime] lark-cli 初始化失败（不影响消息面启动）" >&2
+  fi
+else
+  echo "[dealclaw-runtime] lark-cli 未初始化（非 openclaw plane 或凭据缺失）" >&2
+fi
+
+
 # Custom LLM providers (managed from the admin console via the LLM_PROVIDERS
 # envFrom blob): write-config.mjs materialised their API keys as shell
 # exports in <stateDir>/llm-env.sh. Source them BEFORE starting the gateway

@@ -21,6 +21,10 @@ RUN apt-get update \
       ca-certificates python3 python3-flask python3-openpyxl python3-requests rsync \
     && rm -rf /var/lib/apt/lists/*
 
+# Feishu official CLI — required by lark/feishu skills (docs, base, drive).
+# Pinned; bump together with skills that reference new CLI capabilities.
+RUN npm install -g @larksuite/cli@1.0.68
+
 COPY --from=bridge-build /build/dist /opt/dealclaw/bridge/dist
 COPY --from=bridge-build /build/node_modules /opt/dealclaw/bridge/node_modules
 COPY --from=bridge-build /build/package.json /opt/dealclaw/bridge/package.json
