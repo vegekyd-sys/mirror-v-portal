@@ -71,6 +71,18 @@ export default function RuntimeConfigsPage() {
   const [lpBaseUrl, setLpBaseUrl] = useState('');
   const [lpApiKey, setLpApiKey] = useState('');
   const [lpModels, setLpModels] = useState('');
+  const [lpMsg, setLpMsg] = useState('');
+  const [lpMsgErr, setLpMsgErr] = useState(false);
+
+  // 卡片内就地提示（校验错误/成功反馈），避免出现在页面顶部导致用户误以为"无反应"
+  const flashLp = (text: string, isErr = false) => {
+    setLpMsg(text);
+    setLpMsgErr(isErr);
+    window.setTimeout(() => {
+      setLpMsg('');
+      setLpMsgErr(false);
+    }, 6000);
+  };
 
   const flash = (text: string) => {
     setMsg(text);
@@ -214,29 +226,29 @@ export default function RuntimeConfigsPage() {
   const addOrUpdateProvider = () => {
     const name = lpName.trim().toLowerCase();
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
-      flash('提供商 ID 不合法：小写字母开头，仅小写字母/数字/_/-（最长 32 位）');
+      flashLp('提供商 ID 不合法：需小写字母开头，仅小写字母/数字/_/-（最长 32 位），如 qwen、glm-4', true);
       return;
     }
     if (!/^https?:\/\/.+/.test(lpBaseUrl.trim())) {
-      flash('Base URL 需以 http(s):// 开头');
+      flashLp('Base URL 需以 http:// 或 https:// 开头，如 https://dashscope.aliyuncs.com/compatible-mode/v1', true);
       return;
     }
     if (!lpApiKey.trim()) {
-      flash('API Key 不能为空');
+      flashLp('API Key 不能为空', true);
       return;
     }
     const models = parseModelLines(lpModels);
     if (models.length === 0) {
-      flash('至少填写一个模型 ID');
+      flashLp('至少填写一个模型 ID（模型列表输入框，一行一个）', true);
       return;
     }
     if (models.some((m) => !/^[A-Za-z0-9._-]{1,100}$/.test(m.id))) {
-      flash('模型 ID 只能含字母/数字/./_/-');
+      flashLp('模型 ID 只能含字母/数字/./_/-（:reasoner 后缀除外）', true);
       return;
     }
     const exists = llmDoc.providers.some((p) => p.name === name);
     if (exists && lpEditing !== name) {
-      flash(`提供商 ${name} 已存在`);
+      flashLp(`提供商 ${name} 已存在，请换一个 ID 或用列表中的「编辑」`, true);
       return;
     }
     const next: LlmProvider = {
@@ -259,7 +271,7 @@ export default function RuntimeConfigsPage() {
     setLpBaseUrl('');
     setLpApiKey('');
     setLpModels('');
-    flash(lpEditing ? `已更新提供商 ${name}（尚未保存，请点「保存提供商配置」）` : `已添加提供商 ${name}（尚未保存，请点「保存提供商配置」）`);
+    flashLp(lpEditing ? `已更新提供商 ${name}（尚未保存，请点「保存提供商配置」）` : `已添加提供商 ${name}（尚未保存，请点「保存提供商配置」）`);
   };
 
   const editProvider = (p: LlmProvider) => {
@@ -287,11 +299,11 @@ export default function RuntimeConfigsPage() {
 
   const saveLlm = async () => {
     if (llmDoc.providers.length === 0) {
-      flash('未配置任何提供商；如需清除请用「清除本作用域覆盖/配置」');
+      flashLp('未配置任何提供商；如需清除请用「清除本作用域覆盖/配置」', true);
       return;
     }
     if (!llmDoc.defaultModel) {
-      flash('请选择默认模型');
+      flashLp('请选择默认模型（agent 主模型，必选）', true);
       return;
     }
     const scopeLabel = scope || '全局默认';
@@ -302,11 +314,11 @@ export default function RuntimeConfigsPage() {
         method: 'PUT',
         body: { tenantId: scope || null, providers: llmDoc.providers, defaultModel: llmDoc.defaultModel },
       });
-      flash(`已保存大模型提供商（${scopeLabel}）。${r.push?.hint || ''}`);
+      flashLp(`已保存大模型提供商（${scopeLabel}）。${r.push?.hint || ''}`);
       log(`保存 LLM 提供商 @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
       await loadLlm(scope);
     } catch (e) {
-      flash(`保存失败：${errMsg(e)}`);
+      flashLp(`保存失败：${errMsg(e)}`, true);
       log(`保存 LLM 提供商失败：${errMsg(e)}`, true);
     } finally {
       setLlmBusy(false);
@@ -320,11 +332,11 @@ export default function RuntimeConfigsPage() {
     try {
       const qs = scope ? `?tenantId=${encodeURIComponent(scope)}` : '';
       const r = await api<{ push?: PushSummary }>(`/v1/admin/llm-providers${qs}`, { method: 'DELETE' });
-      flash(`已清除（${scopeLabel}）。${r.push?.hint || ''}`);
+      flashLp(`已清除（${scopeLabel}）。${r.push?.hint || ''}`);
       log(`清除 LLM 提供商 @ ${scopeLabel}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
       await loadLlm(scope);
     } catch (e) {
-      flash(`清除失败：${errMsg(e)}`);
+      flashLp(`清除失败：${errMsg(e)}`, true);
     } finally {
       setLlmBusy(false);
     }
@@ -548,6 +560,9 @@ export default function RuntimeConfigsPage() {
             {lpEditing ? '更新到列表' : '加入列表'}
           </button>
         </div>
+        {lpMsg && (
+          <div className={`msg ${lpMsgErr ? 'msg-err' : 'msg-ok'}`} style={{ marginTop: -4 }}>{lpMsg}</div>
+        )}
         <div className="form-row">
           <label className="field-label">默认模型</label>
           <select
