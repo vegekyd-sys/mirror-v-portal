@@ -9,6 +9,7 @@ FROM ghcr.io/openclaw/openclaw:2026.7.1
 
 # Feishu channel plugin — MUST match the base image's OpenClaw version
 # (plugins are version-coupled to the host runtime). Pinned, not `latest`.
+USER root
 RUN npm install --omit=dev --no-save --legacy-peer-deps \
       --prefix /opt/dealclaw/plugins/feishu \
       @openclaw/feishu@2026.7.1 \
