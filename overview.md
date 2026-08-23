@@ -218,3 +218,29 @@ ACR 拒绝直接 Basic auth 调 v2 API，401 响应带 `WWW-Authenticate: Bearer
 | `POST /v1/admin/default-tenant/ensure` | 404（路由已删） |
 | provisioning boot 日志 | 无 default-tenant 引导；registry-sync 正常 `+0/2; +0/6`（幂等） |
 | 飞书租户聊天回归 | 200 "pong"（首次闲置后偶发空回复，重试正常，代理代码未改动） |
+
+---
+
+# 2026-08-23（三）：飞书扫码一键绑定
+
+需求：飞书绑定（客户详情页）与创建客户时，飞书 App ID/Secret 除手动填写外，支持扫码一键获取。
+
+## 方案
+
+复用 central-gateway 自助入驻已验证的飞书设备授权流（`lark.registerApp`，createOnly）：管理员点「扫码获取」→ 弹出二维码 → 客户用飞书 App 扫码确认 → 飞书在客户企业内自动创建「DealClaw AI销售助手」自建应用 → 凭据自动回填表单 → 管理员确认提交（仍走原有的飞书凭据校验 + 绑定/开通链路）。credentials-only：扫码本身不创建租户、不落库，管理员保持对表单的完全控制。
+
+## 代码改动（dealclaw `6024805`）
+
+- **provisioning-service**
+  - `services/feishu-app-scan.ts`：registerApp 封装（实现可注入便于测试）、内存会话（TTL 20min 懒清扫、pending 上限 50、二维码渲染为 data URI）
+  - `routes/feishu-app-scan.ts`：`POST /v1/admin/feishu-app/scan/start`、`GET …/scan/status/:deviceCode`、`POST …/scan/cancel`，复用 service-token/admin-JWT 鉴权
+  - 新依赖：`@larksuiteoapi/node-sdk@1.72.0`、`qrcode`
+- **admin-web**
+  - `components/FeishuAppScanModal.tsx`：打开即出码、有效期倒计时、2.5s 轮询、成功回填并自动关闭、过期/404 可一键重试、关闭时服务端取消会话
+  - CustomersPage（创建客户）与 CustomerDetailPage（飞书绑定）表单新增「扫码获取」按钮
+- 配套（aochi `01dbc30`）：两 overlay ingress 增加 `/v1/admin/feishu-app` → provisioning-service
+
+## 测试与上线
+
+- provisioning-service 测试 70 passed（新增 10：会话生命周期 pending/completed/failed/cancelled/TTL/cap + 路由面）
+- Jenkins Build #48（TEST）→ Build #49（PROD，DEPLOY_ENV=PROD）：provisioning-service + admin-web
