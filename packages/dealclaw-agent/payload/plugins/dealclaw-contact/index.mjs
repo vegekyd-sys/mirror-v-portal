@@ -17,28 +17,31 @@ const PROVISIONING_TOKEN = process.env.PROVISIONING_API_TOKEN || '';
 
 let lastReportedOpenId = null;
 
-/** 从 message_received 事件的多个可能形态里提取 sender open_id。 */
-function extractOpenId(event) {
-  const ctx = event?.ctx || {};
+/** 从 message_received 钩子的真实形态提取 sender open_id。
+ *
+ * 钩子签名为 api.on('message_received', (event, ctx))，字段来自
+ * OpenClaw dist/message-hook-mappers（toPluginMessageReceivedEvent /
+ * toPluginMessageContext），2026.7.1 实测：
+ *   - ctx.senderId / ctx.channelId（ctx 是第二个参数，不是 event.ctx）
+ *   - event.senderId / event.from（字符串）/ event.metadata.senderId
+ */
+function extractOpenId(event, ctx) {
   const candidates = [
-    ctx.From?.id,
-    typeof ctx.From === 'string' ? ctx.From : null,
-    event?.message?.from?.id,
-    event?.message?.from,
-    ctx.RawBody?.sender?.sender_id?.open_id,
-    event?.rawBody?.sender?.sender_id?.open_id,
+    typeof ctx?.senderId === 'string' ? ctx.senderId : null,
+    typeof event?.senderId === 'string' ? event.senderId : null,
+    typeof event?.from === 'string' ? event.from : null,
+    typeof event?.metadata?.senderId === 'string' ? event.metadata.senderId : null,
   ];
   for (const c of candidates) {
-    if (typeof c === 'string' && c.trim()) return c.trim();
+    if (c && c.trim()) return c.trim();
   }
   return null;
 }
 
 /** 只关心飞书渠道的入站消息（web/bridge 路径不需要回写）。 */
-function isFeishuInbound(event) {
-  const ctx = event?.ctx || {};
-  const channel = ctx.OriginatingChannel || ctx.channel || event?.channel;
-  if (typeof channel === 'string' && channel) return channel.toLowerCase().includes('feishu');
+function isFeishuInbound(event, ctx) {
+  const channel = String(ctx?.channelId || event?.metadata?.originatingChannel || '');
+  if (channel) return channel.toLowerCase().includes('feishu');
   // 渠道信息缺失时不放走——本插件只挂在这类事件上，宁可多报一次幂等 UPDATE。
   return true;
 }
@@ -76,13 +79,16 @@ export default definePluginEntry({
       return;
     }
 
-    api.on('message_received', async (event) => {
+    api.on('message_received', async (event, ctx) => {
       try {
-        if (!isFeishuInbound(event)) return;
-        const openId = extractOpenId(event);
+        if (!isFeishuInbound(event, ctx)) return;
+        const openId = extractOpenId(event, ctx);
         if (!openId || openId === lastReportedOpenId) return;
         const ok = await reportContact(openId);
-        if (ok) lastReportedOpenId = openId;
+        if (ok) {
+          lastReportedOpenId = openId;
+          console.log(`[dc-contact] im_open_id reported: ${openId}`);
+        }
       } catch {
         /* never throw out of a hook */
       }
