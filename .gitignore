@@ -19,3 +19,7 @@ __pycache__/
 
 # workbuddy local data
 .workbuddy/
+
+# local scratch dirs (误产生日志/弃用存档，不入库)
+/memory/
+/trash/

@@ -6,6 +6,7 @@ const workspace = process.env.OPENCLAW_WORKSPACE_DIR || '/data/workspace';
 const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, 'openclaw.json');
 const timezone = process.env.DEALCLAW_TIMEZONE || 'Asia/Shanghai';
 const gatewayPort = Number(process.env.OPENCLAW_GATEWAY_PORT || 18790);
+const gatewayToken = (process.env.OPENCLAW_GATEWAY_TOKEN || '').trim();
 
 function fail(msg) {
   console.error(`[dealclaw-runtime] ${msg}`);
@@ -161,7 +162,11 @@ const config = {
     mode: 'local',
     bind: 'loopback',
     port: gatewayPort,
-    auth: { mode: 'none' },
+    // Shared-token auth so the CLI (cron add / agent) authenticates as an
+    // operator.admin client instead of triggering device-pairing scope-upgrade
+    // (which needs manual approval and blocks unattended tenant startup).
+    // Falls back to none when no token is injected.
+    auth: gatewayToken ? { mode: 'token', token: gatewayToken } : { mode: 'none' },
     http: {
       endpoints: {
         responses: {

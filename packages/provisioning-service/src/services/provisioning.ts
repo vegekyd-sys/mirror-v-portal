@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import {
   createNamespace,
@@ -148,6 +149,12 @@ export async function provisionTenant(
   const agentName = `dealclaw-agent-${tenantLabel}`;
   const agentPvcName = `dealclaw-runtime-${tenantLabel}`;
 
+  // Per-tenant shared-secret auth for the agent's in-pod Gateway loopback.
+  // The dealclaw-agent CLI (cron add / agent) authenticates to the gateway
+  // with this token → operator.admin scope, bypassing device-pairing
+  // scope-upgrade approval that blocks unattended tenant startup.
+  const gatewayToken = randomBytes(32).toString('hex');
+
   if (dryRun) {
     result.warnings.push(`DRY_RUN: would provision in namespace ${nsName}`);
     result.secrets.push(botSecretName, agentConfigName, creditsConfigName, 'tenant-config', 'llm-proxy-config', SKILL_ENV_SECRET_NAME);
@@ -196,6 +203,7 @@ export async function provisionTenant(
       DEALCLAW_TENANT_ID: tenantLabel,
       DEALCLAW_PLAN_TIER: tenant.planTier,
       DEALCLAW_INITIAL_CREDITS: String(tenant.quotaCreditsMonthly),
+      OPENCLAW_GATEWAY_TOKEN: gatewayToken,
       ...(tenant.mioCdpSupplierId ? { MIO_CDP_SUPPLIER_ID: tenant.mioCdpSupplierId } : {}),
     });
     result.secrets.push(agentConfigName);

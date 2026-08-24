@@ -76,14 +76,19 @@ fi
 # without a model (write-config.mjs warns); conversations fail until an
 # admin configures providers in the console.
 
-openclaw gateway run --port "$OPENCLAW_GATEWAY_PORT" --bind loopback --auth none &
+# Shared-token auth avoids device-pairing scope-upgrade for the CLI (cron add /
+# agent). When OPENCLAW_GATEWAY_TOKEN is injected, run with token auth;
+# otherwise fall back to none.
+GATEWAY_AUTH_MODE="${OPENCLAW_GATEWAY_TOKEN:+token}"
+GATEWAY_AUTH_MODE="${GATEWAY_AUTH_MODE:-none}"
+openclaw gateway run --port "$OPENCLAW_GATEWAY_PORT" --bind loopback --auth "$GATEWAY_AUTH_MODE" &
 gateway_pid=$!
 
 node /opt/dealclaw/bridge/dist/index.js &
 bridge_pid=$!
 
 # ── 租户初始化（后台顺序执行，不阻塞 supervise 主流程）──
-# 等 gateway 就绪 → 写 .env → 注册 cron → agent 预加载画像/线索池
+# 等 gateway 就绪 → 注册 cron → agent 预加载画像/线索池（.env 已由 skill-env Secret 提供，不再写）
 init_runtime() {
   local url="http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/readyz"
   local max_attempts="${DEALCLAW_GATEWAY_READY_ATTEMPTS:-90}"
@@ -104,15 +109,12 @@ init_runtime() {
     return 1
   fi
 
-  # 2. 写 work/mio-api/.env
-  bash /opt/dealclaw/runtime/dc-env-config.sh || echo "[dealclaw-runtime] dc-env-config.sh 失败" >&2
-
-  # 3. 注册 cron（幂等）
+  # 2. 注册 cron（幂等）
   bash /opt/dealclaw/runtime/dc-cron-daily.sh       || echo "[dealclaw-runtime] dc-cron-daily.sh 失败" >&2
   bash /opt/dealclaw/runtime/dc-cron-resend-poll.sh || echo "[dealclaw-runtime] dc-cron-resend-poll.sh 失败" >&2
   bash /opt/dealclaw/runtime/dc-cron-leads-push.sh  || echo "[dealclaw-runtime] dc-cron-leads-push.sh 失败" >&2
 
-  # 4. agent 预加载：画像 + 线索池
+  # 3. agent 预加载：画像 + 线索池
   bash /opt/dealclaw/runtime/dc-ensure-agent-preload.sh || echo "[dealclaw-runtime] dc-ensure-agent-preload.sh 失败" >&2
 
   echo "[dealclaw-runtime] 初始化完成"
