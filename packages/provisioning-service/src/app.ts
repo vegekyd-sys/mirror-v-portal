@@ -6,6 +6,7 @@ import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
+import { createExternalApiRoutes } from './routes/external-api.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 
@@ -35,6 +36,10 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(auth));
+
+  // External API routes — third-party API key auth (managed in admin console),
+  // NOT the internal service/admin token gate above.
+  app.use(createExternalApiRoutes(pool, config));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {
