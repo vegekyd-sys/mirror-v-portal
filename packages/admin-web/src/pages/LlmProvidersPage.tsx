@@ -5,7 +5,7 @@
 // nexus-gateway LLM 出口代理上报的 token 记账）。
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
-import { IconAlert, IconRefresh, IconSave } from '../components/icons';
+import { IconAlert, IconRefresh } from '../components/icons';
 
 interface PushSummary {
   status?: 'ok' | 'failed' | 'skipped';
@@ -175,7 +175,8 @@ export default function LlmProvidersPage() {
     setLpBaseUrl('');
     setLpApiKey('');
     setLpModels('');
-    flashLp(lpEditing ? `已更新供应商 ${name}（尚未保存，请点「保存供应商库」）` : `已添加供应商 ${name}（尚未保存，请点「保存供应商库」）`);
+    flashLp(lpEditing ? `正在更新供应商 ${name}…` : `正在写入供应商 ${name}…`);
+    void persistLibrary(providers, defaultModel, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
   };
 
   const editProvider = (p: LlmProvider) => {
@@ -187,10 +188,13 @@ export default function LlmProvidersPage() {
   };
 
   const removeProvider = (name: string) => {
-    if (!window.confirm(`确认从列表移除供应商 ${name}？（需保存后生效）`)) return;
+    if (!window.confirm(`确认从供应商库移除 ${name}？立即生效，所有租户 agent 将滚动重启。`)) return;
     const providers = llmDoc.providers.filter((p) => p.name !== name);
-    const defaultModel =
-      llmDoc.defaultModel && llmDoc.defaultModel.startsWith(`${name}/`) ? null : llmDoc.defaultModel;
+    let defaultModel = llmDoc.defaultModel;
+    if (defaultModel && defaultModel.startsWith(`${name}/`)) {
+      defaultModel = null;
+      flashLp(`系统默认模型 ${llmDoc.defaultModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
+    }
     setLlmDoc({ providers, defaultModel });
     if (lpEditing === name) {
       setLpEditing(null);
@@ -199,49 +203,57 @@ export default function LlmProvidersPage() {
       setLpApiKey('');
       setLpModels('');
     }
+    void persistLibrary(providers, defaultModel, `移除供应商 ${name}`);
   };
 
-  const save = async () => {
-    if (llmDoc.providers.length === 0) {
-      flashLp('未配置任何供应商；如需清空整个库请用「清空供应商库」', true);
-      return;
-    }
-    if (!llmDoc.defaultModel) {
-      flashLp('请选择系统默认模型（未单独选择的租户 agent 将使用它）', true);
-      return;
-    }
+  /**
+   * 即时保存：每次操作（加入/更新/移除/切换默认模型）直接全量写库并推送
+   * 所有租户。库为空时走 DELETE 接口（清库）。失败后 load() 把本地状态
+   * 回滚到后端实际数据，保证界面与库一致。
+   */
+  const persistLibrary = async (
+    providers: LlmProvider[],
+    defaultModel: string | null,
+    opText: string,
+  ) => {
     setBusy(true);
     try {
-      const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
-        method: 'PUT',
-        body: { providers: llmDoc.providers, defaultModel: llmDoc.defaultModel },
-      });
-      flash(`已保存供应商库。${r.push?.hint || ''}`);
-      log(`保存供应商库${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
-      await load();
-    } catch (e) {
-      flashLp(`保存失败：${errMsg(e)}`, true);
-      log(`保存供应商库失败：${errMsg(e)}`, true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const clearAll = async () => {
-    if (!window.confirm('确认清空整个供应商库？所有租户 agent 将在重启后无可用模型（对话会失败），直到重新添加供应商。')) return;
-    setBusy(true);
-    try {
-      const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', { method: 'DELETE' });
-      flash(`已清空供应商库。${r.push?.hint || ''}`);
-      log(`清空供应商库${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
+      if (providers.length === 0) {
+        const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', { method: 'DELETE' });
+        flash(`已移除全部供应商。${r.push?.hint || ''}`);
+        log(`移除全部供应商${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
+      } else {
+        const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
+          method: 'PUT',
+          body: { providers, defaultModel },
+        });
+        flash(`${opText}，已生效。${r.push?.hint || ''}`);
+        log(`${opText}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
+      }
       await load();
     } catch (e) {
       const m = errMsg(e);
-      flash(`清空失败：${m}`, true);
-      log(`清空供应商库失败：${m}`, true);
+      flash(`操作失败：${m}`, true);
+      log(`${opText}失败：${m}`, true);
+      await load(); // 回滚本地 state 到后端真实数据
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 切换系统默认模型：替换已有值时弹确认，确认后即时保存。 */
+  const changeDefaultModel = (raw: string) => {
+    const next = raw || null;
+    const prev = llmDoc.defaultModel;
+    if (prev === next) return;
+    if (prev && next) {
+      if (!window.confirm(`系统默认模型将由「${prev}」替换为「${next}」？确认后将立即生效并推送所有租户。`)) {
+        setLlmDoc((d) => ({ ...d, defaultModel: prev })); // 强制回滚 select 显示
+        return;
+      }
+    }
+    setLlmDoc((d) => ({ ...d, defaultModel: next }));
+    void persistLibrary(llmDoc.providers, next, next ? `设置系统默认模型为 ${next}` : '清空系统默认模型');
   };
 
   const libraryEmpty = llmDoc.providers.length === 0;
@@ -281,8 +293,8 @@ export default function LlmProvidersPage() {
           {llmDoc.defaultModel && <span className="badge badge-warn">系统默认：{llmDoc.defaultModel}</span>}
         </div>
         <div className="hint" style={{ marginBottom: 10 }}>
-          OpenAI 兼容接口（DeepSeek / 通义千问 / 智谱 GLM / Kimi / 豆包等）。保存后写入各租户{' '}
-          <span className="mono">tenant-config</span> Secret 并滚动重启 agent，<b>约 1–2 分钟生效</b>
+          OpenAI 兼容接口（DeepSeek / 通义千问 / 智谱 GLM / Kimi / 豆包等）。<b>每次「加入列表」「更新」「移除」或切换系统默认模型都会立即写入全局库并推送所有租户</b>，
+          触发 agent 滚动重启，<span className="mono">约 1–2 分钟生效</span>
           （模型配置在容器启动时应用，不支持热更新）。系统不设内置默认供应商——未配置时 agent 无可用模型。
           租户级模型选择请到「Agents 管理」的 Agent 详情页设置。
         </div>
@@ -373,7 +385,7 @@ export default function LlmProvidersPage() {
             onChange={(e) => setLpModels(e.target.value)}
             placeholder="模型列表：一行一个 ID，推理模型加后缀 :reasoner（如 qwq-plus:reasoner）"
           />
-          <button className="btn-secondary" disabled={busy} onClick={addOrUpdateProvider}>
+          <button className="btn-primary" disabled={busy} onClick={addOrUpdateProvider}>
             {lpEditing ? '更新到列表' : '加入列表'}
           </button>
         </div>
@@ -384,10 +396,11 @@ export default function LlmProvidersPage() {
           <label className="field-label">系统默认模型</label>
           <select
             value={llmDoc.defaultModel || ''}
-            onChange={(e) => setLlmDoc((d) => ({ ...d, defaultModel: e.target.value || null }))}
+            onChange={(e) => changeDefaultModel(e.target.value)}
             style={{ flex: '0 1 280px' }}
+            disabled={busy}
           >
-            <option value="">— 选择系统默认模型（必选） —</option>
+            <option value="">— 选择系统默认模型（未单独选择的租户 agent 将使用它） —</option>
             {llmDoc.providers.flatMap((p) =>
               p.models.map((m) => (
                 <option key={`${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
@@ -396,14 +409,7 @@ export default function LlmProvidersPage() {
               )),
             )}
           </select>
-          <button className="btn-primary" disabled={busy} onClick={() => void save()}>
-            {busy ? '处理中…' : (<><IconSave /> 保存供应商库</>)}
-          </button>
-          {llmDoc.providers.length > 0 && (
-            <button className="btn-danger" disabled={busy} onClick={() => void clearAll()}>
-              清空供应商库
-            </button>
-          )}
+          <span className="hint">切换后即时生效（替换已有默认模型会先弹确认）</span>
         </div>
       </div>
 
