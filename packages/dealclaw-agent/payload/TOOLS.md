@@ -1,4 +1,4 @@
-# TOOLS.md — DealClaw Routing
+# TOOLS.md — 出海精灵小元 Routing
 
 ## Core routes
 - 企业官网/公开资料：`web_fetch` → `web_search` → `browser`（登录态或复杂页面）

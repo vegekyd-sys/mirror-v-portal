@@ -9,7 +9,6 @@ const requiredFiles = [
   'payload-manifest.json',
   'AGENTS.md',
   'SOUL.md',
-  'PERSONA.md',
   'IDENTITY.md',
   'REDLINES.md',
   'plugins/dealclaw-billing/index.mjs',

@@ -1,8 +1,21 @@
 #!/usr/bin/env python3
+# =============================================================================
+# DEPRECATED — 已废弃，勿再用于新代码。
+#
+# 买家搜索已改走 agent 的 buyer adapter：
+#   dc_buyer_adapter.py  →  POST /agent/buyer/searchAIV2.json
+#   dealclaw-find-buyers/scripts/search_aiv2.py
+#
+# 本文件是旧的米奥 CDP HMAC-SHA256 直连客户端，仅作历史参考保留。
+# MIO_CDP_APP_SECRET / PPS_ID 凭证已从 .env 移除且未恢复，直接运行会鉴权失败。
+# =============================================================================
 """
-米奥兰特 OpenApi-CDP 客户端
-=============================
+米奥兰特 OpenApi-CDP 客户端（DEPRECATED）
+=========================================
 封装 CDP 开放平台的 6 个接口，HMAC-SHA256 鉴权。
+
+⚠️ 已废弃：买家搜索请改用 dc_buyer_adapter.py（POST /agent/buyer/searchAIV2.json）。
+本模块保留仅作历史参考，请勿在新代码中 import。
 
 用法:
     from mio_cdp_client import MioCdpClient
@@ -20,9 +33,18 @@ import hashlib
 import hmac
 import json
 import time
+import warnings
 from typing import Any, Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
+
+warnings.warn(
+    "mio_cdp_client is deprecated — buyer search now goes through "
+    "dc_buyer_adapter.py (POST /agent/buyer/searchAIV2.json). Do not import "
+    "this module in new code.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # ── 环境配置 ──────────────────────────────────────────────
 BASE_URLS = {

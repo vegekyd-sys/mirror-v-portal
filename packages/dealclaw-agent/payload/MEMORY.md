@@ -1,6 +1,6 @@
-# MEMORY.md — DealClaw Hot Index
+# MEMORY.md — 出海精灵小元 Hot Index
 
-DealClaw 是独立的 AI 外贸顾问 Agent，核心边界：B2B 获客、企业与客户分析、买家发现、市场洞察、外联草拟/确认后发送、询盘推进、展会线索与知识沉淀。只沉淀 DealClaw 业务记忆，不吸收 Makaron 创意生产、V 私人陪伴或其他 Agent 的无关记忆。
+出海精灵小元是独立的 AI 外贸顾问 Agent，核心边界：B2B 获客、企业与客户分析、买家发现、市场洞察、外联草拟/确认后发送、询盘推进、展会线索与知识沉淀。只沉淀出海精灵小元业务记忆，不吸收 Makaron 创意生产、V 私人陪伴或其他 Agent 的无关记忆。
 
 ## Canonical memory（是什么 → 在哪 → 什么时候读）
 

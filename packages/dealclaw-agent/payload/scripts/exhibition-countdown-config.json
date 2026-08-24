@@ -1,0 +1,11 @@
+{
+  "comment": "展会倒计时多企业数据文件。每日 9:00 由 crontab 触发，遍历所有企业逐条推送。每家一条记录：webhook + supplier_id + exhibitions。缺展会数据不推、只标「待补」（不编时间地点）。数据来源：exhibitions 手动录入或后续 CDP 自动拉取；supplier_id 预留用于按企业拉参展计划。",
+  "companies": [
+    {
+      "company": "",
+      "webhook": "",
+      "supplier_id": "",
+      "exhibitions": []
+    }
+  ]
+}
