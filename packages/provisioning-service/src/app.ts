@@ -30,16 +30,19 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // Accepts the shared service token (internal callers) OR a valid admin
   // JWT (pure-frontend admin SPA calling directly, no proxy in front).
   const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
+
+  // External API routes — third-party API key auth (managed in admin console).
+  // MUST be mounted BEFORE the auth-protected routers below: those routers
+  // call router.use(authMiddleware) (no path), which would otherwise block
+  // /api/external/* with the admin/service-token gate before it reaches here.
+  app.use(createExternalApiRoutes(pool, config));
+
   app.use(createTenantRoutes(pool, config, auth));
   app.use(createRuntimeConfigRoutes(pool, config, auth));
   app.use(createAdminOpsRoutes(pool, config, auth));
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(auth));
-
-  // External API routes — third-party API key auth (managed in admin console),
-  // NOT the internal service/admin token gate above.
-  app.use(createExternalApiRoutes(pool, config));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {
