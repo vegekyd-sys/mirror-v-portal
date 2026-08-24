@@ -118,13 +118,21 @@ export async function provisionTenant(
   // Central control-plane namespace where provisioning-service / credits-ledger / ops-agent run
   const centralNs = options.runtimeNamespace || process.env.RUNTIME_NAMESPACE || DEFAULT_RUNTIME_NAMESPACE;
   const tenantLabel = tenant.tenantId;
-  const messagePlane = tenant.messagePlane === 'openclaw' ? 'openclaw' : 'gateway';
+  // Safety net: the openclaw direct-connect plane needs real bot credentials
+  // (feishu WS + lark-cli both read DEALCLAW_APP_ID/_SECRET). Without them,
+  // fall back to the gateway bridge so the tenant is still reachable.
+  let messagePlane = tenant.messagePlane === 'openclaw' ? 'openclaw' : 'gateway';
+  const planeFallbackWarning =
+    messagePlane === 'openclaw' && !tenant.appId && !tenant.appSecret
+      ? 'messagePlane=openclaw requested without bot credentials — falling back to gateway bridge'
+      : null;
+  if (planeFallbackWarning) messagePlane = 'gateway';
 
   const result: ProvisionResult = {
     namespace: nsName,
     secrets: [],
     pods: [],
-    warnings: [],
+    warnings: planeFallbackWarning ? [planeFallbackWarning] : [],
   };
 
   const labels = {

@@ -66,6 +66,20 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const safePhone = contactPhone ? contactPhone.replace(/[^0-9+ -]/g, '').slice(0, 30) : null;
       const safeAppId = botAppId && typeof botAppId === 'string' && botAppId.trim() ? botAppId.trim().slice(0, 64) : null;
       const safeAppSecret = botAppSecret && typeof botAppSecret === 'string' && botAppSecret.trim() ? botAppSecret.trim().slice(0, 128) : null;
+
+      // Message plane: Feishu bot credentials present → default to the
+      // openclaw direct-connect plane (feishu WS inside the tenant agent).
+      // Without credentials the gateway bridge is the only workable default.
+      // An explicit body.messagePlane wins, but 'openclaw' requires creds.
+      const explicitPlane = req.body?.messagePlane;
+      const hasBotCreds = Boolean(safeAppId && safeAppSecret);
+      if (explicitPlane === 'openclaw' && !hasBotCreds) {
+        res.status(400).json({ code: 'NO_BOT_CREDENTIALS', message: 'messagePlane=openclaw 需要同时提供 botAppId 与 botAppSecret' });
+        return;
+      }
+      const messagePlane: 'gateway' | 'openclaw' =
+        explicitPlane === 'gateway' || explicitPlane === 'openclaw' ? explicitPlane : (hasBotCreds ? 'openclaw' : 'gateway');
+
       // Mio CDP supplier id — optional, unique among live tenants, injected
       // into the tenant agent's environment as MIO_CDP_SUPPLIER_ID.
       const rawSupplierId = typeof mioCdpSupplierId === 'string' ? mioCdpSupplierId.trim() : '';
@@ -85,9 +99,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         await client.query('BEGIN');
 
         await client.query(
-          `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret, mio_cdp_supplier_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId],
+          `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret, mio_cdp_supplier_id, message_plane)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId, messagePlane],
         );
 
         await client.query(
@@ -156,6 +170,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           quotaCreditsMonthly: safeQuotaCredits,
           appId: safeAppId || undefined,
           appSecret: safeAppSecret || undefined,
+          messagePlane,
           mioCdpSupplierId: safeSupplierId || undefined,
         }, {
           dryRun: config.k8sDryRun,

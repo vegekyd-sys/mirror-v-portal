@@ -129,6 +129,16 @@ describe('provisionTenant message plane', () => {
     expect(agent.env.find((e: any) => e.name === 'PROVISIONING_SERVICE_URL')).toBeTruthy();
     expect(gw.env.find((e: any) => e.name === 'DEALCLAW_MESSAGE_PLANE')?.value).toBe('openclaw');
   });
+
+  it('openclaw without bot credentials falls back to gateway with a warning', async () => {
+    const { appId, appSecret, ...noCreds } = tenant;
+    void appId; void appSecret;
+    const r = await provisionTenant({ ...noCreds, messagePlane: 'openclaw' }, baseOptions);
+    const agent = findDeployment(AG);
+    expect(agent.env.find((e: any) => e.name === 'DEALCLAW_MESSAGE_PLANE')?.value).toBe('gateway');
+    expect(agent.envFrom.map((e: any) => e.secretRef.name)).not.toContain('dealclaw-bot-t-plane');
+    expect(r.warnings.some((w: string) => w.includes('falling back to gateway bridge'))).toBe(true);
+  });
 });
 
 describe('switchTenantMessagePlane ordering', () => {
