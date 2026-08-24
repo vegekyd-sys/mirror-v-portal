@@ -295,6 +295,14 @@ export async function putSecret(namespace: string, name: string, data: Record<st
 
 // ── Deployment ──
 
+export interface ProbeTuning {
+  path: string;
+  initialDelaySeconds: number;
+  periodSeconds: number;
+  failureThreshold: number;
+  timeoutSeconds: number;
+}
+
 export interface DeploymentSpec {
   name: string;
   namespace: string;
@@ -308,6 +316,15 @@ export interface DeploymentSpec {
   limits?: { cpu: string; memory: string };
   livenessPath?: string;
   readinessPath?: string;
+  /**
+   * Optional per-probe tuning. Defaults are intentionally tight (fast-start
+   * stateless services like nexus-gateway); slow-boot pods (dealclaw-agent,
+   * which rsyncs a payload + boots an OpenClaw gateway) MUST pass a
+   * startupProbe and looser liveness/readiness values.
+   */
+  startupProbe?: Partial<ProbeTuning>;
+  livenessProbe?: Partial<ProbeTuning>;
+  readinessProbe?: Partial<ProbeTuning>;
   runAsUser?: number;
   automountServiceAccountToken?: boolean;
   imagePullSecrets?: Array<{ name: string }>;
@@ -335,18 +352,39 @@ export async function createDeployment(spec: DeploymentSpec): Promise<void> {
   if (spec.env?.length) container.env = spec.env;
   if (spec.volumeMounts?.length) container.volumeMounts = spec.volumeMounts;
 
+  // Startup probe gates liveness/readiness until the app has actually booted.
+  // Defaults: up to 30 × 10s = 300s to become ready — generous enough for the
+  // OpenClaw gateway cold boot without ever restarting a healthy slow starter.
+  if (spec.startupProbe) {
+    const sp = spec.startupProbe;
+    container.startupProbe = {
+      httpGet: { path: sp.path ?? spec.livenessPath ?? spec.readinessPath ?? '/healthz', port: spec.port },
+      periodSeconds: sp.periodSeconds ?? 10,
+      failureThreshold: sp.failureThreshold ?? 30,
+      timeoutSeconds: sp.timeoutSeconds ?? 5,
+    };
+  }
   if (spec.livenessPath) {
+    const lp = spec.livenessProbe ?? {};
     container.livenessProbe = {
       httpGet: { path: spec.livenessPath, port: spec.port },
-      initialDelaySeconds: 5,
-      periodSeconds: 15,
+      initialDelaySeconds: lp.initialDelaySeconds ?? 5,
+      periodSeconds: lp.periodSeconds ?? 15,
+      failureThreshold: lp.failureThreshold ?? 3,
+      // NB: /healthz on dealclaw-agent internally fetches the OpenClaw
+      // gateway /v1/models with a 2s abort — keep the probe timeout above
+      // that so a slow-but-healthy gateway isn't counted as a probe timeout.
+      timeoutSeconds: lp.timeoutSeconds ?? 3,
     };
   }
   if (spec.readinessPath) {
+    const rp = spec.readinessProbe ?? {};
     container.readinessProbe = {
       httpGet: { path: spec.readinessPath, port: spec.port },
-      initialDelaySeconds: 3,
-      periodSeconds: 10,
+      initialDelaySeconds: rp.initialDelaySeconds ?? 3,
+      periodSeconds: rp.periodSeconds ?? 10,
+      failureThreshold: rp.failureThreshold ?? 3,
+      timeoutSeconds: rp.timeoutSeconds ?? 3,
     };
   }
 
@@ -427,6 +465,80 @@ export async function patchDeploymentImage(spec: PatchImageSpec): Promise<void> 
     throw new Error(`patchDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
   console.log(`[k8s] deployment patched (rolling update): ${spec.namespace}/${spec.name} -> ${spec.image}`);
+}
+
+// ── Deployment Probe Patch ──
+
+/**
+ * Full probe objects for the dealclaw-agent container. Its cold boot is slow
+ * (rsync payload → write-config → OpenClaw gateway boot + plugin pre-warm →
+ * bridge /healthz responsive), so the default tight liveness
+ * (initialDelay=5, period=15, failureThreshold=3 ≈ 35s to first kill) restarts
+ * the pod in a loop before the gateway is ready.
+ *
+ * Keep this in sync with the Partial<ProbeTuning> values passed to
+ * createDeployment in provisioning.ts.
+ */
+export function buildAgentProbes(port: number, path: string) {
+  return {
+    startupProbe: {
+      httpGet: { path, port },
+      periodSeconds: 10,
+      failureThreshold: 30,
+      timeoutSeconds: 5,
+    },
+    livenessProbe: {
+      httpGet: { path, port },
+      initialDelaySeconds: 20,
+      periodSeconds: 15,
+      failureThreshold: 5,
+      timeoutSeconds: 5,
+    },
+    readinessProbe: {
+      httpGet: { path, port },
+      initialDelaySeconds: 10,
+      periodSeconds: 10,
+      failureThreshold: 5,
+      timeoutSeconds: 5,
+    },
+  };
+}
+
+export interface PatchProbesSpec {
+  namespace: string;
+  name: string;
+  port: number;
+  path: string;
+}
+
+/**
+ * Strategic-merge-patch the startup/liveness/readiness probes on an existing
+ * Deployment. Used to repair already-provisioned dealclaw-agent Deployments
+ * that were created before the slow-boot probe fix shipped.
+ */
+export async function patchDeploymentProbes(spec: PatchProbesSpec): Promise<void> {
+  const probes = buildAgentProbes(spec.port, spec.path);
+  const body = {
+    spec: {
+      template: {
+        spec: {
+          containers: [{ name: spec.name, ...probes }],
+        },
+      },
+    },
+  };
+
+  const res = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${spec.namespace}/deployments/${spec.name}`,
+    body,
+    'application/strategic-merge-patch+json',
+  );
+
+  if (!res.ok) {
+    throw new Error(`patchDeploymentProbes ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  console.log(`[k8s] deployment probes patched: ${spec.namespace}/${spec.name}`);
 }
 
 // ── Deployment Scale ──

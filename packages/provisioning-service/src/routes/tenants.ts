@@ -783,6 +783,58 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
+  // ── Batch deployment probe repair ──
+  // POST /v1/tenants/batch/deployment-probes — strategic-merge-patch the
+  // startup/liveness/readiness probes on all existing dealclaw-agent
+  // Deployments. Repairs pods created before the slow-boot probe fix that
+  // are stuck in a CrashLoopBackOff from the overly tight default liveness.
+  router.post('/v1/tenants/batch/deployment-probes', async (_req: Request, res: Response) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT tenant_id, k8s_namespace FROM tenants WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL`,
+      );
+
+      if (!rows.length) {
+        res.json({ ok: true, patched: 0, results: [] });
+        return;
+      }
+
+      const { patchDeploymentProbes } = await import('../services/k8s-client.js');
+      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; error?: string }> = [];
+
+      for (const row of rows) {
+        const deploymentName = `dealclaw-agent-${row.tenant_id}`;
+        try {
+          await patchDeploymentProbes({ namespace: row.k8s_namespace, name: deploymentName, port: 18789, path: '/healthz' });
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
+        } catch (err: unknown) {
+          const e = err as any;
+          const msg = e.message || String(e);
+          const skipped = /404|not found/i.test(msg);
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped, error: msg });
+          if (!skipped) {
+            console.error(`[batch-probes] ${deploymentName}: ${msg}`);
+          }
+        }
+      }
+
+      const successCount = results.filter(r => r.ok).length;
+      const skippedCount = results.filter(r => r.skipped).length;
+      res.json({
+        ok: true,
+        patched: successCount,
+        total: rows.length,
+        failed: rows.length - successCount - skippedCount,
+        skipped: skippedCount,
+        results,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Batch deployment probes patch failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Batch probe patch failed' });
+    }
+  });
+
   // ── Feishu app binding ──
   // GET /v1/tenants/:id/feishu-binding — current binding state
   router.get('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {

@@ -356,6 +356,15 @@ export async function provisionTenant(
       runAsUser: 1000,
       livenessPath: '/healthz',
       readinessPath: '/healthz',
+      // dealclaw-agent 冷启动很慢（rsync payload → write-config → OpenClaw
+      // gateway 启动 + plugin pre-warm → bridge /healthz 才能响应）。默认的
+      // initialDelaySeconds=5 + periodSeconds=15 + failureThreshold=3 会在
+      // 启动约 35s 内连续 3 次探测失败 → kubelet 杀 Pod → 循环重启。
+      // startupProbe 先把 liveness 门禁到真正启动完成；启动后 liveness
+      // 放宽到 5 次容错，避免 gateway GC/瞬时延迟被误杀。
+      startupProbe: { periodSeconds: 10, failureThreshold: 30, timeoutSeconds: 5 },
+      livenessProbe: { initialDelaySeconds: 20, periodSeconds: 15, failureThreshold: 5, timeoutSeconds: 5 },
+      readinessProbe: { initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 5, timeoutSeconds: 5 },
       volumes: [
         { name: 'runtime-data', persistentVolumeClaim: { claimName: agentPvcName } },
         // Per-tenant skill-env (.env) — hot-rotatable credentials for skill
