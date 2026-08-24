@@ -43,7 +43,7 @@ export class OpenClawRuntimeClient implements RuntimeClient {
 
   async health(): Promise<{ ok: boolean; detail?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/models`, {
+      const response = await fetch(`${this.baseUrl}/readyz`, {
         signal: AbortSignal.timeout(2_000),
       });
       return { ok: response.ok, detail: response.ok ? 'gateway-ready' : `gateway-http-${response.status}` };

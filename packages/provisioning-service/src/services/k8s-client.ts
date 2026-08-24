@@ -568,36 +568,78 @@ export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
 // ── Deployment Restart (rollout) ──
 
 /**
- * Trigger a rolling restart by patching an annotation on the pod template.
- * Used after rotating secret content (e.g. new Feishu app credentials) so the
- * gateway Pod re-reads envFrom secrets. 404 is tolerated — callers may invoke
- * this right after createDeployment, where the ordering is not guaranteed.
+ * Restart a Deployment safely by scaling to 0 then back to its original
+ * replica count. This avoids the dual-pod overlap that a RollingUpdate
+ * annotation-patch causes when the old pod shares a PVC (SQLite) with the
+ * new one — two concurrent agents deadlock on the same DB file and neither
+ * passes startupProbe.
+ *
+ * Steps: GET deployment → patch restarted-at annotation (observability) →
+ * scale 0 → poll for pod termination (≤30s) → scale back to original.
+ * 404 is tolerated; dry-run (status 0) returns false.
  */
 export async function restartDeployment(namespace: string, name: string): Promise<boolean> {
-  const body = {
-    spec: {
-      template: {
-        metadata: {
-          annotations: {
-            'dealclaw.io/restarted-at': new Date().toISOString(),
+  // 1. Read current deployment to get replica count + pod selector.
+  const getRes = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
+  if (getRes.status === 404 || getRes.status === 0) return false;
+  if (!getRes.ok) throw new Error(`restartDeployment ${name} GET failed: ${getRes.status}`);
+  const deploy = getRes.body as Record<string, any>;
+  const replicas: number = deploy?.spec?.replicas ?? 1;
+  const matchLabels: Record<string, string> = deploy?.spec?.selector?.matchLabels ?? { app: name };
+
+  // 2. Patch the restarted-at annotation (observability + ensures RS turnover).
+  const patchRes = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
+    {
+      spec: {
+        template: {
+          metadata: {
+            annotations: { 'dealclaw.io/restarted-at': new Date().toISOString() },
           },
         },
       },
     },
-  };
-
-  const res = await k8sRequest(
-    'PATCH',
-    `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
-    body,
     'application/strategic-merge-patch+json',
   );
-
-  if (!res.ok) {
-    if (res.status === 404) return false;
-    throw new Error(`restartDeployment ${name} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  if (!patchRes.ok) {
+    if (patchRes.status === 404) return false;
+    throw new Error(`restartDeployment ${name} patch failed: ${patchRes.status}`);
   }
-  console.log(`[k8s] deployment restarted: ${namespace}/${name}`);
+
+  // 3. If 0 replicas, annotation alone suffices — nothing to scale.
+  if (replicas === 0) {
+    console.log(`[k8s] deployment restarted (0 replicas): ${namespace}/${name}`);
+    return true;
+  }
+
+  // 4. Scale to 0 — breaks any dual-pod overlap / SQLite lock contention.
+  await scaleDeployment({ namespace, name, replicas: 0 });
+
+  // 5. Poll for pod termination (≤30s, 5s intervals).
+  const labelStr = Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(',');
+  const labelSelector = encodeURIComponent(labelStr);
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    const podRes = await k8sRequest(
+      'GET',
+      `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`,
+    );
+    if (!podRes.ok) break; // best-effort — proceed to scale back regardless
+    const items = (podRes.body as Record<string, any>)?.items ?? [];
+    const active = items.filter(
+      (p: Record<string, any>) =>
+        p.metadata?.deletionTimestamp === undefined &&
+        p.status?.phase !== 'Succeeded' &&
+        p.status?.phase !== 'Failed',
+    );
+    if (active.length === 0) break;
+  }
+
+  // 6. Scale back to original replicas.
+  await scaleDeployment({ namespace, name, replicas });
+
+  console.log(`[k8s] deployment restarted (scale 0→${replicas}): ${namespace}/${name}`);
   return true;
 }
 
