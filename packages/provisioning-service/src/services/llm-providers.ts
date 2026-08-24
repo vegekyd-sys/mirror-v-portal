@@ -175,6 +175,55 @@ export function modelExistsIn(doc: LlmProvidersConfig, ref: string): boolean {
 }
 
 /**
+ * The model ref a tenant would actually use under a given library:
+ * a resolvable tenant selection wins, otherwise the library's global default.
+ */
+export function effectiveRefIn(
+  doc: LlmProvidersConfig | null,
+  selection: string | null,
+): string | null {
+  if (!doc) return null;
+  if (selection && modelExistsIn(doc, selection)) return selection;
+  return doc.defaultModel ?? null;
+}
+
+/**
+ * Credential signature of the provider backing a model ref (baseUrl + apiKey).
+ * Models are deliberately excluded: adding a model to a provider does not
+ * invalidate the currently-running config of tenants not using that model.
+ */
+export function providerCredentialSignature(
+  doc: LlmProvidersConfig | null,
+  ref: string | null,
+): string | null {
+  if (!doc || !ref) return null;
+  const pName = ref.slice(0, ref.indexOf('/'));
+  const provider = doc.providers.find((p) => p.name === pName);
+  if (!provider) return null;
+  return `${provider.baseUrl}|${provider.apiKey}`;
+}
+
+/**
+ * True when a library change actually affects a tenant: its effective model
+ * changed (selection no longer resolves / default switched / provider removed),
+ * or the credentials behind that model changed. Adding an unrelated provider
+ * or model does NOT require a restart — the tenant's live config is untouched.
+ */
+export function tenantNeedsLlmRestart(
+  prev: LlmProvidersConfig | null,
+  now: LlmProvidersConfig | null,
+  selection: string | null,
+): boolean {
+  const beforeRef = effectiveRefIn(prev, selection);
+  const afterRef = effectiveRefIn(now, selection);
+  if (beforeRef !== afterRef) return true;
+  return (
+    providerCredentialSignature(prev, beforeRef) !==
+    providerCredentialSignature(now, afterRef)
+  );
+}
+
+/**
  * The global provider library (decrypted + re-validated). Returns null when
  * no row exists or the stored data is corrupt — callers treat both as
  * "library empty".
@@ -286,6 +335,13 @@ export const LLM_PROXY_CONFIG_SECRET = 'llm-proxy-config';
  * providers are picked up at boot. Global writes target all live tenants;
  * tenant-scoped writes target just that tenant.
  *
+ * The rolling restart is DIFFERENTIAL: when `prevLibrary` is supplied (global
+ * library writes), a tenant is only restarted if its effective model changed
+ * or the credentials behind that model changed. Tenants whose live model is
+ * untouched still get their Secret materialised (cheap, invisible — keeps the
+ * snapshot fresh so a future selection resolves immediately, and preserves
+ * the idempotent self-healing passes), but their agent/gateway are NOT rolled.
+ *
  * Key rotation here is NOT hot: envFrom values only apply on pod start, so
  * each affected agent is rolling-restarted (restartDeployment).
  */
@@ -293,6 +349,7 @@ export async function pushLlmProviders(
   pool: pg.Pool,
   config: ProvisioningConfig,
   scope: string | null,
+  prevLibrary: LlmProvidersConfig | null = null,
 ): Promise<LlmPushResult> {
   const targets: string[] = [];
   if (scope) {
@@ -314,6 +371,7 @@ export async function pushLlmProviders(
   }
 
   const results: LlmPushResult['tenants'] = [];
+  let skippedCount = 0;
   for (const tenantId of targets) {
     try {
       if (config.k8sDryRun) {
@@ -332,6 +390,15 @@ export async function pushLlmProviders(
 
       // Effective blob = global library + this tenant's resolved default.
       const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId);
+      const rawSelection = await getTenantModelSelection(pool, tenantId);
+
+      // Differential roll: tenant-scoped writes always roll (their selection
+      // just changed); global writes only roll when the tenant's live model
+      // or its provider credentials actually changed. Unchanged tenants keep
+      // the materialised Secret but their agent keeps running untouched.
+      const needsRestart =
+        scope !== null ||
+        tenantNeedsLlmRestart(prevLibrary, globalConfig, rawSelection);
 
       // Rewrite each provider's baseUrl to the tenant's LLM egress proxy
       // (nexus-gateway /v1/llm/<name>). The REAL baseUrl moves into the
@@ -395,14 +462,21 @@ export async function pushLlmProviders(
       }
 
       // envFrom values only apply on pod start — roll BOTH the agent
-      // (rewritten provider blob) and the gateway (upstream map).
-      const deployName = `dealclaw-agent-${tenantId}`;
-      const restarted = (await deploymentExists(namespace, deployName))
-        ? await restartDeployment(namespace, deployName)
-        : false;
-      const gatewayRestarted = (await deploymentExists(namespace, `nexus-gateway-${tenantId}`))
-        ? await restartDeployment(namespace, `nexus-gateway-${tenantId}`)
-        : false;
+      // (rewritten provider blob) and the gateway (upstream map) ONLY when
+      // this tenant's live model actually changed.
+      let restarted = false;
+      let gatewayRestarted = false;
+      if (needsRestart) {
+        const deployName = `dealclaw-agent-${tenantId}`;
+        restarted = (await deploymentExists(namespace, deployName))
+          ? await restartDeployment(namespace, deployName)
+          : false;
+        gatewayRestarted = (await deploymentExists(namespace, `nexus-gateway-${tenantId}`))
+          ? await restartDeployment(namespace, `nexus-gateway-${tenantId}`)
+          : false;
+      } else {
+        skippedCount += 1;
+      }
       results.push({ tenantId, ok: true, restarted, gatewayRestarted });
     } catch (err) {
       results.push({
@@ -428,7 +502,9 @@ export async function pushLlmProviders(
       `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret（供应商地址已重写为网关代理）` +
       (restartCount > 0
         ? `，${restartCount} 个 agent 正在滚动重启，重启完成后新模型配置生效（约 1–2 分钟）`
-        : '；agent 下次重启时生效') +
+        : skippedCount > 0
+          ? `；${skippedCount} 个租户模型配置未变，跳过重启（Secret 已同步，后续切换时即时生效）`
+          : '；agent 下次重启时生效') +
       (gatewayRestartCount > 0 ? `；${gatewayRestartCount} 个网关已滚动（上游映射同步）` : '') +
       (failed.length ? `；${failed.length} 个租户推送失败（${failed[0].tenantId}：${failed[0].error}）` : '');
   }

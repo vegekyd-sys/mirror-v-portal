@@ -27,6 +27,9 @@ import {
   getTenantModelSelection,
   resolveEffectiveLlmProviders,
   pushLlmProviders,
+  effectiveRefIn,
+  providerCredentialSignature,
+  tenantNeedsLlmRestart,
   LLM_PROVIDERS_KEY,
   LLM_MODEL_SELECTION_KEY,
 } from '../services/llm-providers.js';
@@ -263,6 +266,73 @@ describe('resolveEffectiveLlmProviders', () => {
   });
 });
 
+// ── differential restart decision ────────────────────────────────────
+
+describe('tenantNeedsLlmRestart', () => {
+  const prev = validateLlmProviders(goodDoc);
+  const withExtraProvider = validateLlmProviders({
+    ...goodDoc,
+    providers: [
+      ...goodDoc.providers,
+      { name: 'kimi', baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'sk-kimi', models: ['moonshot-v1-8k'] },
+    ],
+  });
+  const withNewDefault = validateLlmProviders({ ...goodDoc, defaultModel: 'glm/glm-4.5' });
+  const withRotatedQwenKey = validateLlmProviders({
+    ...goodDoc,
+    providers: goodDoc.providers.map((p) => (p.name === 'qwen' ? { ...p, apiKey: 'sk-qwen-v2' } : p)),
+  });
+  const withoutQwen = validateLlmProviders({
+    providers: goodDoc.providers.filter((p) => p.name !== 'qwen'),
+    defaultModel: 'glm/glm-4.5',
+  });
+
+  it('effectiveRefIn: selection wins, then global default, null for empty lib', () => {
+    expect(effectiveRefIn(prev, 'glm/glm-4.5')).toBe('glm/glm-4.5');
+    expect(effectiveRefIn(prev, null)).toBe('qwen/qwen-max');
+    expect(effectiveRefIn(prev, 'kimi/nope')).toBe('qwen/qwen-max'); // unresolvable → default
+    expect(effectiveRefIn(null, 'glm/glm-4.5')).toBeNull();
+  });
+
+  it('providerCredentialSignature ignores models, tracks baseUrl+apiKey', () => {
+    expect(providerCredentialSignature(prev, 'qwen/qwen-max')).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1|sk-qwen',
+    );
+    // model id is not part of the signature
+    expect(providerCredentialSignature(prev, 'qwen/qwq-plus')).toBe(
+      providerCredentialSignature(prev, 'qwen/qwen-max'),
+    );
+    expect(providerCredentialSignature(null, 'qwen/qwen-max')).toBeNull();
+  });
+
+  it('adding an unrelated provider does NOT require a restart', () => {
+    expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, withExtraProvider, 'glm/glm-4.5')).toBe(false);
+  });
+
+  it('switching the global default requires a restart for followers', () => {
+    expect(tenantNeedsLlmRestart(prev, withNewDefault, null)).toBe(true);
+    // a tenant with its own selection is immune to the default switch
+    expect(tenantNeedsLlmRestart(prev, withNewDefault, 'qwen/qwen-max')).toBe(false);
+  });
+
+  it('rotating the credentials of the selected provider requires a restart', () => {
+    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, 'qwen/qwen-max')).toBe(true);
+    // a tenant on a different provider is untouched
+    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, 'glm/glm-4.5')).toBe(false);
+  });
+
+  it('removing the selected provider falls back and requires a restart', () => {
+    expect(tenantNeedsLlmRestart(prev, withoutQwen, 'qwen/qwen-max')).toBe(true);
+    expect(tenantNeedsLlmRestart(prev, withoutQwen, 'glm/glm-4.5')).toBe(false);
+  });
+
+  it('identical libraries never require a restart; empty→empty neither', () => {
+    expect(tenantNeedsLlmRestart(prev, prev, 'glm/glm-4.5')).toBe(false);
+    expect(tenantNeedsLlmRestart(null, null, null)).toBe(false);
+  });
+});
+
 // ── pushLlmProviders ─────────────────────────────────────────────────
 
 describe('pushLlmProviders', () => {
@@ -353,6 +423,63 @@ describe('pushLlmProviders', () => {
     );
     expect(legacyDelete).toBeTruthy();
     expect(legacyDelete!.params![0]).toBe(LLM_PROVIDERS_KEY);
+  });
+
+  it('global write skips the roll for tenants whose live model is unchanged', async () => {
+    // library gains an unrelated provider; tenant stays on glm with the same key
+    const pool = makeFakePool({
+      allTenants: [{ tenant_id: 't1' }],
+      tenant: makeTenant({ tenant_id: 't1', k8s_namespace: 'dealclaw-t1' }),
+      globalLlmRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({
+              ...goodDoc,
+              providers: [
+                ...goodDoc.providers,
+                { name: 'kimi', baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'sk-kimi', models: ['moonshot-v1-8k'] },
+              ],
+            }),
+        },
+      ],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
+    });
+    k8sMocks.getSecret.mockResolvedValue({ data: { DEEPSEEK_API_KEY: b64('sk-ds') } });
+    const prev = validateLlmProviders(goodDoc);
+    const r = await pushLlmProviders(pool, prodConfig, null, prev);
+    expect(r.tenants[0]).toMatchObject({ tenantId: 't1', ok: true, restarted: false, gatewayRestarted: false });
+    expect(k8sMocks.restartDeployment).not.toHaveBeenCalled();
+    // Secret still materialised (invisible sync) + self-healing passes preserved
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t1', 'tenant-config', expect.anything());
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t1', 'dealclaw-credits-t1', expect.anything());
+    expect(r.hint).toContain('跳过重启');
+  });
+
+  it('global write rolls a tenant whose selected provider credentials changed', async () => {
+    const pool = makeFakePool({
+      allTenants: [{ tenant_id: 't1' }],
+      tenant: makeTenant({ tenant_id: 't1', k8s_namespace: 'dealclaw-t1' }),
+      globalLlmRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({
+              ...goodDoc,
+              providers: goodDoc.providers.map((p) =>
+                p.name === 'qwen' ? { ...p, apiKey: 'sk-qwen-v2' } : p,
+              ),
+            }),
+        },
+      ],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'qwen/qwen-max' }) }],
+    });
+    k8sMocks.getSecret.mockResolvedValue({ data: { DEEPSEEK_API_KEY: b64('sk-ds') } });
+    const prev = validateLlmProviders(goodDoc);
+    const r = await pushLlmProviders(pool, prodConfig, null, prev);
+    expect(r.tenants[0]).toMatchObject({ tenantId: 't1', ok: true, restarted: true, gatewayRestarted: true });
+    expect(k8sMocks.restartDeployment).toHaveBeenCalledWith('dealclaw-t1', 'dealclaw-agent-t1');
+    expect(r.hint).toContain('滚动重启');
   });
 });
 

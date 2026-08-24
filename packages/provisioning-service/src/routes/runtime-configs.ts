@@ -269,6 +269,10 @@ export function createRuntimeConfigRoutes(
 
       const doc = validateLlmProviders({ providers, defaultModel });
 
+      // Snapshot the PREVIOUS library before overwriting — the differential
+      // push uses it to roll only tenants whose live model actually changed.
+      const prevLibrary = await getGlobalLlmProviders(pool);
+
       // Persist as a single encrypted runtime_configs row (empty provider
       // list is not allowed — use DELETE to clear the library instead).
       const blob = JSON.stringify(doc);
@@ -280,7 +284,7 @@ export function createRuntimeConfigRoutes(
         description: '大模型供应商库（全局；agent 启动时经 envFrom 注入，改动需滚动重启生效）',
       });
 
-      const push = await pushLlmProviders(pool, config, null);
+      const push = await pushLlmProviders(pool, config, null, prevLibrary);
       res.json({ ok: true, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {
@@ -299,12 +303,13 @@ export function createRuntimeConfigRoutes(
   // DELETE /v1/admin/llm-providers — clear the global library + push all tenants
   router.delete('/v1/admin/llm-providers', async (_req: Request, res: Response) => {
     try {
+      const prevLibrary = await getGlobalLlmProviders(pool);
       const deleted = await deleteRuntimeConfig(pool, null, LLM_PROVIDERS_KEY);
       if (deleted === 0) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'No LLM provider library configured' });
         return;
       }
-      const push = await pushLlmProviders(pool, config, null);
+      const push = await pushLlmProviders(pool, config, null, prevLibrary);
       res.json({ ok: true, push });
     } catch (err) {
       console.error('DELETE llm-providers failed:', err);
