@@ -17,6 +17,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
 import { syncImageReleases } from '../services/registry-sync.js';
+import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from '../services/external-api-keys.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -197,6 +198,55 @@ export function createAdminOpsRoutes(
       new URLSearchParams({ tenantId, days: String(parseDays(req.query.days)) }),
       res,
     );
+  });
+
+  // ── External API key management (admin console) ──
+  // These keys authenticate third-party (Mio) access to /v1/llm-usage/*.
+  // Plaintext is returned exactly once on create; only the hash is stored.
+
+  // POST /v1/admin/external-api-keys — create a key.
+  router.post('/v1/admin/external-api-keys', async (req: Request, res: Response) => {
+    try {
+      const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      const supplierId = typeof req.body?.supplierId === 'string' && req.body.supplierId.trim()
+        ? req.body.supplierId.trim()
+        : null;
+      if (!name) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'name is required' });
+        return;
+      }
+      const { key, id } = await createExternalApiKey(pool, { name, supplierId, createdBy: adminIdentity(req) });
+      res.json({ ok: true, id, name, keyPrefix: key.slice(0, 12), supplierId, key });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'create key failed' });
+    }
+  });
+
+  // GET /v1/admin/external-api-keys — list keys (no plaintext).
+  router.get('/v1/admin/external-api-keys', async (_req: Request, res: Response) => {
+    try {
+      const keys = await listExternalApiKeys(pool);
+      res.json({ ok: true, keys });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'list keys failed' });
+    }
+  });
+
+  // DELETE /v1/admin/external-api-keys/:id — revoke a key.
+  router.delete('/v1/admin/external-api-keys/:id', async (req: Request, res: Response) => {
+    try {
+      const revoked = await revokeExternalApiKey(pool, String(req.params.id));
+      if (!revoked) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'key not found or already revoked' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'revoke key failed' });
+    }
   });
 
   // POST /v1/admin/tenants/:id/chat — proxy a web-chat message to the

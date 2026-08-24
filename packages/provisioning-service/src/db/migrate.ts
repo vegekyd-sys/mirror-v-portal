@@ -157,6 +157,21 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_message_plane_check;
       ALTER TABLE tenants ADD CONSTRAINT tenants_message_plane_check
         CHECK (message_plane IN ('gateway','openclaw'));
+
+      -- External API keys for third-party (Mio) token accounting access.
+      -- Each key may be scoped to a single supplier (NULL = all suppliers).
+      CREATE TABLE IF NOT EXISTS external_api_keys (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        key_hash    TEXT NOT NULL UNIQUE,
+        key_prefix  TEXT NOT NULL,
+        supplier_id TEXT,
+        status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+        created_by  TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        revoked_at  TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_external_api_keys_status ON external_api_keys(status);
     `);
 
     console.log(JSON.stringify({

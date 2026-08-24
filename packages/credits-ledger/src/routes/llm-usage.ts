@@ -178,4 +178,44 @@ router.get('/v1/billing/llm-usage/tenants', async (req, res) => {
   }
 });
 
+// GET /v1/billing/llm-usage/range?tenantId=&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// Absolute (inclusive) date-range aggregate for external token accounting.
+router.get('/v1/billing/llm-usage/range', async (req, res) => {
+  try {
+    const tenantId = str(req.query.tenantId, 64);
+    const startDate = str(req.query.startDate, 10);
+    const endDate = str(req.query.endDate, 10);
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (!tenantId || !DATE_RE.test(startDate) || !DATE_RE.test(endDate)) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'tenantId and valid startDate/endDate (YYYY-MM-DD) are required',
+      });
+      return;
+    }
+
+    const { rows } = await query(
+      `SELECT COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM llm_usage_events
+        WHERE tenant_id = $1
+          AND created_at >= ($2::date)::timestamptz
+          AND created_at <  (($3::date) + 1)::timestamptz`,
+      [tenantId, startDate, endDate],
+    );
+
+    const r = rows[0];
+    res.json({
+      tenantId,
+      startDate,
+      endDate,
+      totalInputToken: Number(r.input_tokens),
+      totalOutputToken: Number(r.output_tokens),
+    });
+  } catch (err) {
+    console.error('llm-usage range failed:', err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
 export default router;
