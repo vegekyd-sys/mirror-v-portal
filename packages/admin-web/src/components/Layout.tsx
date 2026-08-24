@@ -25,6 +25,7 @@ const SYSTEM: NavItem[] = [
   { to: '/image-releases', icon: '镜', label: '镜像版本' },
   { to: '/runtime-configs', icon: '配', label: '运行时配置' },
   { to: '/users', icon: '户', label: '用户管理' },
+  { to: '/external-api-keys', icon: '钥', label: '外部 API Key' },
 ];
 
 function SideNav({ items }: { items: NavItem[] }) {

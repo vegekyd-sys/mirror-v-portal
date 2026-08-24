@@ -14,6 +14,7 @@ import SkillsPage from './pages/SkillsPage';
 import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
 import LlmProvidersPage from './pages/LlmProvidersPage';
 import UsersPage from './pages/UsersPage';
+import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
 import ChatPage from './pages/ChatPage';
 
@@ -54,6 +55,7 @@ export default function App() {
             <Route path="image-releases" element={<ImageReleasesPage />} />
             <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
             <Route path="users" element={<UsersPage />} />
+            <Route path="external-api-keys" element={<ExternalApiKeysPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
