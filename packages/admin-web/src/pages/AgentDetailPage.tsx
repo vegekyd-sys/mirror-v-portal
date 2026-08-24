@@ -282,7 +282,7 @@ export default function AgentDetailPage() {
   const unbindFeishu = async () => {
     if (
       !window.confirm(
-        `确认解绑该 Agent 的飞书应用 ${fsBinding?.appId || ''}？\n解绑后无法通过飞书对话（网页对话不受影响），网关将被删除。`,
+        `确认解绑该 Agent 的飞书应用 ${fsBinding?.appId || ''}？\n解绑后无法通过飞书对话（网页对话不受影响），网关将保留（LLM 出口代理）。`,
       )
     )
       return;

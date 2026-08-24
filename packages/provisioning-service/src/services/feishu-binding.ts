@@ -9,18 +9,27 @@
  *     can never break an existing binding.
  *  2. The credentials are stored on the tenants row (app_id / app_secret)
  *     and materialized as the `dealclaw-bot-<tenantId>` Secret.
- *  3. A nexus-gateway Deployment+Service is created (or restarted) with
- *     DEALCLAW_PLATFORM=feishu and DEALCLAW_AGENT_URL pointing at the
- *     tenant's agent — the per-tenant dealclaw-agent, or the external
- *     agent (agent_endpoint) for external-agent tenants. The gateway
- *     connects to Feishu via an outbound WebSocket, so NO ingress change
- *     is required.
+ *  3. Message-plane aware rollout (P2): which deployment gets rolled depends
+ *     on the tenant's message_plane —
+ *     - 'openclaw' (in-agent @openclaw/feishu plugin owns the Feishu WS):
+ *       the AGENT is rolled (restartDeployment is scale-0-then-1, no
+ *       dual-pod SQLite lock contention). write-config.mjs reads
+ *       DEALCLAW_APP_ID/_SECRET via envFrom only at pod start, so without
+ *       this roll the agent would keep running on the OLD app indefinitely.
+ *       The gateway env is pinned to DEALCLAW_MESSAGE_PLANE=openclaw so a
+ *       freshly (re)created gateway never starts a competing WS client.
+ *     - 'gateway' (nexus-gateway WS bridge — legacy/external-agent tenants):
+ *       a nexus-gateway Deployment+Service is created (or restarted) with
+ *       DEALCLAW_PLATFORM=feishu and DEALCLAW_AGENT_URL pointing at the
+ *       tenant's agent. The gateway connects to Feishu via an outbound
+ *       WebSocket, so NO ingress change is required.
  *
  * Unbinding DISABLES the Feishu connection without deleting the gateway —
  * the gateway is also the tenant's LLM egress proxy, so it must stay up.
- * The bot Secret is rotated to placeholder credentials and the gateway is
- * rolled: the ws-client fails to obtain a tenant_access_token with the
- * placeholder and safely skips the Feishu long connection.
+ * The bot Secret is rotated to placeholder credentials and the plane owner
+ * (agent on the openclaw plane / gateway on the gateway plane) is rolled:
+ * on boot, placeholders make the ws-client (gateway plane) skip the Feishu
+ * long connection and write-config.mjs (openclaw plane) drop channels.feishu.
  */
 
 import type pg from 'pg';
@@ -32,6 +41,8 @@ import {
   createDeployment,
   createService,
   restartDeployment,
+  patchDeploymentEnvVar,
+  patchDeploymentEnvFromSecret,
 } from './k8s-client.js';
 import { LLM_PROXY_CONFIG_SECRET } from './llm-providers.js';
 import { getPromotedTag } from './rollout-targets.js';
@@ -55,7 +66,9 @@ export interface BindResult {
   gatewayNamespace: string;
   gatewayDeployment: string;
   agentUrl: string;
-  /** true when a pre-existing gateway was rolled instead of freshly created */
+  /** which deployment was rolled to activate the new credentials */
+  restartTarget: 'agent' | 'gateway' | null;
+  /** true when a pre-existing deployment was rolled instead of freshly created */
   restarted: boolean;
   verifiedApp: { tenantKey?: string };
 }
@@ -144,6 +157,7 @@ interface TenantRow {
   plan_tier: string;
   quota_credits_monthly: string;
   credits_account_id: string | null;
+  message_plane: string | null;
 }
 
 /**
@@ -169,7 +183,7 @@ export async function bindTenantFeishuApp(
 
   const { rows } = await pool.query<TenantRow>(
     `SELECT tenant_id, status, platform, app_id, k8s_namespace, agent_endpoint,
-            plan_tier, quota_credits_monthly, credits_account_id
+            plan_tier, quota_credits_monthly, credits_account_id, message_plane
        FROM tenants WHERE tenant_id = $1`,
     [tenantId],
   );
@@ -208,17 +222,24 @@ export async function bindTenantFeishuApp(
 
   const centralNs = config.runtimeNamespace;
   // External-agent tenants have no namespace of their own — their gateway
-  // runs in the control-plane namespace.
+  // runs in the control-plane namespace. They also cannot run the in-agent
+  // openclaw feishu plugin (the agent is not ours to roll), so they always
+  // stay on the gateway bridge plane.
   const gatewayNs = tenant.k8s_namespace || centralNs;
   const agentUrl = tenant.agent_endpoint
     ? String(tenant.agent_endpoint).replace(/\/$/, '')
     : `http://dealclaw-agent-${tenantId}.${tenant.k8s_namespace}:18789`;
+  // P2: on the openclaw plane the agent's @openclaw/feishu plugin owns the
+  // Feishu WS and reads the bot credentials via envFrom — so the AGENT must
+  // be rolled on rebind. Only tenants with their own namespace can do that.
+  const messagePlane = tenant.message_plane === 'openclaw' ? 'openclaw' : 'gateway';
+  const rollAgent = messagePlane === 'openclaw' && Boolean(tenant.k8s_namespace);
 
   if (config.k8sDryRun) {
     await pool.query(
       `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
        VALUES ($1, $2, $2, $3)`,
-      [tenantId, tenant.status, `DRY_RUN: Feishu app bound (${appId}); gateway would run in ${gatewayNs} → ${agentUrl}`],
+      [tenantId, tenant.status, `DRY_RUN: Feishu app bound (${appId}); ${rollAgent ? 'agent' : 'gateway'} would roll in ${gatewayNs} → ${agentUrl}`],
     );
     return {
       ok: true,
@@ -227,6 +248,7 @@ export async function bindTenantFeishuApp(
       gatewayNamespace: gatewayNs,
       gatewayDeployment: `nexus-gateway-${tenantId}`,
       agentUrl,
+      restartTarget: null,
       restarted: false,
       verifiedApp: verified,
     };
@@ -292,6 +314,10 @@ export async function bindTenantFeishuApp(
     ],
     env: [
       { name: 'DEALCLAW_PLATFORM', value: 'feishu' },
+      // P2: a freshly (re)created gateway must never start a competing
+      // Feishu WS when the tenant runs the openclaw plane — ws-client
+      // checks this env and skips the WS connection when set to openclaw.
+      { name: 'DEALCLAW_MESSAGE_PLANE', value: messagePlane },
       { name: 'DEALCLAW_AGENT_URL', value: agentUrl },
       { name: 'NODE_ENV', value: 'production' },
       { name: 'PROVISIONING_SERVICE_URL', value: process.env.PROVISIONING_SERVICE_URL || `http://provisioning-service.${centralNs}:8082` },
@@ -305,13 +331,30 @@ export async function bindTenantFeishuApp(
   });
   await createService(gatewayNs, gatewayName, 8080, gwLabels);
 
-  // 5. Roll the Pod so a pre-existing gateway re-reads the rotated secret.
-  const restarted = await restartDeployment(gatewayNs, gatewayName);
+  // 5. Roll the plane owner so it re-reads the rotated secret.
+  let restartTarget: 'agent' | 'gateway';
+  let restarted: boolean;
+  if (rollAgent) {
+    const agentName = `dealclaw-agent-${tenantId}`;
+    // Idempotent safety nets for fleets provisioned before the plane switch:
+    // make sure the agent references the bot Secret and the gateway is
+    // pinned to the openclaw plane (both no-op when already correct).
+    await patchDeploymentEnvFromSecret(gatewayNs, agentName, botSecretName);
+    await patchDeploymentEnvVar(gatewayNs, gatewayName, 'DEALCLAW_MESSAGE_PLANE', 'openclaw');
+    // write-config.mjs reads DEALCLAW_APP_ID/_SECRET at pod start only —
+    // scale-0-then-1 (restartDeployment) swaps the credentials safely
+    // without dual pods contending for the SQLite state on the PVC.
+    restarted = await restartDeployment(gatewayNs, agentName);
+    restartTarget = 'agent';
+  } else {
+    restarted = await restartDeployment(gatewayNs, gatewayName);
+    restartTarget = 'gateway';
+  }
 
   await pool.query(
     `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
      VALUES ($1, $2, $2, $3)`,
-    [tenantId, tenant.status, `Feishu app bound: ${appId} — gateway ${gatewayName} in ${gatewayNs} → agent ${agentUrl}`],
+    [tenantId, tenant.status, `Feishu app bound: ${appId} — ${restartTarget} rolled in ${gatewayNs} (plane=${messagePlane}) → agent ${agentUrl}`],
   );
 
   return {
@@ -321,6 +364,7 @@ export async function bindTenantFeishuApp(
     gatewayNamespace: gatewayNs,
     gatewayDeployment: gatewayName,
     agentUrl,
+    restartTarget,
     restarted,
     verifiedApp: verified,
   };
@@ -332,7 +376,9 @@ export interface UnbindResult {
   /** the gateway Deployment is KEPT (it is the tenant's LLM egress proxy) */
   gatewayKept: string;
   gatewayNamespace: string | null;
-  /** true when the gateway Pod was rolled to pick up the placeholder creds */
+  /** which deployment was rolled to drop the Feishu connection */
+  restartTarget: 'agent' | 'gateway' | null;
+  /** true when the plane owner was rolled to pick up the placeholder creds */
   restarted: boolean;
 }
 
@@ -340,9 +386,14 @@ export interface UnbindResult {
  * Remove a tenant's Feishu binding. The gateway Deployment/Service is NOT
  * deleted — the gateway doubles as the tenant's LLM egress proxy (token
  * billing + balance interception), which must keep running. Instead the bot
- * Secret is rotated to placeholder credentials and the gateway is rolled:
- * the ws-client fails to obtain a tenant_access_token with placeholders and
- * safely skips the Feishu long connection. The agent itself is untouched.
+ * Secret is rotated to placeholder credentials and the message-plane owner
+ * is rolled:
+ *  - openclaw plane: the AGENT is rolled — write-config.mjs sees the
+ *    placeholder credentials and drops channels.feishu on boot. Without
+ *    this roll the old bot would stay online inside the agent.
+ *  - gateway plane: the gateway is rolled — the ws-client fails to obtain
+ *    a tenant_access_token with placeholders and safely skips the Feishu
+ *    long connection.
  */
 export async function unbindTenantFeishuApp(
   pool: Queryable & pg.Pool,
@@ -351,7 +402,7 @@ export async function unbindTenantFeishuApp(
 ): Promise<UnbindResult> {
   const { rows } = await pool.query<TenantRow>(
     `SELECT tenant_id, status, platform, app_id, k8s_namespace, agent_endpoint,
-            plan_tier, quota_credits_monthly, credits_account_id
+            plan_tier, quota_credits_monthly, credits_account_id, message_plane
        FROM tenants WHERE tenant_id = $1`,
     [tenantId],
   );
@@ -369,7 +420,10 @@ export async function unbindTenantFeishuApp(
   const gatewayNs = tenant.k8s_namespace || config.runtimeNamespace;
   const gatewayName = `nexus-gateway-${tenantId}`;
   const botSecretName = `dealclaw-bot-${tenantId}`;
+  const messagePlane = tenant.message_plane === 'openclaw' ? 'openclaw' : 'gateway';
+  const rollAgent = messagePlane === 'openclaw' && Boolean(tenant.k8s_namespace);
 
+  let restartTarget: 'agent' | 'gateway' | null = null;
   let restarted = false;
   if (!config.k8sDryRun) {
     // Rotate the bot Secret to placeholders instead of deleting the
@@ -378,7 +432,15 @@ export async function unbindTenantFeishuApp(
       DEALCLAW_APP_ID: `placeholder-${tenantId}`,
       DEALCLAW_APP_SECRET: uuidv4(),
     });
-    restarted = await restartDeployment(gatewayNs, gatewayName);
+    if (rollAgent) {
+      // openclaw plane: the in-agent feishu channel must see the
+      // placeholder credentials — roll the agent (scale-0-then-1).
+      restarted = await restartDeployment(gatewayNs, `dealclaw-agent-${tenantId}`);
+      restartTarget = 'agent';
+    } else {
+      restarted = await restartDeployment(gatewayNs, gatewayName);
+      restartTarget = 'gateway';
+    }
   }
 
   await pool.query(
@@ -389,7 +451,7 @@ export async function unbindTenantFeishuApp(
   await pool.query(
     `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
      VALUES ($1, $2, $2, $3)`,
-    [tenantId, tenant.status, `Feishu app unbound: ${tenant.app_id} — gateway ${gatewayName} kept as LLM egress proxy, bot credentials rotated to placeholder`],
+    [tenantId, tenant.status, `Feishu app unbound: ${tenant.app_id} — ${restartTarget ?? 'plane owner'} rolled, gateway ${gatewayName} kept as LLM egress proxy, bot credentials rotated to placeholder`],
   );
 
   return {
@@ -397,6 +459,7 @@ export async function unbindTenantFeishuApp(
     tenantId,
     gatewayKept: gatewayName,
     gatewayNamespace: config.k8sDryRun ? null : gatewayNs,
+    restartTarget,
     restarted,
   };
 }

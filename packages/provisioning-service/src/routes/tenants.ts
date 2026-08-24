@@ -853,7 +853,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
 
   // PUT /v1/tenants/:id/feishu-binding — bind / rotate the Feishu app for
   // this tenant's agent. Verifies the credentials against the Feishu open
-  // API first, then updates DB + K8s secret and (re)deploys nexus-gateway.
+  // API first, then updates DB + K8s secret and rolls the message-plane
+  // owner (agent on the openclaw plane, nexus-gateway otherwise).
   router.put('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
     try {
       const { appId, appSecret } = req.body ?? {};
@@ -862,12 +863,13 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
       const result = await bindTenantFeishuApp(pool, config, req.params.id, { appId, appSecret });
-      res.json({
-        ...result,
-        message: result.restarted
-          ? `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 已滚动重启（约 10–30 秒生效）`
-          : `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 部署于 ${result.gatewayNamespace}（约 10–30 秒生效）`,
-      });
+      const rolloutMsg =
+        result.restartTarget === 'agent'
+          ? `已绑定 ${result.appId}，Agent 已滚动重启以加载新凭据（约 30–90 秒生效）`
+          : result.restarted
+            ? `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 已滚动重启（约 10–30 秒生效）`
+            : `已绑定 ${result.appId}，网关 ${result.gatewayDeployment} 部署于 ${result.gatewayNamespace}（约 10–30 秒生效）`;
+      res.json({ ...result, message: rolloutMsg });
     } catch (err: unknown) {
       const e = err as any;
       if (e instanceof FeishuBindingError) {
@@ -885,12 +887,13 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.delete('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
     try {
       const result = await unbindTenantFeishuApp(pool, config, req.params.id);
-      res.json({
-        ...result,
-        message: `已解绑飞书应用；网关 ${result.gatewayKept} 保留（LLM 出口代理）${
-          result.restarted ? '，已滚动重启以断开飞书连接' : ''
-        }`,
-      });
+      const unbindMsg =
+        result.restartTarget === 'agent'
+          ? `已解绑飞书应用；Agent 已重启并断开飞书连接，网关 ${result.gatewayKept} 保留（LLM 出口代理）`
+          : `已解绑飞书应用；网关 ${result.gatewayKept} 保留（LLM 出口代理）${
+              result.restarted ? '，已滚动重启以断开飞书连接' : ''
+            }`;
+      res.json({ ...result, message: unbindMsg });
     } catch (err: unknown) {
       const e = err as any;
       if (e instanceof FeishuBindingError) {

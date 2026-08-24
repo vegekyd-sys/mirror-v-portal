@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   FeishuBindingError,
   verifyFeishuApp,
@@ -7,6 +7,29 @@ import {
   unbindTenantFeishuApp,
 } from '../services/feishu-binding.js';
 import type { ProvisioningConfig } from '../config.js';
+
+// ── k8s-client mock for message-plane branching tests ──────────────────
+const k8sMock = vi.hoisted(() => ({
+  createSecret: vi.fn(),
+  putSecret: vi.fn(),
+  createDeployment: vi.fn(),
+  createService: vi.fn(),
+  restartDeployment: vi.fn(async () => true),
+  patchDeploymentEnvVar: vi.fn(async () => false),
+  patchDeploymentEnvFromSecret: vi.fn(async () => false),
+}));
+
+vi.mock('../services/k8s-client.js', () => ({
+  getSecret: vi.fn(),
+  putSecret: k8sMock.putSecret,
+  createSecret: k8sMock.createSecret,
+  restartDeployment: k8sMock.restartDeployment,
+  deploymentExists: vi.fn(async () => true),
+  patchDeploymentEnvVar: k8sMock.patchDeploymentEnvVar,
+  patchDeploymentEnvFromSecret: k8sMock.patchDeploymentEnvFromSecret,
+  createDeployment: k8sMock.createDeployment,
+  createService: k8sMock.createService,
+}));
 
 const baseConfig: ProvisioningConfig = {
   port: 0,
@@ -201,6 +224,112 @@ describe('unbindTenantFeishuApp', () => {
     expect(r.restarted).toBe(false);
     const update = pool.queries.find((q: FakeQuery) => q.sql.includes('app_id = NULL'));
     expect(update?.params).toEqual(['default']);
+  });
+});
+
+describe('bindTenantFeishuApp message-plane branching (k8s mocked)', () => {
+  const liveConfig: ProvisioningConfig = { ...baseConfig, k8sDryRun: false };
+  const tid = 'topenc1aw00000000000000000000';
+  const ns = `dealclaw-${tid}`;
+  const GW = `nexus-gateway-${tid}`;
+  const AG = `dealclaw-agent-${tid}`;
+  const BOT = `dealclaw-bot-${tid}`;
+
+  const openclawTenant = {
+    tenant_id: tid,
+    status: 'active',
+    platform: 'feishu',
+    app_id: null,
+    k8s_namespace: ns,
+    agent_endpoint: null,
+    plan_tier: 'starter',
+    quota_credits_monthly: '1000000',
+    credits_account_id: `acct_${tid}`,
+    message_plane: 'openclaw',
+  };
+
+  const gatewayTenant = { ...openclawTenant, message_plane: 'gateway' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    k8sMock.restartDeployment.mockResolvedValue(true);
+    k8sMock.patchDeploymentEnvVar.mockResolvedValue(false);
+    k8sMock.patchDeploymentEnvFromSecret.mockResolvedValue(false);
+  });
+
+  it('openclaw plane: rolls the AGENT, never the gateway', async () => {
+    const pool = makeFakePool(openclawTenant);
+    const r = await bindTenantFeishuApp(pool, liveConfig, tid, { appId: 'cli_abc123', appSecret: 'secret123' }, okFetch());
+
+    expect(r.restartTarget).toBe('agent');
+    expect(r.restarted).toBe(true);
+
+    expect(k8sMock.restartDeployment).toHaveBeenCalledTimes(1);
+    expect(k8sMock.restartDeployment).toHaveBeenCalledWith(ns, AG);
+    expect(k8sMock.restartDeployment).not.toHaveBeenCalledWith(ns, GW);
+
+    // New credentials are materialized in the shared bot secret.
+    expect(k8sMock.putSecret).toHaveBeenCalledWith(ns, BOT, {
+      DEALCLAW_APP_ID: 'cli_abc123',
+      DEALCLAW_APP_SECRET: 'secret123',
+    });
+
+    // Idempotent safety nets for pre-switch fleets: agent envFrom bot
+    // secret + gateway pinned to the openclaw plane.
+    expect(k8sMock.patchDeploymentEnvFromSecret).toHaveBeenCalledWith(ns, AG, BOT);
+    expect(k8sMock.patchDeploymentEnvVar).toHaveBeenCalledWith(ns, GW, 'DEALCLAW_MESSAGE_PLANE', 'openclaw');
+
+    // A (re)created gateway must carry the plane env so it never starts a
+    // competing Feishu WS client.
+    const spec = k8sMock.createDeployment.mock.calls.find((c: any[]) => c[0].name === GW)?.[0];
+    expect(spec?.env.find((e: any) => e.name === 'DEALCLAW_MESSAGE_PLANE')?.value).toBe('openclaw');
+  });
+
+  it('gateway plane: rolls the GATEWAY (legacy behavior)', async () => {
+    const pool = makeFakePool(gatewayTenant);
+    const r = await bindTenantFeishuApp(pool, liveConfig, tid, { appId: 'cli_abc123', appSecret: 'secret123' }, okFetch());
+
+    expect(r.restartTarget).toBe('gateway');
+    expect(k8sMock.restartDeployment).toHaveBeenCalledTimes(1);
+    expect(k8sMock.restartDeployment).toHaveBeenCalledWith(ns, GW);
+    expect(k8sMock.restartDeployment).not.toHaveBeenCalledWith(ns, AG);
+    expect(k8sMock.patchDeploymentEnvFromSecret).not.toHaveBeenCalled();
+
+    const spec = k8sMock.createDeployment.mock.calls.find((c: any[]) => c[0].name === GW)?.[0];
+    expect(spec?.env.find((e: any) => e.name === 'DEALCLAW_MESSAGE_PLANE')?.value).toBe('gateway');
+  });
+
+  it('external-agent tenant (no namespace) on the openclaw plane falls back to a gateway rollout', async () => {
+    const external = { ...openclawTenant, k8s_namespace: null, agent_endpoint: 'http://dealclaw-agent.dealclaw-nexus-production:18789' };
+    const pool = makeFakePool(external);
+    const r = await bindTenantFeishuApp(pool, liveConfig, tid, { appId: 'cli_abc123', appSecret: 'secret123' }, okFetch());
+    expect(r.restartTarget).toBe('gateway');
+    expect(k8sMock.restartDeployment).toHaveBeenCalledWith('dealclaw-nexus-production', GW);
+  });
+
+  it('openclaw plane unbind: rotates the bot secret and rolls the AGENT', async () => {
+    const pool = makeFakePool({ ...openclawTenant, app_id: 'cli_old' });
+    const r = await unbindTenantFeishuApp(pool, liveConfig, tid);
+
+    expect(r.restartTarget).toBe('agent');
+    expect(r.restarted).toBe(true);
+    expect(k8sMock.restartDeployment).toHaveBeenCalledTimes(1);
+    expect(k8sMock.restartDeployment).toHaveBeenCalledWith(ns, AG);
+    expect(k8sMock.restartDeployment).not.toHaveBeenCalledWith(ns, GW);
+
+    const put = k8sMock.putSecret.mock.calls[0];
+    expect(put[0]).toBe(ns);
+    expect(put[1]).toBe(BOT);
+    expect(String(put[2].DEALCLAW_APP_ID)).toBe(`placeholder-${tid}`);
+  });
+
+  it('gateway plane unbind: rolls the GATEWAY (legacy behavior)', async () => {
+    const pool = makeFakePool({ ...gatewayTenant, app_id: 'cli_old' });
+    const r = await unbindTenantFeishuApp(pool, liveConfig, tid);
+
+    expect(r.restartTarget).toBe('gateway');
+    expect(k8sMock.restartDeployment).toHaveBeenCalledWith(ns, GW);
+    expect(k8sMock.restartDeployment).not.toHaveBeenCalledWith(ns, AG);
   });
 });
 
