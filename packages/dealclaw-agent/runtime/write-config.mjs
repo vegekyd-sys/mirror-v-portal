@@ -277,7 +277,9 @@ const config = {
             allowFrom: ['*'],
             // Groups off by default; enable per tenant via config push.
             groupPolicy: 'allowlist',
-            requireMention: true,
+            // Respond in groups without an explicit @mention by default;
+            // set DEALCLAW_FEISHU_REQUIRE_MENTION=true to restore mention-gating.
+            requireMention: process.env.DEALCLAW_FEISHU_REQUIRE_MENTION === 'true',
             streaming: true,
             // Show "typing…" indicator while the agent run is in flight.
             // Set DEALCLAW_FEISHU_TYPING_INDICATOR=false to disable (quota optimisation).
