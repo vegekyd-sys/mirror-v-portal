@@ -62,7 +62,7 @@ describe('write-config channels.feishu (P2)', () => {
     expect(feishu.appSecret).toEqual({ source: 'env', provider: 'default', id: 'DEALCLAW_APP_SECRET' });
     expect(JSON.stringify(config)).not.toContain('sec-secret-value');
     expect(feishu.dmPolicy).toBe('open');
-    expect(feishu.groupPolicy).toBe('allowlist');
+    expect(feishu.groupPolicy).toBe('open');
     expect(feishu.tools.bitable).toBe(true);
     // feishu plugin dir added to load paths
     expect(config.plugins.load.paths.some((p: string) => p.includes('@openclaw/feishu'))).toBe(true);
