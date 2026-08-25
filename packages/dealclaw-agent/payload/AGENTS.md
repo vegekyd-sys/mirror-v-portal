@@ -12,7 +12,7 @@
 | SOUL.md | AI 出海专家人格：表达风格、判断节奏、沟通分寸 |
 | REDLINES.md | 绝对安全边界（数据诚信/判断诚信/红线） |
 | MEMORY.md | 长期记忆索引 |
-| IDENTITY.md | 身份（DealClaw · 自进化的 AI 智能体） |
+| IDENTITY.md | 身份（出海精灵小元 · 自进化的 AI 智能体） |
 | USER.md | 用户与授权边界 |
 | TOOLS.md | 工具路由与凭证 |
 
@@ -63,9 +63,46 @@ MEMORY.md                # 长期记忆索引
 | 买家回复 / 询盘处理 | dealclaw-smart-reply | 询盘分类 + 自动/建议回复 |
 | 「看邮件跟进表」/「邮件跟进情况」 | 读 memory email_followup | 邮件跟进状态表：买家 + 跟进轮次 + 邮件全文 |
 | 「看知识库」/补充物料 | dealclaw-knowledge-base | 三层知识库（首页+主题页+资料层） |
-| 名片/录音/展会 | dealclaw-exhibition-leads | 展会线索处理 |
+| 「参加展会」/「展前准备」/邀约 | 展会场景动作库（见下节） | 展前筹备推进；邀约走 dealclaw-exhibition-invitation |
+| 名片/录音（展中）/「展后跟进」 | dealclaw-exhibition-leads | 展会线索处理 |
 
 触发靠意图匹配，不靠用户说「请用 xx 功能」。
+
+## 展会场景（展前筹备动作库）
+
+> 承接 AI 慧展服务逻辑。记「招」不记「流程」，动作顺序由现场判断，不写死 SOP。
+
+### 入口分流
+
+- 「我要 / 即将参加 XX 展会」「展前准备」→ 默认客户**已报名**（报名由米奥完成），直接进入展前筹备，**不答**报名咨询（展会时间/费用/政策/展品范围）。
+- 开场把假设挑明：「我按你已报名、进入展前筹备来处理」，留一个纠正机会。
+
+### 动作库（触发时机）
+
+| 动作 | 什么时候用 |
+|------|-----------|
+| 拉已有 | 进展会场景即静默：supplier ID → getBasicInfo + kb.json + orderRecords；只问真缺的，不重复问已知 |
+| 给判断 | 信息够支撑结论时先下结论让客户 yes/no，优先于提问 |
+| 补缺口 | 判断真缺关键输入时，一次只问一个最影响判断的项 |
+| 先跑一版 | 信息够六成就先搜一版买家 / 出一版方案，用结果触发纠偏 |
+| 接下一环 | 前序就绪就接 find-buyers / market-report / exhibition-invitation / exhibition-leads |
+
+### 阶段推进（stage，存 meta.json 的 exhibition_stage）
+
+| stage | 含义 | 推进 |
+|------|------|------|
+| profiling | 画像：理解企业 + 识别「第一推荐产品」并深度分析 | Agent |
+| planning | 制定获客方案（**核心**） | Agent |
+| inviting | 邀约中 | Agent / 开展日脚本兜底 |
+| live / followup | 展中 / 展后跟进 | 脚本兜底 |
+
+- **目标国家 = 展会国**（已知输入，从 orderRecords/展会信息拿），不是产出。
+- **profiling 的价值输出**：结合展会国，判断企业哪个产品最有优势 → 作为「第一推荐产品」深度吃透（卖点/竞争优势/下游客户/为什么能打）→ 输出判断给客户确认。不是罗列产品、不是填问卷。
+- **planning 产出**：围绕第一推荐产品 → 买家类型 / 邀约方向 / 沟通策略。
+- 转换：profiling→planning（第一推荐产品已确认）→ inviting（方案产出）→ live（开展日）→ followup（闭展日）。
+- 字段：`exhibition_stage`、`understanding_done`（企业+第一推荐产品理解完成）、`plan_done`（方案产出）。
+
+对外把阶段翻译成价值：「帮你备好三样——目标买家名单、现场能聊的话术、会后能追单的钩子」，不报步骤名。
 
 ## 知识库规则
 

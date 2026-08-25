@@ -360,6 +360,14 @@ def build_morning_plan(company_id: str, date: str | None = None, dry_run: bool =
     仍拿不到参数则降级为无 campaign 早报。
     """
     date = date or _today()
+    # 展会阶段：日期兜底推进 + 读当前阶段（供 Todo/早报体现）
+    exhibition_stage = ""
+    try:
+        from dc_exhibition_stage import reconcile_stage, read_stage
+        reconcile_stage(company_id, date, write=not dry_run)
+        exhibition_stage = read_stage(company_id)["stage"]
+    except Exception:
+        pass
     camp = get_active_campaign(company_id)
     if not camp:
         camp = _ensure_campaign_dynamic(company_id)
@@ -389,6 +397,7 @@ def build_morning_plan(company_id: str, date: str | None = None, dry_run: bool =
         "phase": evaluation["phase"],
         "urgency": evaluation["urgency"],
         "strategy_version": camp.get("strategy_version", 0),
+        "exhibition_stage": exhibition_stage,
         "status": "planning",
         "created_at": _now(),
         "evaluation": evaluation,
@@ -410,6 +419,7 @@ def build_morning_plan(company_id: str, date: str | None = None, dry_run: bool =
         "phase": evaluation["phase"],
         "urgency": evaluation["urgency"],
         "todo_count": len(todos),
+        "exhibition_stage": exhibition_stage,
         "todos": todos,
         "notify": notify_result,
     }
@@ -1283,6 +1293,26 @@ def _should_send_evening(summary: dict) -> bool:
     return False
 
 
+def _refresh_email_followup(company_id: str) -> None:
+    """刷新邮件跟进数据：memory email_followup.json → 飞书「邮件跟进」表。
+
+    只对注册表里配了 followup_table_id 的企业生效；任何异常静默吞掉，不阻断日报。
+    """
+    try:
+        from dc_memory_data import sync_email_followup_to_memory
+        from dc_company_registry import CompanyRegistry
+        from enterprise_ids import slug_for
+        slug = slug_for(company_id)
+        entry = CompanyRegistry().get(slug)
+        if not entry or not entry.get("app_token"):
+            return
+        sync_email_followup_to_memory(company_id)
+        import dc_feishu_standard as std
+        std.sync_email_followup(company_id, entry["app_token"])
+    except Exception:
+        pass
+
+
 def run_daily_job(company_id: str, slot: str, execute: bool = False,
                   dispatch: bool = False) -> dict:
     """完整每日循环（生成→执行→publish→dispatch）+ slot flock + 作业元数据 + 一次重试。
@@ -1310,6 +1340,9 @@ def run_daily_job(company_id: str, slot: str, execute: bool = False,
     lock_path = cron_dir / f"{slot}.lock"
 
     def _run_once() -> dict:
+        # 先刷新邮件跟进表（memory email_followup.json + 飞书「邮件跟进」表），
+        # 保证日报里的「跟进明细」链接始终指向最新数据。失败不影响日报。
+        _refresh_email_followup(company_id)
         if slot == "morning":
             r = build_morning_plan(company_id, dry_run=not execute)
             record["plan_id"] = r.get("plan_id", "")

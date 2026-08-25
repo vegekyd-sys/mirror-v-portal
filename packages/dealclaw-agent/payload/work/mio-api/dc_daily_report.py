@@ -18,6 +18,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _exhibition_stage_line(company_id: str) -> str:
+    """展会阶段提示行（当前阶段 + 下一步）；读不到 meta.json 或非展会企业则返回空。"""
+    try:
+        from dc_exhibition_stage import read_stage, stage_next_step, STAGE_LABELS
+        st = read_stage(company_id)
+        label = STAGE_LABELS.get(st["stage"], st["stage"])
+        if st["stage"] in ("profiling", "planning"):
+            return f"展会阶段：{label}｜{stage_next_step(st['stage'])}"
+        return f"展会阶段：{label}"
+    except Exception:
+        return ""
+
+
 def _distill_brief(company_id: str) -> str:
     """读取该企业用户的上周行为偏好（蒸馏产物），用于周一早报。"""
     try:
@@ -122,6 +135,50 @@ def _kb_brief(company_id: str) -> str:
         return "（KB 未接入）"
 
 
+# supplier_id → 真实企业名 + registry slug。
+# 注意：不能用 CDP getBasicInfo 的 companyName——它对 151897148668 返回「米奥兰特2026」
+# （平台测试号名），真实企业是中亿丰罗普斯金（LPSK，slug=lpskcom）。
+_COMPANY_INFO = {
+    "151897148668": {"name": "中亿丰罗普斯金材料科技股份有限公司", "slug": "lpskcom"},
+    "152598718575": {"name": "杭州奕歌跨境电商有限公司", "slug": "ingiatradecom"},
+    "100000834234": {"name": "杭州卓立家具有限公司", "slug": ""},
+}
+
+
+def company_display_name(company_id: str) -> str:
+    """supplier_id → 企业展示名。优先显式映射，兜底 registry/company_id。"""
+    info = _COMPANY_INFO.get(company_id)
+    if info and info.get("name"):
+        return info["name"]
+    try:
+        from dc_company_registry import CompanyRegistry
+        entry = CompanyRegistry().get(company_id)
+        if entry and entry.get("company_name"):
+            return entry["company_name"]
+    except Exception:
+        pass
+    return company_id
+
+
+def _followup_table_url(company_id: str) -> str:
+    """飞书跟进明细表跳转链接（优先「邮件跟进」表，兜底线索池 bitable_url）。无则返回空串。"""
+    info = _COMPANY_INFO.get(company_id, {})
+    slug = info.get("slug") or company_id
+    try:
+        from dc_company_registry import CompanyRegistry
+        entry = CompanyRegistry().get(slug)
+        if entry:
+            app_token = entry.get("app_token", "")
+            followup_tid = entry.get("followup_table_id", "")
+            if app_token and followup_tid:
+                return f"https://versa-ai.feishu.cn/base/{app_token}?table={followup_tid}"
+            if entry.get("bitable_url"):
+                return entry["bitable_url"]
+    except Exception:
+        pass
+    return ""
+
+
 def _funnel(company_id: str) -> dict:
     try:
         from dc_growth_dashboard import build_funnel
@@ -185,27 +242,32 @@ def build_evening_report(company_id: str) -> dict:
 
 
 def _format_morning(company_id, m, drafts, followups, funnel) -> str:
-    lines = [f"☀️ DealClaw 早报 · {company_id}"]
-    lines.append(f"漏斗 发送{funnel.get('sent',0)}→送达{funnel.get('delivered',0)}→回复{funnel.get('replied',0)}→有效询盘{funnel.get('valid_inquiry',0)}→会议意向{funnel.get('meeting_intent',0)}")
-    lines.append(f"今日到期跟进 {len(followups)} · 待确认草稿 {len(drafts)}")
-    lines.append(f"知识库：{_kb_brief(company_id)}")
-    if followups:
-        for f in followups[:5]:
-            lines.append(f"· 跟进 {f.get('buyer_email','')} 第 {f.get('next_touch')} 轮")
-    if drafts:
-        for d in drafts[:5]:
-            lines.append(f"· 待确认 {d.get('category','reply')} → {d.get('buyer_email','')}")
+    """早报：只做跟进情况总结（不再逐条列邮箱），明细跳转飞书跟进表。"""
+    lines = []
+    stage_line = _exhibition_stage_line(company_id)
+    if stage_line:
+        lines.append(stage_line)
+    lines += [
+        f"发送 {m['sent']} · 送达 {m['delivered']} · 回复 {m['replied']} · 退信 {m['bounced']}",
+        f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
+    ]
+    url = _followup_table_url(company_id)
+    if url:
+        lines.append(f"跟进明细 → {url}")
     return "\n".join(lines)
 
 
 def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
-    lines = [f"🌙 DealClaw 晚报 · {company_id}"]
-    lines.append(f"今日发送 {m['sent']} / 送达 {m['delivered']} / 回复 {m['replied']} / 退信 {m['bounced']}")
-    lines.append("")
-    lines.append("展会邮件看板摘要：")
-    lines.append(f"漏斗 发送{funnel.get('sent',0)}→送达{funnel.get('delivered',0)}→回复{funnel.get('replied',0)}→有效询盘{funnel.get('valid_inquiry',0)}→会议意向{funnel.get('meeting_intent',0)}")
-    lines.append(f"当前待跟进 {len(followups)} · 待确认草稿 {len(drafts)} · 退信 {funnel.get('bounced',0)}")
-    lines.append(f"策略{'需复盘' if strategy.get('needs_review') else '无需复盘'}")
-    lines.append("")
-    lines.append("明日计划：跟进到期线索 + 处理待确认草稿。")
+    """晚报：今日发送/待跟进总结，明细跳转飞书跟进表。"""
+    lines = []
+    stage_line = _exhibition_stage_line(company_id)
+    if stage_line:
+        lines.append(stage_line)
+    lines += [
+        f"今日发送 {m['sent']} · 送达 {m['delivered']} · 回复 {m['replied']} · 退信 {m['bounced']}",
+        f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
+    ]
+    url = _followup_table_url(company_id)
+    if url:
+        lines.append(f"跟进明细 → {url}")
     return "\n".join(lines)
