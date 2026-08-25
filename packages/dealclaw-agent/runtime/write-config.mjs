@@ -275,8 +275,9 @@ const config = {
             // D1: per-tenant isolated Feishu app — open DMs, zero onboarding.
             dmPolicy: 'open',
             allowFrom: ['*'],
-            // Groups off by default; enable per tenant via config push.
-            groupPolicy: 'allowlist',
+            // Group policy: 'open' (respond in all groups) by default; set
+            // DEALCLAW_FEISHU_GROUP_POLICY=allowlist to restrict to whitelist.
+            groupPolicy: process.env.DEALCLAW_FEISHU_GROUP_POLICY || 'open',
             // Respond in groups without an explicit @mention by default;
             // set DEALCLAW_FEISHU_REQUIRE_MENTION=true to restore mention-gating.
             requireMention: process.env.DEALCLAW_FEISHU_REQUIRE_MENTION === 'true',
