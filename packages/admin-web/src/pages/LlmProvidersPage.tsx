@@ -415,17 +415,17 @@ export default function LlmProvidersPage() {
             placeholder="API Key"
           />
         </div>
-        <div className="form-row">
-          <label className="field-label" />
-          <input
-            type="text"
+        <div className="form-row" style={{ alignItems: 'flex-start' }}>
+          <label className="field-label" style={{ paddingTop: 8 }}>模型列表</label>
+          <textarea
             className="mono"
-            style={{ flex: 1 }}
+            rows={4}
+            style={{ flex: 1, resize: 'vertical', minHeight: 84, lineHeight: 1.6 }}
             value={lpModels}
             onChange={(e) => setLpModels(e.target.value)}
-            placeholder="模型列表：一行一个 ID，推理模型加 :reasoner，视觉模型加 :vision（如 qwen-vl-plus:vision）"
+            placeholder={'每行一个模型 ID：\n推理模型加 :reasoner，视觉模型加 :vision\n如：\ndeepseek-v4-pro-0813:reasoner\nqwen-vl-plus:vision\nglm-4.5'}
           />
-          <button className="btn-primary" disabled={busy} onClick={addOrUpdateProvider}>
+          <button className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={addOrUpdateProvider}>
             {lpEditing ? '更新到列表' : '加入列表'}
           </button>
         </div>
