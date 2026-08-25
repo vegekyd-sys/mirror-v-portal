@@ -29,7 +29,7 @@ export interface RegistrationSession {
 }
 
 const APP_PRESET = {
-  name: 'DealClaw AI销售助手',
+  name: '元海精灵 AI出海专家',
   desc: 'AI-powered sales assistant for global trade — 全天候帮你找客户、写邮件、跟线索',
 };
 
