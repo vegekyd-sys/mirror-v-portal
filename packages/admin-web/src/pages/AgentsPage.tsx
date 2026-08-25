@@ -280,6 +280,7 @@ export default function AgentsPage() {
                 <th>状态</th>
                 <th>K8s Namespace</th>
                 <th>飞书</th>
+                <th>接入方式</th>
                 <th>Mio CDP</th>
                 <th>余额 / 累计消耗</th>
                 <th>创建时间</th>
@@ -320,6 +321,13 @@ export default function AgentsPage() {
                       <span className="badge badge-active">已绑定</span>
                     ) : (
                       <span className="badge badge-pending">未绑定</span>
+                    )}
+                  </td>
+                  <td>
+                    {a.directMode ? (
+                      <span className="badge badge-warn" title="绕过网关直连大模型 API，计费/余额拦截失效">直连上游</span>
+                    ) : (
+                      <span className="badge" style={{ opacity: 0.5 }}>网关代理</span>
                     )}
                   </td>
                   <td className="mono" style={{ fontSize: 11 }}>

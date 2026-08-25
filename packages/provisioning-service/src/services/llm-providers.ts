@@ -355,6 +355,35 @@ export async function getTenantModelSelection(
   }
 }
 
+/**
+ * Bulk-read the direct-mode flag for many tenants in one query (used by the
+ * agent list view). Returns a tenantId → boolean map; tenants without a
+ * selection row (or with a corrupt row) are absent and treated as false.
+ */
+export async function getTenantDirectModeMap(
+  pool: pg.Pool,
+  tenantIds: string[],
+): Promise<Map<string, boolean>> {
+  const result = new Map<string, boolean>();
+  if (tenantIds.length === 0) return result;
+  const { rows } = await pool.query(
+    `SELECT tenant_id, encrypted_value FROM runtime_configs
+      WHERE config_key = $1 AND tenant_id = ANY($2::text[])`,
+    [LLM_MODEL_SELECTION_KEY, tenantIds],
+  );
+  for (const r of rows) {
+    try {
+      const parsed = JSON.parse(decryptValue(r.encrypted_value));
+      if (parsed && typeof parsed === 'object' && parsed.directMode === true) {
+        result.set(r.tenant_id, true);
+      }
+    } catch {
+      // corrupt / undecryptable row → treat as false
+    }
+  }
+  return result;
+}
+
 export interface EffectiveLlmProviders {
   /** Global library (null when empty/corrupt). */
   globalConfig: LlmProvidersConfig | null;

@@ -22,6 +22,7 @@ import {
   pushTenantSkillEnv,
 } from '../services/skill-env.js';
 import { getMasterKey } from '../services/crypto.js';
+import { getTenantDirectModeMap } from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -333,6 +334,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
          FROM tenants ORDER BY created_at DESC LIMIT 100`,
       );
 
+      const directModeMap = await getTenantDirectModeMap(
+        pool,
+        rows.map((t: any) => t.tenant_id),
+      );
       res.json({
         ok: true,
         tenants: rows.map((t: any) => ({
@@ -347,6 +352,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
           feishuAppId: t.app_id ?? null,
           externalAgent: Boolean(t.agent_endpoint),
+          directMode: directModeMap.get(t.tenant_id) === true,
           createdAt: t.created_at,
           updatedAt: t.updated_at,
         })),

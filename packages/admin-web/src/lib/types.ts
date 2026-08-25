@@ -13,6 +13,8 @@ export interface Tenant {
   quotaCreditsMonthly?: number | null;
   /** Mio CDP supplier id — optional tenant credential for Mio CDP skills. */
   mioCdpSupplierId?: string | null;
+  /** True → tenant bypasses nexus-gateway and uses real upstream LLM URLs. */
+  directMode?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
