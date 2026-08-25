@@ -46,7 +46,6 @@ const PROVIDERS = JSON.stringify({
   }],
   defaultModel: 'deepseek/deepseek-chat',
 });
-
 describe('write-config channels.feishu (P2)', () => {
   it('emits channels.feishu with env-referenced secret on the openclaw plane', () => {
     const { config } = runWriteConfig({
@@ -123,5 +122,50 @@ describe('write-config runtime tuning (queue / pruning / compaction / session)',
     });
     expect(config.messages).toBeUndefined();
     expect(config.session?.dmScope).toBe('shared');
+  });
+});
+
+describe('write-config vision models', () => {
+  const VISION_PROVIDERS = JSON.stringify({
+    providers: [{
+      name: 'qwen',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      apiKey: 'sk-x',
+      models: [
+        { id: 'qwen-max' },
+        { id: 'qwen-vl-plus', vision: true },
+      ],
+    }],
+    defaultModel: 'qwen/qwen-max',
+    imageModel: 'qwen/qwen-vl-plus',
+  });
+
+  it('marks the vision model with image input and emits agents.defaults.imageModel', () => {
+    const { config } = runWriteConfig({ LLM_PROVIDERS: VISION_PROVIDERS });
+    const models = config.models.providers.qwen.models;
+    const text = models.find((m: any) => m.id === 'qwen-max');
+    const vision = models.find((m: any) => m.id === 'qwen-vl-plus');
+    expect(text.input).toEqual(['text']);
+    expect(vision.input).toEqual(['text', 'image']);
+    expect(config.agents.defaults.imageModel).toEqual({ primary: 'qwen/qwen-vl-plus' });
+  });
+
+  it('omits imageModel when no vision model is configured', () => {
+    const { config } = runWriteConfig({ LLM_PROVIDERS: PROVIDERS });
+    expect(config.agents.defaults.imageModel).toBeUndefined();
+  });
+
+  it('fails closed when imageModel points at a non-vision model', () => {
+    const bad = JSON.stringify({
+      providers: [{
+        name: 'qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiKey: 'sk-x',
+        models: [{ id: 'qwen-max' }],
+      }],
+      defaultModel: 'qwen/qwen-max',
+      imageModel: 'qwen/qwen-max',
+    });
+    expect(() => runWriteConfig({ LLM_PROVIDERS: bad })).toThrow();
   });
 });

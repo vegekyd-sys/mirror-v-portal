@@ -41,6 +41,8 @@ export const LLM_MODEL_SELECTION_KEY = 'LLM_MODEL_SELECTION';
 export interface LlmModelSpec {
   id: string;
   reasoning?: boolean;
+  /** True marks the model as vision-capable (accepts image input). */
+  vision?: boolean;
 }
 
 export interface LlmProviderSpec {
@@ -56,6 +58,14 @@ export interface LlmProvidersConfig {
   providers: LlmProviderSpec[];
   /** '<providerName>/<modelId>' — becomes the agent's primary model. */
   defaultModel: string | null;
+  /** '<providerName>/<modelId>' — the agent's image-understanding (vision) model. */
+  imageModel: string | null;
+}
+
+/** A tenant's model selection: primary + image model refs into the library. */
+export interface TenantModelSelection {
+  defaultModel: string | null;
+  imageModel: string | null;
 }
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -138,7 +148,11 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
         if (!MODEL_ID_PATTERN.test(id)) throw new LlmProvidersError(`模型 ID「${id || '(空)'}」不合法`);
         if (seenModels.has(id)) throw new LlmProvidersError(`提供商 ${name} 模型重复：${id}`);
         seenModels.add(id);
-        models.push({ id, reasoning: spec.reasoning === true });
+        models.push({
+          id,
+          ...(spec.reasoning === true ? { reasoning: true } : {}),
+          ...(spec.vision === true ? { vision: true } : {}),
+        });
       } else {
         throw new LlmProvidersError(`提供商 ${name} 的模型条目不合法`);
       }
@@ -162,7 +176,21 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     }
   }
 
-  return { providers, defaultModel };
+  const imageModel = str(raw.imageModel) || null;
+  if (imageModel) {
+    const [pName, ...rest] = imageModel.split('/');
+    const modelId = rest.join('/');
+    const provider = providers.find((p) => p.name === pName);
+    const model = provider?.models.find((m) => m.id === modelId);
+    if (!model) {
+      throw new LlmProvidersError(`视觉模型 ${imageModel} 不在已配置的提供商/模型列表中`);
+    }
+    if (model.vision !== true) {
+      throw new LlmProvidersError(`视觉模型 ${imageModel} 未标记为视觉模型（请在模型列表里为它加 :vision 后缀）`);
+    }
+  }
+
+  return { providers, defaultModel, imageModel };
 }
 
 /** True when '<provider>/<modelId>' exists in the given provider doc. */
@@ -172,6 +200,15 @@ export function modelExistsIn(doc: LlmProvidersConfig, ref: string): boolean {
   if (!pName || !modelId) return false;
   const provider = doc.providers.find((p) => p.name === pName);
   return !!provider && provider.models.some((m) => m.id === modelId);
+}
+
+/** True when '<provider>/<modelId>' resolves AND is marked vision-capable. */
+export function visionModelExistsIn(doc: LlmProvidersConfig, ref: string): boolean {
+  const [pName, ...rest] = ref.split('/');
+  const modelId = rest.join('/');
+  if (!pName || !modelId) return false;
+  const provider = doc.providers.find((p) => p.name === pName);
+  return !!provider && provider.models.some((m) => m.id === modelId && m.vision === true);
 }
 
 /**
@@ -185,6 +222,21 @@ export function effectiveRefIn(
   if (!doc) return null;
   if (selection && modelExistsIn(doc, selection)) return selection;
   return doc.defaultModel ?? null;
+}
+
+/**
+ * The image model ref a tenant would actually use: a resolvable tenant image
+ * selection wins, otherwise the library's global imageModel. Falls back to
+ * null when nothing is configured (no vision model → image tools disabled).
+ */
+export function effectiveImageRefIn(
+  doc: LlmProvidersConfig | null,
+  imageSelection: string | null,
+): string | null {
+  if (!doc) return null;
+  if (imageSelection && visionModelExistsIn(doc, imageSelection)) return imageSelection;
+  if (doc.imageModel && visionModelExistsIn(doc, doc.imageModel)) return doc.imageModel;
+  return null;
 }
 
 /**
@@ -206,20 +258,34 @@ export function providerCredentialSignature(
 /**
  * True when a library change actually affects a tenant: its effective model
  * changed (selection no longer resolves / default switched / provider removed),
- * or the credentials behind that model changed. Adding an unrelated provider
- * or model does NOT require a restart — the tenant's live config is untouched.
+ * its effective image model changed, or the credentials behind either model
+ * changed. Adding an unrelated provider or model does NOT require a restart —
+ * the tenant's live config is untouched.
  */
 export function tenantNeedsLlmRestart(
   prev: LlmProvidersConfig | null,
   now: LlmProvidersConfig | null,
-  selection: string | null,
+  selection: TenantModelSelection | null,
 ): boolean {
-  const beforeRef = effectiveRefIn(prev, selection);
-  const afterRef = effectiveRefIn(now, selection);
+  const selDefault = selection?.defaultModel ?? null;
+  const selImage = selection?.imageModel ?? null;
+
+  const beforeRef = effectiveRefIn(prev, selDefault);
+  const afterRef = effectiveRefIn(now, selDefault);
   if (beforeRef !== afterRef) return true;
-  return (
+  if (
     providerCredentialSignature(prev, beforeRef) !==
     providerCredentialSignature(now, afterRef)
+  ) {
+    return true;
+  }
+
+  const beforeImage = effectiveImageRefIn(prev, selImage);
+  const afterImage = effectiveImageRefIn(now, selImage);
+  if (beforeImage !== afterImage) return true;
+  return (
+    providerCredentialSignature(prev, beforeImage) !==
+    providerCredentialSignature(now, afterImage)
   );
 }
 
@@ -250,15 +316,15 @@ export async function getGlobalLlmProviders(
 }
 
 /**
- * A tenant's model selection: '<provider>/<modelId>' or null (follow the
- * global default). A selection that no longer resolves into the library
- * (provider removed) is ignored — the tenant falls back to the global
- * default instead of failing.
+ * A tenant's model selection: { defaultModel, imageModel } — each a
+ * '<provider>/<modelId>' ref or null (follow the global default). A selection
+ * that no longer resolves into the library (provider removed) is ignored —
+ * the tenant falls back to the global default instead of failing.
  */
 export async function getTenantModelSelection(
   pool: pg.Pool,
   tenantId: string,
-): Promise<string | null> {
+): Promise<TenantModelSelection | null> {
   const { rows } = await pool.query(
     `SELECT encrypted_value FROM runtime_configs WHERE tenant_id = $1 AND config_key = $2`,
     [tenantId, LLM_MODEL_SELECTION_KEY],
@@ -266,8 +332,15 @@ export async function getTenantModelSelection(
   if (!rows.length) return null;
   try {
     const parsed = JSON.parse(decryptValue(rows[0].encrypted_value));
-    const ref = typeof parsed?.defaultModel === 'string' ? parsed.defaultModel.trim() : '';
-    return ref || null;
+    // Back-compat: legacy rows only carried defaultModel.
+    if (parsed && typeof parsed === 'object' && 'defaultModel' in parsed) {
+      const defaultModel =
+        typeof parsed.defaultModel === 'string' ? parsed.defaultModel.trim() || null : null;
+      const imageModel =
+        typeof parsed.imageModel === 'string' ? parsed.imageModel.trim() || null : null;
+      return { defaultModel, imageModel };
+    }
+    return null;
   } catch {
     return null;
   }
@@ -276,18 +349,23 @@ export async function getTenantModelSelection(
 export interface EffectiveLlmProviders {
   /** Global library (null when empty/corrupt). */
   globalConfig: LlmProvidersConfig | null;
-  /** Tenant's own selection, if it resolves into the library. */
+  /** Tenant's own primary-model selection, if it resolves into the library. */
   selection: string | null;
+  /** Tenant's own image-model selection, if it resolves (vision). */
+  imageSelection: string | null;
   /** selection ?? globalConfig.defaultModel ?? null */
   effectiveModel: string | null;
+  /** imageSelection ?? globalConfig.imageModel ?? null */
+  effectiveImageModel: string | null;
   /** Serialised blob to inject as the LLM_PROVIDERS env var, or null. */
   blob: string | null;
 }
 
 /**
  * Effective provider doc for a tenant: the GLOBAL library's providers with
- * the default model resolved as tenant-selection → global default → none.
- * The materialised blob is what write-config.mjs parses at container boot.
+ * the default model resolved as tenant-selection → global default → none,
+ * and the image model resolved as tenant-image-selection → global imageModel
+ * → none. The materialised blob is what write-config.mjs parses at boot.
  */
 export async function resolveEffectiveLlmProviders(
   pool: pg.Pool,
@@ -295,16 +373,44 @@ export async function resolveEffectiveLlmProviders(
 ): Promise<EffectiveLlmProviders> {
   const globalConfig = await getGlobalLlmProviders(pool);
   if (!globalConfig || globalConfig.providers.length === 0) {
-    return { globalConfig: null, selection: null, effectiveModel: null, blob: null };
+    return {
+      globalConfig: null,
+      selection: null,
+      imageSelection: null,
+      effectiveModel: null,
+      effectiveImageModel: null,
+      blob: null,
+    };
   }
   let selection: string | null = null;
+  let imageSelection: string | null = null;
   if (tenantId) {
-    const ref = await getTenantModelSelection(pool, tenantId);
-    if (ref && modelExistsIn(globalConfig, ref)) selection = ref;
+    const sel = await getTenantModelSelection(pool, tenantId);
+    if (sel?.defaultModel && modelExistsIn(globalConfig, sel.defaultModel)) {
+      selection = sel.defaultModel;
+    }
+    if (sel?.imageModel && visionModelExistsIn(globalConfig, sel.imageModel)) {
+      imageSelection = sel.imageModel;
+    }
   }
   const effectiveModel = selection ?? globalConfig.defaultModel ?? null;
-  const blob = JSON.stringify({ ...globalConfig, defaultModel: effectiveModel });
-  return { globalConfig, selection, effectiveModel, blob };
+  const effectiveImageModel =
+    imageSelection ?? (globalConfig.imageModel && visionModelExistsIn(globalConfig, globalConfig.imageModel)
+      ? globalConfig.imageModel
+      : null);
+  const blob = JSON.stringify({
+    ...globalConfig,
+    defaultModel: effectiveModel,
+    imageModel: effectiveImageModel,
+  });
+  return {
+    globalConfig,
+    selection,
+    imageSelection,
+    effectiveModel,
+    effectiveImageModel,
+    blob,
+  };
 }
 
 export interface LlmPushResult {

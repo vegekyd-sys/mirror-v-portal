@@ -23,11 +23,13 @@ vi.mock('../services/crypto.js', () => cryptoMocks);
 import {
   validateLlmProviders,
   modelExistsIn,
+  visionModelExistsIn,
   getGlobalLlmProviders,
   getTenantModelSelection,
   resolveEffectiveLlmProviders,
   pushLlmProviders,
   effectiveRefIn,
+  effectiveImageRefIn,
   providerCredentialSignature,
   tenantNeedsLlmRestart,
   LLM_PROVIDERS_KEY,
@@ -65,7 +67,11 @@ const goodDoc = {
       name: 'qwen',
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/',
       apiKey: 'sk-qwen',
-      models: [{ id: 'qwen-max' }, { id: 'qwq-plus', reasoning: true }],
+      models: [
+        { id: 'qwen-max' },
+        { id: 'qwq-plus', reasoning: true },
+        { id: 'qwen-vl-plus', vision: true },
+      ],
     },
     {
       name: 'glm',
@@ -75,6 +81,7 @@ const goodDoc = {
     },
   ],
   defaultModel: 'qwen/qwen-max',
+  imageModel: 'qwen/qwen-vl-plus',
 };
 
 interface FakeQuery { sql: string; params?: unknown[] }
@@ -158,8 +165,10 @@ describe('validateLlmProviders', () => {
     expect(doc.providers).toHaveLength(2);
     expect(doc.providers[0].baseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
     expect(doc.providers[0].models[1]).toEqual({ id: 'qwq-plus', reasoning: true });
+    expect(doc.providers[0].models[2]).toEqual({ id: 'qwen-vl-plus', vision: true });
     expect(doc.providers[1].models).toEqual([{ id: 'glm-4.5' }]);
     expect(doc.defaultModel).toBe('qwen/qwen-max');
+    expect(doc.imageModel).toBe('qwen/qwen-vl-plus');
   });
 
   it('rejects duplicate provider names', () => {
@@ -200,6 +209,15 @@ describe('validateLlmProviders', () => {
     ).toThrow(/默认模型/);
   });
 
+  it('rejects an imageModel outside the library or not vision-marked', () => {
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, imageModel: 'other/m9' }),
+    ).toThrow(/视觉模型/);
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, imageModel: 'qwen/qwen-max' }),
+    ).toThrow(/未标记为视觉模型/);
+  });
+
   it('modelExistsIn matches only real provider/model pairs', () => {
     const doc = validateLlmProviders(goodDoc);
     expect(modelExistsIn(doc, 'qwen/qwen-max')).toBe(true);
@@ -207,6 +225,13 @@ describe('validateLlmProviders', () => {
     expect(modelExistsIn(doc, 'qwen/nope')).toBe(false);
     expect(modelExistsIn(doc, 'nope/qwen-max')).toBe(false);
     expect(modelExistsIn(doc, 'dangling')).toBe(false);
+  });
+
+  it('visionModelExistsIn requires the vision flag', () => {
+    const doc = validateLlmProviders(goodDoc);
+    expect(visionModelExistsIn(doc, 'qwen/qwen-vl-plus')).toBe(true);
+    expect(visionModelExistsIn(doc, 'qwen/qwen-max')).toBe(false);
+    expect(visionModelExistsIn(doc, 'qwen/nope')).toBe(false);
   });
 });
 
@@ -294,6 +319,14 @@ describe('tenantNeedsLlmRestart', () => {
     expect(effectiveRefIn(null, 'glm/glm-4.5')).toBeNull();
   });
 
+  it('effectiveImageRefIn: tenant image selection wins, then global, null otherwise', () => {
+    expect(effectiveImageRefIn(prev, null)).toBe('qwen/qwen-vl-plus');
+    expect(effectiveImageRefIn(prev, 'qwen/qwen-vl-plus')).toBe('qwen/qwen-vl-plus');
+    // non-vision model never qualifies as an image model
+    expect(effectiveImageRefIn(prev, 'qwen/qwen-max')).toBe('qwen/qwen-vl-plus');
+    expect(effectiveImageRefIn(null, 'qwen/qwen-vl-plus')).toBeNull();
+  });
+
   it('providerCredentialSignature ignores models, tracks baseUrl+apiKey', () => {
     expect(providerCredentialSignature(prev, 'qwen/qwen-max')).toBe(
       'https://dashscope.aliyuncs.com/compatible-mode/v1|sk-qwen',
@@ -305,30 +338,70 @@ describe('tenantNeedsLlmRestart', () => {
     expect(providerCredentialSignature(null, 'qwen/qwen-max')).toBeNull();
   });
 
+  const sel = (defaultModel: string | null, imageModel: string | null = null) => ({ defaultModel, imageModel });
+
   it('adding an unrelated provider does NOT require a restart', () => {
     expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);
-    expect(tenantNeedsLlmRestart(prev, withExtraProvider, 'glm/glm-4.5')).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, withExtraProvider, sel('glm/glm-4.5'))).toBe(false);
   });
 
   it('switching the global default requires a restart for followers', () => {
     expect(tenantNeedsLlmRestart(prev, withNewDefault, null)).toBe(true);
     // a tenant with its own selection is immune to the default switch
-    expect(tenantNeedsLlmRestart(prev, withNewDefault, 'qwen/qwen-max')).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, withNewDefault, sel('qwen/qwen-max'))).toBe(false);
   });
 
   it('rotating the credentials of the selected provider requires a restart', () => {
-    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, 'qwen/qwen-max')).toBe(true);
-    // a tenant on a different provider is untouched
-    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, 'glm/glm-4.5')).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, sel('qwen/qwen-max'))).toBe(true);
+    // a tenant on a different PRIMARY provider is still affected when its
+    // image model follows the global qwen vision model (credentials rotate)
+    expect(tenantNeedsLlmRestart(prev, withRotatedQwenKey, sel('glm/glm-4.5'))).toBe(true);
   });
 
   it('removing the selected provider falls back and requires a restart', () => {
-    expect(tenantNeedsLlmRestart(prev, withoutQwen, 'qwen/qwen-max')).toBe(true);
-    expect(tenantNeedsLlmRestart(prev, withoutQwen, 'glm/glm-4.5')).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, withoutQwen, sel('qwen/qwen-max'))).toBe(true);
+    // glm primary is untouched, but the global qwen vision model is gone → fallback
+    expect(tenantNeedsLlmRestart(prev, withoutQwen, sel('glm/glm-4.5'))).toBe(true);
+  });
+
+  it('switching the global image model requires a restart for followers', () => {
+    const withNewImage = validateLlmProviders({ ...goodDoc, imageModel: 'qwen/qwen-vl-plus' });
+    const withOtherImage = validateLlmProviders({
+      ...goodDoc,
+      providers: goodDoc.providers.map((p) =>
+        p.name === 'qwen'
+          ? { ...p, models: [...p.models, { id: 'qwen-vl-max', vision: true }] }
+          : p,
+      ),
+      imageModel: 'qwen/qwen-vl-max',
+    });
+    expect(tenantNeedsLlmRestart(withNewImage, withOtherImage, null)).toBe(true);
+    // a tenant that pinned its own image model is immune to the global switch
+    expect(
+      tenantNeedsLlmRestart(withNewImage, withOtherImage, sel(null, 'qwen/qwen-vl-plus')),
+    ).toBe(false);
+  });
+
+  it('removing the vision model from the library requires a restart', () => {
+    const noVision = validateLlmProviders({
+      providers: goodDoc.providers.map((p) =>
+        p.name === 'qwen'
+          ? {
+              ...p,
+              models: (p.models as Array<{ id: string; reasoning?: boolean; vision?: boolean }>).filter(
+                (m) => m.id !== 'qwen-vl-plus',
+              ),
+            }
+          : p,
+      ),
+      defaultModel: 'qwen/qwen-max',
+      imageModel: null,
+    });
+    expect(tenantNeedsLlmRestart(prev, noVision, null)).toBe(true);
   });
 
   it('identical libraries never require a restart; empty→empty neither', () => {
-    expect(tenantNeedsLlmRestart(prev, prev, 'glm/glm-4.5')).toBe(false);
+    expect(tenantNeedsLlmRestart(prev, prev, sel('glm/glm-4.5'))).toBe(false);
     expect(tenantNeedsLlmRestart(null, null, null)).toBe(false);
   });
 });

@@ -444,18 +444,23 @@ export default function AgentDetailPage() {
   // ── 模型选择（从全局供应商库中为本 Agent 选模型） ──
   interface LlmSelectionView {
     rawSelection: string | null;
+    rawImageSelection: string | null;
     selection: string | null;
     effectiveModel: string | null;
+    imageSelection: string | null;
+    effectiveImageModel: string | null;
     libraryEmpty: boolean;
     globalDefaultModel: string | null;
+    globalImageModel: string | null;
   }
   interface LlmLibraryProvider {
     name: string;
-    models: Array<{ id: string }>;
+    models: Array<{ id: string; vision?: boolean }>;
   }
   const [llmSel, setLlmSel] = useState<LlmSelectionView | null>(null);
   const [llmLib, setLlmLib] = useState<LlmLibraryProvider[]>([]);
   const [llmChoice, setLlmChoice] = useState('');
+  const [llmImageChoice, setLlmImageChoice] = useState('');
   const [llmBusy, setLlmBusy] = useState(false);
 
   const loadLlmSelection = useCallback(async () => {
@@ -471,6 +476,7 @@ export default function AgentDetailPage() {
       setLlmSel(sel);
       setLlmLib(lib.config?.providers || []);
       setLlmChoice(sel.selection || '');
+      setLlmImageChoice(sel.imageSelection || '');
     } catch {
       setLlmSel(null);
     }
@@ -507,13 +513,14 @@ export default function AgentDetailPage() {
     try {
       const r = await api<{ push?: { hint?: string } }>('/v1/admin/llm-providers/selection', {
         method: 'PUT',
-        body: { tenantId, defaultModel: llmChoice || null },
+        body: { tenantId, defaultModel: llmChoice || null, imageModel: llmImageChoice || null },
       });
-      flash(
-        llmChoice
-          ? `已设置本 Agent 模型：${llmChoice}。${r.push?.hint || ''}`
-          : `已恢复跟随系统默认。${r.push?.hint || ''}`,
-      );
+      const parts: string[] = [];
+      if (llmChoice) parts.push(`主模型：${llmChoice}`);
+      else parts.push('主模型：跟随系统默认');
+      if (llmImageChoice) parts.push(`视觉模型：${llmImageChoice}`);
+      else parts.push('视觉模型：跟随系统默认');
+      flash(`已保存本 Agent 模型选择（${parts.join('；')}）。${r.push?.hint || ''}`);
       await loadLlmSelection();
     } catch (e) {
       flash(`模型选择保存失败：${errMsg(e)}`);
@@ -904,6 +911,30 @@ export default function AgentDetailPage() {
                     )),
                   )}
                 </select>
+                <span className="hint">本 Agent 主对话模型</span>
+              </div>
+              <div className="form-row">
+                <label className="field-label">视觉模型</label>
+                <select
+                  value={llmImageChoice}
+                  onChange={(e) => setLlmImageChoice(e.target.value)}
+                  style={{ flex: '0 1 320px' }}
+                >
+                  <option value="">跟随系统默认（{llmSel.globalImageModel || '未设置'}）</option>
+                  {llmLib.flatMap((p) =>
+                    p.models
+                      .filter((m) => m.vision)
+                      .map((m) => (
+                        <option key={`${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
+                          {p.name}/{m.id}
+                        </option>
+                      )),
+                  )}
+                </select>
+                <span className="hint">本 Agent 图片理解模型（view_image 等）</span>
+              </div>
+              <div className="form-row" style={{ marginBottom: 0 }}>
+                <label className="field-label" />
                 <button className="btn-primary" disabled={llmBusy} onClick={() => void saveLlmSelection()}>
                   {llmBusy ? '处理中…' : '保存（滚动重启生效）'}
                 </button>

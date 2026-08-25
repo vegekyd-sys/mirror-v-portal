@@ -26,6 +26,7 @@ interface LlmUsageTenant {
 interface LlmModel {
   id: string;
   reasoning?: boolean;
+  vision?: boolean;
 }
 
 interface LlmProvider {
@@ -39,10 +40,11 @@ interface LlmProvider {
 interface LlmDoc {
   providers: LlmProvider[];
   defaultModel: string | null;
+  imageModel: string | null;
 }
 
 export default function LlmProvidersPage() {
-  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null });
+  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null, imageModel: null });
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -87,7 +89,7 @@ export default function LlmProvidersPage() {
   const load = useCallback(async () => {
     try {
       const r = await api<{ config: LlmDoc | null }>('/v1/admin/llm-providers');
-      setLlmDoc(r.config || { providers: [], defaultModel: null });
+      setLlmDoc(r.config || { providers: [], defaultModel: null, imageModel: null });
       setError('');
     } catch (e) {
       setError(errMsg(e));
@@ -119,8 +121,11 @@ export default function LlmProvidersPage() {
       const line = raw.trim();
       if (!line) continue;
       const m = line.match(/^(.+):reasoner$/i);
+      const v = line.match(/^(.+):vision$/i);
       if (m) {
         models.push({ id: m[1].trim(), reasoning: true });
+      } else if (v) {
+        models.push({ id: v[1].trim(), vision: true });
       } else {
         models.push({ id: line });
       }
@@ -148,7 +153,7 @@ export default function LlmProvidersPage() {
       return;
     }
     if (models.some((m) => !/^[A-Za-z0-9._-]{1,100}$/.test(m.id))) {
-      flashLp('模型 ID 只能含字母/数字/./_/-（:reasoner 后缀除外）', true);
+      flashLp('模型 ID 只能含字母/数字/./_/-（:reasoner / :vision 后缀除外）', true);
       return;
     }
     const exists = llmDoc.providers.some((p) => p.name === name);
@@ -169,14 +174,17 @@ export default function LlmProvidersPage() {
       llmDoc.defaultModel && providers.some((p) => llmDoc.defaultModel!.startsWith(`${p.name}/`))
         ? llmDoc.defaultModel
         : null;
-    setLlmDoc({ providers, defaultModel });
+    const imageModel = isVisionRefValid(providers, llmDoc.imageModel)
+      ? llmDoc.imageModel
+      : null;
+    setLlmDoc({ providers, defaultModel, imageModel });
     setLpEditing(null);
     setLpName('');
     setLpBaseUrl('');
     setLpApiKey('');
     setLpModels('');
     flashLp(lpEditing ? `正在更新供应商 ${name}…` : `正在写入供应商 ${name}…`);
-    void persistLibrary(providers, defaultModel, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
   };
 
   const editProvider = (p: LlmProvider) => {
@@ -184,7 +192,7 @@ export default function LlmProvidersPage() {
     setLpName(p.name);
     setLpBaseUrl(p.baseUrl);
     setLpApiKey(p.apiKey);
-    setLpModels(p.models.map((m) => (m.reasoning ? `${m.id}:reasoner` : m.id)).join('\n'));
+    setLpModels(p.models.map((m) => (m.reasoning ? `${m.id}:reasoner` : m.vision ? `${m.id}:vision` : m.id)).join('\n'));
   };
 
   const removeProvider = (name: string) => {
@@ -195,7 +203,12 @@ export default function LlmProvidersPage() {
       defaultModel = null;
       flashLp(`系统默认模型 ${llmDoc.defaultModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
     }
-    setLlmDoc({ providers, defaultModel });
+    let imageModel = llmDoc.imageModel;
+    if (imageModel && imageModel.startsWith(`${name}/`)) {
+      imageModel = null;
+      flashLp(`系统视觉模型 ${llmDoc.imageModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
+    }
+    setLlmDoc({ providers, defaultModel, imageModel });
     if (lpEditing === name) {
       setLpEditing(null);
       setLpName('');
@@ -203,7 +216,7 @@ export default function LlmProvidersPage() {
       setLpApiKey('');
       setLpModels('');
     }
-    void persistLibrary(providers, defaultModel, `移除供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, `移除供应商 ${name}`);
   };
 
   /**
@@ -214,6 +227,7 @@ export default function LlmProvidersPage() {
   const persistLibrary = async (
     providers: LlmProvider[],
     defaultModel: string | null,
+    imageModel: string | null,
     opText: string,
   ) => {
     setBusy(true);
@@ -225,7 +239,7 @@ export default function LlmProvidersPage() {
       } else {
         const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
           method: 'PUT',
-          body: { providers, defaultModel },
+          body: { providers, defaultModel, imageModel },
         });
         flash(`${opText}，已生效。${r.push?.hint || ''}`);
         log(`${opText}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
@@ -241,6 +255,15 @@ export default function LlmProvidersPage() {
     }
   };
 
+  /** 视觉模型引用是否仍然有效（存在于库且标记了 vision）。 */
+  const isVisionRefValid = (providers: LlmProvider[], ref: string | null): boolean => {
+    if (!ref) return false;
+    const [pName, ...rest] = ref.split('/');
+    const modelId = rest.join('/');
+    const provider = providers.find((p) => p.name === pName);
+    return !!provider && provider.models.some((m) => m.id === modelId && m.vision === true);
+  };
+
   /** 切换系统默认模型：替换已有值时弹确认，确认后即时保存。 */
   const changeDefaultModel = (raw: string) => {
     const next = raw || null;
@@ -252,8 +275,24 @@ export default function LlmProvidersPage() {
         return;
       }
     }
-    setLlmDoc((d) => ({ ...d, defaultModel: next }));
-    void persistLibrary(llmDoc.providers, next, next ? `设置系统默认模型为 ${next}` : '清空系统默认模型');
+    const imageModel = isVisionRefValid(llmDoc.providers, llmDoc.imageModel) ? llmDoc.imageModel : null;
+    setLlmDoc((d) => ({ ...d, defaultModel: next, imageModel }));
+    void persistLibrary(llmDoc.providers, next, imageModel, next ? `设置系统默认模型为 ${next}` : '清空系统默认模型');
+  };
+
+  /** 切换系统视觉模型：替换已有值时弹确认，确认后即时保存。 */
+  const changeImageModel = (raw: string) => {
+    const next = raw || null;
+    const prev = llmDoc.imageModel;
+    if (prev === next) return;
+    if (prev && next) {
+      if (!window.confirm(`系统视觉模型将由「${prev}」替换为「${next}」？确认后将立即生效并推送所有租户。`)) {
+        setLlmDoc((d) => ({ ...d, imageModel: prev })); // 强制回滚 select 显示
+        return;
+      }
+    }
+    setLlmDoc((d) => ({ ...d, imageModel: next }));
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, next, next ? `设置系统视觉模型为 ${next}` : '清空系统视觉模型');
   };
 
   const libraryEmpty = llmDoc.providers.length === 0;
@@ -330,6 +369,7 @@ export default function LlmProvidersPage() {
                       <span key={m.id} className="badge" style={{ marginRight: 4 }}>
                         {m.id}
                         {m.reasoning ? ' (r)' : ''}
+                        {m.vision ? ' (v)' : ''}
                       </span>
                     ))}
                   </td>
@@ -383,7 +423,7 @@ export default function LlmProvidersPage() {
             style={{ flex: 1 }}
             value={lpModels}
             onChange={(e) => setLpModels(e.target.value)}
-            placeholder="模型列表：一行一个 ID，推理模型加后缀 :reasoner（如 qwq-plus:reasoner）"
+            placeholder="模型列表：一行一个 ID，推理模型加 :reasoner，视觉模型加 :vision（如 qwen-vl-plus:vision）"
           />
           <button className="btn-primary" disabled={busy} onClick={addOrUpdateProvider}>
             {lpEditing ? '更新到列表' : '加入列表'}
@@ -410,6 +450,27 @@ export default function LlmProvidersPage() {
             )}
           </select>
           <span className="hint">切换后即时生效（替换已有默认模型会先弹确认）</span>
+        </div>
+        <div className="form-row">
+          <label className="field-label">系统视觉模型</label>
+          <select
+            value={llmDoc.imageModel || ''}
+            onChange={(e) => changeImageModel(e.target.value)}
+            style={{ flex: '0 1 280px' }}
+            disabled={busy}
+          >
+            <option value="">— 选择系统视觉模型（供 view_image 等图片理解使用） —</option>
+            {llmDoc.providers.flatMap((p) =>
+              p.models
+                .filter((m) => m.vision)
+                .map((m) => (
+                  <option key={`${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
+                    {p.name}/{m.id}
+                  </option>
+                )),
+            )}
+          </select>
+          <span className="hint">仅列出带 :vision 标记的模型（替换已有视觉模型会先弹确认）</span>
         </div>
       </div>
 

@@ -34,12 +34,12 @@ if (llmRaw) {
   }
 }
 
-function defaultModelSpec(id, reasoning) {
+function defaultModelSpec(id, reasoning, vision) {
   return {
     id,
     name: id,
     ...(reasoning ? { reasoning: true } : {}),
-    input: ['text'],
+    input: vision ? ['text', 'image'] : ['text'],
     contextWindow: 131_072,
     maxTokens: reasoning ? 65_536 : 8_192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -51,6 +51,7 @@ function defaultModelSpec(id, reasoning) {
 // no model configured (admin must add providers in the console first).
 const providers = {};
 let primaryModel = null;
+let imageModel = null;
 
 if (llmDoc && llmDoc.providers.length > 0) {
   const exportLines = [];
@@ -78,7 +79,7 @@ if (llmDoc && llmDoc.providers.length > 0) {
         if (!spec || typeof spec.id !== 'string' || !spec.id) {
           fail(`LLM_PROVIDERS: provider ${p.name} has an invalid model entry`);
         }
-        return defaultModelSpec(spec.id, spec.reasoning === true);
+        return defaultModelSpec(spec.id, spec.reasoning === true, spec.vision === true);
       }),
     };
     // Single-quote the secret; escape embedded quotes safely.
@@ -101,6 +102,23 @@ if (llmDoc && llmDoc.providers.length > 0) {
     // No explicit default → first provider's first model.
     const first = llmDoc.providers[0];
     primaryModel = `${first.name}/${first.models[0]?.id ?? ''}`;
+  }
+
+  // ── Image (vision) model ────────────────────────────────────────────
+  // llmDoc.imageModel is a '<provider>/<modelId>' ref; it must resolve to a
+  // model marked vision: true, otherwise we fail closed (a mis-configured
+  // imageModel must never silently point at a text-only model).
+  if (typeof llmDoc.imageModel === 'string' && llmDoc.imageModel) {
+    const [pName, ...rest] = llmDoc.imageModel.split('/');
+    const modelId = rest.join('/');
+    const model = nextProviders[pName]?.models.find((m) => m.id === modelId);
+    if (!model) {
+      fail(`LLM_PROVIDERS: imageModel ${llmDoc.imageModel} not found in configured providers`);
+    }
+    if (!Array.isArray(model.input) || !model.input.includes('image')) {
+      fail(`LLM_PROVIDERS: imageModel ${llmDoc.imageModel} is not vision-capable (add :vision to its model entry)`);
+    }
+    imageModel = llmDoc.imageModel;
   }
 } else {
   // No providers configured — remove any stale exports file so a
@@ -187,6 +205,7 @@ const config = {
       bootstrapMaxChars: 30_000,
       bootstrapTotalMaxChars: 100_000,
       ...(primaryModel ? { model: { primary: primaryModel } } : {}),
+      ...(imageModel ? { imageModel: { primary: imageModel } } : {}),
       // Long business runs (multi-round skill tooling + slow SSE generation)
       // blow past the 120s default and get killed mid-reply. 600s ceiling,
       // overridable per deployment via env.

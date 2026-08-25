@@ -23,6 +23,7 @@ import {
   resolveEffectiveLlmProviders,
   validateLlmProviders,
   modelExistsIn,
+  visionModelExistsIn,
 } from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -254,6 +255,8 @@ export function createRuntimeConfigRoutes(
         config: eff.globalConfig,
         selection: eff.selection,
         effectiveModel: eff.effectiveModel,
+        imageSelection: eff.imageSelection,
+        effectiveImageModel: eff.effectiveImageModel,
         tenantId,
       });
     } catch (err) {
@@ -265,9 +268,9 @@ export function createRuntimeConfigRoutes(
   // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
-      const { providers, defaultModel } = req.body ?? {};
+      const { providers, defaultModel, imageModel } = req.body ?? {};
 
-      const doc = validateLlmProviders({ providers, defaultModel });
+      const doc = validateLlmProviders({ providers, defaultModel, imageModel });
 
       // Snapshot the PREVIOUS library before overwriting — the differential
       // push uses it to roll only tenants whose live model actually changed.
@@ -332,11 +335,15 @@ export function createRuntimeConfigRoutes(
       const eff = await resolveEffectiveLlmProviders(pool, tenantId);
       res.json({
         tenantId,
-        rawSelection,
+        rawSelection: rawSelection?.defaultModel ?? null,
+        rawImageSelection: rawSelection?.imageModel ?? null,
         selection: eff.selection,
         effectiveModel: eff.effectiveModel,
+        imageSelection: eff.imageSelection,
+        effectiveImageModel: eff.effectiveImageModel,
         libraryEmpty: !library || library.providers.length === 0,
         globalDefaultModel: library?.defaultModel ?? null,
+        globalImageModel: library?.imageModel ?? null,
       });
     } catch (err) {
       console.error('GET llm-providers/selection failed:', err);
@@ -345,37 +352,65 @@ export function createRuntimeConfigRoutes(
   });
 
   // PUT /v1/admin/llm-providers/selection — set/clear a tenant's model
-  // selection (body: { tenantId, defaultModel: '<p>/<m>' | null }) and roll
-  // just that tenant's agent.
+  // selection (body: { tenantId, defaultModel?: '<p>/<m>' | null,
+  // imageModel?: '<p>/<m>' | null }) and roll just that tenant's agent.
+  // Missing keys keep the existing value; null/'' clears that slot.
   router.put('/v1/admin/llm-providers/selection', async (req: Request, res: Response) => {
     try {
-      const { tenantId, defaultModel } = req.body ?? {};
+      const { tenantId } = req.body ?? {};
       if (typeof tenantId !== 'string' || !tenantId || !(await tenantExists(tenantId))) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
       }
 
-      const ref = typeof defaultModel === 'string' ? defaultModel.trim() : '';
-      if (ref) {
-        const library = await getGlobalLlmProviders(pool);
-        if (!library || library.providers.length === 0) {
+      const library = await getGlobalLlmProviders(pool);
+      const libraryEmpty = !library || library.providers.length === 0;
+
+      // Explicitly-provided keys (string OR null) override; missing keys keep
+      // the tenant's current value. null/'' clears that slot.
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const hasDefaultKey = 'defaultModel' in body;
+      const hasImageKey = 'imageModel' in body;
+
+      const ref = typeof body.defaultModel === 'string' ? body.defaultModel.trim() : '';
+      const imgRef = typeof body.imageModel === 'string' ? body.imageModel.trim() : '';
+
+      // A selection row exists only when at least one model is chosen.
+      const current = await getTenantModelSelection(pool, tenantId);
+
+      const nextDefault = hasDefaultKey
+        ? ref || null
+        : current?.defaultModel ?? null;
+      const nextImage = hasImageKey
+        ? imgRef || null
+        : current?.imageModel ?? null;
+
+      if (nextDefault || nextImage) {
+        if (libraryEmpty) {
           res.status(400).json({
             code: 'VALIDATION',
             message: '供应商库为空：请先在「模型供应商」页添加供应商并设置默认模型',
           });
           return;
         }
-        if (!modelExistsIn(library, ref)) {
+        if (nextDefault && !modelExistsIn(library!, nextDefault)) {
           res.status(400).json({
             code: 'VALIDATION',
-            message: `模型 ${ref} 不在全局供应商库中（请重新选择）`,
+            message: `模型 ${nextDefault} 不在全局供应商库中（请重新选择）`,
+          });
+          return;
+        }
+        if (nextImage && !visionModelExistsIn(library!, nextImage)) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: `视觉模型 ${nextImage} 不在库中或未标记为视觉模型（请重新选择）`,
           });
           return;
         }
         await upsertRuntimeConfig(pool, {
           tenantId,
           key: LLM_MODEL_SELECTION_KEY,
-          value: JSON.stringify({ defaultModel: ref }),
+          value: JSON.stringify({ defaultModel: nextDefault, imageModel: nextImage }),
           isSecret: false,
           description: '租户模型选择（引用全局供应商库，默认跟随系统默认）',
         });
@@ -385,7 +420,13 @@ export function createRuntimeConfigRoutes(
       }
 
       const push = await pushLlmProviders(pool, config, tenantId);
-      res.json({ ok: true, tenantId, selection: ref || null, push });
+      res.json({
+        ok: true,
+        tenantId,
+        selection: nextDefault,
+        imageSelection: nextImage,
+        push,
+      });
     } catch (err) {
       if (err instanceof MasterKeyError) {
         res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
