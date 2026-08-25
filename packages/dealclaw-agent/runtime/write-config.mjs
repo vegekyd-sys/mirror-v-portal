@@ -231,9 +231,9 @@ const config = {
       // the context overflows. Uses the primary model (tenant gateway proxy).
       compaction: {
         mode: 'safeguard',
-        reserveTokens: 16_384,
-        keepRecentTokens: 8_192,
-        reserveTokensFloor: 4_096,
+        reserveTokens: 50_000,
+        keepRecentTokens: 8_000,
+        reserveTokensFloor: 50_000,
         maxHistoryShare: 0.35,
         recentTurnsPreserve: 3,
         truncateAfterCompaction: true,
