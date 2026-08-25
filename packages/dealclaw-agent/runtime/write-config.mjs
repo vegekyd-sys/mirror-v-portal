@@ -211,6 +211,7 @@ const config = {
       // reasoning off (skip reasoning tokens — faster first-token + streaming)
       reasoningDefault: 'off',
       thinkingDefault: 'high',
+      contextTokens: 1_000_000,
       // Long business runs (multi-round skill tooling + slow SSE generation)
       // blow past the 120s default and get killed mid-reply. 600s ceiling,
       // overridable per deployment via env.
