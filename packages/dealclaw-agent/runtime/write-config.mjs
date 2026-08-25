@@ -203,7 +203,6 @@ const config = {
     defaults: {
       workspace,
       skipBootstrap: true,
-      contextInjection: 'always',
       bootstrapMaxChars: 30_000,
       bootstrapTotalMaxChars: 100_000,
       ...(primaryModel ? { model: { primary: primaryModel } } : {}),
