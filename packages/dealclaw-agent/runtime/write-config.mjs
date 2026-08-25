@@ -35,13 +35,15 @@ if (llmRaw) {
 }
 
 function defaultModelSpec(id, reasoning, vision) {
+  // deepseek-v4-pro-0813 = long-context reasoning model (1M ctx / 384k out).
+  const longCtx = id === 'deepseek-v4-pro-0813';
   return {
     id,
     name: id,
     ...(reasoning ? { reasoning: true } : {}),
     input: vision ? ['text', 'image'] : ['text'],
-    contextWindow: 131_072,
-    maxTokens: reasoning ? 65_536 : 8_192,
+    contextWindow: longCtx ? 1_000_000 : 131_072,
+    maxTokens: longCtx ? 384_000 : (reasoning ? 65_536 : 8_192),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: { supportsUsageInStreaming: true, supportsReasoningEffort: false, maxTokensField: 'max_tokens' },
   };
