@@ -66,6 +66,14 @@ export interface LlmProvidersConfig {
 export interface TenantModelSelection {
   defaultModel: string | null;
   imageModel: string | null;
+  /**
+   * True → configure the REAL upstream baseUrl + apiKey directly into the
+   * agent's OpenClaw config, bypassing the nexus-gateway LLM egress proxy
+   * (and its value-added interceptions). False (default) → baseUrl is
+   * rewritten to the tenant's nexus-gateway proxy, so balance checks /
+   * accounting stay active. Used to A/B-isolate gateway-induced latency.
+   */
+  directMode: boolean;
 }
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -338,7 +346,8 @@ export async function getTenantModelSelection(
         typeof parsed.defaultModel === 'string' ? parsed.defaultModel.trim() || null : null;
       const imageModel =
         typeof parsed.imageModel === 'string' ? parsed.imageModel.trim() || null : null;
-      return { defaultModel, imageModel };
+      const directMode = parsed.directMode === true;
+      return { defaultModel, imageModel, directMode };
     }
     return null;
   } catch {
@@ -497,6 +506,7 @@ export async function pushLlmProviders(
       // Effective blob = global library + this tenant's resolved default.
       const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId);
       const rawSelection = await getTenantModelSelection(pool, tenantId);
+      const directMode = rawSelection?.directMode === true;
 
       // Differential roll: tenant-scoped writes always roll (their selection
       // just changed); global writes only roll when the tenant's live model
@@ -506,20 +516,30 @@ export async function pushLlmProviders(
         scope !== null ||
         tenantNeedsLlmRestart(prevLibrary, globalConfig, rawSelection);
 
-      // Rewrite each provider's baseUrl to the tenant's LLM egress proxy
-      // (nexus-gateway /v1/llm/<name>). The REAL baseUrl moves into the
-      // llm-proxy-config Secret the gateway reads via envFrom, and the API
-      // key travels unchanged in the blob (Authorization passthrough) —
-      // OpenClaw / write-config.mjs need zero changes.
+      // Proxy mode (default): rewrite each provider's baseUrl to the tenant's
+      // LLM egress proxy (nexus-gateway /v1/llm/<name>). The REAL baseUrl
+      // moves into the llm-proxy-config Secret the gateway reads via envFrom,
+      // and the API key travels unchanged in the blob (Authorization
+      // passthrough) — OpenClaw / write-config.mjs need zero changes.
+      //
+      // Direct mode (opt-in per tenant): keep the REAL baseUrl + apiKey in
+      // the blob so OpenClaw calls the upstream directly, bypassing the
+      // gateway and its value-added interceptions (balance check, accounting
+      // tee, rate limits). Used to A/B-isolate gateway-induced latency.
       const upstreams: Record<string, string> = {};
       let proxyBlob: string | null = null;
       if (globalConfig && blob) {
         const doc = JSON.parse(blob) as LlmProvidersConfig;
-        doc.providers = doc.providers.map((p) => {
-          upstreams[p.name] = p.baseUrl;
-          return { ...p, baseUrl: llmProxyBaseUrl(tenantId, p.name) };
-        });
-        proxyBlob = JSON.stringify(doc);
+        if (directMode) {
+          proxyBlob = blob; // keep real baseUrl + apiKey
+          for (const p of doc.providers) upstreams[p.name] = p.baseUrl;
+        } else {
+          doc.providers = doc.providers.map((p) => {
+            upstreams[p.name] = p.baseUrl;
+            return { ...p, baseUrl: llmProxyBaseUrl(tenantId, p.name) };
+          });
+          proxyBlob = JSON.stringify(doc);
+        }
       }
 
       // tenant-config: keep only envFrom-only keys, then set or drop

@@ -338,7 +338,7 @@ describe('tenantNeedsLlmRestart', () => {
     expect(providerCredentialSignature(null, 'qwen/qwen-max')).toBeNull();
   });
 
-  const sel = (defaultModel: string | null, imageModel: string | null = null) => ({ defaultModel, imageModel });
+  const sel = (defaultModel: string | null, imageModel: string | null = null) => ({ defaultModel, imageModel, directMode: false });
 
   it('adding an unrelated provider does NOT require a restart', () => {
     expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);

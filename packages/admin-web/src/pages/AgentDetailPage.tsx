@@ -452,6 +452,7 @@ export default function AgentDetailPage() {
     libraryEmpty: boolean;
     globalDefaultModel: string | null;
     globalImageModel: string | null;
+    directMode: boolean;
   }
   interface LlmLibraryProvider {
     name: string;
@@ -461,6 +462,7 @@ export default function AgentDetailPage() {
   const [llmLib, setLlmLib] = useState<LlmLibraryProvider[]>([]);
   const [llmChoice, setLlmChoice] = useState('');
   const [llmImageChoice, setLlmImageChoice] = useState('');
+  const [llmDirect, setLlmDirect] = useState(false);
   const [llmBusy, setLlmBusy] = useState(false);
 
   const loadLlmSelection = useCallback(async () => {
@@ -477,6 +479,7 @@ export default function AgentDetailPage() {
       setLlmLib(lib.config?.providers || []);
       setLlmChoice(sel.selection || '');
       setLlmImageChoice(sel.imageSelection || '');
+      setLlmDirect(sel.directMode === true);
     } catch {
       setLlmSel(null);
     }
@@ -513,13 +516,14 @@ export default function AgentDetailPage() {
     try {
       const r = await api<{ push?: { hint?: string } }>('/v1/admin/llm-providers/selection', {
         method: 'PUT',
-        body: { tenantId, defaultModel: llmChoice || null, imageModel: llmImageChoice || null },
+        body: { tenantId, defaultModel: llmChoice || null, imageModel: llmImageChoice || null, directMode: llmDirect },
       });
       const parts: string[] = [];
       if (llmChoice) parts.push(`主模型：${llmChoice}`);
       else parts.push('主模型：跟随系统默认');
       if (llmImageChoice) parts.push(`视觉模型：${llmImageChoice}`);
       else parts.push('视觉模型：跟随系统默认');
+      parts.push(`大模型接入：${llmDirect ? '直连上游（绕过网关）' : '经网关代理（含增值服务）'}`);
       flash(`已保存本 Agent 模型选择（${parts.join('；')}）。${r.push?.hint || ''}`);
       await loadLlmSelection();
     } catch (e) {
@@ -932,6 +936,23 @@ export default function AgentDetailPage() {
                   )}
                 </select>
                 <span className="hint">本 Agent 图片理解模型（view_image 等）</span>
+              </div>
+              <div className="form-row">
+                <label className="field-label">大模型接入</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={llmDirect}
+                    onChange={(e) => setLlmDirect(e.target.checked)}
+                    disabled={llmBusy}
+                  />
+                  <span>
+                    <b>直连上游（绕过网关代理）</b>
+                    <span className="hint" style={{ margin: 0, marginLeft: 6 }}>
+                      勾选后把供应商真实 Base URL + API Key 直接写入 OpenClaw，跳过 nexus-gateway 的余额拦截/记账/限流，用于排查网关增值服务是否拖慢回复
+                    </span>
+                  </span>
+                </label>
               </div>
               <div className="form-row" style={{ marginBottom: 0 }}>
                 <label className="field-label" />

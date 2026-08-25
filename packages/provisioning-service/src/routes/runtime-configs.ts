@@ -344,6 +344,7 @@ export function createRuntimeConfigRoutes(
         libraryEmpty: !library || library.providers.length === 0,
         globalDefaultModel: library?.defaultModel ?? null,
         globalImageModel: library?.imageModel ?? null,
+        directMode: rawSelection?.directMode === true,
       });
     } catch (err) {
       console.error('GET llm-providers/selection failed:', err);
@@ -371,6 +372,7 @@ export function createRuntimeConfigRoutes(
       const body = (req.body ?? {}) as Record<string, unknown>;
       const hasDefaultKey = 'defaultModel' in body;
       const hasImageKey = 'imageModel' in body;
+      const hasDirectKey = 'directMode' in body;
 
       const ref = typeof body.defaultModel === 'string' ? body.defaultModel.trim() : '';
       const imgRef = typeof body.imageModel === 'string' ? body.imageModel.trim() : '';
@@ -384,6 +386,9 @@ export function createRuntimeConfigRoutes(
       const nextImage = hasImageKey
         ? imgRef || null
         : current?.imageModel ?? null;
+      const nextDirect = hasDirectKey
+        ? body.directMode === true
+        : current?.directMode === true;
 
       if (nextDefault || nextImage) {
         if (libraryEmpty) {
@@ -410,12 +415,13 @@ export function createRuntimeConfigRoutes(
         await upsertRuntimeConfig(pool, {
           tenantId,
           key: LLM_MODEL_SELECTION_KEY,
-          value: JSON.stringify({ defaultModel: nextDefault, imageModel: nextImage }),
+          value: JSON.stringify({ defaultModel: nextDefault, imageModel: nextImage, directMode: nextDirect }),
           isSecret: false,
-          description: '租户模型选择（引用全局供应商库，默认跟随系统默认）',
+          description: '租户模型选择（引用全局供应商库，默认跟随系统默认；directMode 控制是否绕过网关直连上游）',
         });
       } else {
         // Clear the selection — tenant follows the global default again.
+        // (directMode without a model selection is meaningless; drop the row.)
         await deleteRuntimeConfig(pool, tenantId, LLM_MODEL_SELECTION_KEY);
       }
 
@@ -425,6 +431,7 @@ export function createRuntimeConfigRoutes(
         tenantId,
         selection: nextDefault,
         imageSelection: nextImage,
+        directMode: nextDirect,
         push,
       });
     } catch (err) {
