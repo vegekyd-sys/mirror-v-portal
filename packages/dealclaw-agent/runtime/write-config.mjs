@@ -209,6 +209,7 @@ const config = {
       reasoningDefault: 'off',
       thinkingDefault: 'high',
       contextTokens: 1_000_000,
+      typingMode: 'instant',
       // Multi-user tenants: each Feishu peer gets its own concurrent budget
       // instead of one global run slot.
       maxConcurrent: Number(process.env.DEALCLAW_AGENT_MAX_CONCURRENT || 5),
