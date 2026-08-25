@@ -248,6 +248,7 @@ const config = {
       {
         id: 'dealclaw',
         name: 'DealClaw',
+        identity: { name: '出海精灵小元', emoji: '🤝' },
         workspace,
         // Auto-discover all skills from workspace skills/ directory
         skills: (() => {
