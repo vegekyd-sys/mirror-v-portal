@@ -377,7 +377,9 @@ export function createRuntimeConfigRoutes(
       const ref = typeof body.defaultModel === 'string' ? body.defaultModel.trim() : '';
       const imgRef = typeof body.imageModel === 'string' ? body.imageModel.trim() : '';
 
-      // A selection row exists only when at least one model is chosen.
+      // A selection row exists when at least one model is chosen. Direct mode
+      // is a separate tenant-level switch — keep it even when the tenant
+      // follows the global default model (nextDefault/nextImage both null).
       const current = await getTenantModelSelection(pool, tenantId);
 
       const nextDefault = hasDefaultKey
@@ -390,8 +392,8 @@ export function createRuntimeConfigRoutes(
         ? body.directMode === true
         : current?.directMode === true;
 
-      if (nextDefault || nextImage) {
-        if (libraryEmpty) {
+      if (nextDefault || nextImage || nextDirect) {
+        if (nextDefault && libraryEmpty) {
           res.status(400).json({
             code: 'VALIDATION',
             message: '供应商库为空：请先在「模型供应商」页添加供应商并设置默认模型',
@@ -420,8 +422,8 @@ export function createRuntimeConfigRoutes(
           description: '租户模型选择（引用全局供应商库，默认跟随系统默认；directMode 控制是否绕过网关直连上游）',
         });
       } else {
-        // Clear the selection — tenant follows the global default again.
-        // (directMode without a model selection is meaningless; drop the row.)
+        // No model chosen and direct mode off — clear the selection row;
+        // the tenant follows the global default again.
         await deleteRuntimeConfig(pool, tenantId, LLM_MODEL_SELECTION_KEY);
       }
 

@@ -625,7 +625,7 @@ export async function pushLlmProviders(
     hint = `已保存，但推送全部失败（${failed[0]?.tenantId}：${failed[0]?.error}）`;
   } else {
     hint =
-      `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret（供应商地址已重写为网关代理）` +
+      `已写入 ${okCount}/${results.length} 个租户的 tenant-config Secret` +
       (restartCount > 0
         ? `，${restartCount} 个 agent 正在滚动重启，重启完成后新模型配置生效（约 1–2 分钟）`
         : skippedCount > 0

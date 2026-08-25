@@ -728,6 +728,31 @@ describe('llm-providers API', () => {
     expect(del).toBeTruthy();
   });
 
+  it('selection PUT keeps the row when directMode is set without a model', async () => {
+    // Regression: enabling direct mode on a tenant that follows the global
+    // default (no explicit model) used to hit the "clear" branch and silently
+    // drop the row — directMode never stuck. It must persist the row instead.
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: null, imageModel: null, directMode: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, selection: null, directMode: true });
+    const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO runtime_configs'));
+    expect(insert).toBeTruthy();
+    const stored = JSON.parse(String(insert!.params![2]).replace(/^enc:/, ''));
+    expect(stored).toMatchObject({ defaultModel: null, imageModel: null, directMode: true });
+    const del = pool.queries.find(
+      (q: FakeQuery) => q.sql.includes('DELETE FROM runtime_configs') && q.sql.includes('config_key = $2'),
+    );
+    expect(del).toBeFalsy();
+  });
+
   it('blocks the generic runtime-configs endpoints for LLM keys', async () => {
     const app = createApp(makeFakePool(), baseConfig);
     const put = await request(app)
