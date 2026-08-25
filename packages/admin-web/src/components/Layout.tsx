@@ -1,7 +1,7 @@
 // App shell: dark sidebar navigation + light content area (phase 3 redesign).
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { IconLogout } from './icons';
+import { IconLogout, IconNexus } from './icons';
 
 interface NavItem {
   to: string;
@@ -53,10 +53,12 @@ export default function Layout() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="side-logo">
-          <div className="logo-mark">元</div>
+          <div className="logo-mark">
+            <IconNexus size={22} />
+          </div>
           <div>
-            <div className="brand">小元</div>
-            <div className="brand-sub">管理后台</div>
+            <div className="brand">Nexus</div>
+            <div className="brand-sub">控制台</div>
           </div>
         </div>
         <nav className="side-nav">

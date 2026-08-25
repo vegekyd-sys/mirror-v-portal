@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, errMsg } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { IconArrowRight, IconCheck } from '../components/icons';
+import { IconArrowRight, IconCheck, IconNexus } from '../components/icons';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -37,24 +37,26 @@ export default function LoginPage() {
     <div className="login-shell">
       <div className="login-hero">
         <div className="hero-brand">
-          <div className="logo-mark">元</div>
-          小元 · 企业服务
+          <div className="logo-mark">
+            <IconNexus size={22} />
+          </div>
+          Nexus · 控制台
         </div>
-        <div className="hero-eyebrow">AI 外贸获客基础设施</div>
+        <div className="hero-eyebrow">AGENT 运行管理平台</div>
         <h1 className="hero-title">
-          让每一份获客投入，
+          一个平台，连接并管理
           <br />
-          都清晰可见。
+          你的每一个 AI Agent。
         </h1>
         <p className="hero-desc">
-          统一管理客户、Credits、Skill 定价与套餐，帮助团队持续交付高质量的海外增长服务。
+          多租户隔离运行、模型供应商、Credits 计费与 Skill 编排，统一在 Nexus 完成 —— 让 Agent 的开通、运行与运维清晰可控。
         </p>
         <div className="hero-foot">
           <span className="side-status">
-            <span className="status-dot" /> 服务状态正常
+            <span className="status-dot" /> 平台运行正常
           </span>
           <span>·</span>
-          <span>数据实时同步</span>
+          <span>多租户隔离 · 数据实时同步</span>
         </div>
       </div>
 

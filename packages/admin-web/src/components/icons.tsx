@@ -144,3 +144,33 @@ export const IconRocket = (p: IconProps) => (
     <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
   </S>
 );
+
+/**
+ * Nexus logo mark — a hub connecting nodes. "Nexus" = 连接点/枢纽：
+ * 一个中心节点向外连接多个运行节点，代表平台连接并托管众多 Agent。
+ * Rendered in currentColor so it picks up the surrounding text color.
+ */
+export const IconNexus = ({ size = 20 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    style={{ flexShrink: 0 }}
+  >
+    {/* 连接线：中枢 → 三个节点 */}
+    <path
+      d="M12 12V5.2M12 12l-6.2 5.6M12 12l6.2 5.6"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+    />
+    {/* 中枢节点 */}
+    <circle cx="12" cy="12" r="3.4" fill="currentColor" />
+    {/* 外围运行节点 */}
+    <circle cx="12" cy="4.2" r="2.1" fill="currentColor" />
+    <circle cx="5.8" cy="17.8" r="2.1" fill="currentColor" />
+    <circle cx="18.2" cy="17.8" r="2.1" fill="currentColor" />
+  </svg>
+);
