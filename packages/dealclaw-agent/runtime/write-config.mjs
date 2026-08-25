@@ -208,6 +208,9 @@ const config = {
       bootstrapTotalMaxChars: 100_000,
       ...(primaryModel ? { model: { primary: primaryModel } } : {}),
       ...(imageModel ? { imageModel: { primary: imageModel } } : {}),
+      // reasoning off (skip reasoning tokens — faster first-token + streaming)
+      reasoningDefault: 'off',
+      thinkingDefault: 'high',
       // Long business runs (multi-round skill tooling + slow SSE generation)
       // blow past the 120s default and get killed mid-reply. 600s ceiling,
       // overridable per deployment via env.
