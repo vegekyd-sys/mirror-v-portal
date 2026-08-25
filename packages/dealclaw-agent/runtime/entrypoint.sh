@@ -112,7 +112,6 @@ init_runtime() {
   # 2. 注册 cron（幂等）
   bash /opt/dealclaw/runtime/dc-cron-daily.sh       || echo "[dealclaw-runtime] dc-cron-daily.sh 失败" >&2
   bash /opt/dealclaw/runtime/dc-cron-resend-poll.sh || echo "[dealclaw-runtime] dc-cron-resend-poll.sh 失败" >&2
-  bash /opt/dealclaw/runtime/dc-cron-leads-push.sh  || echo "[dealclaw-runtime] dc-cron-leads-push.sh 失败" >&2
 
   # 3. agent 预加载：画像 + 线索池
   bash /opt/dealclaw/runtime/dc-ensure-agent-preload.sh || echo "[dealclaw-runtime] dc-ensure-agent-preload.sh 失败" >&2
