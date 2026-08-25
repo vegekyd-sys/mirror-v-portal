@@ -202,7 +202,6 @@ const config = {
   agents: {
     defaults: {
       workspace,
-      skipBootstrap: true,
       ...(primaryModel ? { model: { primary: primaryModel } } : {}),
       ...(imageModel ? { imageModel: { primary: imageModel } } : {}),
       // reasoning off (skip reasoning tokens — faster first-token + streaming)
