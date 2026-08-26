@@ -264,6 +264,26 @@ export function providerCredentialSignature(
 }
 
 /**
+ * Spec signature of the model backing a model ref (id + reasoning/vision
+ * flags). Unlike providerCredentialSignature, this DOES include the model
+ * itself — a tenant whose effective model is edited in place (e.g. reasoning
+ * flipped on) must restart to re-materialize the change.
+ */
+export function modelSpecSignature(
+  doc: LlmProvidersConfig | null,
+  ref: string | null,
+): string | null {
+  if (!doc || !ref) return null;
+  const pName = ref.slice(0, ref.indexOf('/'));
+  const modelId = ref.slice(ref.indexOf('/') + 1);
+  const provider = doc.providers.find((p) => p.name === pName);
+  if (!provider) return null;
+  const model = provider.models.find((m) => m.id === modelId);
+  if (!model) return null;
+  return JSON.stringify(model);
+}
+
+/**
  * True when a library change actually affects a tenant: its effective model
  * changed (selection no longer resolves / default switched / provider removed),
  * its effective image model changed, or the credentials behind either model
@@ -287,10 +307,17 @@ export function tenantNeedsLlmRestart(
   ) {
     return true;
   }
+  // In-place model edits (reasoning/vision flags) also require a restart.
+  if (modelSpecSignature(prev, beforeRef) !== modelSpecSignature(now, afterRef)) {
+    return true;
+  }
 
   const beforeImage = effectiveImageRefIn(prev, selImage);
   const afterImage = effectiveImageRefIn(now, selImage);
   if (beforeImage !== afterImage) return true;
+  if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
+    return true;
+  }
   return (
     providerCredentialSignature(prev, beforeImage) !==
     providerCredentialSignature(now, afterImage)
