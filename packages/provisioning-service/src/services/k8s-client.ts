@@ -78,6 +78,8 @@ export interface TenantRuntimeStatus {
       ready: boolean;
       restartCount: number;
       state: string;
+      /** ISO 8601 — when the current container instance started (running.startedAt). */
+      startedAt: string | null;
     }>;
   }>;
 }
@@ -120,6 +122,11 @@ export async function getTenantRuntimeStatus(namespace: string, tenantId: string
         ready: container?.ready || false,
         restartCount: container?.restartCount || 0,
         state: Object.keys(container?.state || {})[0] || 'unknown',
+        startedAt:
+          container?.state?.running?.startedAt ??
+          container?.state?.terminated?.startedAt ??
+          item?.status?.startTime ??
+          null,
       })),
     })),
   };

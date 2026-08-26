@@ -15,6 +15,7 @@ interface RuntimeContainer {
   ready: boolean;
   restartCount: number;
   state: string;
+  startedAt?: string | null;
 }
 
 interface RuntimePod {
@@ -801,6 +802,7 @@ export default function AgentDetailPage() {
                       <th>容器 / 镜像</th>
                       <th>重启</th>
                       <th>状态</th>
+                      <th>启动时间</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -826,6 +828,7 @@ export default function AgentDetailPage() {
                           <td>
                             <span className={`badge ${c.ready ? 'badge-active' : 'badge-failed'}`}>{c.state}</span>
                           </td>
+                          <td style={{ fontSize: 11, color: '#777' }}>{fmtTime(c.startedAt)}</td>
                         </tr>
                       )),
                     )}
