@@ -157,8 +157,11 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       }
 
       // ── interception 2: exhausted balance (chat calls only) ──
+      let balanceCheckMs = 0;
       if (isChatCall) {
+        const tBal = Date.now();
         const balance = await getCachedBalance();
+        balanceCheckMs = Date.now() - tBal;
         if (balance !== null && balance <= 0) {
           const text = '⚠️ 您的账户额度已用完，暂时无法继续对话。请联系客服或前往充值页面补充额度后重试。';
           respondSynthesized(res, parsed, model, text);
@@ -181,13 +184,16 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       if (accept) fwdHeaders['accept'] = accept;
 
       let upstreamRes: Response | globalThis.Response;
+      let fetchMs = 0;
       try {
+        const tFetch = Date.now();
         upstreamRes = await fetchImpl(upstreamUrl, {
           method: req.method,
           headers: fwdHeaders,
           body: raw && raw.length > 0 ? new Uint8Array(raw) : undefined,
           signal: AbortSignal.timeout(300_000),
         });
+        fetchMs = Date.now() - tFetch;
       } catch (err: any) {
         console.warn(`[llm-proxy] upstream unreachable: ${err?.message || err}`);
         res.status(502).json({ code: 'UPSTREAM_UNREACHABLE', message: 'LLM upstream is unreachable' });
@@ -205,22 +211,65 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       const isSSE = (upstreamCt || '').includes('text/event-stream');
 
       if (isSSE) {
+        // SSE hygiene: flush headers immediately and disable any intermediate
+        // proxy buffering so chunks reach OpenClaw as they arrive.
+        res.setHeader('cache-control', 'no-cache');
+        res.setHeader('connection', 'keep-alive');
+        res.setHeader('x-accel-buffering', 'no');
+        res.flushHeaders();
+
         // Stream chunks through as they arrive; keep a tail buffer to parse
         // the final usage chunk once the stream completes.
         const reader = bodyStream.getReader();
+        const slowChunkLogThresholdMs = Number(process.env.LLM_PROXY_SLOW_CHUNK_MS || 1000);
         let tail = '';
+        let chunkCount = 0;
+        let firstChunkAt = 0;
+        let lastChunkAt = 0;
+        let maxIntervalMs = 0;
+        let maxReadToWriteMs = 0;
+        let drainCount = 0;
         try {
           for (;;) {
+            const tReadDone = Date.now();
             const { done, value } = await reader.read();
             if (done) break;
             const chunk = Buffer.from(value);
+            const tWriteDone = Date.now();
+            const readToWrite = tWriteDone - tReadDone;
+            if (readToWrite > maxReadToWriteMs) maxReadToWriteMs = readToWrite;
+            if (firstChunkAt === 0) firstChunkAt = tReadDone;
+            if (lastChunkAt > 0) {
+              const interval = tReadDone - lastChunkAt;
+              if (interval > maxIntervalMs) maxIntervalMs = interval;
+              if (interval >= slowChunkLogThresholdMs) {
+                console.warn(`[llm-proxy][stream] slow chunk: +${interval}ms since last (chunk #${chunkCount}) provider=${provider} model=${model} requestId=${requestId}`);
+              }
+            }
+            lastChunkAt = tReadDone;
+            chunkCount++;
             if (!res.write(chunk)) {
-              // backpressure: wait for the socket to drain
+              // backpressure: downstream (OpenClaw) is not draining fast enough
+              drainCount++;
+              const tDrainStart = Date.now();
               await new Promise<void>(resolve => res.once('drain', resolve));
+              const drainMs = Date.now() - tDrainStart;
+              if (drainMs >= slowChunkLogThresholdMs) {
+                console.warn(`[llm-proxy][stream] downstream backpressure: drain waited ${drainMs}ms (chunk #${chunkCount}) provider=${provider} model=${model} requestId=${requestId}`);
+              }
             }
             tail = (tail + chunk.toString('utf8')).slice(-SSE_TAIL_MAX);
           }
           res.end();
+          const tEnd = Date.now();
+          const ttft = firstChunkAt > 0 ? firstChunkAt - started : -1;
+          const avgInterval = chunkCount > 1 ? (lastChunkAt - firstChunkAt) / (chunkCount - 1) : 0;
+          console.log(
+            `[llm-proxy][stream] done provider=${provider} model=${model} requestId=${requestId} ` +
+            `balance=${balanceCheckMs}ms fetch=${fetchMs}ms ttft=${ttft}ms ` +
+            `chunks=${chunkCount} total=${tEnd - started}ms avgInterval=${avgInterval.toFixed(1)}ms ` +
+            `maxInterval=${maxIntervalMs}ms maxReadToWrite=${maxReadToWriteMs}ms drains=${drainCount}`,
+          );
         } catch (err: any) {
           console.warn(`[llm-proxy] stream failed mid-flight: ${err?.message || err}`);
           res.end();
