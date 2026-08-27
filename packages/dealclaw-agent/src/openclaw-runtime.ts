@@ -54,15 +54,23 @@ export class OpenClawRuntimeClient implements RuntimeClient {
 
   async execute(text: string, context: AgentExecutionContext): Promise<RuntimeResult> {
     const sessionKey = stableSessionKey(context);
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-openclaw-agent-id': this.agentId,
+      'x-openclaw-session-key': sessionKey,
+      'x-openclaw-message-channel': sanitizeChannel(context.channel),
+    };
+    // The gateway enforces Bearer auth whenever a non-empty token exists
+    // (2026-08-24+ provisioning always sets one). Missing it yields 401 →
+    // the /execute bridge surfaces 502. Legacy fleets with an empty token
+    // run the gateway in auth=none mode, so omit the header for them.
+    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    if (gatewayToken) headers['authorization'] = `Bearer ${gatewayToken}`;
+
     const response = await fetch(`${this.baseUrl}/v1/responses`, {
       method: 'POST',
       signal: AbortSignal.timeout(this.timeoutMs),
-      headers: {
-        'content-type': 'application/json',
-        'x-openclaw-agent-id': this.agentId,
-        'x-openclaw-session-key': sessionKey,
-        'x-openclaw-message-channel': sanitizeChannel(context.channel),
-      },
+      headers,
       body: JSON.stringify({
         model: `openclaw/${this.agentId}`,
         input: text,

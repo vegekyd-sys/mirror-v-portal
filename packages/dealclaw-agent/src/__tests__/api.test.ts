@@ -84,7 +84,10 @@ describe('DealClaw OpenClaw bridge', () => {
 });
 
 describe('tenant session isolation', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  });
 
   it('uses stable sessions within one tenant and different sessions across tenants', async () => {
     const calls: Array<{ headers: Headers; body: any }> = [];
@@ -110,6 +113,26 @@ describe('tenant session isolation', () => {
     expect(sessionKeys[0]).not.toBe(sessionKeys[2]);
     expect(calls[0].body.user).toBe(calls[1].body.user);
     expect(calls[0].body.user).not.toBe(calls[2].body.user);
+  });
+
+  it('sends Bearer authorization when a gateway token is configured', async () => {
+    const calls: Array<{ headers: Headers }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ output_text: 'ok' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }));
+
+    process.env.OPENCLAW_GATEWAY_TOKEN = 'a'.repeat(64);
+    const runtime = new OpenClawRuntimeClient({ baseUrl: 'http://runtime.test' });
+    await runtime.execute('hi', { tenantId: 'tenant-a', userId: 'u1', channel: 'feishu' });
+    expect(calls[0].headers.get('authorization')).toBe(`Bearer ${'a'.repeat(64)}`);
+
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    await runtime.execute('hi', { tenantId: 'tenant-a', userId: 'u1', channel: 'feishu' });
+    expect(calls[1].headers.get('authorization')).toBeNull();
   });
 });
 
