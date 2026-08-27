@@ -845,3 +845,127 @@ export async function createJob(spec: JobSpec): Promise<void> {
   }
   console.log(`[k8s] job created: ${spec.namespace}/${spec.name}`);
 }
+
+// ── Pod console: logs + exec (admin console features) ──
+
+/** RFC 1123 label value — safe for pod / container / namespace path segments. */
+export function isSafeK8sName(value: string, maxLen = 63): boolean {
+  return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(value) && value.length <= maxLen;
+}
+
+/** Full-width tenant UUIDs are `dealclaw-<32 hex>`; validate before path use. */
+export function isSafeTenantId(tenantId: string): boolean {
+  return /^[0-9a-f]{32}$/.test(tenantId);
+}
+
+/**
+ * Lightweight check that the given pod actually exists in the tenant's
+ * namespace AND carries the tenant label. Prevents exec/log access to pods
+ * outside the tenant's namespace even if a caller passes an arbitrary name.
+ * Returns the pod object, or null when missing / not owned by the tenant.
+ */
+export async function getTenantPod(
+  namespace: string,
+  tenantId: string,
+  podName: string,
+): Promise<Record<string, any> | null> {
+  const res = await k8sRequest('GET', `/api/v1/namespaces/${namespace}/pods/${podName}`);
+  if (!res.ok) return null;
+  const pod = res.body as Record<string, any>;
+  const owner = pod?.metadata?.labels?.['dealclaw.io/tenant-id'];
+  if (owner !== tenantId) return null;
+  return pod;
+}
+
+export interface PodLogOptions {
+  container?: string;
+  tailLines?: number;
+  sinceSeconds?: number;
+  timestamps?: boolean;
+  /** Cap the one-shot response size (k8s limitBytes, default 1MiB). */
+  limitBytes?: number;
+}
+
+function buildPodLogQuery(opts: PodLogOptions, follow: boolean): string {
+  const params = new URLSearchParams();
+  if (opts.container) params.set('container', opts.container);
+  if (opts.tailLines && opts.tailLines > 0) params.set('tailLines', String(Math.min(opts.tailLines, 10_000)));
+  if (opts.sinceSeconds && opts.sinceSeconds > 0) params.set('sinceSeconds', String(opts.sinceSeconds));
+  if (opts.timestamps) params.set('timestamps', 'true');
+  if (follow) params.set('follow', 'true');
+  params.set('limitBytes', String(opts.limitBytes ?? 1_048_576));
+  return params.toString();
+}
+
+/**
+ * One-shot pod log fetch (no follow). Returns the raw text. Throws on
+ * upstream errors with the apiserver's message.
+ */
+export async function getPodLogs(
+  namespace: string,
+  podName: string,
+  opts: PodLogOptions = {},
+): Promise<string> {
+  const path = `/api/v1/namespaces/${namespace}/pods/${podName}/log?${buildPodLogQuery(opts, false)}`;
+  const res = await k8sRequest('GET', path);
+  if (!res.ok) {
+    throw new Error(`getPodLogs ${namespace}/${podName} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return typeof res.body === 'string' ? res.body : String(res.body ?? '');
+}
+
+/**
+ * Streaming pod log fetch (`follow=true`). Returns the raw fetch Response so
+ * the route can pipe the upstream body straight to the client. The caller
+ * owns the AbortSignal (client disconnect cancels the upstream request).
+ */
+export async function streamPodLogs(
+  namespace: string,
+  podName: string,
+  opts: PodLogOptions,
+  signal?: AbortSignal,
+): Promise<Response> {
+  if (!isInCluster() || !_k8sBaseUrl || !_k8sToken) {
+    throw new Error('not in cluster');
+  }
+  const path = `/api/v1/namespaces/${namespace}/pods/${podName}/log?${buildPodLogQuery(opts, true)}`;
+  return fetch(`${_k8sBaseUrl}${path}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${_k8sToken}` },
+    signal,
+  });
+}
+
+/**
+ * Open a WebSocket to the K8s exec API (remotecommand subprotocol
+ * `v4.channel.k8s.io`). Returns the connected `ws` client; the caller is
+ * responsible for relaying the channel-framed messages.
+ */
+export async function openPodExecWs(
+  namespace: string,
+  podName: string,
+  opts: { container?: string; command: string[]; tty?: boolean },
+): Promise<import('ws').WebSocket> {
+  if (!isInCluster() || !_k8sBaseUrl || !_k8sToken) {
+    throw new Error('not in cluster');
+  }
+  const { WebSocket } = await import('ws');
+  const params = new URLSearchParams();
+  if (opts.container) params.set('container', opts.container);
+  for (const part of opts.command) params.append('command', part);
+  params.set('stdin', 'true');
+  params.set('stdout', 'true');
+  params.set('stderr', 'true');
+  params.set('tty', opts.tty === false ? 'false' : 'true');
+
+  const url = `${_k8sBaseUrl.replace(/^http/, 'ws')}/api/v1/namespaces/${namespace}/pods/${podName}/exec?${params.toString()}`;
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, ['v4.channel.k8s.io'], {
+      headers: { Authorization: `Bearer ${_k8sToken}` },
+      ca: _k8sCa ?? undefined,
+      handshakeTimeout: 10_000,
+    });
+    ws.once('open', () => resolve(ws));
+    ws.once('error', (err) => reject(err));
+  });
+}

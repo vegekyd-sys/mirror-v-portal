@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
 import { syncImageReleases } from './services/registry-sync.js';
+import { attachPodExecWebSocket } from './ws/pod-exec.js';
 
 async function main() {
   const config = loadConfig();
@@ -17,7 +18,7 @@ async function main() {
 
   const app = createApp(pool, config);
 
-  app.listen(config.port, '0.0.0.0', () => {
+  const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(JSON.stringify({
       level: 'info',
       service: 'provisioning-service',
@@ -26,6 +27,11 @@ async function main() {
       message: 'Provisioning Service started',
     }));
   });
+
+  // Pod exec WebSocket (/v1/tenants/:id/exec) — Express can't upgrade WS,
+  // so the ws server attaches to the raw HTTP server. No-op in dry-run mode
+  // (k8s exec is cluster-only; the upgrade handler rejects with 404).
+  attachPodExecWebSocket(server);
 
   // Registry sync — the image release registry's source of truth is the
   // container registry (replaces the removed Jenkins post-build hook).

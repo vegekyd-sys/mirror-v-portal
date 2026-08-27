@@ -61,6 +61,19 @@ export function verifyAdminJwt(token: string): Record<string, unknown> | null {
 }
 
 /**
+ * Shared token validation used by both the Express middleware and the
+ * WebSocket upgrade path (pod exec terminal — a browser WS cannot attach
+ * custom Authorization headers, so the client sends its token as the first
+ * WS message and this function validates it with the same rules).
+ */
+export function isValidServiceOrAdminToken(token: string | undefined, envVar: string): boolean {
+  if (!token) return false;
+  const expectedToken = process.env[envVar];
+  if (expectedToken && token === expectedToken) return true;
+  return verifyAdminJwt(token) !== null;
+}
+
+/**
  * Service-token OR admin-JWT auth. Internal services (ops-agent, billing
  * hooks) keep using the shared static token; the pure-frontend admin SPA
  * authenticates with the JWT issued by credits-ledger login, so this
@@ -69,12 +82,11 @@ export function verifyAdminJwt(token: string): Record<string, unknown> | null {
 export function createServiceOrAdminAuthMiddleware(envVar: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    const expectedToken = process.env[envVar];
-
     if (!token) {
       res.status(401).json({ code: 'UNAUTHORIZED', message: 'Missing authorization token' });
       return;
     }
+    const expectedToken = process.env[envVar];
     if (expectedToken && token === expectedToken) {
       next();
       return;

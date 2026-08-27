@@ -7,6 +7,8 @@ import { api, errMsg } from '../lib/api';
 import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
+import PodLogsModal from '../components/PodLogsModal';
+import PodTerminalModal from '../components/PodTerminalModal';
 import { IconArrowLeft, IconBox, IconChat, IconRefresh, IconTrash } from '../components/icons';
 
 interface RuntimeContainer {
@@ -157,6 +159,13 @@ export default function AgentDetailPage() {
   const [rtBusy, setRtBusy] = useState(false);
   const [scaleService, setScaleService] = useState<'dealclaw-agent' | 'nexus-gateway'>('dealclaw-agent');
   const [scaleReplicas, setScaleReplicas] = useState('1');
+
+  // ── Pod 控制台（日志 / 终端） ──
+  const [consoleTarget, setConsoleTarget] = useState<{
+    kind: 'logs' | 'term';
+    pod: string;
+    containers: string[];
+  } | null>(null);
 
   const loadRuntime = useCallback(async () => {
     setRtBusy(true);
@@ -803,6 +812,7 @@ export default function AgentDetailPage() {
                       <th>重启</th>
                       <th>状态</th>
                       <th>启动时间</th>
+                      <th style={{ width: 132 }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -829,6 +839,34 @@ export default function AgentDetailPage() {
                             <span className={`badge ${c.ready ? 'badge-active' : 'badge-failed'}`}>{c.state}</span>
                           </td>
                           <td style={{ fontSize: 11, color: '#777' }}>{fmtTime(c.startedAt)}</td>
+                          {ci === 0 ? (
+                            <td rowSpan={p.containers.length} style={{ whiteSpace: 'nowrap' }}>
+                              <button
+                                className="btn-secondary btn-sm"
+                                onClick={() =>
+                                  setConsoleTarget({
+                                    kind: 'logs',
+                                    pod: p.name,
+                                    containers: p.containers.map((x) => x.name),
+                                  })
+                                }
+                              >
+                                日志
+                              </button>{' '}
+                              <button
+                                className="btn-secondary btn-sm"
+                                onClick={() =>
+                                  setConsoleTarget({
+                                    kind: 'term',
+                                    pod: p.name,
+                                    containers: p.containers.map((x) => x.name),
+                                  })
+                                }
+                              >
+                                终端
+                              </button>
+                            </td>
+                          ) : null}
                         </tr>
                       )),
                     )}
@@ -1244,6 +1282,26 @@ export default function AgentDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Pod 控制台（日志 / 终端弹窗） ── */}
+      {consoleTarget && consoleTarget.kind === 'logs' && (
+        <PodLogsModal
+          key={`logs-${consoleTarget.pod}`}
+          tenantId={tenantId}
+          pod={consoleTarget.pod}
+          containers={consoleTarget.containers}
+          onClose={() => setConsoleTarget(null)}
+        />
+      )}
+      {consoleTarget && consoleTarget.kind === 'term' && (
+        <PodTerminalModal
+          key={`term-${consoleTarget.pod}`}
+          tenantId={tenantId}
+          pod={consoleTarget.pod}
+          containers={consoleTarget.containers}
+          onClose={() => setConsoleTarget(null)}
+        />
+      )}
     </>
   );
 }
