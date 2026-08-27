@@ -105,6 +105,23 @@ function sendJson(ws: WebSocket, obj: unknown) {
 export function attachPodExecWebSocket(server: Server, authEnvVar = 'PROVISIONING_API_TOKEN') {
   const wss = new WebSocketServer({ noServer: true });
 
+  // Server-side kill switch: pod exec is disabled until the permission system
+  // (fine-grained RBAC + audit trail) is in place. Set POD_EXEC_ENABLED=true
+  // (or any of '1'/'yes'/'on') to re-enable alongside the admin-web flag.
+  const enabled = ['1', 'true', 'yes', 'on'].includes(
+    (process.env.POD_EXEC_ENABLED ?? 'false').toLowerCase(),
+  );
+  if (!enabled) {
+    server.on('upgrade', (req, socket) => {
+      const target = parseExecTarget(req.url);
+      if (target !== null) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\npod exec disabled');
+        socket.destroy();
+      }
+    });
+    return wss;
+  }
+
   server.on('upgrade', (req, socket: Duplex, head) => {
     // Only claim our own path; everything else is destroyed (no other
     // WS consumers exist on this service today).

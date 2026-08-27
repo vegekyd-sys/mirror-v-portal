@@ -9,6 +9,10 @@ import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
 import PodLogsModal from '../components/PodLogsModal';
 import PodTerminalModal from '../components/PodTerminalModal';
+
+// Pod 终端功能开关：等权限系统（细粒度 RBAC / 操作审计）就绪后再开启。
+// 后端 ws /pod-exec 路由保留，仅隐藏前端入口；恢复时改回 true 即可。
+const POD_TERMINAL_ENABLED = false;
 import { IconArrowLeft, IconBox, IconChat, IconRefresh, IconTrash } from '../components/icons';
 
 interface RuntimeContainer {
@@ -912,19 +916,21 @@ export default function AgentDetailPage() {
                                 }
                               >
                                 日志
-                              </button>{' '}
-                              <button
-                                className="btn-secondary btn-sm"
-                                onClick={() =>
-                                  setConsoleTarget({
-                                    kind: 'term',
-                                    pod: p.name,
-                                    containers: p.containers.map((x) => x.name),
-                                  })
-                                }
-                              >
-                                终端
                               </button>
+                              {POD_TERMINAL_ENABLED && (
+                                <button
+                                  className="btn-secondary btn-sm"
+                                  onClick={() =>
+                                    setConsoleTarget({
+                                      kind: 'term',
+                                      pod: p.name,
+                                      containers: p.containers.map((x) => x.name),
+                                    })
+                                  }
+                                >
+                                  终端
+                                </button>
+                              )}
                             </td>
                           ) : null}
                         </tr>
