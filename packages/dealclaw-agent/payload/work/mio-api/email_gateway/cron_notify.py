@@ -137,7 +137,7 @@ def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
         "card": {
             "header": {
                 "template": "purple",
-                "title": {"content": f"[DealClaw] 新邮件提醒 · {len(events)} 封", "tag": "plain_text"},
+                "title": {"content": f"[出海精灵小元] 新邮件提醒 · {len(events)} 封", "tag": "plain_text"},
             },
             "elements": elements,
         },

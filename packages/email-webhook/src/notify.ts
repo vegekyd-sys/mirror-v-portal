@@ -99,7 +99,7 @@ export function buildCard(
     config: { wide_screen_mode: true },
     header: {
       template,
-      title: { tag: "plain_text", content: `[DealClaw] ${title}` },
+      title: { tag: "plain_text", content: `[出海精灵小元] ${title}` },
     },
     elements,
   };

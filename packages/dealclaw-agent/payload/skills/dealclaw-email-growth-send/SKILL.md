@@ -40,7 +40,7 @@ date: "2026-07-30"
 每次用户触发发送邮件时，静默执行：
 
 ```python
-GET https://webhook.dealclaw.io/bindings
+GET https://dealclaw.datathink.com/webhook/bindings
 Header: X-Admin-Token: <token>
 ```
 
@@ -56,13 +56,13 @@ Header: X-Admin-Token: <token>
 
 `X-Admin-Token` 存储在 `workspace/.env` 的 `WEBHOOK_ADMIN_TOKEN`。
 
-默认发件地址统一使用 `agent@example.com`。
+默认发件地址统一使用 `V@mail.dealclaw.io`。
 
 ### 默认绑定参数（当用户说「绑定邮件通知」时）
 
 按以下优先级收集参数：
 
-1. **agent_email** → 默认 `agent@example.com`
+1. **agent_email** → 默认 `V@mail.dealclaw.io`
 2. **webhook_url** → 用户在当前群触发，问「是绑到当前群吗？」→ 是 → 使用当前群的机器人 webhook URL
 3. **mention_open_id** → 默认不填，除非用户说「有回信 @ 我」
 
@@ -96,7 +96,7 @@ V 根据买家背景和企业画像自主生成，不套死模板。核心原则
 
 ### 反垃圾（Anti-Spam）控制 — 冷信首封必读
 
-> 来源实践（2026-08-20 领艺首轮群发）：`buyer@example.com` 被拒 `550 High probability of spam`（ContentRejected）。根因是营销词密度过高 + 冷群发语境。以下为硬约束：
+> 来源实践（2026-08-20 领艺首轮群发）：`trevor@expertmedicalsupplies.co.za` 被拒 `550 High probability of spam`（ContentRejected）。根因是营销词密度过高 + 冷群发语境。以下为硬约束：
 
 1. **去营销化标题**：冷信标题不用「形容词+品牌堆砌」式（如 "German-standard … / premium …"），改用低调商务询价式（如 "Inquiry - <品类> for your product range" / "Regarding <品类> at the Johannesburg show"）。
 2. **降营销词密度**：首封正文避免连用 "German-standard / century-old / full-solution / premium / luxury" 等密集形容词；一句话一个卖点，多留中性陈述（我是谁、做什么、何时在哪参展）。
@@ -139,7 +139,7 @@ export RESEND_API_KEY=$(grep RESEND_API_KEY scripts/resend/.env | cut -d= -f2)
 ```bash
 # Step 1: 创建域名
 export RESEND_API_KEY=***
-node scripts/resend/domain-setup.mjs step1 --email buyer@example.com
+node scripts/resend/domain-setup.mjs step1 --email sandkey@jasscup.com
 
 # Step 2: 添加域名到 Resend
 node scripts/resend/domain-setup.mjs step2 --domain mail.dealclaw.io
@@ -176,11 +176,11 @@ Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**
 
 `agent_email` 是**我方代理邮箱**（发送身份），不是买家邮箱。一个代理邮箱 ↔ 一个飞书群。地址大小写不敏感。
 
-**默认发件地址：`agent@example.com`**
+**默认发件地址：`V@mail.dealclaw.io`**
 
 ### 管理接口
 
-**Base URL:** `https://webhook.dealclaw.io`
+**Base URL:** `https://dealclaw.datathink.com`（前缀 `/webhook`）
 **认证头:** `X-Admin-Token: <WEBHOOK_ADMIN_TOKEN>`
 
 限流：10次/分钟，burst 5，按调用方 IP 计。429 时退避重试。
@@ -197,7 +197,7 @@ Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**
 
 | 参数 | 必填 | 说明 |
 |------|:--:|------|
-| `agent_email` | ✅ | 代理邮箱，如 `agent@example.com` |
+| `agent_email` | ✅ | 代理邮箱，如 `V@mail.dealclaw.io` |
 | `webhook_url` | ✅ | 飞书自定义机器人 webhook URL |
 | `webhook_secret` | 否 | 机器人签名校验码 |
 | `prefer` | 否 | `"custom"` (默认) |
@@ -223,7 +223,7 @@ Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**
 
 ```bash
 node scripts/resend/send.mjs \
-  --from 'Lawaken <agent@example.com>' \
+  --from 'Lawaken <V@mail.dealclaw.io>' \
   --to buyer@x.com \
   --subject '...' \
   --html '<p>...</p>' \

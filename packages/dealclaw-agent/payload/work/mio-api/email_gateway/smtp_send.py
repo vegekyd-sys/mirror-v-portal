@@ -42,8 +42,10 @@ def build_idempotency_key(
     recipient: str = "",
     touch_number: int = 0,
     content_version: str = "",
+    subject: str = "",
+    text: str = "",
 ) -> str:
-    raw = f"{company_id}|{campaign_id}|{lead_id}|{recipient}|{touch_number}|{content_version}"
+    raw = f"{company_id}|{campaign_id}|{lead_id}|{recipient}|{touch_number}|{content_version}|{subject}|{text}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
@@ -168,9 +170,15 @@ class SmtpSender:
             raise ValueError("valid recipients are required")
 
         recipient_key = ",".join(sorted(to))
+        try:
+            from enterprise_ids import canonical_company_id
+            company_id = canonical_company_id(company_id)
+        except Exception:
+            pass
         idempotency_key = build_idempotency_key(
             company_id=company_id, campaign_id=campaign_id, lead_id=lead_id,
             recipient=recipient_key, touch_number=touch_number, content_version=content_version,
+            subject=subject, text=text,
         )
 
         # Try registered account first; fall back to Resend for backward compat.

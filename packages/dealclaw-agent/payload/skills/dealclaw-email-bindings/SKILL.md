@@ -8,7 +8,7 @@ author: ""
 
 > 管理 DealClaw 的「邮箱 → 飞书群通知」绑定。共两类，**先按邮箱域名路由，再走对应流程**：
 >
-> - **resend 代理邮箱 webhook 绑定**：`agent@example.com` 代理邮箱，服务端 webhook 直接推送
+> - **resend 代理邮箱 webhook 绑定**：`xxx@mail.dealclaw.io` 代理邮箱，服务端 webhook 直接推送
 > - **个人邮箱通知绑定**：真实个人/企业邮箱（163、腾讯企业邮箱、gmail 等），本地 IMAP 轮询
 
 ---
@@ -19,7 +19,7 @@ author: ""
 
 | 邮箱形态 | 类型 | 绑定方式 | 通知路径 |
 |---------|------|---------|---------|
-| `agent@example.com` | resend 代理邮箱 | `webhook.dealclaw.io/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
+| `xxx@mail.dealclaw.io` | resend 代理邮箱 | `dealclaw.datathink.com/webhook/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
 | `@163.com` / `@qq.com` / `@gmail.com` 等真实邮箱 | 个人邮箱 | `email_gateway.cli`（本地） | cron IMAP 轮询 → 飞书 |
 
 判断规则：邮箱域名是 `mail.dealclaw.io` → 走 **类型 A（代理）**；否则 → 走 **类型 B（个人）**。
@@ -35,11 +35,11 @@ author: ""
 ## 类型 A：resend 代理邮箱 webhook 绑定
 
 > 通道：自定义机器人 webhook，`mention_open_id` 自动取 V。
-> 服务地址：`https://webhook.dealclaw.io`
+> 服务地址：`https://dealclaw.datathink.com`（接口前缀 `/webhook`）
 
 ### 触发条件
 
-- 用户给的邮箱是 `agent@example.com`
+- 用户给的邮箱是 `xxx@mail.dealclaw.io`
 - 或用户说「代理邮箱绑定」「dealclaw 邮箱通知绑定」
 
 ### 绑定需要什么
@@ -48,7 +48,7 @@ author: ""
 
 | 谁来 | 需要什么 | 说明 |
 |------|---------|------|
-| 用户 | 代理邮箱 | 我方发送身份，如 `agent@example.com` |
+| 用户 | 代理邮箱 | 我方发送身份，如 `thia@mail.dealclaw.io` |
 | 用户 | Webhook URL | 飞书群 → 群设置 → 添加自定义机器人 → 复制地址 |
 | 用户 | 验签码（可选） | 机器人开了签名校验才需要，没开就留空 |
 
@@ -81,16 +81,16 @@ bash scripts/dc-bindings.sh list
 
 # 新增/覆盖绑定（mention_open_id 传当前应用机器人的 open_id）
 bash scripts/dc-bindings.sh upsert \
-  agent@example.com \
+  thia@mail.dealclaw.io \
   "https://open.feishu.cn/open-apis/bot/v2/hook/xxx" \
   "ou_xxxxxxxxxxxxxxxx" \
   "备注"
 
 # 删除
-bash scripts/dc-bindings.sh delete agent@example.com
+bash scripts/dc-bindings.sh delete thia@mail.dealclaw.io
 
 # 测试（会真的往群里发一张卡片）
-bash scripts/dc-bindings.sh test agent@example.com
+bash scripts/dc-bindings.sh test thia@mail.dealclaw.io
 ```
 
 upsert 参数：`<agent_email> <webhook_url> <mention_open_id> [note]`
@@ -99,20 +99,20 @@ upsert 参数：`<agent_email> <webhook_url> <mention_open_id> [note]`
 
 ```bash
 # 列出全部
-curl -s -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://webhook.dealclaw.io/bindings
+curl -s -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://dealclaw.datathink.com/webhook/bindings
 
 # 新增/覆盖
 curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "X-Admin-Token: $TOKEN" \
   -H "X-Supplier-Id: $SUPPLIER_ID" \
-  -d '{"agent_email":"agent@example.com","webhook_url":"https://.../hook/xxx","webhook_secret":"","prefer":"custom","mention_open_id":"<机器人open_id>","note":"备注"}' \
-  https://webhook.dealclaw.io/bindings
+  -d '{"agent_email":"thia@mail.dealclaw.io","webhook_url":"https://.../hook/xxx","webhook_secret":"","prefer":"custom","mention_open_id":"<机器人open_id>","note":"备注"}' \
+  https://dealclaw.datathink.com/webhook/bindings
 
 # 删除 / 测试
-curl -s -X DELETE -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://webhook.dealclaw.io/bindings/agent@example.com
+curl -s -X DELETE -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" https://dealclaw.datathink.com/webhook/bindings/thia@mail.dealclaw.io
 curl -s -X POST -H "Content-Type: application/json" -H "X-Admin-Token: $TOKEN" -H "X-Supplier-Id: $SUPPLIER_ID" \
-  -d '{"agent_email":"agent@example.com"}' https://webhook.dealclaw.io/bindings/agent@example.com/test
+  -d '{"agent_email":"thia@mail.dealclaw.io"}' https://dealclaw.datathink.com/webhook/bindings/thia@mail.dealclaw.io/test
 ```
 
 规则：
@@ -139,7 +139,7 @@ curl -s -X POST -H "Content-Type: application/json" -H "X-Admin-Token: $TOKEN" -
 
 | 谁来 | 需要什么 | 说明 |
 |------|---------|------|
-| 用户 | 邮箱地址 | 如 `user@example.com` |
+| 用户 | 邮箱地址 | 如 `waqa1988@163.com` |
 | 用户 | provider | `netease_163` / `tencent_exmail` / `gmail` |
 | 用户 | IMAP/SMTP 授权码 | 163/腾讯 = 网页版生成的「客户端授权码」（非登录密码）；gmail = App Password |
 | 用户 | 飞书群 chat_id | `oc_` 开头（通常就是当前群） |
@@ -166,7 +166,7 @@ SUPPLIER_ID="$(grep '^MIO_CDP_SUPPLIER_ID=' .env | cut -d= -f2-)"
 python3 -m email_gateway.cli account-add \
   --enterprise "$SUPPLIER_ID" \
   --owner-open-id ou_xxx \
-  --email user@example.com \
+  --email waqa1988@163.com \
   --provider netease_163 \
   --secret-ref env:WQA1988_163_APP_PASSWORD \
   --display-name "王强163"

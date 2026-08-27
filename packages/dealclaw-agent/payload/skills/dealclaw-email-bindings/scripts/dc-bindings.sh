@@ -7,7 +7,7 @@ set -euo pipefail
 
 SERVER="114.55.150.21"
 TOKEN_FILE="/etc/email-webhook/email-webhook.env"
-BASE_URL="https://webhook.dealclaw.io"
+BASE_URL="https://dealclaw.datathink.com"
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -79,7 +79,7 @@ do_request() {
 # ---------------------------------------------------------------------------
 
 cmd_list() {
-  do_request GET /bindings
+  do_request GET /webhook/bindings
 }
 
 cmd_upsert() {
@@ -105,20 +105,20 @@ print(json.dumps({
   'note': '${note}'
 }))
 ")
-  do_request POST /bindings "$body"
+  do_request POST /webhook/bindings "$body"
 }
 
 cmd_delete() {
   local agent_email="$1"
   [[ -z "$agent_email" ]] && die "delete 需要一个参数: <agent_email>"
-  do_request DELETE "/bindings/$agent_email"
+  do_request DELETE "/webhook/bindings/$agent_email"
 }
 
 cmd_test() {
   local agent_email="$1"
   [[ -z "$agent_email" ]] && die "test 需要一个参数: <agent_email>"
   local body="{\"agent_email\":\"$agent_email\"}"
-  do_request POST "/bindings/$agent_email/test" "$body"
+  do_request POST "/webhook/bindings/$agent_email/test" "$body"
 }
 
 # ---------------------------------------------------------------------------
