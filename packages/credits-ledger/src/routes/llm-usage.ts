@@ -204,6 +204,22 @@ router.get('/v1/billing/llm-usage/range', async (req, res) => {
       [tenantId, startDate, endDate],
     );
 
+    // Per provider+model breakdown — a tenant agent may use multiple
+    // suppliers/models, so external accounting needs the split.
+    const { rows: byModel } = await query(
+      `SELECT provider, model,
+              COUNT(*) AS calls,
+              COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM llm_usage_events
+        WHERE tenant_id = $1
+          AND created_at >= ($2::date)::timestamptz
+          AND created_at <  (($3::date) + 1)::timestamptz
+        GROUP BY provider, model
+        ORDER BY output_tokens DESC, input_tokens DESC`,
+      [tenantId, startDate, endDate],
+    );
+
     const r = rows[0];
     res.json({
       tenantId,
@@ -211,6 +227,13 @@ router.get('/v1/billing/llm-usage/range', async (req, res) => {
       endDate,
       totalInputToken: Number(r.input_tokens),
       totalOutputToken: Number(r.output_tokens),
+      byModel: byModel.map((m: any) => ({
+        provider: m.provider,
+        model: m.model,
+        calls: Number(m.calls),
+        inputTokens: Number(m.input_tokens),
+        outputTokens: Number(m.output_tokens),
+      })),
     });
   } catch (err) {
     console.error('llm-usage range failed:', err);
