@@ -19,8 +19,9 @@ Base URL:  https://webhook.dealclaw.io          （systemd 部署，无前缀）
 > - k8s：`kubectl -n <namespace> get secret email-webhook-secret -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d`
 > - 早期 systemd 部署：`grep ^ADMIN_TOKEN= /etc/email-webhook/email-webhook.env`
 >
-> 该值最初由部署脚本用 `head -c 24 /dev/urandom | base64 | tr -d '/+=\n'` 生成，
-> 生成后不会自动轮换。`X-Supplier-Id` 不是凭据，可以照常出现在文档和工单里。
+> 需要轮换时用 `scripts/new-admin-token.sh` 生成新值（脚本里也写了应用步骤和
+> 需要同步更新的调用方）。生成后不会自动轮换，全靠手动。
+> `X-Supplier-Id` 不是凭据，可以照常出现在文档和工单里。
 
 ## 两个头是配合使用的
 
