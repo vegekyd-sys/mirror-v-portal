@@ -45,6 +45,8 @@ export interface UsageReportEvent {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
   latencyMs: number;
   status: 'ok' | 'error' | 'blocked' | 'synthesized';
   requestId: string;
@@ -100,6 +102,8 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
         model: ev.model,
         inputTokens: ev.inputTokens,
         outputTokens: ev.outputTokens,
+        cacheHitTokens: ev.cacheHitTokens,
+        cacheMissTokens: ev.cacheMissTokens,
         latencyMs: ev.latencyMs,
         status: ev.status,
         source: 'proxy',
@@ -135,9 +139,10 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       const model = (parsed?.model && typeof parsed.model === 'string') ? parsed.model : 'unknown';
       const isChatCall = Array.isArray(parsed?.messages) && (parsed!.messages!.length ?? 0) > 0;
 
-      const mkReport = (status: UsageReportEvent['status'], inTok = 0, outTok = 0) => ({
+      const mkReport = (status: UsageReportEvent['status'], inTok = 0, outTok = 0, hitTok = 0, missTok = 0) => ({
         tenantId: config.tenantId, provider, model,
         inputTokens: inTok, outputTokens: outTok,
+        cacheHitTokens: hitTok, cacheMissTokens: missTok,
         latencyMs: Date.now() - started, status, requestId,
       });
 
@@ -277,7 +282,7 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
           return;
         }
         const usage = parseSseUsage(tail);
-        report(mkReport('ok', usage.inputTokens, usage.outputTokens));
+        report(mkReport('ok', usage.inputTokens, usage.outputTokens, usage.cacheHitTokens, usage.cacheMissTokens));
         return;
       }
 
@@ -290,7 +295,7 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
         return;
       }
       const usage = parseJsonUsage(buf.toString('utf8'));
-      report(mkReport('ok', usage.inputTokens, usage.outputTokens));
+      report(mkReport('ok', usage.inputTokens, usage.outputTokens, usage.cacheHitTokens, usage.cacheMissTokens));
     },
   );
 }
@@ -314,7 +319,7 @@ function extractLastUserText(parsed: ParsedChatBody | null): string | null {
   return null;
 }
 
-interface Tokens { inputTokens: number; outputTokens: number }
+interface Tokens { inputTokens: number; outputTokens: number; cacheHitTokens: number; cacheMissTokens: number }
 
 function parseSseUsage(tail: string): Tokens {
   // Find the LAST `data: {...}` line containing a usage object.
@@ -329,7 +334,7 @@ function parseSseUsage(tail: string): Tokens {
       if (obj?.usage && typeof obj.usage === 'object') return normalizeUsage(obj.usage);
     } catch { /* partial chunk at buffer edge — keep scanning */ }
   }
-  return { inputTokens: 0, outputTokens: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 };
 }
 
 function parseJsonUsage(body: string): Tokens {
@@ -337,13 +342,15 @@ function parseJsonUsage(body: string): Tokens {
     const obj = JSON.parse(body);
     if (obj?.usage) return normalizeUsage(obj.usage);
   } catch { /* not JSON */ }
-  return { inputTokens: 0, outputTokens: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 };
 }
 
 function normalizeUsage(u: any): Tokens {
   const inp = Number(u?.input_tokens ?? u?.prompt_tokens ?? 0) || 0;
   const out = Number(u?.output_tokens ?? u?.completion_tokens ?? 0) || 0;
-  return { inputTokens: inp, outputTokens: out };
+  const cacheHit = Number(u?.prompt_cache_hit_tokens ?? u?.prompt_tokens_details?.cached_tokens ?? 0) || 0;
+  const cacheMiss = Number(u?.prompt_cache_miss_tokens ?? 0) || 0;
+  return { inputTokens: inp, outputTokens: out, cacheHitTokens: cacheHit, cacheMissTokens: cacheMiss };
 }
 
 /**

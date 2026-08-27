@@ -21,6 +21,10 @@ function str(v: unknown, max = 128): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 // POST /v1/billing/llm-usage — record one upstream (or synthesized) call.
 // Idempotent on request_id: replays return the existing row without dupes.
 router.post('/v1/billing/llm-usage', async (req, res) => {
@@ -39,6 +43,8 @@ router.post('/v1/billing/llm-usage', async (req, res) => {
     const accountId = str(b.accountId, 64) || `acct_${tenantId}`;
     const inputTokens = int(b.inputTokens);
     const outputTokens = int(b.outputTokens);
+    const cacheHitTokens = int(b.cacheHitTokens);
+    const cacheMissTokens = int(b.cacheMissTokens);
     const status = STATUSES.has(str(b.status, 16)) ? str(b.status, 16) : 'ok';
     const requestId = str(b.requestId, 128) || null;
     const latencyMs = b.latencyMs == null ? null : int(b.latencyMs, 86_400_000);
@@ -49,13 +55,15 @@ router.post('/v1/billing/llm-usage', async (req, res) => {
       `INSERT INTO llm_usage_events
          (id, tenant_id, account_id, provider, model,
           input_tokens, output_tokens, total_tokens,
+          cache_hit_tokens, cache_miss_tokens,
           latency_ms, status, source, request_id, metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         id, tenantId, accountId, provider, model,
         inputTokens, outputTokens, inputTokens + outputTokens,
+        cacheHitTokens, cacheMissTokens,
         latencyMs, status, str(b.source, 32) || 'proxy', requestId,
         JSON.stringify(metadata),
       ],
@@ -195,48 +203,169 @@ router.get('/v1/billing/llm-usage/range', async (req, res) => {
     }
 
     const { rows } = await query(
-      `SELECT COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens
-         FROM llm_usage_events
-        WHERE tenant_id = $1
-          AND created_at >= ($2::date)::timestamptz
-          AND created_at <  (($3::date) + 1)::timestamptz`,
-      [tenantId, startDate, endDate],
-    );
-
-    // Per provider+model breakdown — a tenant agent may use multiple
-    // suppliers/models, so external accounting needs the split.
-    const { rows: byModel } = await query(
-      `SELECT provider, model,
+      `SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS day,
+              provider, model,
+              CASE
+                WHEN EXTRACT(DOW FROM created_at AT TIME ZONE 'Asia/Shanghai') IN (1,2,3,4,5)
+                  AND EXTRACT(HOUR FROM created_at AT TIME ZONE 'Asia/Shanghai') IN (9,10,11,14,15,16,17)
+                THEN 'peak' ELSE 'offpeak'
+              END AS bucket,
               COUNT(*) AS calls,
               COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_hit_tokens), 0)  AS cache_hit_tokens,
+              COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens
          FROM llm_usage_events
         WHERE tenant_id = $1
           AND created_at >= ($2::date)::timestamptz
           AND created_at <  (($3::date) + 1)::timestamptz
-        GROUP BY provider, model
-        ORDER BY output_tokens DESC, input_tokens DESC`,
+        GROUP BY day, provider, model, bucket
+        ORDER BY day, provider, model`,
       [tenantId, startDate, endDate],
     );
 
-    const r = rows[0];
+    // Load the token pricing table (CNY per 1M tokens).
+    const { rows: pricingRows } = await query(
+      `SELECT provider, model, input_cache_hit_peak, input_cache_hit_offpeak,
+              input_cache_miss_peak, input_cache_miss_offpeak, output_peak, output_offpeak
+         FROM llm_token_pricing`,
+    );
+    const pricingMap = new Map<string, any>();
+    for (const p of pricingRows) pricingMap.set(`${p.provider}|${p.model}`, p);
+
+    const costOf = (key: string, bucket: string, miss: number, hit: number, out: number): number => {
+      const p = pricingMap.get(key);
+      if (!p) return 0;
+      const peak = bucket === 'peak';
+      const missPrice = peak ? Number(p.input_cache_miss_peak) : Number(p.input_cache_miss_offpeak);
+      const hitPrice = peak ? Number(p.input_cache_hit_peak) : Number(p.input_cache_hit_offpeak);
+      const outPrice = peak ? Number(p.output_peak) : Number(p.output_offpeak);
+      return (miss * missPrice + hit * hitPrice + out * outPrice) / 1_000_000;
+    };
+
+    // Aggregate: day → provider+model (tokens + cost).
+    const dayMap = new Map<string, Map<string, any>>();
+    for (const r of rows) {
+      const day = r.day;
+      const key = `${r.provider}|${r.model}`;
+      if (!dayMap.has(day)) dayMap.set(day, new Map());
+      const modelMap = dayMap.get(day)!;
+      if (!modelMap.has(key)) {
+        modelMap.set(key, {
+          provider: r.provider, model: r.model, calls: 0,
+          inputTokens: 0, outputTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, cost: 0,
+        });
+      }
+      const e = modelMap.get(key)!;
+      e.calls += Number(r.calls);
+      e.inputTokens += Number(r.input_tokens);
+      e.outputTokens += Number(r.output_tokens);
+      e.cacheHitTokens += Number(r.cache_hit_tokens);
+      e.cacheMissTokens += Number(r.cache_miss_tokens);
+      e.cost += costOf(key, r.bucket, Number(r.cache_miss_tokens), Number(r.cache_hit_tokens), Number(r.output_tokens));
+    }
+
+    const byDay = Array.from(dayMap.entries()).map(([day, modelMap]) => {
+      const models = Array.from(modelMap.values())
+        .sort((a, b) => b.cost - a.cost)
+        .map((m) => ({ ...m, cost: round2(m.cost) }));
+      const dayCost = round2(models.reduce((s, m) => s + m.cost, 0));
+      const inputTokens = models.reduce((s, m) => s + m.inputTokens, 0);
+      const outputTokens = models.reduce((s, m) => s + m.outputTokens, 0);
+      return { day, inputTokens, outputTokens, cost: dayCost, models };
+    }).sort((a, b) => a.day.localeCompare(b.day));
+
+    const totalCost = round2(byDay.reduce((s, d) => s + d.cost, 0));
     res.json({
       tenantId,
       startDate,
       endDate,
-      totalInputToken: Number(r.input_tokens),
-      totalOutputToken: Number(r.output_tokens),
-      byModel: byModel.map((m: any) => ({
-        provider: m.provider,
-        model: m.model,
-        calls: Number(m.calls),
-        inputTokens: Number(m.input_tokens),
-        outputTokens: Number(m.output_tokens),
-      })),
+      totalInputToken: byDay.reduce((s, d) => s + d.inputTokens, 0),
+      totalOutputToken: byDay.reduce((s, d) => s + d.outputTokens, 0),
+      totalCost,
+      byDay,
     });
   } catch (err) {
     console.error('llm-usage range failed:', err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// GET /v1/billing/llm-token-pricing — list token pricing (admin console).
+router.get('/v1/billing/llm-token-pricing', async (_req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT provider, model, input_cache_hit_peak, input_cache_hit_offpeak,
+              input_cache_miss_peak, input_cache_miss_offpeak, output_peak, output_offpeak,
+              currency, updated_at
+         FROM llm_token_pricing
+        ORDER BY provider, model`,
+    );
+    res.json({
+      pricing: rows.map((r: any) => ({
+        provider: r.provider,
+        model: r.model,
+        inputCacheHitPeak: Number(r.input_cache_hit_peak),
+        inputCacheHitOffpeak: Number(r.input_cache_hit_offpeak),
+        inputCacheMissPeak: Number(r.input_cache_miss_peak),
+        inputCacheMissOffpeak: Number(r.input_cache_miss_offpeak),
+        outputPeak: Number(r.output_peak),
+        outputOffpeak: Number(r.output_offpeak),
+        currency: r.currency,
+        updatedAt: r.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('llm-token-pricing list failed:', err);
+    res.status(500).json({ code: 'INTERNAL' });
+  }
+});
+
+// PUT /v1/billing/llm-token-pricing — upsert one model's token pricing.
+router.put('/v1/billing/llm-token-pricing', async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const provider = str(b.provider, 64);
+    const model = str(b.model, 128);
+    if (!provider || !model) {
+      res.status(400).json({ code: 'VALIDATION', message: 'provider and model are required' });
+      return;
+    }
+    const num = (v: unknown): number | null => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+    const inputCacheHitPeak = num(b.inputCacheHitPeak);
+    const inputCacheHitOffpeak = num(b.inputCacheHitOffpeak);
+    const inputCacheMissPeak = num(b.inputCacheMissPeak);
+    const inputCacheMissOffpeak = num(b.inputCacheMissOffpeak);
+    const outputPeak = num(b.outputPeak);
+    const outputOffpeak = num(b.outputOffpeak);
+    if ([inputCacheHitPeak, inputCacheHitOffpeak, inputCacheMissPeak, inputCacheMissOffpeak, outputPeak, outputOffpeak].some((v) => v === null)) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'inputCacheHitPeak/inputCacheHitOffpeak/inputCacheMissPeak/inputCacheMissOffpeak/outputPeak/outputOffpeak are required (>= 0)',
+      });
+      return;
+    }
+    await query(
+      `INSERT INTO llm_token_pricing
+         (provider, model, input_cache_hit_peak, input_cache_hit_offpeak,
+          input_cache_miss_peak, input_cache_miss_offpeak, output_peak, output_offpeak, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'CNY')
+       ON CONFLICT (provider, model) DO UPDATE SET
+         input_cache_hit_peak = EXCLUDED.input_cache_hit_peak,
+         input_cache_hit_offpeak = EXCLUDED.input_cache_hit_offpeak,
+         input_cache_miss_peak = EXCLUDED.input_cache_miss_peak,
+         input_cache_miss_offpeak = EXCLUDED.input_cache_miss_offpeak,
+         output_peak = EXCLUDED.output_peak,
+         output_offpeak = EXCLUDED.output_offpeak,
+         updated_at = NOW()`,
+      [provider, model, inputCacheHitPeak, inputCacheHitOffpeak, inputCacheMissPeak, inputCacheMissOffpeak, outputPeak, outputOffpeak],
+    );
+    res.json({ ok: true, provider, model });
+  } catch (err) {
+    console.error('llm-token-pricing upsert failed:', err);
     res.status(500).json({ code: 'INTERNAL' });
   }
 });

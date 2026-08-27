@@ -192,6 +192,30 @@ export async function migrate() {
   await query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage_events(provider, model)`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_usage_request_id ON llm_usage_events(request_id) WHERE request_id IS NOT NULL`);
 
+  // ── v4: cache hit/miss token accounting (deepseek prompt caching) ──
+  await query(`ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS cache_hit_tokens BIGINT NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS cache_miss_tokens BIGINT NOT NULL DEFAULT 0`);
+
+  // ── v5: per-model token pricing (peak/off-peak, cache hit/miss) ──
+  // Prices are CNY per 1M tokens. Peak/off-peak windows follow DeepSeek's
+  // published schedule (workday 09:00-12:00 + 14:00-18:00 = peak; rest +
+  // weekend = off-peak). Admin-editable via the pricing API.
+  await query(`
+    CREATE TABLE IF NOT EXISTS llm_token_pricing (
+      provider                  VARCHAR(64)  NOT NULL,
+      model                     VARCHAR(128) NOT NULL,
+      input_cache_hit_peak      NUMERIC(14,8) NOT NULL,
+      input_cache_hit_offpeak   NUMERIC(14,8) NOT NULL,
+      input_cache_miss_peak     NUMERIC(14,8) NOT NULL,
+      input_cache_miss_offpeak  NUMERIC(14,8) NOT NULL,
+      output_peak               NUMERIC(14,8) NOT NULL,
+      output_offpeak            NUMERIC(14,8) NOT NULL,
+      currency                  VARCHAR(8)   NOT NULL DEFAULT 'CNY',
+      updated_at                TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (provider, model)
+    )
+  `);
+
   // ── v2.1: billing_mode column (live/shadow) ──
   await query(`ALTER TABLE skill_billing_events ADD COLUMN IF NOT EXISTS billing_mode VARCHAR(8) DEFAULT 'live'`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_mode ON skill_billing_events(billing_mode, created_at DESC)`);
@@ -217,6 +241,20 @@ export async function migrate() {
   const { rows: existingPrices } = await query('SELECT COUNT(*) as cnt FROM skill_prices');
   if (Number(existingPrices[0].cnt) === 0) {
     await seedDefaultPrices();
+  }
+
+  // ── v5: Seed default token pricing (DeepSeek official, CNY per 1M tokens) ──
+  const { rows: existingTokenPricing } = await query('SELECT COUNT(*) as cnt FROM llm_token_pricing');
+  if (Number(existingTokenPricing[0].cnt) === 0) {
+    await query(`
+      INSERT INTO llm_token_pricing
+        (provider, model, input_cache_hit_peak, input_cache_hit_offpeak,
+         input_cache_miss_peak, input_cache_miss_offpeak, output_peak, output_offpeak)
+      VALUES
+        ('deepseek', 'deepseek-v4-pro',   0.30, 0.15, 9.00, 4.50, 27.00, 13.50),
+        ('deepseek', 'deepseek-v4-flash', 0.10, 0.05, 3.00, 1.50,  9.00,  4.50)
+      ON CONFLICT (provider, model) DO NOTHING
+    `);
   }
 
   // ── v2.2: Gateway agent billing entries (nexus-gateway estimate→settle) ──
