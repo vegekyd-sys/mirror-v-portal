@@ -14,6 +14,7 @@ resources:
   - ../../base/ops-agent
   - ../../base/central-gateway
   - ../../base/admin-dashboard
+  - ../../base/email-webhook
 
 # Production-specific config overrides
 patches:

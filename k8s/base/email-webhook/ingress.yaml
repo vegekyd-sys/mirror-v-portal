@@ -1,0 +1,106 @@
+# ALB Ingress。集群启用的是 alb-ingress-controller，nginx-ingress 组件是 disabled 的，
+# 所以注解前缀必须是 alb.ingress.kubernetes.io/*（和 central-gateway 一致）。
+#
+# 应用自身就监听 /webhook/*（ROUTE_PREFIX=/webhook），**不要**配 rewrite/StripPrefix。
+# 对外地址：https://<host>/webhook/inbound  ← Resend 里填这个
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: email-webhook
+  labels:
+    app: email-webhook
+  annotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # ALB 健康检查默认打 "/" 且默认方法 HEAD，而本服务的 "/" 是 404，
+    # 用默认值会把后端判成全不健康、整条链路 503。/health 无论 ROUTE_PREFIX
+    # 设成什么都挂在根路径上，正是为这种场景留的。
+    alb.ingress.kubernetes.io/healthcheck-enabled: "true"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: "8000"
+    alb.ingress.kubernetes.io/healthcheck-method: GET
+    # 同一个 host 下多条规则靠 order 定优先级（[1,1000]，数值越小越优先）。
+    # 管理接口那条必须排在兜底的 /webhook 前面，否则限流会被绕过。
+    alb.ingress.kubernetes.io/order: "20"
+spec:
+  ingressClassName: alb
+  rules:
+    - host: webhook.dealclaw.io
+      http:
+        paths:
+          - path: /webhook
+            pathType: Prefix
+            backend:
+              service:
+                name: email-webhook
+                port:
+                  number: 8000
+---
+# 管理接口（/webhook/bindings、/webhook/suppliers）单独一条，只为挂限流。
+# 这些接口靠一个静态 token 鉴权，暴露公网要防爆破。
+# 注意 ALB 的限流是「按转发规则的总量」，不是 nginx 那种按客户端 IP，语义更粗：
+# 正常调用方和攻击者共享同一个额度。真正的闸门仍是应用层的 token 校验。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: email-webhook-admin
+  labels:
+    app: email-webhook
+  annotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-enabled: "true"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: "8000"
+    alb.ingress.kubernetes.io/healthcheck-method: GET
+    alb.ingress.kubernetes.io/order: "1"
+    # 取值下限就是 1 QPS（=60 次/分钟），做不到旧 nginx 那样的 10 次/分钟
+    alb.ingress.kubernetes.io/traffic-limit-qps: "1"
+spec:
+  ingressClassName: alb
+  rules:
+    - host: webhook.dealclaw.io
+      http:
+        paths:
+          - path: /webhook/bindings
+            pathType: Prefix
+            backend:
+              service:
+                name: email-webhook
+                port:
+                  number: 8000
+          - path: /webhook/suppliers
+            pathType: Prefix
+            backend:
+              service:
+                name: email-webhook
+                port:
+                  number: 8000
+---
+# 事件拉取。同样是 ADMIN_TOKEN 鉴权，但调用方是 poller，追游标时会连续翻页，
+# 额度给宽一点，别把正常拉取限死。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: email-webhook-events
+  labels:
+    app: email-webhook
+  annotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-enabled: "true"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: "8000"
+    alb.ingress.kubernetes.io/healthcheck-method: GET
+    alb.ingress.kubernetes.io/order: "2"
+    alb.ingress.kubernetes.io/traffic-limit-qps: "10"
+spec:
+  ingressClassName: alb
+  rules:
+    - host: webhook.dealclaw.io
+      http:
+        paths:
+          - path: /webhook/v1/events
+            pathType: Exact
+            backend:
+              service:
+                name: email-webhook
+                port:
+                  number: 8000

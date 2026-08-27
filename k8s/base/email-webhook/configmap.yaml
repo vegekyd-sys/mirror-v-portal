@@ -1,0 +1,38 @@
+# 非敏感配置。凭据一律走 Secret（见本目录 README）。
+# 改完需要 kubectl rollout restart 才生效（envFrom 不会自动触发滚动）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: email-webhook-config
+  labels:
+    app: email-webhook
+data:
+  # 镜像里已有默认值，这里显式写出来是为了让配置面一眼可见
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  LOG_LEVEL: "info"
+
+  # 应用自身在这个前缀下提供服务，Ingress 不需要 rewrite。
+  # /health 额外无条件挂在根路径，供探针直连 Pod 使用。
+  ROUTE_PREFIX: "/webhook"
+
+  # 生产必须 false：没有密钥就拒绝所有请求（fail closed）
+  ALLOW_UNSIGNED: "false"
+  SIGNATURE_TOLERANCE_SECONDS: "300"
+
+  RESEND_TIMEOUT_SECONDS: "5"
+  EMAIL_CONTENT_PREVIEW_CHARS: "1200"
+
+  NOTIFY_EVENTS: "email.received,email.opened,email.clicked,email.bounced,email.complained"
+  FEISHU_MENTION_EVENTS: "email.received"
+  FEISHU_TIMEOUT_SECONDS: "5"
+
+  # Redis 现在只用于 LEAD_BACKEND=redis 的线索状态；
+  # 幂等去重已经由 email_events.message_id 的唯一约束保证，不再依赖它。
+  REDIS_DB: "0"
+  REDIS_KEY_PREFIX: "emailhook"
+
+  DEFAULT_SUPPLIER_ID: "151897148668"
+
+  # noop / redis / postgres
+  LEAD_BACKEND: "redis"

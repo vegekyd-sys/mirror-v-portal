@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-webhook
+  labels:
+    app: email-webhook
+    dealclaw.io/component: email
+spec:
+  # 服务是无状态的：绑定表、供应商表、事件全在 PostgreSQL 里，
+  # 幂等靠 email_events.message_id 的唯一约束，多副本并发写也不会重。
+  # 所以可以正常滚动更新，也可以按需扩副本。
+  replicas: 1
+  selector:
+    matchLabels:
+      app: email-webhook
+  template:
+    metadata:
+      labels:
+        app: email-webhook
+        dealclaw.io/component: email
+    spec:
+      securityContext:
+        # 与镜像里的 USER node 对齐（node:22-alpine 的 node 用户是 1000）
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: email-webhook
+          # 注意：同级服务的清单里写的是 registry.cn-hangzhou.aliyuncs.com/dealclaw/<svc>，
+          # 但经 ACR OpenAPI 核实，实际在用的是企业版实例 dealclaw-acr，
+          # 仓库在 dealclaw-nexus 命名空间下；集群同 VPC，走 VPC 端点拉取。
+          image: dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/email-webhook:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # 硬依赖。缺了应用会在启动时明确报错退出，而不是等到每个请求 500。
+            #
+            # key 取 DATABASE_URL，和 credits-ledger 一致。
+            # 注意 provisioning-service 用的是同一个 Secret 但 key 写作 `url` ——
+            # 两边不一致是既有状况，这里先按 credits-ledger 的来；哪天统一了再改这一处。
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dealclaw-db
+                  key: DATABASE_URL
+                  optional: true
+          envFrom:
+            # 顺序有意义：同名键以后者（Secret）为准
+            - configMapRef:
+                name: email-webhook-config
+            - secretRef:
+                name: email-webhook-secret
+          # 探针直连 Pod，不经过 Ingress，所以走根路径的 /health（与 ROUTE_PREFIX 无关）
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # 不再有状态目录，但 Node 运行期可能往 /tmp 写
+            - name: tmp
+              mountPath: /tmp
+      # 收到 SIGTERM 后要把在处理的 webhook 走完再退（见 src/index.ts）
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: email-webhook
+  labels:
+    app: email-webhook
+spec:
+  type: ClusterIP
+  selector:
+    app: email-webhook
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

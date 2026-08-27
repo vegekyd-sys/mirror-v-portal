@@ -8,7 +8,7 @@
     "test": {
       "dependsOn": ["build"],
       "outputs": [],
-      "inputs": ["src/**", "vitest.config.ts", "tsconfig.json"]
+      "inputs": ["src/**", "tests/**", "vitest.config.ts", "tsconfig.json"]
     },
     "dev": {
       "cache": false,

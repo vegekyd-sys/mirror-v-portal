@@ -1,0 +1,16 @@
+# 构建产物（根 .gitignore 也覆盖，这里写一份便于单独 clone 本包时也生效）
+node_modules/
+dist/
+*.tsbuildinfo
+
+# tests/smoke_test.py 是黑盒验收脚本，跑完会留缓存
+__pycache__/
+*.pyc
+
+# 运行期产物：事件落盘 + 本地开发时的状态文件
+events/
+*.jsonl
+/bindings.json
+/suppliers.json
+
+.DS_Store
