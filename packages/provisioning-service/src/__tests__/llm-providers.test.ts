@@ -425,9 +425,10 @@ describe('pushLlmProviders', () => {
     const r = await pushLlmProviders(pool, prodConfig, 't123');
     expect(r.tenants[0]).toMatchObject({ tenantId: 't123', ok: true, restarted: true, gatewayRestarted: true });
 
-    // call 0: tenant-config — blob with PROXY baseUrls, apiKey untouched
+    // call 0: tenant-config — blob with PROXY baseUrls, apiKey untouched;
+    // the deprecated DEEPSEEK_API_KEY is dropped (no longer envFrom-only)
     const tenantConfigArg = k8sMocks.putSecret.mock.calls[0][2];
-    expect(tenantConfigArg.DEEPSEEK_API_KEY).toBe('sk-ds');
+    expect(tenantConfigArg.DEEPSEEK_API_KEY).toBeUndefined();
     expect(tenantConfigArg.APIFY_TOKEN).toBeUndefined();
     const blob = JSON.parse(tenantConfigArg.LLM_PROVIDERS);
     expect(blob.defaultModel).toBe('glm/glm-4.5'); // tenant selection wins
@@ -469,9 +470,9 @@ describe('pushLlmProviders', () => {
     });
     const r = await pushLlmProviders(pool, prodConfig, 't123');
     expect(r.tenants[0].ok).toBe(true);
-    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {
-      DEEPSEEK_API_KEY: 'sk-ds',
-    });
+    // envFrom-only keys = {LLM_PROVIDERS} only; DEEPSEEK_API_KEY is
+    // deprecated and stripped — the secret is rewritten empty.
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {});
     // stale upstream mappings must not linger in llm-proxy-config
     expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'llm-proxy-config', {
       LLM_UPSTREAMS: '{}',

@@ -45,7 +45,7 @@ const baseOptions = {
   imageRegistry: 'reg.example.com/dealclaw',
   nexusGatewayImageTag: 'master.env.7',
   dealclawAgentImageTag: 'master.env.7',
-  runtimeSecretData: { DEEPSEEK_API_KEY: 'sk-test' },
+  runtimeSecretData: { LLM_PROVIDERS: '{"providers":[]}' },
 };
 
 /** Fake pool returning a promoted tag per service param. */

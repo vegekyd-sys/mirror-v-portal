@@ -11,7 +11,7 @@ import { getMasterKey, MasterKeyError } from '../services/crypto.js';
 import {
   pushSkillEnvToAllTenants,
   pushTenantSkillEnv,
-  ENV_FROM_ONLY_KEYS,
+  DEPRECATED_KEYS,
 } from '../services/skill-env.js';
 import {
   LLM_PROVIDERS_KEY,
@@ -162,18 +162,25 @@ export function createRuntimeConfigRoutes(
         });
         return;
       }
+      // Deprecated keys: DEEPSEEK_API_KEY was the legacy envFrom-only provider
+      // key — the OpenClaw deepseek-provider plugin prefers it over the
+      // LLM_PROVIDERS blob, so any write here silently resurrects the
+      // dual-source conflict. Reject writes; DELETE is still allowed so
+      // admins can clean up legacy rows.
+      if (DEPRECATED_KEYS.has(String(key))) {
+        res.status(400).json({
+          code: 'DEPRECATED',
+          message: `${String(key)} 已废弃：DeepSeek 供应商 key 请到「模型供应商」页通过 LLM_PROVIDERS 维护（/v1/admin/llm-providers）。如需清理残留数据可用 DELETE 删除该 key。`,
+        });
+        return;
+      }
 
       await upsertRuntimeConfig(pool, { tenantId: scope, key, value, isSecret, description });
 
-      // Model-provider keys (envFrom-only) intentionally skip the skill-env
-      // push — they are consumed at container boot, not from .env.
-      let push: Awaited<ReturnType<typeof pushAfterWrite>> = {
-        status: 'skipped',
-        hint: '该 key 仅在开通/重启时经 envFrom 注入，本次不推送（skill .env 不含此 key）',
-      };
-      if (!ENV_FROM_ONLY_KEYS.has(String(key))) {
-        push = await pushAfterWrite(scope);
-      }
+      // Every key that reaches this point is a skill key → push to the
+      // skill-env Secret (hot). LLM_PROVIDERS never gets here (rejected
+      // above; it lives on the dedicated provider endpoint).
+      const push = await pushAfterWrite(scope);
       res.json({ ok: true, key, tenantId: scope, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {

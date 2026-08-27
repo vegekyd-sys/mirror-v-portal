@@ -72,10 +72,11 @@ export interface ProvisionOptions {
   agentPvcAccessMode?: 'ReadWriteOnce' | 'ReadWriteMany';
   /**
    * Merged runtime config (global defaults + tenant overrides, decrypted).
-   * Split at provisioning time: envFrom-only keys (DEEPSEEK_API_KEY…) are
+   * Split at provisioning time: envFrom-only keys (LLM_PROVIDERS) are
    * materialized as the `tenant-config` Secret (envFrom of dealclaw-agent),
    * the rest as the `skill-env` Secret's single `.env` key (mounted file,
-   * hot-rotatable without restarts).
+   * hot-rotatable without restarts). Deprecated keys (DEEPSEEK_API_KEY) are
+   * excluded from both.
    */
   runtimeSecretData?: Record<string, string>;
   /**
@@ -220,18 +221,18 @@ export async function provisionTenant(
     });
     result.secrets.push(creditsConfigName);
 
-    // 1b. tenant-config Secret — runtime provider credentials for
+    // 1b. tenant-config Secret — runtime provider configuration for
     // dealclaw-agent (envFrom). Built from the runtime_configs table
     // (global defaults + per-tenant overrides), managed via admin-web.
     // Fail closed: without it the agent Pod cannot start.
-    // Only envFrom-only keys (model provider keys like DEEPSEEK_API_KEY,
-    // consumed at container boot) belong here — skill/tool keys live in the
-    // skill-env Secret (step 1c) so they can be rotated without a restart
-    // and cannot shadow the hot .env file via envFrom.
+    // Only envFrom-only keys (LLM_PROVIDERS, consumed at container boot)
+    // belong here — skill/tool keys live in the skill-env Secret (step 1c)
+    // so they can be rotated without a restart and cannot shadow the hot
+    // .env file via envFrom.
     const runtimeSecretName = 'tenant-config';
     if (!options.runtimeSecretData || Object.keys(options.runtimeSecretData).length === 0) {
       throw new Error(
-        'Runtime config is empty — configure global defaults (e.g. DEEPSEEK_API_KEY) via the admin console before provisioning',
+        'Runtime config is empty — configure global defaults (e.g. LLM_PROVIDERS) via the admin console before provisioning',
       );
     }
     const envFromData: Record<string, string> = {};

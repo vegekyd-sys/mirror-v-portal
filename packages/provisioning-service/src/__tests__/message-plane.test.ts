@@ -93,7 +93,7 @@ const baseOptions = {
   imageRegistry: 'reg.example.com/dealclaw',
   nexusGatewayImageTag: 'master.t.1',
   dealclawAgentImageTag: 'master.t.1',
-  runtimeSecretData: { DEEPSEEK_API_KEY: 'sk-test' },
+  runtimeSecretData: { LLM_PROVIDERS: '{"providers":[]}' },
 };
 
 const NS = 'dealclaw-t-plane';

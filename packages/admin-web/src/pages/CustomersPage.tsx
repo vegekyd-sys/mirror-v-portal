@@ -500,7 +500,7 @@ export default function CustomersPage() {
         </div>
         <div className="hint">
           创建即真实开通——写租户记录、建 credits 账户、在独立 namespace 中创建
-          Deployment/Secret/PVC。前置条件：运行时配置需先配好全局默认（如 DEEPSEEK_API_KEY）。
+          Deployment/Secret/PVC。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
         </div>
         <div className="form-row" style={{ marginTop: 12 }}>
           <button className="btn-primary" onClick={() => void createCustomer()} disabled={creating}>

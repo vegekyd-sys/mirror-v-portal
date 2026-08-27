@@ -255,9 +255,21 @@ describe('runtime-config admin API', () => {
     const res = await request(app)
       .put('/v1/admin/runtime-configs')
       .set(authHeader)
-      .send({ key: 'DEEPSEEK_API_KEY', value: 'sk-test' });
+      .send({ key: 'APIFY_TOKEN', value: 'sk-test' });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('RUNTIME_CONFIG_KEY_NOT_CONFIGURED');
+  });
+
+  it('rejects writes to deprecated keys (DEEPSEEK_API_KEY) with 400 DEPRECATED', async () => {
+    process.env.RUNTIME_CONFIG_KEY = TEST_KEY;
+    const { app } = buildApp();
+    const res = await request(app)
+      .put('/v1/admin/runtime-configs')
+      .set(authHeader)
+      .send({ key: 'DEEPSEEK_API_KEY', value: 'sk-test' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DEPRECATED');
+    expect(res.body.message).toMatch(/LLM_PROVIDERS/);
   });
 
   it('upserts an encrypted value into the global scope', async () => {
@@ -267,7 +279,7 @@ describe('runtime-config admin API', () => {
     const res = await request(app)
       .put('/v1/admin/runtime-configs')
       .set(authHeader)
-      .send({ key: 'DEEPSEEK_API_KEY', value: 'sk-secret', description: 'main key' });
+      .send({ key: 'APIFY_TOKEN', value: 'sk-secret', description: 'main key' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 

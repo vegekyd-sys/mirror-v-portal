@@ -18,8 +18,9 @@ const MAX_VALUE_LENGTH = 8192;
 /**
  * Preset key suggestions for the admin UI (purely informational chips).
  * Intentionally empty: admins may configure ANY key:value pair — key names
- * only need to be valid env-var names (KEY_PATTERN). DEEPSEEK_API_KEY remains
- * envFrom-only and is not managed through the .env pipeline.
+ * only need to be valid env-var names (KEY_PATTERN). The legacy
+ * DEEPSEEK_API_KEY is deprecated (write rejected with 400); DeepSeek provider
+ * keys are managed exclusively via LLM_PROVIDERS on the provider page.
  */
 export const PRESET_RUNTIME_KEYS: Array<{ key: string; description: string; isSecret: boolean }> = [];
 

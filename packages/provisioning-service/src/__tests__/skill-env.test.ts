@@ -23,6 +23,7 @@ import {
   pushTenantSkillEnv,
   pushSkillEnvToAllTenants,
   ENV_FROM_ONLY_KEYS,
+  DEPRECATED_KEYS,
   HINT_HOT,
   HINT_FIRST_MOUNT,
   HINT_SKIPPED,
@@ -127,9 +128,10 @@ beforeEach(() => {
 // ── buildEnvFileContent ──────────────────────────────────────────────
 
 describe('buildEnvFileContent', () => {
-  it('excludes envFrom-only keys (DEEPSEEK_API_KEY) and sorts the rest', () => {
+  it('excludes envFrom-only (LLM_PROVIDERS) and deprecated (DEEPSEEK_API_KEY) keys, sorts the rest', () => {
     const r = buildEnvFileContent({
       DEEPSEEK_API_KEY: 'sk-llm',
+      LLM_PROVIDERS: '{"providers":[]}',
       MIO_CDP_APP_KEY: 'mio',
       APIFY_TOKEN: 'apify',
     });
@@ -274,7 +276,7 @@ describe('pushTenantSkillEnv', () => {
     expect(r.warnings.join(' ')).toMatch(/Deployment|挂载/);
   });
 
-  it('strips skill keys from the legacy tenant-config Secret to avoid envFrom shadowing', async () => {
+  it('strips skill AND deprecated keys from the legacy tenant-config Secret (no envFrom shadowing)', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
       globalRows: [{ config_key: 'APIFY_TOKEN', encrypted_value: 'enc:tok' }],
@@ -294,7 +296,8 @@ describe('pushTenantSkillEnv', () => {
         },
       ],
     }));
-    // Legacy secret still carries skill keys from provisioning time.
+    // Legacy secret still carries skill keys + the deprecated DEEPSEEK key
+    // from provisioning time.
     k8sMocks.getSecret.mockResolvedValue({
       type: 'Opaque',
       data: {
@@ -305,13 +308,13 @@ describe('pushTenantSkillEnv', () => {
 
     const r = await pushTenantSkillEnv(pool, prodConfig, 't123');
     expect(r.rollout).toBe('none');
-    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {
-      DEEPSEEK_API_KEY: 'sk-llm',
-    });
+    // Only envFrom-only keys (LLM_PROVIDERS) survive — here that is none, so
+    // the secret is rewritten empty and the legacy values can never shadow.
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {});
     expect(r.warnings.join(' ')).toMatch(/移除/);
   });
 
-  it('leaves tenant-config untouched when it only holds envFrom keys', async () => {
+  it('leaves tenant-config untouched when it only holds envFrom-only keys (LLM_PROVIDERS)', async () => {
     const pool = makeFakePool({ tenant: makeTenant() });
     k8sMocks.getDeployment.mockResolvedValue(makeDeployment({
       volumes: [
@@ -330,7 +333,7 @@ describe('pushTenantSkillEnv', () => {
     }));
     k8sMocks.getSecret.mockResolvedValue({
       type: 'Opaque',
-      data: { DEEPSEEK_API_KEY: Buffer.from('sk-llm').toString('base64') },
+      data: { LLM_PROVIDERS: Buffer.from('{"providers":[]}').toString('base64') },
     });
 
     await pushTenantSkillEnv(pool, prodConfig, 't123');
@@ -438,15 +441,18 @@ describe('getTenantSkillEnvView', () => {
     ]);
   });
 
-  it('hides envFrom-only keys (DEEPSEEK) from the .env card', async () => {
+  it('hides envFrom-only (LLM_PROVIDERS) and deprecated (DEEPSEEK_API_KEY) keys from the .env card', async () => {
     const pool = makeFakePool({
       tenant: makeTenant(),
       globalRows: [
+        { config_key: 'LLM_PROVIDERS', encrypted_value: 'enc:{}', is_secret: true, description: null, updated_at: '2026-01-01' },
         { config_key: 'DEEPSEEK_API_KEY', encrypted_value: 'enc:sk', is_secret: true, description: null, updated_at: '2026-01-01' },
       ],
     });
     const view = await getTenantSkillEnvView(pool, 't123', true);
     expect(view.entries).toHaveLength(0);
-    expect(ENV_FROM_ONLY_KEYS.has('DEEPSEEK_API_KEY')).toBe(true);
+    expect(ENV_FROM_ONLY_KEYS.has('DEEPSEEK_API_KEY')).toBe(false);
+    expect(ENV_FROM_ONLY_KEYS.has('LLM_PROVIDERS')).toBe(true);
+    expect(DEPRECATED_KEYS.has('DEEPSEEK_API_KEY')).toBe(true);
   });
 });

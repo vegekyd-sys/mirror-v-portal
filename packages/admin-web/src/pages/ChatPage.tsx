@@ -94,7 +94,7 @@ export default function ChatPage() {
             <div style={{ fontSize: 13.5, color: '#52627e', lineHeight: 1.9 }}>
               当前没有可对话的租户（需状态为 active）。
               <br />
-              请先创建租户，并在「运行时配置」中配置大模型 API Key（DEEPSEEK_API_KEY）与模型 ID（DEALCLAW_MODEL），租户部署完成后即可对话。
+              请先创建租户，并在「模型供应商」页配置全局大模型提供商与默认模型，租户部署完成后即可对话。
               <br />
               <Link to="/customers">前往客户管理 →</Link>
             </div>

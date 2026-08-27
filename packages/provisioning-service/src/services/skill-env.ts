@@ -19,8 +19,10 @@
  * Secret volume mount — the first push patches the Deployment to add it
  * (single rolling restart); afterwards key changes are hot.
  *
- * Model-provider keys (DEEPSEEK_API_KEY) stay envFrom-only: they are consumed
- * by write-config.mjs at container start and must NOT move to .env.
+ * Model-provider configuration (LLM_PROVIDERS) stays envFrom-only: it is
+ * consumed by write-config.mjs at container start and must NOT move to .env.
+ * The legacy DEEPSEEK_API_KEY key is deprecated (see DEPRECATED_KEYS) —
+ * DeepSeek provider keys are now managed exclusively via LLM_PROVIDERS.
  */
 
 import type pg from 'pg';
@@ -35,12 +37,22 @@ export const SKILL_ENV_MOUNT_PATH = '/run/secrets/skill-env';
 export const SKILL_ENV_DEFAULT_MODE = 0o440;
 
 /**
- * Keys that never enter the .env file — model-provider credentials consumed
- * at container boot (write-config.mjs / entrypoint fail-closed check) via
- * the tenant-config Secret (envFrom). LLM_PROVIDERS is the admin-managed
- * provider blob (JSON: providers + defaultModel) parsed by write-config.mjs.
+ * Keys that never enter the .env file — model-provider configuration consumed
+ * at container boot (write-config.mjs / entrypoint fail-closed check) via the
+ * tenant-config Secret (envFrom). LLM_PROVIDERS is the admin-managed provider
+ * blob (JSON: providers + defaultModel) parsed by write-config.mjs.
  */
-export const ENV_FROM_ONLY_KEYS = new Set(['DEEPSEEK_API_KEY', 'LLM_PROVIDERS']);
+export const ENV_FROM_ONLY_KEYS = new Set(['LLM_PROVIDERS']);
+
+/**
+ * Keys that are no longer supported. Keeping them in runtime_configs or the
+ * tenant-config Secret is harmless but pointless — and they can shadow the
+ * canonical provider config when a plugin prefers the raw env var (e.g. the
+ * OpenClaw deepseek-provider plugin reads DEEPSEEK_API_KEY before the
+ * LLM_PROVIDERS blob). Writes to these keys are rejected (400) and the
+ * provisioning pipeline no longer pushes them to the agent.
+ */
+export const DEPRECATED_KEYS = new Set(['DEEPSEEK_API_KEY']);
 
 /**
  * Keys that never reach the agent at all — admin-side bookkeeping consumed
@@ -70,7 +82,8 @@ export interface EnvFileResult {
 
 /**
  * Build the `.env` file content from the merged runtime config:
- * - DEEPSEEK_API_KEY (envFrom-only) excluded;
+ * - LLM_PROVIDERS (envFrom-only) excluded; DEPRECATED_KEYS excluded as well
+ *   (they must not resurface in the agent after the migration);
  * - MIO_CDP_SUPPLIER_ID (kept on the tenants row) injected when set;
  * - keys sorted alphabetically for stable diffs;
  * - multi-line values are skipped (would corrupt the KEY=value format).
@@ -82,6 +95,7 @@ export function buildEnvFileContent(
   const entries = new Map<string, string>();
   for (const [k, v] of Object.entries(merged)) {
     if (ENV_FROM_ONLY_KEYS.has(k)) continue;
+    if (DEPRECATED_KEYS.has(k)) continue;
     if (ADMIN_ONLY_KEYS.has(k)) continue;
     entries.set(k, v);
   }
@@ -191,8 +205,9 @@ export async function getTenantSkillEnvView(
       displayValue: tenant.mio_cdp_supplier_id,
     });
   }
-  // envFrom-only keys are irrelevant for the .env card.
+  // envFrom-only and deprecated keys are irrelevant for the .env card.
   for (const k of ENV_FROM_ONLY_KEYS) entries.delete(k);
+  for (const k of DEPRECATED_KEYS) entries.delete(k);
 
   return {
     tenantId,
@@ -296,7 +311,9 @@ export async function pushTenantSkillEnv(
 
   // Also strip skill keys from the legacy tenant-config Secret so stale
   // envFrom values (from provisioning time) cannot shadow the hot .env file
-  // after the next pod start. envFrom-only keys are preserved.
+  // after the next pod start. Only envFrom-only keys (LLM_PROVIDERS) survive;
+  // everything else — including DEPRECATED_KEYS such as DEEPSEEK_API_KEY — is
+  // stripped so legacy values can never shadow the canonical provider blob.
   try {
     const existing = await getSecret(namespace, 'tenant-config');
     if (existing) {
@@ -314,7 +331,7 @@ export async function pushTenantSkillEnv(
         const next: Record<string, string> = {};
         for (const k of envFromKeys) next[k] = decoded[k];
         await putSecret(namespace, 'tenant-config', next);
-        warnings.push(`已从 tenant-config Secret 移除 skill 专用 key（${staleKeys.join(', ')}），避免旧值遮蔽 .env`);
+        warnings.push(`已从 tenant-config Secret 移除冗余 key（${staleKeys.join(', ')}），避免旧值遮蔽 .env / 供应商配置`);
       }
     }
   } catch (err) {
