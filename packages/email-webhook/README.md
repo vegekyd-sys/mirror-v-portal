@@ -141,16 +141,13 @@ Resend API 超时、权限不足或查询失败时会降级为原来的元数据
 }
 ```
 
-全局环境变量仍作为兼容性回退，供历史绑定、仅应用机器人绑定或未命中绑定的全局
-机器人使用：
+`mention_open_id` 只接受 `ou_` 开头的 Open ID。绑定测试接口（`POST /bindings/{email}/test`）
+构造的就是 `email.received` 卡片，可以用它验证 @ 是否生效。
 
-```bash
-FEISHU_MENTION_OPEN_ID=ou_xxx
-FEISHU_MENTION_EVENTS=email.received
-```
-
-绑定值和全局回退值都只接受 `ou_` 开头的 Open ID。绑定测试接口构造的也是
-`email.received` 卡片，因此可用于验证该绑定的 @ 是否生效。
+**没有全局兜底。** 查不到绑定就不推，响应里的 `notify.reason` 会点名是哪个代理邮箱
+（`no binding for xxx@...`）。早期版本有一组全局 `FEISHU_WEBHOOK_URL/SECRET/MENTION_OPEN_ID`
+作为未命中时的回落，已移除 —— 多租户下那条路会把某家的买家回信（含正文预览）
+推到平台或另一家的群里，绕过 `supplier_id` 隔离。
 
 已有服务器的 env 文件不会被 `bootstrap.sh` 覆盖，首次启用时需手动加入：
 
@@ -227,12 +224,9 @@ Redis 不可用时是 fail open 静默放行的 —— 后果是 Resend 重推�
 | **`REDIS_PASSWORD`** | 空 | |
 | `REDIS_DB` | `0` | |
 | `REDIS_KEY_PREFIX` | `emailhook` | 键前缀 |
-| **`FEISHU_WEBHOOK_URL`** | 空 | 全局自定义机器人。按邮箱的绑定在 `bindings.json` 里，优先级更高 |
-| **`FEISHU_SECRET`** | 空 | 机器人开了「签名校验」才需要 |
 | `NOTIFY_EVENTS` | 见下 | 逗号分隔。默认 `email.received,email.opened,email.clicked,email.bounced,email.complained` |
-| `FEISHU_TIMEOUT_SECONDS` | `5` | |
-| `FEISHU_MENTION_OPEN_ID` | 空 | 全局 @ 的负责人 Open ID（`ou_` 开头），绑定里没配时的回退 |
 | `FEISHU_MENTION_EVENTS` | `email.received` | 哪些事件要 @ 人 |
+| `FEISHU_TIMEOUT_SECONDS` | `5` | |
 | `LEAD_BACKEND` | `noop` | `noop` / `redis` / `postgres` |
 | `LEAD_TABLE` | 空 | `LEAD_BACKEND=postgres` 时必填 |
 | `LEAD_EMAIL_COLUMN` | `email` | |

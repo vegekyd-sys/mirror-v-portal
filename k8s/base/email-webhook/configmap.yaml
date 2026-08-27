@@ -23,6 +23,8 @@ data:
   RESEND_TIMEOUT_SECONDS: "5"
   EMAIL_CONTENT_PREVIEW_CHARS: "1200"
 
+  # 只有「推什么、超时多久」是全局策略；推到哪个群、用哪套凭据、@ 谁，
+  # 全部按代理邮箱存在 email_bindings 表里，通过 /bindings 接口动态维护。
   NOTIFY_EVENTS: "email.received,email.opened,email.clicked,email.bounced,email.complained"
   FEISHU_MENTION_EVENTS: "email.received"
   FEISHU_TIMEOUT_SECONDS: "5"

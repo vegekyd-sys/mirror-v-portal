@@ -110,11 +110,13 @@ export interface Settings {
   redisKeyPrefix: string;
 
   // --- 飞书通知 ---
-  feishuWebhookUrl: string;
-  feishuSecret: string;
+  // 这里只有「推什么、超时多久」这类策略。**具体推到哪个群、用哪套凭据、@ 谁，
+  // 全部按代理邮箱存在 email_bindings 表里**，通过 /bindings 接口动态维护。
+  // 早期版本有一组全局 FEISHU_WEBHOOK_URL/SECRET/MENTION_OPEN_ID 作为「未命中绑定」
+  // 时的兜底，已移除：在多租户下那条路会把某家的买家回信（含正文预览）推到
+  // 另一家或平台的群里，绕过 supplier_id 隔离。
   notifyEvents: ReadonlySet<string>;
   feishuTimeoutSeconds: number;
-  feishuMentionOpenId: string;
   feishuMentionEvents: ReadonlySet<string>;
 
   // --- 多租户 ---
@@ -139,10 +141,6 @@ export interface Settings {
 
 export function redisEnabled(s: Settings): boolean {
   return Boolean(s.redisAddr);
-}
-
-export function feishuEnabled(s: Settings): boolean {
-  return Boolean(s.feishuWebhookUrl);
 }
 
 export function resendApiEnabled(s: Settings): boolean {
@@ -172,11 +170,8 @@ function build(): Settings {
     redisDb: int("REDIS_DB", 0),
     redisKeyPrefix: str("REDIS_KEY_PREFIX", "emailhook"),
 
-    feishuWebhookUrl: str("FEISHU_WEBHOOK_URL"),
-    feishuSecret: str("FEISHU_SECRET"),
     notifyEvents: csv("NOTIFY_EVENTS", DEFAULT_NOTIFY_EVENTS),
     feishuTimeoutSeconds: float("FEISHU_TIMEOUT_SECONDS", 5),
-    feishuMentionOpenId: str("FEISHU_MENTION_OPEN_ID"),
     feishuMentionEvents: csv("FEISHU_MENTION_EVENTS", ["email.received"]),
 
     defaultSupplierId: str("DEFAULT_SUPPLIER_ID", "151897148668"),

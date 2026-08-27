@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { VERSION } from "../version.js";
-import { feishuEnabled, resendApiEnabled } from "../config.js";
+import { resendApiEnabled } from "../config.js";
 import { query } from "../db/pool.js";
 import type { AppState } from "../state.js";
 
@@ -44,9 +44,9 @@ export async function healthHandler(request: FastifyRequest): Promise<Record<str
       database_connected: dbOk,
       redis_connected: cacheOk,
       lead_backend: state.leads.name,
-      feishu_configured: feishuEnabled(settings),
-      feishu_mention_configured:
-        Boolean(settings.feishuMentionOpenId) || bindingStats.anyMention,
+      // 飞书渠道是按邮箱绑定的，没有全局开关；这里报的是「有几条绑定、
+      // 其中有没有配 @ 人」，未命中绑定的事件会在 /inbound 响应的 notify.reason 里点名
+      feishu_mention_configured: bindingStats.anyMention,
       bindings: bindingStats.count,
       suppliers: supplierCount,
       default_supplier_id: settings.defaultSupplierId,

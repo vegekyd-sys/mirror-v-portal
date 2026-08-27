@@ -197,9 +197,8 @@ export async function registerBindingRoutes(app: FastifyInstance): Promise<void>
         "binding-test",
       );
 
-      const settings = state.settings;
-      const mentionOpenId = settings.feishuMentionEvents.has(probe.eventType)
-        ? binding.mention_open_id || settings.feishuMentionOpenId
+      const mentionOpenId = state.settings.feishuMentionEvents.has(probe.eventType)
+        ? binding.mention_open_id
         : "";
       const result = await state.notifier.sendViaBinding(
         binding,

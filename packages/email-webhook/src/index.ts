@@ -2,7 +2,7 @@
 
 import { buildApp } from "./app.js";
 import { getSettings } from "./config.js";
-import { feishuEnabled, redisEnabled, resendApiEnabled } from "./config.js";
+import { redisEnabled, resendApiEnabled } from "./config.js";
 import { closePool, query } from "./db/pool.js";
 import { VERSION } from "./version.js";
 
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const state = app.state;
 
   app.log.info(
-    "启动完成 version=%s 验签=%s Resend正文=%s 线索后端=%s Redis=%s 飞书=%s 管理接口=%s 路由前缀=%s",
+    "启动完成 version=%s 验签=%s Resend正文=%s 线索后端=%s Redis=%s 绑定数=%d 管理接口=%s 路由前缀=%s",
     VERSION,
     settings.signingSecret
       ? "on"
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     resendApiEnabled(settings) ? "on" : "off(未配 RESEND_API_KEY)",
     state.leads.name,
     redisEnabled(settings),
-    feishuEnabled(settings),
+    (await state.bindings.stats()).count,
     settings.adminToken ? "on" : "off(未配 ADMIN_TOKEN)",
     settings.routePrefix || "(无)",
   );

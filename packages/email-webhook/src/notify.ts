@@ -9,7 +9,6 @@
 import { logger } from "./logger.js";
 import { createHmac } from "node:crypto";
 import type { Settings } from "./config.js";
-import { feishuEnabled } from "./config.js";
 import { EmailContent } from "./emailContent.js";
 import type { ResendEmailClient } from "./emailContent.js";
 import type { InboundEvent } from "./events.js";
@@ -189,42 +188,26 @@ export class FeishuNotifier {
         ? await this.contentClient.fetch(event)
         : new EmailContent({ reason: "content client not configured" });
 
-    const fallbackMentionOpenId = s.feishuMentionEvents.has(event.eventType)
-      ? s.feishuMentionOpenId
-      : "";
+    // 按代理邮箱查绑定。查不到就不推 —— 没有全局兜底，那会跨租户。
+    const binding =
+      this.bindingStore !== null ? await this.bindingStore.get(event.agentEmail) : null;
 
-    // --- 1. 按代理邮箱查绑定 ---
-    if (this.bindingStore !== null) {
-      const binding = await this.bindingStore.get(event.agentEmail);
-      if (binding !== null) {
-        const mentionOpenId = s.feishuMentionEvents.has(event.eventType)
-          ? binding.mention_open_id || fallbackMentionOpenId
-          : "";
-        const card = buildCard(event, content, mentionOpenId);
-        const result = await this.sendViaBinding(binding, card);
-        result["agent_email"] = event.agentEmail;
-        result["email_content"] = content.metadata();
-        return result;
-      }
-    }
-
-    // --- 2. 回落到全局自定义机器人 ---
-    if (!feishuEnabled(s)) {
+    if (binding === null) {
       return {
         sent: false,
         via: "none",
         bound: false,
         agent_email: event.agentEmail,
-        reason:
-          `no binding for ${event.agentEmail || "(unknown)"} ` +
-          "and FEISHU_WEBHOOK_URL not configured",
+        reason: `no binding for ${event.agentEmail || "(unknown)"}`,
         email_content: content.metadata(),
       };
     }
 
-    const card = buildCard(event, content, fallbackMentionOpenId);
-    const result = await this.postCustomBot(s.feishuWebhookUrl, s.feishuSecret, card);
-    result["bound"] = false;
+    const mentionOpenId = s.feishuMentionEvents.has(event.eventType)
+      ? binding.mention_open_id
+      : "";
+    const card = buildCard(event, content, mentionOpenId);
+    const result = await this.sendViaBinding(binding, card);
     result["agent_email"] = event.agentEmail;
     result["email_content"] = content.metadata();
     return result;
