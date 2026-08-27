@@ -29,6 +29,7 @@ const OWNED_ENV = [
   "REDIS_ADDR", "REDIS_PASSWORD", "REDIS_DB", "REDIS_KEY_PREFIX",
   "NOTIFY_EVENTS", "FEISHU_TIMEOUT_SECONDS", "FEISHU_MENTION_EVENTS",
   "DEFAULT_SUPPLIER_ID", "ADMIN_TOKEN",
+  "RATE_LIMIT_ALLOW_LIST",
   "LEAD_BACKEND", "LEAD_TABLE", "LEAD_EMAIL_COLUMN", "LEAD_STATUS_COLUMN", "LEAD_UPDATED_COLUMN",
 ];
 
@@ -39,6 +40,8 @@ export function makeSettings(overrides: Record<string, string> = {}): Settings {
   Object.assign(process.env, {
     LOG_LEVEL: "silent",
     ADMIN_TOKEN: "test-admin-token",
+    // 豁免本地 inject（127.0.0.1）的限流：测试关心业务逻辑，不是限流
+    RATE_LIMIT_ALLOW_LIST: "127.0.0.1",
     ...overrides,
   });
 

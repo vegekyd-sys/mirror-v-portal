@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { bearerToken, headerValue, requireAdmin } from "../auth.js";
+import { EVENTS_RATE_LIMIT } from "../rateLimit.js";
 
 interface EventsQuery {
   after?: string;
@@ -23,7 +24,10 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
    * 返回 {events, next_cursor, has_more}。每个 event 的 sequence 即下次游标值
    * （= 服务端 received_at），poller 拿到后作为 after 传入下一次请求。
    */
-  app.get<{ Querystring: EventsQuery }>("/v1/events", async (request) => {
+  app.get<{ Querystring: EventsQuery }>(
+    "/v1/events",
+    { config: { rateLimit: EVENTS_RATE_LIMIT } },
+    async (request) => {
     const state = request.server.state;
     requireAdmin(state, bearerToken(headerValue(request.headers.authorization)));
 

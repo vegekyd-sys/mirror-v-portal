@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { headerValue, queryBool, requireAdmin } from "../auth.js";
 import { isValidSupplierId, publicSupplier } from "../suppliers.js";
+import { SUPPLIERS_RATE_LIMIT } from "../rateLimit.js";
 
 interface SupplierIn {
   supplier_id: string;
@@ -21,7 +22,10 @@ const supplierInSchema = {
 /** 供应商（租户）管理 —— 仅平台管理员可用。 */
 export async function registerSupplierRoutes(app: FastifyInstance): Promise<void> {
   /** 列出全部供应商。密钥只存哈希，不返回。 */
-  app.get("/suppliers", async (request) => {
+  app.get(
+    "/suppliers",
+    { config: { rateLimit: SUPPLIERS_RATE_LIMIT } },
+    async (request) => {
     const state = request.server.state;
     requireAdmin(state, headerValue(request.headers["x-admin-token"]));
     const [bindings, suppliers] = await Promise.all([
@@ -38,7 +42,7 @@ export async function registerSupplierRoutes(app: FastifyInstance): Promise<void
   /** 登记或更新一个供应商。supplier_id 不是凭据，这里只维护元信息。 */
   app.post<{ Body: SupplierIn }>(
     "/suppliers",
-    { schema: { body: supplierInSchema } },
+    { schema: { body: supplierInSchema }, config: { rateLimit: SUPPLIERS_RATE_LIMIT } },
     async (request, reply) => {
       const state = request.server.state;
       requireAdmin(state, headerValue(request.headers["x-admin-token"]));
@@ -60,6 +64,7 @@ export async function registerSupplierRoutes(app: FastifyInstance): Promise<void
   /** 删除供应商。名下还有绑定时默认拒绝，避免留下无主数据。 */
   app.delete<{ Params: { supplierId: string }; Querystring: { force?: string } }>(
     "/suppliers/:supplierId",
+    { config: { rateLimit: SUPPLIERS_RATE_LIMIT } },
     async (request, reply) => {
       const state = request.server.state;
       requireAdmin(state, headerValue(request.headers["x-admin-token"]));

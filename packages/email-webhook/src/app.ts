@@ -15,6 +15,7 @@ import Fastify from "fastify";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
+import rateLimit from "@fastify/rate-limit";
 
 import { getSettings } from "./config.js";
 import type { Settings } from "./config.js";
@@ -110,6 +111,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const status = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
     return reply.code(status).send({ error: error.message || "internal server error" });
   });
+
+  // 应用层限流：只对显式 config.rateLimit 的路由生效（global: false），
+  // 避免误伤 /health、/inbound、docs 等。具体限额见 src/rateLimit.ts。
+  await app.register(rateLimit, {
+    global: false,
+    allowList: [...settings.rateLimitAllowList],
+  });
+
+  // ALB 健康检查默认打 "/"（HEAD），本服务根路径没有业务路由会 404，
+  // 被 ALB 判成不健康、整条 /webhook 链路 503。加一个轻量根路由返回 200，
+  // 不查 DB（健康检查可能高频，避免打库），与 /health 的完整检查解耦。
+  app.get("/", { schema: { hide: true } }, async () => ({ status: "ok", version: VERSION }));
 
   await app.register(fastifySwagger, {
     openapi: {

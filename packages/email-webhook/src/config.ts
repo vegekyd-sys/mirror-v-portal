@@ -128,6 +128,10 @@ export interface Settings {
    */
   adminToken: string;
 
+  // --- 限流 ---
+  /** 限流白名单 IP（CSV）。命中的请求不受限，测试用 127.0.0.1 豁免本地 inject。 */
+  rateLimitAllowList: ReadonlySet<string>;
+
   // --- 线索（lead）后端 ---
   // noop      : 只记录状态流转日志，不写任何业务表（默认）
   // redis     : 线索状态写 Redis Hash
@@ -176,6 +180,8 @@ function build(): Settings {
 
     defaultSupplierId: str("DEFAULT_SUPPLIER_ID", "151897148668"),
     adminToken: str("ADMIN_TOKEN"),
+
+    rateLimitAllowList: csv("RATE_LIMIT_ALLOW_LIST", []),
 
     leadBackend: str("LEAD_BACKEND", "noop").toLowerCase(),
     leadTable: str("LEAD_TABLE"),

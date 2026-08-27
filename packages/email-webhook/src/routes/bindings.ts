@@ -8,6 +8,7 @@ import {
 } from "../bindings.js";
 import { extractAddress, parse } from "../events.js";
 import { buildCard } from "../notify.js";
+import { BINDINGS_RATE_LIMIT } from "../rateLimit.js";
 
 /**
  * 绑定请求体。agent_email 是我方代理邮箱，不是买家邮箱。
@@ -54,7 +55,10 @@ export async function registerBindingRoutes(app: FastifyInstance): Promise<void>
    *
    * 默认按 X-Supplier-Id 隔离；?all_suppliers=true 跨租户列全部（运维用）。
    */
-  app.get<{ Querystring: { all_suppliers?: string } }>("/bindings", async (request) => {
+  app.get<{ Querystring: { all_suppliers?: string } }>(
+    "/bindings",
+    { config: { rateLimit: BINDINGS_RATE_LIMIT } },
+    async (request) => {
     const state = request.server.state;
     const allSuppliers = queryBool(request.query.all_suppliers);
     const caller = await resolveCaller(
@@ -76,7 +80,7 @@ export async function registerBindingRoutes(app: FastifyInstance): Promise<void>
   /** 新增或覆盖一条绑定。同一个 agent_email 再次提交即覆盖。 */
   app.post<{ Body: BindingIn }>(
     "/bindings",
-    { schema: { body: bindingInSchema } },
+    { schema: { body: bindingInSchema }, config: { rateLimit: BINDINGS_RATE_LIMIT } },
     async (request, reply) => {
       const state = request.server.state;
       const caller = await resolveCaller(
@@ -146,6 +150,7 @@ export async function registerBindingRoutes(app: FastifyInstance): Promise<void>
 
   app.delete<{ Params: { agentEmail: string } }>(
     "/bindings/:agentEmail",
+    { config: { rateLimit: BINDINGS_RATE_LIMIT } },
     async (request, reply) => {
       const state = request.server.state;
       const caller = await resolveCaller(
@@ -168,6 +173,7 @@ export async function registerBindingRoutes(app: FastifyInstance): Promise<void>
   /** 用一条假事件验证绑定能不能真的把卡片发到群里。 */
   app.post<{ Params: { agentEmail: string } }>(
     "/bindings/:agentEmail/test",
+    { config: { rateLimit: BINDINGS_RATE_LIMIT } },
     async (request, reply) => {
       const state = request.server.state;
       const caller = await resolveCaller(
