@@ -58,7 +58,7 @@ export function loadConfig(): ProvisioningConfig {
     imageRegistry: process.env.IMAGE_REGISTRY || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealclaw',
     nexusGatewayImageTag: process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest',
     dealclawAgentImageTag: process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest',
-    agentPvcSize: process.env.AGENT_PVC_SIZE || '10Gi',
+    agentPvcSize: process.env.AGENT_PVC_SIZE || '100Gi',
     agentPvcStorageClass: process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas',
     agentPvcAccessMode: (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce',
     ossEndpoint: process.env.OSS_ENDPOINT || 'oss-cn-shanghai.aliyuncs.com',

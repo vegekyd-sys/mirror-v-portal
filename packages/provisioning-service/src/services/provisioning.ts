@@ -112,9 +112,14 @@ export async function provisionTenant(
   const registry = options.imageRegistry || process.env.IMAGE_REGISTRY || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/dealclaw';
   let gwTag = options.nexusGatewayImageTag || process.env.NEXUS_GATEWAY_IMAGE_TAG || 'latest';
   let agentTag = options.dealclawAgentImageTag || process.env.DEALCLAW_AGENT_IMAGE_TAG || 'latest';
-  const pvcSize = options.agentPvcSize || process.env.AGENT_PVC_SIZE || '10Gi';
+  const pvcSize = options.agentPvcSize || process.env.AGENT_PVC_SIZE || '100Gi';
   const pvcStorageClass = options.agentPvcStorageClass || process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas';
   const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
+  // dealclaw-agent 规格（2026-08-27 起 2 核 / 4Gi，可通过环境变量调整无需发版）
+  const agentCpuRequest = process.env.AGENT_CPU_REQUEST || '2';
+  const agentMemRequest = process.env.AGENT_MEM_REQUEST || '4Gi';
+  const agentCpuLimit = process.env.AGENT_CPU_LIMIT || '2';
+  const agentMemLimit = process.env.AGENT_MEM_LIMIT || '4Gi';
 
   const nsName = tenantNamespace(tenant.tenantId); // per-tenant namespace
   // Central control-plane namespace where provisioning-service / credits-ledger / ops-agent run
@@ -351,8 +356,8 @@ export async function provisionTenant(
         { name: 'DC_BILLING_URL', value: process.env.CREDITS_LEDGER_URL || `http://credits-ledger.${centralNs}:8081` },
         { name: 'DC_BILLING_TOKEN', value: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '' },
       ],
-      requests: { cpu: '500m', memory: '1Gi' },
-      limits: { cpu: '2000m', memory: '2Gi' },
+      requests: { cpu: agentCpuRequest, memory: agentMemRequest },
+      limits: { cpu: agentCpuLimit, memory: agentMemLimit },
       imagePullSecrets: [{ name: 'registry-secret-vpc' }],
       runAsUser: 1000,
       livenessPath: '/healthz',
