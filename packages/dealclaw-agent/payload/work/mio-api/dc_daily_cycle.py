@@ -147,7 +147,7 @@ def _buyer_search_sample_size(campaign: dict, buyer_readiness: str) -> tuple[int
 
 
 def _gen_todos(campaign: dict, eval_result: dict, metrics: dict, user_open_id: str = "",
-               date: str | None = None) -> list[dict]:
+               date: str | None = None, exhibition_stage: str = "") -> list[dict]:
     """根据 phase/urgency/progress_gap/授权范围生成今日 Todo。展会获客优先。
 
     每个 Campaign 每天最多 1 个 buyer_search Todo（不再扇出 8 个）；
@@ -185,6 +185,23 @@ def _gen_todos(campaign: dict, eval_result: dict, metrics: dict, user_open_id: s
             "next_action": "",
             "attempts": 0,
         })
+
+    # 展会阶段 Todo（exhibition_stage 驱动：今日该干嘛跟展会走到哪一步挂钩）
+    if exhibition_stage:
+        try:
+            from dc_exhibition_stage import STAGE_LABELS
+        except Exception:
+            STAGE_LABELS = {}
+        stage_action = {
+            "profiling": "锁定「第一推荐产品」+ 补企业/产品缺口",
+            "planning": "产出获客方案（买家类型 + 触达方向 + 沟通策略）",
+            "inviting": "推进邀约与跟进回复",
+            "live": "展中对接买家、收名片/录音",
+            "followup": "展后跟进追单",
+        }.get(exhibition_stage)
+        if stage_action:
+            add("exhibition", f"展会阶段「{STAGE_LABELS.get(exhibition_stage, exhibition_stage)}」：{stage_action}",
+                "P0", action_type="exhibition_stage", auto=False)
 
     # 买家搜索 Todo（每天最多 1 个）
     long_term = _load_long_term_context(campaign["company_id"], user_open_id)
@@ -386,7 +403,7 @@ def build_morning_plan(company_id: str, date: str | None = None, dry_run: bool =
 
     metrics = calculate_metrics(company_id)
     evaluation = evaluate_campaign(camp, metrics, today=date)
-    todos = _gen_todos(camp, evaluation, metrics, user_open_id=user_open_id, date=date)
+    todos = _gen_todos(camp, evaluation, metrics, user_open_id=user_open_id, date=date, exhibition_stage=exhibition_stage)
 
     plan_id = _plan_id(company_id, date)
     plan = {

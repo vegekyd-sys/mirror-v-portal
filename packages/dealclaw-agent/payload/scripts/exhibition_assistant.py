@@ -274,7 +274,7 @@ def build_advice(exh: dict, days: int, prog: dict, mats: dict, stage: str = "pro
     return lines
 
 
-def build_card(exh: dict, today: date, prog: dict, mats: dict, company: str, stage: str = "profiling") -> dict:
+def build_card(exh: dict, today: date, prog: dict, mats: dict, company: str, stage: str = "profiling", understanding_done: bool = False, plan_done: bool = False) -> dict:
     start = datetime.strptime(exh["start"], "%Y-%m-%d").date()
     days = (start - today).days
     if days <= 0:
@@ -299,6 +299,8 @@ def build_card(exh: dict, today: date, prog: dict, mats: dict, company: str, sta
     ]
     lines += ["· " + a for a in build_advice(exh, days, prog, mats, stage)]
     lines += ["", "**📋 展前准备**"]
+    lines.append(("✅" if understanding_done else "⬜") + " 画像（理解企业 + 第一推荐产品）")
+    lines.append(("✅" if plan_done else "⬜") + " 获客方案（买家类型 + 触达 + 沟通策略）")
     for t, label in MATERIAL_LABELS.items():
         mark = "✅" if t in mats["ready"] else "⬜"
         lines.append(f"{mark} {label}")
@@ -444,9 +446,11 @@ def main():
         mats = material_status(sid)
         meta = get_meta(sid)
         company = bound_name or _company_name(sid, meta)
-        stage = read_stage(sid)["stage"]
+        stage_info = read_stage(sid)
+        stage = stage_info["stage"]
         for exh in exhs:
-            card = build_card(exh, today, prog, mats, company, stage)
+            card = build_card(exh, today, prog, mats, company, stage,
+                              stage_info["understanding_done"], stage_info["plan_done"])
             if card is None:
                 print("[skip] 展会已结束:", exh["name"])
                 continue
