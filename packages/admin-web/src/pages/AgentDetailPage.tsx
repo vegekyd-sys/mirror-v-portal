@@ -154,6 +154,33 @@ export default function AgentDetailPage() {
     }
   };
 
+  // ── 消息平面（gateway ↔ openclaw 一键迁移） ──
+  const [planeBusy, setPlaneBusy] = useState(false);
+  const switchPlane = async (plane: 'gateway' | 'openclaw') => {
+    const target = plane === 'openclaw' ? 'openclaw（飞书由 agent 直连）' : 'gateway（网关桥接）';
+    if (
+      !window.confirm(
+        `确认将消息平面切换为 ${target}？\n将按序滚动网关（让出/接管 WS）与 Agent（注入/移除飞书凭据），期间飞书消息可能中断数秒。切换失败会自动回滚状态记录。`,
+      )
+    )
+      return;
+    setPlaneBusy(true);
+    try {
+      const r = await api<{ plane: string; steps?: string[]; warnings?: string[] }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/message-plane`,
+        { method: 'PUT', body: { plane } },
+      );
+      flash(
+        `消息平面已切换为 ${r.plane}（共 ${r.steps?.length ?? 0} 步）${r.warnings?.length ? `，警告：${r.warnings.join('；')}` : ''}`,
+      );
+      await Promise.all([loadTenant(), loadRuntime(), loadBinding()]);
+    } catch (e) {
+      flash(`切换失败：${errMsg(e)}`);
+    } finally {
+      setPlaneBusy(false);
+    }
+  };
+
   // ── 运行状态（K8s） ──
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [rtBusy, setRtBusy] = useState(false);
@@ -275,11 +302,19 @@ export default function AgentDetailPage() {
     }
     setFsBusy(true);
     try {
-      const r = await api<{ message?: string }>(
-        `/v1/tenants/${encodeURIComponent(tenantId)}/feishu-binding`,
+      // Deferred-provisioning tenant (created without Feishu credentials):
+      // the credentials endpoint auto-provisions the agent (openclaw plane).
+      // Provisioned tenants use the normal bind/rotate endpoint instead.
+      const isDeferred = tenant?.status === 'pending';
+      const r = await api<{ message?: string; provisioned?: boolean }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/${isDeferred ? 'credentials' : 'feishu-binding'}`,
         { method: 'PUT', body: { appId, appSecret } },
       );
-      flash(r.message || `已绑定 ${appId}`);
+      flash(
+        isDeferred
+          ? r.message || `凭据已保存，Agent 开通中（openclaw 平面，数十秒后就绪）`
+          : r.message || `已绑定 ${appId}`,
+      );
       setFsAppSecret('');
       await Promise.all([loadBinding(), loadTenant()]);
     } catch (e) {
@@ -676,6 +711,31 @@ export default function AgentDetailPage() {
                 <div className="v">{tenant.creditsAccountId || '-'}</div>
               </div>
               <div className="detail-item">
+                <div className="k">消息平面</div>
+                <div className="v" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {tenant.messagePlane === 'openclaw' ? (
+                    <span className="badge badge-active" title="飞书消息由 agent 内 @openclaw/feishu 插件直连">openclaw · 飞书直连</span>
+                  ) : (
+                    <span className="badge badge-warn" title="飞书消息经 nexus-gateway WS 桥接（旧平面，建议迁移）">gateway · 网关桥接</span>
+                  )}
+                  {tenant.messagePlane !== 'openclaw' && tenant.status === 'active' && (
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: 12, padding: '2px 10px' }}
+                      disabled={planeBusy}
+                      onClick={() => void switchPlane('openclaw')}
+                    >
+                      {planeBusy ? '迁移中…' : '一键迁移到 openclaw →'}
+                    </button>
+                  )}
+                </div>
+                <div className="hint" style={{ margin: '4px 0 0' }}>
+                  {tenant.messagePlane === 'openclaw'
+                    ? '飞书消息由 agent 内 @openclaw/feishu 插件直连，网关仅作 LLM 出口代理（体验更佳，支持流式卡片）。'
+                    : '飞书消息经 nexus-gateway WS 桥接（存量旧平面）。迁移后由 agent 直连飞书，消息链路更稳定。'}
+                </div>
+              </div>
+              <div className="detail-item">
                 <div className="k">创建 / 更新时间</div>
                 <div className="v" style={{ fontSize: 12 }}>
                   {fmtTime(tenant.createdAt)} / {fmtTime(tenant.updatedAt)}
@@ -1063,6 +1123,13 @@ export default function AgentDetailPage() {
       <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
         飞书绑定
       </div>
+      {tenant?.status === 'pending' && (
+        <div className="msg msg-warn" style={{ marginBottom: 10 }}>
+          该客户创建时未提供飞书凭据，<b>尚未开通 Agent</b>（仅有客户记录与计费账户，无 K8s
+          资源）。在下框填写飞书 App ID / Secret（或扫码获取）并点击「开通 Agent」，
+          将自动完成 K8s 开通并以 <b>openclaw 直连平面</b>接入飞书消息。
+        </div>
+      )}
       <div className="panel">
         <div className="panel-body">
           <div className="form-row" style={{ marginBottom: 10 }}>
@@ -1083,7 +1150,9 @@ export default function AgentDetailPage() {
                 </button>
               </span>
             ) : (
-              <span className="badge badge-pending">未绑定（仅网页对话）</span>
+              <span className="badge badge-pending">
+                {tenant?.status === 'pending' ? '未开通（无 Agent）' : '未绑定（仅网页对话）'}
+              </span>
             )}
           </div>
           <div className="form-row">
@@ -1112,12 +1181,13 @@ export default function AgentDetailPage() {
               扫码获取
             </button>
             <button className="btn-primary" disabled={fsBusy} onClick={() => void bindFeishu()}>
-              <IconChat /> {fsBusy ? '处理中…' : fsBinding?.bound ? '更换绑定' : '绑定'}
+              <IconChat /> {fsBusy ? '处理中…' : tenant?.status === 'pending' ? '开通 Agent' : fsBinding?.bound ? '更换绑定' : '绑定'}
             </button>
           </div>
           <div className="hint">
-            绑定后该 Agent 即可在飞书中对话：网关通过长连接接入飞书，无需公网回调。要求应用已启用「机器人」能力并开启「长连接」接收模式。
-            绑定时会先向飞书校验凭据，校验通过才生效；同一应用同时只能绑定一个 Agent。
+            {tenant?.status === 'pending'
+              ? '开通 Agent = 保存凭据 + 自动完成 K8s 开通（gateway 出口代理 + agent 内 @openclaw/feishu 插件直连飞书）。要求应用已启用「机器人」能力并开启「长连接」接收模式。'
+              : '绑定后该 Agent 即可在飞书中对话：网关通过长连接接入飞书，无需公网回调。要求应用已启用「机器人」能力并开启「长连接」接收模式。绑定时会先向飞书校验凭据，校验通过才生效；同一应用同时只能绑定一个 Agent。'}
           </div>
         </div>
       </div>

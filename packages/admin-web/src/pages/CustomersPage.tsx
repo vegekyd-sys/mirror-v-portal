@@ -165,20 +165,36 @@ export default function CustomersPage() {
       botAppSecret: createForm.botAppSecret.trim(),
       mioCdpSupplierId: createForm.mioSupplierId.trim(),
     };
-    if (!window.confirm(`确认创建客户「${body.companyName || '未命名'}」？将立即开通 K8s 资源与计费账户。`))
+    if (
+      !window.confirm(
+        `确认创建客户「${body.companyName || '未命名'}」？${
+          body.botAppId && body.botAppSecret
+            ? '将同时开通 Agent（独立 namespace + K8s 资源 + 计费账户）。'
+            : '未填飞书凭据：仅创建客户记录与计费账户，不会开通 Agent；稍后可到「Agents 管理」该客户详情页补充飞书凭据一键开通。'
+        }`,
+      )
+    )
       return;
     setCreating(true);
     setCreateErr('');
     try {
-      const r = await api<{ tenant?: Tenant; provisioning?: { dryRun?: boolean } }>(
-        '/v1/tenants',
-        { method: 'POST', body },
-      );
+      const r = await api<{
+        tenant?: Tenant;
+        provisioning?: { dryRun?: boolean } | null;
+        provisioned?: boolean;
+      }>('/v1/tenants', { method: 'POST', body });
       setShowCreate(false);
       setCreateForm({ ...emptyCreate });
-      window.alert(
-        `客户创建成功：${r.tenant?.tenantId || '-'}${r.provisioning?.dryRun ? '（dry-run 模式）' : ''}`,
-      );
+      const tid = r.tenant?.tenantId || '-';
+      if (r.provisioned === false) {
+        window.alert(
+          `客户已创建（未开通 Agent）：${tid}。请到「Agents 管理」→ 该客户详情 → 补充飞书 App ID/Secret 后点击「开通 Agent」。`,
+        );
+      } else {
+        window.alert(
+          `客户创建成功并已开通 Agent：${tid}${r.provisioning?.dryRun ? '（dry-run 模式）' : ''}。初始状态 provisioning，数十秒后自动就绪。`,
+        );
+      }
       await load();
     } catch (e) {
       setCreateErr(errMsg(e));
@@ -468,7 +484,7 @@ export default function CustomersPage() {
             className="mono"
             value={createForm.botAppId}
             onChange={(e) => setCreateForm({ ...createForm, botAppId: e.target.value })}
-            placeholder="cli_xxxx（可留空后补）"
+            placeholder="cli_xxxx（可选，留空则仅创建客户、不开通 Agent）"
           />
           <button
             className="btn-secondary"
@@ -485,7 +501,7 @@ export default function CustomersPage() {
             className="mono"
             value={createForm.botAppSecret}
             onChange={(e) => setCreateForm({ ...createForm, botAppSecret: e.target.value })}
-            placeholder="可留空后补"
+            placeholder="可选（留空则仅创建客户、不开通 Agent）"
           />
         </div>
         <div className="form-row">
@@ -499,8 +515,9 @@ export default function CustomersPage() {
           />
         </div>
         <div className="hint">
-          创建即真实开通——写租户记录、建 credits 账户、在独立 namespace 中创建
-          Deployment/Secret/PVC。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
+          创建客户：填飞书凭据 → 同时开通 Agent（openclaw 直连平面）；<b>不填飞书凭据 →
+          仅创建客户记录与计费账户，不创建 Agent</b>，稍后可到「Agents 管理」该客户详情页补充凭据一键开通。
+          前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
         </div>
         <div className="form-row" style={{ marginTop: 12 }}>
           <button className="btn-primary" onClick={() => void createCustomer()} disabled={creating}>

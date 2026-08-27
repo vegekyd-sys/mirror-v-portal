@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { TestContext } from 'vitest';
 import request from 'supertest';
 import pg from 'pg';
@@ -37,6 +37,23 @@ beforeAll(async () => {
     return;
   }
 
+  // NB FIX: No credits-ledger service exists in the local test environment.
+  // Every POST /v1/tenants (with or without bot credentials) calls
+  // createCreditsAccount() → fetch('http://credits-ledger:8081/v1/admin/customers'),
+  // which would fail with ECONNREFUSED and turn every tenant-creation test
+  // into a 500. Intercept only credits-ledger calls with a fake 201 (the
+  // real createCreditsAccount code path still runs — URL building, JSON body,
+  // ok/DUPLICATE handling) and delegate everything else to the real fetch.
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal('fetch', async (input: any, init?: any) => {
+    const url = typeof input === 'string' ? input : (input as Request).url;
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    if (url.includes('credits-ledger') && method === 'POST' && url.endsWith('/v1/admin/customers')) {
+      return new Response(JSON.stringify({ ok: true, accountId: 'acct_test-mock' }), { status: 201 });
+    }
+    return realFetch(input, init);
+  });
+
   config = {
     port: 0,
     databaseUrl: TEST_DB,
@@ -57,6 +74,10 @@ beforeAll(async () => {
 
   };
   app = createApp(pool, config);
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('GET /healthz', () => {
@@ -81,7 +102,7 @@ describe('GET /healthz', () => {
 });
 
 describe('POST /v1/tenants — create', () => {
-  dbIt('creates a tenant and provisions k8s resources', async () => {
+  dbIt('creates a tenant with bot credentials and provisions k8s resources (openclaw plane)', async () => {
     const res = await request(app)
       .post('/v1/tenants')
       .set(authHeader)
@@ -92,18 +113,52 @@ describe('POST /v1/tenants — create', () => {
         planTier: 'pro',
         quotaAgents: 5,
         quotaCreditsMonthly: 5_000_000,
+        botAppId: 'cli_test0000000001',
+        botAppSecret: 'test-secret-12345678',
       });
 
     expect(res.status).toBe(201);
     expect(res.body.ok).toBe(true);
     expect(res.body.tenant.tenantId).toHaveLength(32);
     expect(res.body.tenant.companyName).toBe('测试科技公司');
-    expect(res.body.tenant.status).toBe('pending');
+    // Bot credentials present → provisioned immediately and activated
+    expect(res.body.provisioned).toBe(true);
+    expect(res.body.tenant.status).toBe('active');
     expect(res.body.tenant.planTier).toBe('pro');
     expect(res.body.tenant.k8sNamespace).toMatch(/^dealclaw-/);
+    expect(res.body.tenant.messagePlane).toBe('openclaw');
     expect(res.body.provisioning.secrets.length).toBeGreaterThanOrEqual(3);
     expect(res.body.provisioning.pods).toContain(`nexus-gateway-${res.body.tenant.tenantId}`);
     expect(res.body.provisioning.pods).toContain(`dealclaw-agent-${res.body.tenant.tenantId}`);
+  });
+
+  dbIt('without Feishu credentials → customer-only record, NO agent provisioned', async () => {
+    const res = await request(app)
+      .post('/v1/tenants')
+      .set(authHeader)
+      .send({
+        companyName: '无凭据客户',
+        contactEmail: 'nocreds@example.com',
+        planTier: 'starter',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.provisioned).toBe(false);
+    expect(res.body.provisioning).toBeNull();
+    // Stays pending until credentials are bound (PUT /credentials auto-provisions)
+    expect(res.body.tenant.status).toBe('pending');
+    expect(res.body.tenant.k8sNamespace).toMatch(/^dealclaw-/);
+    // DB plane pinned to the desired end state, never 'gateway'
+    expect(res.body.tenant.messagePlane).toBe('openclaw');
+
+    // GET detail confirms the deferred state is recorded in the status log
+    const getRes = await request(app)
+      .get(`/v1/tenants/${res.body.tenant.tenantId}`)
+      .set(authHeader);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.tenant.messagePlane).toBe('openclaw');
+    expect(getRes.body.statusLog[0].reason).toContain('deferred');
   });
 
   dbIt('accepts missing companyName as optional (QR-flow support)', async () => {
@@ -186,8 +241,12 @@ describe('GET /v1/tenants/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.tenant.tenantId).toBe(tenantId);
     expect(res.body.tenant.companyName).toBe('GetTest Co');
-    expect(res.body.statusLog.length).toBe(1);
+    // Created without bot credentials → customer-only record: the deferred
+    // status log entry follows the initial "Tenant created" entry.
+    expect(res.body.statusLog.length).toBe(2);
     expect(res.body.statusLog[0].to).toBe('pending');
+    expect(res.body.statusLog[0].reason).toContain('deferred');
+    expect(res.body.tenant.messagePlane).toBe('openclaw');
   });
 
   dbIt('returns dry-run runtime status without querying K8s', async () => {
@@ -245,7 +304,8 @@ describe('PATCH /v1/tenants/:id/status', () => {
       .get(`/v1/tenants/${tenantId}`)
       .set(authHeader);
     expect(getRes.body.tenant.status).toBe('active');
-    expect(getRes.body.statusLog.length).toBe(2);
+    // 2 creation/deferral entries + 1 manual patch entry
+    expect(getRes.body.statusLog.length).toBe(3);
   });
 
   dbIt('rejects invalid status', async () => {
@@ -288,5 +348,73 @@ describe('DELETE /v1/tenants/:id', () => {
       .delete('/v1/tenants/nonexist')
       .set(authHeader);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /v1/tenants/:id/credentials — deferred provisioning', () => {
+  dbIt('auto-provisions a pending (customer-only) tenant when credentials are bound', async () => {
+    // Create without credentials → customer-only record (no agent)
+    const created = await request(app)
+      .post('/v1/tenants')
+      .set(authHeader)
+      .send({ companyName: 'Deferred Co', contactEmail: 'deferred@example.com' });
+    expect(created.body.provisioned).toBe(false);
+    const tid = created.body.tenant.tenantId;
+
+    // Bind credentials → agent gets auto-provisioned on the openclaw plane
+    const res = await request(app)
+      .put(`/v1/tenants/${tid}/credentials`)
+      .set(authHeader)
+      .send({ appId: 'cli_deferred00001', appSecret: 'deferred-secret-1234' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.provisioned).toBe(true);
+    expect(res.body.plane).toBe('openclaw');
+    expect(res.body.pods).toContain(`nexus-gateway-${tid}`);
+    expect(res.body.pods).toContain(`dealclaw-agent-${tid}`);
+
+    // Tenant activated and plane persisted
+    const getRes = await request(app)
+      .get(`/v1/tenants/${tid}`)
+      .set(authHeader);
+    expect(getRes.body.tenant.status).toBe('active');
+    expect(getRes.body.tenant.messagePlane).toBe('openclaw');
+  });
+
+  dbIt('rejects missing credentials', async () => {
+    const created = await request(app)
+      .post('/v1/tenants')
+      .set(authHeader)
+      .send({ companyName: 'NoCreds Body Co', contactEmail: 'nobody@example.com' });
+    const tid = created.body.tenant.tenantId;
+    const res = await request(app)
+      .put(`/v1/tenants/${tid}/credentials`)
+      .set(authHeader)
+      .send({ appId: 'cli_abc' });
+    expect(res.status).toBe(400);
+  });
+
+  dbIt('is a no-op credential update for already-provisioned tenants', async () => {
+    // Created WITH credentials → provisioned + active immediately
+    const created = await request(app)
+      .post('/v1/tenants')
+      .set(authHeader)
+      .send({
+        companyName: 'Active Co',
+        contactEmail: 'active@example.com',
+        botAppId: 'cli_active000001',
+        botAppSecret: 'active-secret-1234',
+      });
+    const tid = created.body.tenant.tenantId;
+    expect(created.body.tenant.status).toBe('active');
+
+    // Re-persisting (QR flow re-writes the same creds) must NOT re-provision
+    const res = await request(app)
+      .put(`/v1/tenants/${tid}/credentials`)
+      .set(authHeader)
+      .send({ appId: 'cli_active000001', appSecret: 'active-secret-1234' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.provisioned).toBe(false);
   });
 });

@@ -150,9 +150,17 @@ export default function AgentsPage() {
       setAddErr('请填写公司名称（企业标识）');
       return;
     }
+    // Requirement (2026-08-27): creating an Agent REQUIRES Feishu bot
+    // credentials — without them the backend refuses to provision agent
+    // workloads (no creds → customer-only record). Enforce here so the
+    // operator cannot even submit an invalid request.
+    if (!body.botAppId || !body.botAppSecret) {
+      setAddErr('创建 Agent 必须填写飞书 App ID 与 App Secret（可用「扫码获取」回填）——未绑定飞书凭据无法开通 Agent');
+      return;
+    }
     if (
       !window.confirm(
-        `确认为企业「${body.companyName}」开通 Agent？将创建客户记录并在独立 namespace 中开通 K8s 资源。`,
+        `确认为企业「${body.companyName}」开通 Agent？将创建客户记录并在独立 namespace 中开通 K8s 资源（飞书消息走 openclaw 直连平面）。`,
       )
     )
       return;
@@ -324,6 +332,13 @@ export default function AgentsPage() {
                     )}
                   </td>
                   <td>
+                    <div style={{ marginBottom: 2 }}>
+                      {a.messagePlane === 'openclaw' ? (
+                        <span className="badge badge-active" title="飞书消息：agent 内 @openclaw/feishu 插件直连">openclaw 直连</span>
+                      ) : (
+                        <span className="badge badge-warn" title="飞书消息：nexus-gateway WS 桥接（存量旧平面，建议迁移）">gateway 桥接</span>
+                      )}
+                    </div>
                     {a.directMode ? (
                       <span className="badge badge-warn" title="绕过网关直连大模型 API，计费/余额拦截失效">直连上游</span>
                     ) : (
@@ -456,7 +471,7 @@ export default function AgentsPage() {
                 style={{ flex: 1 }}
                 value={addForm.botAppId}
                 onChange={(e) => setAddForm({ ...addForm, botAppId: e.target.value })}
-                placeholder="cli_xxxx（可留空后补）"
+                placeholder="cli_xxxx（必填，可用「扫码获取」）"
               />
               <button className="btn-secondary" style={{ flex: '0 0 auto' }} onClick={() => setShowScan(true)}>
                 扫码获取
@@ -469,7 +484,7 @@ export default function AgentsPage() {
                 className="mono"
                 value={addForm.botAppSecret}
                 onChange={(e) => setAddForm({ ...addForm, botAppSecret: e.target.value })}
-                placeholder="可留空后补"
+                placeholder="必填（可与 App ID 同用「扫码获取」）"
               />
             </div>
             <div className="form-row">
@@ -484,7 +499,9 @@ export default function AgentsPage() {
             </div>
             <div className="hint">
               添加即真实开通——写客户记录、建 credits 账户、在独立 namespace 创建
-              Deployment/Secret/PVC。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
+              Deployment/Secret/PVC，飞书消息走 openclaw 直连平面（agent 内 @openclaw/feishu
+              插件）。<b>飞书 App ID / Secret 必填</b>：未提供凭据将只创建客户记录、不创建
+              Agent。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
             </div>
             <div className="form-row" style={{ marginTop: 12 }}>
               <button className="btn-primary" onClick={() => void addAgent()} disabled={adding}>

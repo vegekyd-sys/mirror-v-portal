@@ -15,6 +15,11 @@ export interface Tenant {
   mioCdpSupplierId?: string | null;
   /** True → tenant bypasses nexus-gateway and uses real upstream LLM URLs. */
   directMode?: boolean;
+  /** Feishu app id bound to this tenant (may be null when never bound). */
+  feishuAppId?: string | null;
+  /** Message plane: 'gateway' = nexus-gateway WS bridge; 'openclaw' = in-agent
+   *  @openclaw/feishu plugin owns the Feishu long connection. */
+  messagePlane?: 'gateway' | 'openclaw';
   createdAt?: string | null;
   updatedAt?: string | null;
 }

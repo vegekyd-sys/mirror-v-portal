@@ -80,6 +80,12 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
       const messagePlane: 'gateway' | 'openclaw' =
         explicitPlane === 'gateway' || explicitPlane === 'openclaw' ? explicitPlane : (hasBotCreds ? 'openclaw' : 'gateway');
+      // Customer-only creation (no bot credentials) must NEVER land on the
+      // gateway plane: without credentials the gateway WS bridge cannot
+      // connect to Feishu at all — the root cause of "先建后绑" tenants.
+      // Pin the DB plane to the desired end state 'openclaw' so the later
+      // auto-provision (PUT /v1/tenants/:id/credentials) comes up correctly.
+      const dbMessagePlane = hasBotCreds ? messagePlane : 'openclaw';
 
       // Mio CDP supplier id — optional, unique among live tenants, injected
       // into the tenant agent's environment as MIO_CDP_SUPPLIER_ID.
@@ -102,7 +108,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         await client.query(
           `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret, mio_cdp_supplier_id, message_plane)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId, messagePlane],
+          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId, dbMessagePlane],
         );
 
         await client.query(
@@ -147,6 +153,39 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         );
         await pool.query(`UPDATE tenants SET status = 'provisioning_failed' WHERE tenant_id = $1`, [tenantId]);
         res.status(500).json({ code: 'PROVISIONING_FAILED', message: 'Tenant created but credits account creation failed' });
+        return;
+      }
+
+      // Requirement (2026-08-27): a customer created WITHOUT Feishu bot
+      // credentials must NOT get an agent. Previously this silently created
+      // a gateway-plane agent whose WS bridge could never connect — the root
+      // cause of "先建后绑" (create first, bind later) tenants landing on the
+      // wrong message plane. Only the customer record + credits account are
+      // created here; the agent is provisioned later when credentials are
+      // bound, via PUT /v1/tenants/:id/credentials (auto-provision path).
+      if (!hasBotCreds) {
+        await pool.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+           VALUES ($1, 'pending', 'pending', 'No Feishu credentials — agent provisioning deferred until creds bound')`,
+          [tenantId],
+        );
+        res.status(201).json({
+          ok: true,
+          provisioned: false,
+          tenant: {
+            tenantId,
+            companyName: safeName,
+            contactEmail: safeEmail,
+            planTier: safePlanTier,
+            status: 'pending',
+            quotaAgents: safeQuotaAgents,
+            quotaCreditsMonthly: safeQuotaCredits,
+            mioCdpSupplierId: safeSupplierId,
+            k8sNamespace: k8sNs,
+            messagePlane: dbMessagePlane,
+          },
+          provisioning: null,
+        });
         return;
       }
 
@@ -212,6 +251,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
 
       res.status(201).json({
         ok: true,
+        provisioned: true,
         tenant: {
           tenantId,
           companyName: safeName,
@@ -222,6 +262,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           quotaCreditsMonthly: safeQuotaCredits,
           mioCdpSupplierId: safeSupplierId,
           k8sNamespace: provisionResult.namespace,
+          messagePlane,
           secretsCreated: provisionResult.secrets,
           podsScheduled: provisionResult.pods,
         },
@@ -244,7 +285,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, contact_phone, plan_tier, status,
                 k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly,
-                mio_cdp_supplier_id, created_at, updated_at
+                mio_cdp_supplier_id, app_id, message_plane, created_at, updated_at
          FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
@@ -277,6 +318,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           quotaAgents: t.quota_agents,
           quotaCreditsMonthly: Number(t.quota_credits_monthly),
           mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
+          feishuAppId: t.app_id ?? null,
+          messagePlane: t.message_plane ?? 'gateway',
           createdAt: t.created_at,
           updatedAt: t.updated_at,
         },
@@ -330,7 +373,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     try {
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_agents, quota_credits_monthly,
-                k8s_namespace, mio_cdp_supplier_id, app_id, agent_endpoint, created_at, updated_at
+                k8s_namespace, mio_cdp_supplier_id, app_id, message_plane, agent_endpoint, created_at, updated_at
          FROM tenants ORDER BY created_at DESC LIMIT 100`,
       );
 
@@ -351,6 +394,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           k8sNamespace: t.k8s_namespace ?? null,
           mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
           feishuAppId: t.app_id ?? null,
+          messagePlane: t.message_plane ?? 'gateway',
           externalAgent: Boolean(t.agent_endpoint),
           directMode: directModeMap.get(t.tenant_id) === true,
           createdAt: t.created_at,
@@ -415,13 +459,106 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
-  // PUT /v1/tenants/:id/credentials — persist Feishu app credentials
-  router.put("/v1/tenants/:id/credentials", async (req, res) => {
+  // PUT /v1/tenants/:id/credentials — persist Feishu app credentials.
+  // Deferred-provisioning path (2026-08-27): a tenant created WITHOUT bot
+  // credentials (customer-only record, status 'pending') gets its agent
+  // auto-provisioned here on the openclaw plane — the admin console's
+  // "开通 Agent" button calls this endpoint. Already-provisioned tenants
+  // just get the credentials row updated (idempotent, used by the QR flow).
+  router.put('/v1/tenants/:id/credentials', async (req, res) => {
     try {
-      const { appId, appSecret } = req.body;
-      await pool.query("UPDATE tenants SET app_id=$1, app_secret=$2, updated_at=NOW() WHERE tenant_id=$3", [appId, appSecret, req.params.id]);
-      res.json({ ok: true });
-    } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
+      const { appId, appSecret } = req.body ?? {};
+      if (!appId || typeof appId !== 'string' || !appId.trim() || !appSecret || typeof appSecret !== 'string' || !appSecret.trim()) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'appId and appSecret are required' });
+        return;
+      }
+      const tenantId = req.params.id;
+      const { rows } = await pool.query(
+        `SELECT tenant_id, status, k8s_namespace, message_plane, plan_tier, company_name,
+                contact_email, quota_agents, quota_credits_monthly, mio_cdp_supplier_id, agent_endpoint
+         FROM tenants WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      if (!rows.length) { res.status(404).json({ code: 'NOT_FOUND' }); return; }
+      const tenant = rows[0];
+
+      await pool.query(
+        `UPDATE tenants SET app_id=$1, app_secret=$2, platform='feishu', updated_at=NOW() WHERE tenant_id=$3`,
+        [appId.trim(), appSecret.trim(), tenantId],
+      );
+
+      // Already-provisioned tenants: nothing more to do (QR flow re-persists
+      // the same credentials it created with).
+      if (tenant.status !== 'pending') {
+        res.json({ ok: true, provisioned: false, plane: tenant.message_plane ?? 'gateway' });
+        return;
+      }
+
+      // Double-provision guard: if the agent Deployment already exists the
+      // 'pending' status is a transient mid-provision state — skip.
+      if (!config.k8sDryRun) {
+        const ns = tenant.k8s_namespace || `dealclaw-${tenantId}`;
+        try {
+          const rt = await getTenantRuntimeStatus(ns, tenantId);
+          if ((rt.deployments || []).some((d: any) => String(d.name).includes('dealclaw-agent'))) {
+            res.json({ ok: true, provisioned: false, plane: 'openclaw', alreadyProvisioned: true });
+            return;
+          }
+        } catch {
+          // Namespace missing is the expected state for a deferred tenant.
+        }
+      }
+
+      let runtimeSecretData: Record<string, string> | undefined;
+      if (!config.k8sDryRun) {
+        runtimeSecretData = await resolveTenantConfig(pool, tenantId);
+      }
+
+      const planTier = (['starter', 'pro', 'enterprise'].includes(tenant.plan_tier) ? tenant.plan_tier : 'starter') as 'starter' | 'pro' | 'enterprise';
+      const provisionResult = await provisionTenant({
+        tenantId,
+        companyName: tenant.company_name || 'new-tenant',
+        contactEmail: tenant.contact_email || '',
+        planTier,
+        quotaAgents: Math.max(1, Number(tenant.quota_agents) || 1),
+        quotaCreditsMonthly: Math.max(0, Number(tenant.quota_credits_monthly) || 0),
+        appId: appId.trim(),
+        appSecret: appSecret.trim(),
+        messagePlane: 'openclaw',
+        mioCdpSupplierId: tenant.mio_cdp_supplier_id || undefined,
+      }, {
+        dryRun: config.k8sDryRun,
+        runtimeNamespace: config.runtimeNamespace,
+        imageRegistry: config.imageRegistry,
+        nexusGatewayImageTag: config.nexusGatewayImageTag,
+        dealclawAgentImageTag: config.dealclawAgentImageTag,
+        runtimeSecretData,
+        dbPool: pool,
+      });
+
+      await pool.query(
+        `UPDATE tenants SET message_plane = 'openclaw', status = 'active', updated_at = NOW() WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      await pool.query(
+        `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+         VALUES ($1, 'pending', 'active', 'Auto-provisioned after Feishu credentials bound (openclaw plane)')`,
+        [tenantId],
+      );
+
+      res.json({
+        ok: true,
+        provisioned: true,
+        plane: 'openclaw',
+        namespace: provisionResult.namespace,
+        secrets: provisionResult.secrets,
+        pods: provisionResult.pods,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('PUT /credentials failed:', e?.message ?? e);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
   });
 
   // GET /v1/tenants/:id/credentials — read Feishu app credentials + notification contact
