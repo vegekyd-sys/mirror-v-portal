@@ -1,5 +1,7 @@
 // 模型供应商 — 集中管理全局大模型供应商库。
-// Data: provisioning-service /v1/admin/llm-providers（全局库，解密回显编辑）。
+// Data: provisioning-service /v1/admin/llm-providers（全局库）。
+// 安全：编辑回显时 API Key 只显示掩码（首4位+••••+末4位），
+// 保持掩码原样提交则沿用原 Key，输入完整新值才覆盖。
 // 租户不做库覆盖，只在 Agent 详情页从库中选择模型（LLM_MODEL_SELECTION）。
 // 附「LLM 用量汇总」卡片：/v1/admin/llm-usage（credits-ledger 聚合，
 // nexus-gateway LLM 出口代理上报的 token 记账）。
@@ -63,6 +65,13 @@ export default function LlmProvidersPage() {
 
   const fmtNum = (n: number): string =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n);
+
+  /** API Key 掩码：首4位 + •••• + 末4位（与列表展示一致；过短则全 •）。 */
+  const maskApiKey = (key: string): string => {
+    if (!key) return '';
+    if (key.length <= 8) return '••••••••';
+    return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+  };
 
   const flash = (text: string, isErr = false) => {
     setMsg(text);
@@ -143,7 +152,16 @@ export default function LlmProvidersPage() {
       flashLp('Base URL 需以 http:// 或 https:// 开头，如 https://dashscope.aliyuncs.com/compatible-mode/v1', true);
       return;
     }
-    if (!lpApiKey.trim()) {
+    // 编辑态：掩码原样提交 → 沿用原 Key；否则视为完整新 Key（不允许含 • 的残缺输入）。
+    const originalKey = lpEditing ? llmDoc.providers.find((p) => p.name === lpEditing)?.apiKey ?? '' : '';
+    let apiKey = lpApiKey.trim();
+    if (lpEditing && apiKey === maskApiKey(originalKey)) {
+      apiKey = originalKey;
+    } else if (apiKey.includes('•')) {
+      flashLp('API Key 不合法：请保持掩码不变（沿用原 Key），或清空后输入完整新 Key', true);
+      return;
+    }
+    if (!apiKey) {
       flashLp('API Key 不能为空', true);
       return;
     }
@@ -164,7 +182,7 @@ export default function LlmProvidersPage() {
     const next: LlmProvider = {
       name,
       baseUrl: lpBaseUrl.trim().replace(/\/+$/, ''),
-      apiKey: lpApiKey,
+      apiKey,
       models,
     };
     const providers = exists
@@ -191,7 +209,7 @@ export default function LlmProvidersPage() {
     setLpEditing(p.name);
     setLpName(p.name);
     setLpBaseUrl(p.baseUrl);
-    setLpApiKey(p.apiKey);
+    setLpApiKey(maskApiKey(p.apiKey)); // 只回显掩码，不回显明文
     setLpModels(p.models.map((m) => (m.reasoning ? `${m.id}:reasoner` : m.vision ? `${m.id}:vision` : m.id)).join('\n'));
   };
 
@@ -412,9 +430,16 @@ export default function LlmProvidersPage() {
             style={{ flex: '1 1 180px' }}
             value={lpApiKey}
             onChange={(e) => setLpApiKey(e.target.value)}
-            placeholder="API Key"
+            placeholder={lpEditing ? '输入完整新 Key 覆盖（留掩码不变则沿用原 Key）' : 'API Key'}
+            autoComplete="off"
           />
         </div>
+        {lpEditing && (
+          <div className="hint" style={{ marginTop: -4, marginBottom: 4 }}>
+            安全提示：编辑时 API Key 只显示掩码（首4位••••末4位），保持不变提交即沿用原 Key；
+            如需更换，请清空后输入完整新 Key。
+          </div>
+        )}
         <div className="form-row" style={{ alignItems: 'flex-start' }}>
           <label className="field-label" style={{ paddingTop: 8 }}>模型列表</label>
           <textarea
