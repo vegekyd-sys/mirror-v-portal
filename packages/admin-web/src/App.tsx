@@ -13,6 +13,7 @@ import SkillPricesPage from './pages/SkillPricesPage';
 import SkillsPage from './pages/SkillsPage';
 import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
 import LlmProvidersPage from './pages/LlmProvidersPage';
+import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
@@ -48,6 +49,7 @@ export default function App() {
             <Route path="agents" element={<AgentsPage />} />
             <Route path="agents/:tenantId" element={<AgentDetailPage />} />
             <Route path="llm-providers" element={<LlmProvidersPage />} />
+            <Route path="llm-token-pricing" element={<LlmTokenPricingPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />
