@@ -22,7 +22,10 @@ author: ""
 | `xxx@mail.dealclaw.io` | resend 代理邮箱 | `dealclaw.datathink.com/webhook/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
 | `@163.com` / `@qq.com` / `@gmail.com` 等真实邮箱 | 个人邮箱 | `email_gateway.cli`（本地） | cron IMAP 轮询 → 飞书 |
 
-判断规则：邮箱域名是 `mail.dealclaw.io` → 走 **类型 A（代理）**；否则 → 走 **类型 B（个人）**。
+判断规则：
+- 邮箱域名是 `mail.dealclaw.io` 且动词是「创建/建/新增」→ 走 **类型 C（登记代理邮箱）**
+- 邮箱域名是 `mail.dealclaw.io` 且动词是「绑定/绑」→ 走 **类型 A（代理 webhook 绑定）**
+- 其他真实邮箱（`@163.com` 等）→ 走 **类型 B（个人 IMAP）**
 
 - 用户没给邮箱，或只说「绑邮箱」没说是哪种 → 先问邮箱地址，拿到后按域名路由。
 - 用户同时提到「代理邮箱 / dealclaw 邮箱」→ 直接走 A。
@@ -195,6 +198,39 @@ python3 -m email_gateway.cli bind-group \
 1. `account-check`：`python3 -m email_gateway.cli account-check --account-id ema_xxx` → 确认 IMAP/SMTP 认证通过
 2. `sync`：`python3 -m email_gateway.cli sync --account-id ema_xxx` → 确认 IMAP 登录成功（`fetched` 正常，无 `SecretResolutionError`）
 3. 让收件人回一封，等 `cron_notify --all` 跑一轮，群里应出卡片 + @ 数字人
+
+---
+
+## 类型 C：创建 resend 代理邮箱（`xxx@mail.dealclaw.io`）
+
+> 触发：用户说「创建代理邮箱 xxx@mail.dealclaw.io」「帮我建 resend 代理邮箱」。
+> 前提：mail.dealclaw.io 域名已在 Resend 验证（sending+receiving），@mail.dealclaw.io 通配收信，
+> 无需逐个别名创建，也无需再建域名。
+
+### 判断规则
+- 邮箱域名是 `mail.dealclaw.io` 且动词是「创建/建/新增」→ 类型 C（登记代理邮箱）
+- 动词是「绑定/绑」→ 类型 A（webhook 绑定）
+
+### 一条命令
+```bash
+cd work/mio-api
+SUP=$(grep '^MIO_CDP_SUPPLIER_ID=' .env | cut -d= -f2-)
+python3 -m email_gateway.cli account-add \
+ --enterprise "$SUP" \
+ --owner-open-id <当前用户open_id> \
+ --email <用户名>@mail.dealclaw.io \
+ --provider resend \
+ --mailbox-kind dealclaw_proxy \
+ --secret-ref env:RESEND_API_KEY \
+ --display-name "<中文名>"
+```
+
+### 参数口径
+- `--enterprise` = `MIO_CDP_SUPPLIER_ID`（.env 自动读，不手填）
+- `--owner-open-id` = 当前用户 open_id（不是机器人 open_id，不是 mention_open_id）
+- `--provider` 固定 `resend`；`--mailbox-kind` 固定 `dealclaw_proxy`
+- `--secret-ref env:RESEND_API_KEY`（代理发信走 Resend API key，无 IMAP 授权码）
+- 创建后**主动说明**：发信身份已可用；回信自动通知还需另走类型 A 绑群（同轮问 webhook）
 
 ---
 

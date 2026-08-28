@@ -116,6 +116,11 @@ features 枚举：
   - 关联判断 / 验证：`python3 dc_arounddeal/check_relationship.py`、`verify_contact.py --email/--phone`
   - 枚举值必须用 ID（不用人话），完整枚举表见下方「AroundDeal 枚举速查」章节；不确定先 `python3 dc_arounddeal/list_enums.py --field <字段> --search <关键词>` 查
   - 需 `.env` 配 `AROUNDDEAL_API_KEY`；联系人发现/邮箱反查是消耗性动作，批量前先跟用户确认
+- **Hunter 兜底邮箱**（最后一道：CDP / Apollo / AroundDeal 都没拿到邮箱时走），脚本在 `mio-api/dc_hunter/`，从 `work/mio-api` 目录调用：
+  - 域名搜邮箱：`python3 dc_hunter/domain_search.py --domain "<domain>" --limit 10`（某公司全部邮箱 + 职位/部门/决策人标记）
+  - 邮箱查找：`python3 dc_hunter/email_finder.py --domain "<domain>" --first-name X --last-name Y`（已知姓名找最可能邮箱，找不到不扣费）
+  - 邮箱验证：仅当用户明确要求验证邮箱时，才调用 `python3 dc_hunter/email_verifier.py --email "<email>"`；不得因找到邮箱、准备展示或准备发送而自动验证
+  - 需 `.env` 配 `HUNTER_API_KEY`；domain-search 免费，验证/富化按量计费
 - 未实际调用的数据源，不要声称已经执行。
 
 ## AroundDeal 枚举速查（必须用 ID，不要写人话）
@@ -300,6 +305,7 @@ GS 群发全发。FD 只发 1+2（采购+总经理）。
 **数据源**：
 - CDP 结果有 companyCdpId → 优先用 CDP 联系人接口，不消耗 Apollo reveal 额度。
 - Apollo 结果只有域名 → 先搜联系人；reveal 前确认额度。
+- **兜底链**：CDP（companyCdpId）→ Apollo → AroundDeal（linkedin 找联系人）→ **Hunter**（域名搜邮箱）。前三者都没拿到邮箱时，用 Hunter `domain_search` 按域名搜邮箱兜底。**不得自动验证邮箱**；只有用户明确要求验证时，才调用 Hunter `email_verifier`。
 - 不为用户未确认的公司解锁邮箱。
 - 接口失败不等于没有联系人，须如实说明失败。
 
