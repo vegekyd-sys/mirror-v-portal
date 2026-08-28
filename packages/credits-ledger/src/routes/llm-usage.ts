@@ -233,8 +233,28 @@ router.get('/v1/billing/llm-usage/range', async (req, res) => {
     const pricingMap = new Map<string, any>();
     for (const p of pricingRows) pricingMap.set(`${p.provider}|${p.model}`, p);
 
-    const costOf = (key: string, bucket: string, miss: number, hit: number, out: number): number => {
-      const p = pricingMap.get(key);
+    // Resolve a pricing row with fallback:
+    // 1) exact "provider|model";
+    // 2) longest model-prefix match, same provider preferred over cross-provider.
+    // Covers versioned model names (e.g. deepseek-v4-pro-0813 → deepseek-v4-pro).
+    const resolvePricing = (provider: string, model: string): any => {
+      const exact = pricingMap.get(`${provider}|${model}`);
+      if (exact) return exact;
+      let best: any = null;
+      let bestScore = -1;
+      for (const [k, p] of pricingMap) {
+        const sep = k.indexOf('|');
+        const pProvider = k.slice(0, sep);
+        const pModel = k.slice(sep + 1);
+        if (!model.startsWith(pModel)) continue;
+        const score = pModel.length * 2 + (pProvider === provider ? 1 : 0);
+        if (score > bestScore) { best = p; bestScore = score; }
+      }
+      return best;
+    };
+
+    const costOf = (provider: string, model: string, bucket: string, miss: number, hit: number, out: number): number => {
+      const p = resolvePricing(provider, model);
       if (!p) return 0;
       const peak = bucket === 'peak';
       const missPrice = peak ? Number(p.input_cache_miss_peak) : Number(p.input_cache_miss_offpeak);
@@ -262,7 +282,7 @@ router.get('/v1/billing/llm-usage/range', async (req, res) => {
       e.outputTokens += Number(r.output_tokens);
       e.cacheHitTokens += Number(r.cache_hit_tokens);
       e.cacheMissTokens += Number(r.cache_miss_tokens);
-      e.cost += costOf(key, r.bucket, Number(r.cache_miss_tokens), Number(r.cache_hit_tokens), Number(r.output_tokens));
+      e.cost += costOf(r.provider, r.model, r.bucket, Number(r.cache_miss_tokens), Number(r.cache_hit_tokens), Number(r.output_tokens));
     }
 
     const byDay = Array.from(dayMap.entries()).map(([day, modelMap]) => {
