@@ -18,6 +18,12 @@ interface PricingRow {
   updatedAt: string;
 }
 
+/** 供应商库（用于「供应商/模型」下拉，避免手填错误）— /v1/admin/llm-providers */
+interface LlmProviderOpt {
+  name: string;
+  models: { id: string }[];
+}
+
 const EMPTY_FORM = {
   provider: '',
   model: '',
@@ -41,6 +47,7 @@ export default function LlmTokenPricingPage() {
   const [msgErr, setMsgErr] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null); // "provider|model"
   const [form, setForm] = useState(EMPTY_FORM);
+  const [providerLib, setProviderLib] = useState<LlmProviderOpt[]>([]);
 
   const flash = (text: string, isErr = false) => {
     setMsg(text);
@@ -64,9 +71,22 @@ export default function LlmTokenPricingPage() {
     }
   }, []);
 
+  const loadProviders = useCallback(async () => {
+    try {
+      const r = await api<{ config: { providers: LlmProviderOpt[] } | null }>('/v1/admin/llm-providers');
+      setProviderLib(r.config?.providers ?? []);
+    } catch {
+      setProviderLib([]); // 供应商库不可达时降级为手填
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadProviders();
+  }, [loadProviders]);
 
   const set = (k: keyof typeof EMPTY_FORM) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -89,6 +109,19 @@ export default function LlmTokenPricingPage() {
       outputOffpeak: String(r.outputOffpeak),
     });
   };
+
+  // 供应商/模型下拉候选：供应商从库选；模型候选 = 库内模型 ∪ 该供应商下已配定价的模型（含带版本号的实际用量名）。
+  const providerOptions = providerLib.map((p) => p.name);
+  if (form.provider && !providerOptions.includes(form.provider)) {
+    providerOptions.push(form.provider); // 编辑态历史值兜底
+  }
+  const selectedProviderModels = providerLib.find((p) => p.name === form.provider)?.models.map((m) => m.id) ?? [];
+  const modelOptions = Array.from(
+    new Set([
+      ...selectedProviderModels,
+      ...rows.filter((r) => r.provider === form.provider).map((r) => r.model),
+    ]),
+  );
 
   const save = async () => {
     const provider = form.provider.trim();
@@ -213,25 +246,36 @@ export default function LlmTokenPricingPage() {
 
           <div className="form-row">
             <label className="field-label">供应商</label>
-            <input
-              type="text"
+            <select
               className="mono"
-              style={{ flex: '0 1 150px' }}
+              style={{ flex: '0 1 170px' }}
               value={form.provider}
-              onChange={set('provider')}
-              placeholder="如 deepseek / foldin-xiaoyuan"
+              onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value, model: '' }))}
               disabled={editingKey !== null}
-            />
+            >
+              <option value="">— 选择供应商 —</option>
+              {providerOptions.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
             <label className="field-label" style={{ marginLeft: 12 }}>模型</label>
             <input
               type="text"
+              list="pricing-model-options"
               className="mono"
               style={{ flex: '1 1 220px' }}
               value={form.model}
               onChange={set('model')}
-              placeholder="如 deepseek-v4-pro-0813（需与实际用量模型名一致）"
+              placeholder="从列表选或手填（需与实际用量模型名一致）"
               disabled={editingKey !== null}
             />
+            <datalist id="pricing-model-options">
+              {modelOptions.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
           </div>
 
           <div className="form-row" style={{ marginTop: 8 }}>
