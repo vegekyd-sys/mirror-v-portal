@@ -8,3 +8,4 @@ from .providers import PROVIDERS, ProviderConfig, get_provider
 from .store import EmailStore
 
 __all__ = ["EmailStore", "PROVIDERS", "ProviderConfig", "get_provider"]
+

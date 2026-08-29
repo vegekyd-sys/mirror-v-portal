@@ -134,7 +134,7 @@ def classify_intent(text):
             scores[intent] = 0.85 if matches >= 3 else (0.7 if matches >= 2 else 0.5)
     if not scores:
         return ("表达兴趣", 0.3)
-
+    
     # 🔄 读取用户纠错记录，覆盖误判
     try:
         intent_file = Path(__file__).resolve().parent / "data" / "intent_corrections.jsonl"
@@ -147,7 +147,7 @@ def classify_intent(text):
                         break
     except Exception:
         pass
-
+    
     priority = ["拒绝", "索要资料", "预约会议", "表达兴趣", "一般回复", "自动回复"]
     for p in priority:
         if p in scores:

@@ -24,6 +24,7 @@ SELECTION_APPCODE=97363dcc06ea48e3b71e7b5d97a29453
 AROUNDDEAL_API_KEY=s-live-uwqedojjwtlsrobkctglpvnaatkmyxgu
 UN_COMTRADE_API_KEY=f2bca70bd96e4827ab3acef024a5e2af
 WTO_API_KEY=265a974f6afa4eed89e080d97a4bf21e
+MEO_API_KEY=mo_e2902cbc418247d292e87c5fe9bec5ec
 EOF
 
 echo "[dc-env-config] 已写入 work/mio-api/.env"

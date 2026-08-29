@@ -1,98 +1,53 @@
 #!/usr/bin/env python3
 """
-Apollo.io API 客户端 — DealClaw DC-LS 联系人引擎
+Apollo.io API 客户端（走内部 blade-agent-adapter 网关）
 ==================================================
-封装 People Search + People Enrichment + Contact Search。
+封装 People Search + People Enrichment + Contact Search + Organization Search，
+底层走 https://micro.tradechina.com/blade-agent-adapter 的 /agent/apollo/* 端点，
+鉴权用 X-Feishu-Open-Id + X-Supplier-Id header（与 CDP 一致），不再用 APOLLO_API_KEY，
+防止 API key 泄漏。
 
-用法:
+对外接口与旧版兼容：
     from apollo_client import ApolloClient
     client = ApolloClient()
 
-    # 搜公司里的采购决策人（需 Organization 套餐）
+    # 按公司域名搜采购决策人
     people = client.search_people(
         domain="brumate.com",
         titles=["sourcing manager", "supply chain", "procurement", "buyer"],
         seniorities=["director", "manager", "head", "vp"]
     )
 
-    # 解锁邮箱电话（需 Organization + 消耗积分）
+    # 解锁邮箱电话（消耗积分）
     contact = client.enrich_person(
         first_name="Dylan", last_name="Jacob",
         organization_name="BrüMate", domain="brumate.com"
     )
 
-    # 兜底：Contact Search（Free 套餐可用，数据较稀疏）
-    contacts = client.search_contacts(
-        domain="brumate.com",
-        titles=["sourcing", "supply chain", "buyer"]
-    )
+    # 兜底 Contact Search
+    contacts = client.search_contacts(domain="brumate.com", titles=["sourcing", "buyer"])
 
-环境变量:
-    APOLLO_API_KEY — Master API Key (从 .env 自动加载)
-
-套餐要求:
-    Free     — Contact Search only
-    Basic+   — People Search (免费) + People Match (消耗积分)
-    Organization — 全部端点 + 更高额度
+环境变量（不再需要 APOLLO_API_KEY）:
+    MIO_V_OPEN_ID — 飞书数字人 open_id（X-Feishu-Open-Id）
+    MIO_CDP_SUPPLIER_ID — 供应商 id（X-Supplier-Id）
+    MEO_ADAPTER_BASE_URL — 网关地址（默认 https://micro.tradechina.com/blade-agent-adapter）
 """
 
-import json
 import os
 import sys
 from typing import Optional
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
 
-# ── 自动加载 .env（与 find-buyers/_client.py 一致：固定 3 目录）──────────
+# 复用 find-buyers 的公共客户端（_client.py：post_json / env，自动读 .env + 带 X-Feishu-Open-Id / X-Supplier-Id header）
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ENV_DIRS = [
-    _HERE,  # 脚本所在目录
-    os.path.normpath(os.path.join(_HERE, "..", "..")),  # workspace 根（相对，同步安全）
-    os.environ.get("HOME", "") + "/.openclaw",
-]
+_SKILL_SCRIPTS = os.path.normpath(
+    os.path.join(_HERE, "..", "..", "skills", "dealclaw-find-buyers", "scripts")
+)
+if _SKILL_SCRIPTS not in sys.path:
+    sys.path.insert(0, _SKILL_SCRIPTS)
 
+from _client import post_json, env  # noqa: E402
 
-def _load_env() -> None:
-    """读取固定 3 目录的 .env 写入 os.environ（已存在的键不覆盖，进程 env 优先）。"""
-    for _d in _ENV_DIRS:
-        _env_file = os.path.join(_d, ".env")
-        if not os.path.exists(_env_file):
-            continue
-        try:
-            with open(_env_file, encoding="utf-8") as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if not _line or _line.startswith("#") or "=" not in _line:
-                        continue
-                    _k, _v = _line.split("=", 1)
-                    if _k not in os.environ:
-                        os.environ[_k] = _v.strip()
-        except OSError:
-            continue
-
-
-def _refresh_apollo_key() -> str:
-    """动态读取最新 APOLLO_API_KEY：每次实例化重读 .env，覆盖旧值，不残留旧配置。"""
-    key = ""
-    for _d in _ENV_DIRS:
-        _env_file = os.path.join(_d, ".env")
-        if not os.path.exists(_env_file):
-            continue
-        try:
-            with open(_env_file, encoding="utf-8") as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if _line.startswith("APOLLO_API_KEY="):
-                        if not key:  # 靠近脚本的目录优先
-                            key = _line.split("=", 1)[1].strip()
-        except OSError:
-            continue
-    if key:
-        os.environ["APOLLO_API_KEY"] = key
-    return key
-
-
-_load_env()
+DEFAULT_BASE_URL = "https://micro.tradechina.com/blade-agent-adapter"
 
 # ── 采购/供应链决策人预设 ─────────────────────────────────
 DEFAULT_SOURCING_TITLES = [
@@ -113,58 +68,121 @@ DEFAULT_BRAND_TITLES = [
 
 
 class ApolloClient:
-    """Apollo.io API 客户端"""
+    """Apollo.io 客户端（经内部 blade-agent-adapter 网关，防 key 泄漏）"""
 
-    BASE = "https://api.apollo.io/api/v1"
+    def __init__(self):
+        self.base_url = env("MEO_ADAPTER_BASE_URL", DEFAULT_BASE_URL)
+        self.open_id = env("MIO_V_OPEN_ID", "")
+        self.supplier_id = env("MIO_CDP_SUPPLIER_ID", "")
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or _refresh_apollo_key()
-        self._headers = {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-cache",
-            "X-Api-Key": self.api_key,
+    # ── 内部方法 ──────────────────────────────────────────
+
+    def _call(self, path: str, body: dict) -> dict:
+        """统一调 blade-agent-adapter。失败返回 {"success": False, "error": ...}，成功解包 data。"""
+        resp = post_json(
+            base_url=self.base_url,
+            path=path,
+            body=body,
+            open_id=self.open_id,
+            supplier_id=self.supplier_id,
+            timeout=60,
+        )
+        if not resp.get("success"):
+            return {
+                "success": False,
+                "error": resp.get("msg") or "未知错误",
+                "code": resp.get("code"),
+            }
+        data = resp.get("data") or {}
+        return {"success": True, **data}
+
+    @staticmethod
+    def _map_person(p: dict) -> dict:
+        """网关联系人卡片（camelCase）→ 旧版 snake_case，保持下游兼容。"""
+        return {
+            "id": p.get("apolloId", ""),
+            "first_name": p.get("firstName", ""),
+            "last_name": p.get("lastName", ""),
+            "name": p.get("name", ""),
+            "title": p.get("title", ""),
+            "seniority": p.get("seniority", ""),
+            "organization_name": p.get("organization", ""),
+            "email": p.get("email", ""),
+            "email_status": p.get("emailStatus", ""),
+            "phone_numbers": p.get("phone", []) or [],
+            "linkedin_url": p.get("linkedinUrl", ""),
+            "has_email": p.get("hasEmail", False),
+            "last_name_obfuscated": p.get("lastNameObfuscated", ""),
+            "enrich_success": p.get("enrichSuccess", False),
+        }
+
+    @staticmethod
+    def _map_org(o: dict) -> dict:
+        """网关公司卡片（camelCase）→ 旧版 snake_case。"""
+        return {
+            "id": o.get("apolloId", ""),
+            "name": o.get("name", ""),
+            "primary_domain": o.get("primaryDomain", ""),
+            "website_url": o.get("websiteUrl", ""),
+            "industry": o.get("industry", ""),
+            "linkedin_url": o.get("linkedinUrl", ""),
+            "estimated_num_employees": o.get("estimatedNumEmployees", ""),
+        }
+
+    @classmethod
+    def _map_people_search(cls, data: dict) -> dict:
+        """search* 联系人响应 → {"people": [...], "pagination": {...}}（旧版格式）。"""
+        people = [cls._map_person(p) for p in (data.get("people") or [])]
+        return {
+            "people": people,
+            "pagination": {
+                "page": data.get("page", 1),
+                "per_page": data.get("perPage", 10),
+                "total_entries": data.get("totalEntries", 0),
+                "total_pages": data.get("totalPages", 0),
+            },
+        }
+
+    @classmethod
+    def _map_org_search(cls, data: dict) -> dict:
+        """search* 公司响应 → {"organizations": [...], "pagination": {...}}。"""
+        orgs = [cls._map_org(o) for o in (data.get("organizations") or [])]
+        return {
+            "organizations": orgs,
+            "pagination": {
+                "page": data.get("page", 1),
+                "per_page": data.get("perPage", 10),
+                "total_entries": data.get("totalEntries", 0),
+                "total_pages": data.get("totalPages", 0),
+            },
         }
 
     # ── People Search ─────────────────────────────────────
-    # 需要 Basic+ 套餐
 
     def search_people(
         self,
         domain: str,
-        titles: Optional[list[str]] = None,
-        seniorities: Optional[list[str]] = None,
+        titles: Optional[list] = None,
+        seniorities: Optional[list] = None,
         per_page: int = 10,
         page: int = 1,
-        locations: Optional[list[str]] = None,
+        locations: Optional[list] = None,
     ) -> dict:
-        """
-        按公司域名搜索联系人。
-
-        Args:
-            domain: 公司域名 (如 "brumate.com")
-            titles: 职位关键词列表
-            seniorities: 级别列表 (owner/founder/c_suite/partner/vp/head/director/manager/senior/entry/intern)
-            per_page: 每页条数 (最大100)
-            page: 页码
-
-        Returns: {"people": [...], "pagination": {...}}
-        """
-        body = {
-            "q_organization_domains": domain,
-            "page": page,
-            "per_page": min(per_page, 100),
-        }
+        """按公司域名搜索联系人。返回 {"people": [...], "pagination": {...}}。"""
+        body: dict = {"domain": domain, "page": page, "perPage": min(per_page, 100)}
         if titles:
-            body["person_titles"] = titles
+            body["titles"] = titles
         if seniorities:
-            body["person_seniorities"] = seniorities
+            body["seniorities"] = seniorities
         if locations:
-            body["person_locations"] = locations
-
-        return self._call("POST", "/mixed_people/api_search", body)
+            body["locations"] = locations
+        result = self._call("/agent/apollo/searchPeople.json", body)
+        if not result.get("success"):
+            return result
+        return {"success": True, **self._map_people_search(result)}
 
     def search_sourcing_contacts(self, domain: str, per_page: int = 10) -> dict:
-        """快捷方法：搜公司的采购/供应链决策人"""
+        """快捷方法：搜公司的采购/供应链决策人。"""
         return self.search_people(
             domain=domain,
             titles=DEFAULT_SOURCING_TITLES,
@@ -173,7 +191,7 @@ class ApolloClient:
         )
 
     def search_brand_contacts(self, domain: str, per_page: int = 10) -> dict:
-        """快捷方法：搜公司的高管/品牌负责人"""
+        """快捷方法：搜公司的高管/品牌负责人。"""
         return self.search_people(
             domain=domain,
             titles=DEFAULT_BRAND_TITLES,
@@ -181,54 +199,47 @@ class ApolloClient:
             per_page=per_page,
         )
 
-    # ── Email Reveal Pipeline ───────────────────────────
-    # 两步流程: search_sourcing → 交叉验证姓氏 → reveal_contacts_emails
+    # ── Email Reveal Pipeline ─────────────────────────────
 
     def reveal_contacts_emails(
         self,
-        contacts: list[dict],
+        contacts: list,
         reveal_personal_emails: bool = True,
         reveal_phone_number: bool = False,
     ) -> dict:
-        """
-        批量解锁联系人邮箱和电话。
-        contacts 中每条需包含: first_name, last_name, domain, organization_name(可选)
-
-        消耗 Apollo 积分(1-9积分/人)。返回每条记录的 email、email_status、phone。
-        """
-        results = []
+        """批量解锁联系人邮箱/电话。contacts 每条需含 first_name + last_name + domain。"""
+        payload = []
         for c in contacts:
             first = c.get("first_name", "")
             last = c.get("last_name", "")
             domain = c.get("domain", "")
-            org = c.get("organization_name", "")
-
             if not first or not last or not domain:
-                results.append({**c, "email": None, "email_status": "missing_name_or_domain", "phone": []})
+                payload.append({
+                    "first_name": first, "last_name": last, "domain": domain,
+                    "email": None, "email_status": "missing_name_or_domain", "phone_numbers": [],
+                })
                 continue
+            payload.append({"firstName": first, "lastName": last, "domain": domain})
+        # 网关批量解锁需要至少一条合法联系人，否则直接返回
+        valid = [p for p in payload if "firstName" in p]
+        if not valid:
+            return {"contacts": payload}
 
-            enriched = self.enrich_person(
-                first_name=first,
-                last_name=last,
-                domain=domain,
-                organization_name=org,
-                reveal_personal_emails=reveal_personal_emails,
-                reveal_phone_number=reveal_phone_number,
-            )
-            person = enriched.get("person", {})
-            results.append({
-                **c,
-                "email": person.get("email"),
-                "email_status": person.get("email_status"),
-                "phone": person.get("phone_numbers", []),
-                "apollo_id": person.get("id", ""),
-                "enrich_success": enriched.get("success", False),
-            })
+        body = {
+            "contacts": valid,
+            "revealPersonalEmails": reveal_personal_emails,
+            "revealPhoneNumber": reveal_phone_number,
+        }
+        result = self._call("/agent/apollo/revealEmails.json", body)
+        if not result.get("success"):
+            return {"contacts": payload, "error": result.get("error")}
 
-        return {"contacts": results}
+        out = []
+        for c in (result.get("contacts") or []):
+            out.append(self._map_person(c))
+        return {"contacts": out}
 
     # ── People Enrichment ─────────────────────────────────
-    # 需要 Basic+ 套餐 + 消耗积分
 
     def enrich_person(
         self,
@@ -242,143 +253,103 @@ class ApolloClient:
         reveal_personal_emails: bool = False,
         reveal_phone_number: bool = False,
     ) -> dict:
-        """
-        根据姓名+公司信息解锁联系人邮箱和电话。
-        消耗 1-9 积分/人。返回的 email/phone 在 response['person'] 中。
-
-        至少提供: first_name+last_name 或 full_name 或 email
-        建议同时提供: organization_name 或 domain (提高匹配率)
-        """
-        body = {}
+        """根据姓名+公司信息解锁联系人邮箱/电话。返回的 email/phone 在 response['person']。"""
+        body: dict = {}
         if first_name:
-            body["first_name"] = first_name
+            body["firstName"] = first_name
         if last_name:
-            body["last_name"] = last_name
+            body["lastName"] = last_name
         if full_name:
-            body["name"] = full_name
+            body["fullName"] = full_name
         if organization_name:
-            body["organization_name"] = organization_name
+            body["organizationName"] = organization_name
         if domain:
             body["domain"] = domain
         if email:
             body["email"] = email
         if linkedin_url:
-            body["linkedin_url"] = linkedin_url
+            body["linkedinUrl"] = linkedin_url
         if reveal_personal_emails:
-            body["reveal_personal_emails"] = True
+            body["revealPersonalEmails"] = True
         if reveal_phone_number:
-            body["reveal_phone_number"] = True
+            body["revealPhoneNumber"] = True
 
         if not body:
             return {"error": "至少提供 first_name+last_name / name / email 之一"}
 
-        return self._call("POST", "/people/match", body)
+        result = self._call("/agent/apollo/enrichPerson.json", body)
+        if not result.get("success"):
+            return result
+        # enrichPerson 的 data 就是单张联系人卡片
+        return {"success": True, "person": self._map_person(result)}
 
     # ── Contact Search ────────────────────────────────────
-    # Free 套餐可用，但数据较稀疏
 
     def search_contacts(
         self,
         domain: Optional[str] = None,
-        titles: Optional[list[str]] = None,
+        titles: Optional[list] = None,
         keywords: Optional[str] = None,
         per_page: int = 10,
         page: int = 1,
     ) -> dict:
-        """
-        搜索已保存的联系人（Free 套餐可用）。
-
-        Args:
-            domain: 公司域名过滤
-            titles: 职位过滤
-            keywords: 关键词搜索
-        """
-        body = {"page": page, "per_page": min(per_page, 100)}
+        """搜索联系人（Contact Search）。"""
+        body: dict = {"page": page, "perPage": min(per_page, 100)}
         if domain:
-            body["q_organization_domains"] = [domain]
+            body["domain"] = domain
         if titles:
-            body["contact_titles"] = titles
+            body["titles"] = titles
         if keywords:
-            body["q_keywords"] = keywords
-
-        return self._call("POST", "/contacts/search", body)
+            body["keywords"] = keywords
+        result = self._call("/agent/apollo/searchContacts.json", body)
+        if not result.get("success"):
+            return result
+        return {"success": True, **self._map_people_search(result)}
 
     # ── Organization Search ──────────────────────────────
-    # 按行业/关键词/地区搜公司，不需要先有域名
 
     def search_organizations(
         self,
         keyword: Optional[str] = None,
-        keyword_tags: Optional[list[str]] = None,
+        keyword_tags: Optional[list] = None,
         name: Optional[str] = None,
         industry: Optional[str] = None,
-        locations: Optional[list[str]] = None,
-        employee_ranges: Optional[list[str]] = None,
+        locations: Optional[list] = None,
+        employee_ranges: Optional[list] = None,
         per_page: int = 10,
         page: int = 1,
     ) -> dict:
-        """
-        搜索公司（不需要域名）。端点: /mixed_companies/search。
-
-        Args:
-            keyword: 公司名模糊匹配 (q_organization_name)
-            keyword_tags: 关键词标签数组 (q_organization_keyword_tags[])
-            name: 公司名精确片段 (等同于 keyword)
-            industry: 行业 (organization_industries[]), 大小写敏感
-            locations: 地区数组 (organization_locations[])
-            employee_ranges: 员工规模数组 (organization_num_employees_ranges[])
-                如 ["1,10", "11,50", "51,200"]
-            per_page: 每页条数 (最大100, 消耗1积分/页)
-
-        Returns: {"organizations": [...], "pagination": {...}}
-        """
-        body = {"page": page, "per_page": min(per_page, 100)}
+        """搜索公司（不需要域名）。返回 {"organizations": [...], "pagination": {...}}。"""
+        body: dict = {"page": page, "perPage": min(per_page, 100)}
         if keyword or name:
-            body["q_organization_name"] = keyword or name
+            body["keyword"] = keyword or name
         if keyword_tags:
-            body["q_organization_keyword_tags"] = keyword_tags
+            body["keywordTags"] = keyword_tags
         if industry:
-            body["organization_industries"] = [industry]
+            body["industry"] = industry
         if locations:
-            body["organization_locations"] = locations
+            body["locations"] = locations
         if employee_ranges:
-            body["organization_num_employees_ranges"] = employee_ranges
-
-        return self._call("POST", "/organizations/search", body)
+            body["employeeRanges"] = employee_ranges
+        result = self._call("/agent/apollo/searchOrganizations.json", body)
+        if not result.get("success"):
+            return result
+        return {"success": True, **self._map_org_search(result)}
 
     def search_companies_by_keyword(
         self, keyword: str, country: str = "United States", per_page: int = 10
     ) -> dict:
-        """快捷方法：按关键词标签+国家搜公司"""
-        return self.search_organizations(
-            keyword_tags=[keyword], locations=[country], per_page=per_page
-        )
-
-    # ── 内部方法 ──────────────────────────────────────────
-
-    def _call(self, method: str, path: str, body: dict) -> dict:
-        url = f"{self.BASE}{path}"
-        data = json.dumps(body, ensure_ascii=False).encode()
-        req = Request(url, data=data, headers=self._headers, method=method)
-        try:
-            with urlopen(req, timeout=30) as resp:
-                return {"success": True, **json.loads(resp.read().decode())}
-        except HTTPError as e:
-            err_body = e.read().decode()
-            try:
-                err = json.loads(err_body)
-            except json.JSONDecodeError:
-                err = {"error": err_body[:200]}
-            return {
-                "success": False,
-                "http_status": e.code,
-                **err,
-            }
+        """快捷方法：按关键词+国家搜公司。"""
+        body: dict = {"keyword": keyword, "country": country, "perPage": min(per_page, 100)}
+        result = self._call("/agent/apollo/searchCompaniesByKeyword.json", body)
+        if not result.get("success"):
+            return result
+        return {"success": True, **self._map_org_search(result)}
 
 
 # ── DC-LS 集成 ────────────────────────────────────────────
 
-def format_people_for_dc_ls(people: list[dict]) -> list[dict]:
+def format_people_for_dc_ls(people: list) -> list:
     """将 Apollo People 结果格式化为 DC-LS 联系人卡片"""
     cards = []
     for p in people:

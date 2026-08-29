@@ -88,12 +88,12 @@ def check_kb():
     if not KB_DIR.exists():
         results.append(("⬜", "KB目录", "不存在, 尚未初始化"))
         return results
-
+    
     kb_files = list(KB_DIR.glob("*/kb.json"))
     if not kb_files:
         results.append(("⬜", "KB", "无企业知识库"))
         return results
-
+    
     for path in kb_files:
         try:
             kb = json.loads(path.read_text())

@@ -182,8 +182,8 @@ def build_homepage(enterprise, layer_links=None):
     qs = iq.get("common_questions", [])
     if qs:
         recent_learnings.append(f"买家常问: {qs[0]['question'][:50]}")
-
-
+    
+    
     if not recent_learnings:
         recent_learnings = ["知识库刚建立，开始使用后会累积学习记录"]
 
@@ -855,12 +855,12 @@ def publish(title, content, enterprise="", grant_to=""):
             subprocess.run(
                 ["lark-cli", "drive", "permission.members", "create",
                  "--token", doc_token, "--type", "docx",
-                 "--data", '{"member_id":"<OPEN_ID>","member_type":"openid","perm":"full_access"}',
+                 "--data", '{"member_id":"ou_2b516abcb05aa539ff0056bc839d3d3a","member_type":"openid","perm":"full_access"}',
                  "--yes", "--as", "bot"],
                 capture_output=True, timeout=10
             )
             # 如果指定了单独授权用户(销售个人)
-            if grant_to and grant_to != "<OPEN_ID>":
+            if grant_to and grant_to != "ou_2b516abcb05aa539ff0056bc839d3d3a":
                 subprocess.run(
                     ["lark-cli", "drive", "permission.members", "create",
                      "--token", doc_token, "--type", "docx",

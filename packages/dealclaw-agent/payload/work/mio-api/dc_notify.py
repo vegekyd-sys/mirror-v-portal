@@ -505,7 +505,7 @@ class NotifyEngine:
                 return {"company_id": company_id, "status": "route_invalid", "error": "invalid open_id"}
             if not r.get("app_id"):
                 return {"company_id": company_id, "status": "route_invalid", "error": "open_id requires app_id"}
-            expected_app = os.getenv("DC_NOTIFY_FEISHU_APP_ID", "<APP_ID>")
+            expected_app = os.getenv("DC_NOTIFY_FEISHU_APP_ID", "cli_a9365919fc3a1bd6")
             if r.get("app_id") != expected_app:
                 return {"company_id": company_id, "status": "route_invalid", "error": "open_id app_id mismatch"}
         else:
@@ -725,7 +725,12 @@ class NotifyEngine:
         slot = batch.get("slot", "")
         if kind in ("plan_item", "summary_item"):
             head = "☀️" if slot == "morning" else "🌙"
-            title = f"{head} DealClaw {'早报' if slot == 'morning' else '晚报'} · {company}"
+            try:
+                from dc_daily_report import company_display_name
+                cname = company_display_name(company)
+            except Exception:
+                cname = company
+            title = f"{head} {'早报' if slot == 'morning' else '晚报'} · {cname}"
             lines = [title]
             for item in batch.get("items", []):
                 rt = item.get("report_text") if isinstance(item, dict) else None

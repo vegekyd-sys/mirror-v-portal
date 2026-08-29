@@ -868,7 +868,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;background:#f0f2f5;padding:
                     subprocess.run(
                         ["lark-cli", "drive", "permission.members", "create",
                          "--token", doc_token, "--type", "docx",
-                         "--data", '{"member_id":"<OPEN_ID>","member_type":"openid","perm":"full_access"}',
+                         "--data", '{"member_id":"ou_2b516abcb05aa539ff0056bc839d3d3a","member_type":"openid","perm":"full_access"}',
                          "--yes", "--as", "bot"],
                         capture_output=True, timeout=10
                     )

@@ -42,3 +42,4 @@ def resolve_secret(secret_ref: str) -> str:
 
     # 裸值视为明文密码（用户明确选择明文存储）
     return secret_ref
+

@@ -40,13 +40,13 @@ STATUS_EVENT_TYPES = {
 INBOUND_EVENT_TYPES = ("email.received", "inbound", "email.inbound")
 
 # 本 handler 所属飞书应用（open_id 是 app 级，路由键需含 app_id）
-HANDLER_APP_ID = os.getenv("DEALCLAW_FEISHU_APP_ID", "<APP_ID>")
+HANDLER_APP_ID = os.getenv("DEALCLAW_FEISHU_APP_ID", "cli_a9365919fc3a1bd6")
 
 # 代理邮箱 → 企业映射（legacy 硬编码，仅入站通知路由 fallback；不得覆盖动态绑定）
 PROXY_MAP = {
-    "agent@example.com": {"enterprise": "meorient.com", "owner": "田耕郡",
-                               "open_id": "<OPEN_ID>",
-                               "app_id": "<APP_ID>"},
+    "thia@mail.dealclaw.io": {"enterprise": "meorient.com", "owner": "田耕郡",
+                               "open_id": "ou_3fe4922d138f37c5a9fbd6ce7aa89570",
+                               "app_id": "cli_a9365919fc3a1bd6"},
 }
 
 
@@ -349,9 +349,27 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
             result["binding_method"] = fb.get("binding_method", "")
             result["binding_confidence"] = fb.get("binding_confidence", "")
         elif fb.get("status") == "ambiguous":
-            return {**result, "status": "unmatched", "failure_reason": "ambiguous_contact_match",
-                    "binding_status": "ambiguous", "auto_fixed": False, "need_user": True,
-                    "candidate_outbound_ids": fb.get("candidate_outbound_ids", [])}
+            # company 级降级：候选 outbound 都属同一企业时，按企业绑定产生回复信号
+            # （漏斗/早晚报只需企业级事实）；lead 级精确归属仍 need_user，留给人工。
+            cands = fb.get("candidate_outbound_ids", [])
+            cids = set()
+            latest = None
+            for cid_rid in cands:
+                o = store.find_outbound_by_resend_id(cid_rid)
+                if o:
+                    cids.add(o.get("company_id", ""))
+                    if latest is None or (o.get("sent_at") or "") > (latest.get("sent_at") or ""):
+                        latest = o
+            if len(cids) == 1 and next(iter(cids)) and latest is not None:
+                outbound = latest
+                result["binding_method"] = "company_fallback"
+                result["binding_confidence"] = "low"
+                result["need_user"] = True
+                result["candidate_outbound_ids"] = cands
+            else:
+                return {**result, "status": "unmatched", "failure_reason": "ambiguous_contact_match",
+                        "binding_status": "ambiguous", "auto_fixed": False, "need_user": True,
+                        "candidate_outbound_ids": cands}
 
     if outbound is None:
         return {**result, "status": "unmatched", "failure_reason": "no_matching_outbound"}

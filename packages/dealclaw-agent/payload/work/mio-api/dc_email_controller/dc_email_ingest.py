@@ -175,8 +175,8 @@ def ingest_resend_event(event: dict) -> dict:
             STATUS_EVENT_TYPES, INBOUND_EVENT_TYPES,
         )
         if event_type in STATUS_EVENT_TYPES:
-            result = {"ok": True, "event_type": event_type,
-                      **handle_status_event(event_type, data)}
+            r = handle_status_event(event_type, data)
+            result = {"ok": r.get("handled", False), "event_type": event_type, **r}
         elif event_type in INBOUND_EVENT_TYPES:
             r = handle_inbound_event(data)
             result = {"ok": r.get("status") != "retryable", "event_type": event_type, **r}

@@ -49,12 +49,19 @@ BLOCKED_INTENTS = {"自动回复", "拒绝"}
 # ── 术语 ───────────────────────────────────────────────────
 _QUOTE_TERMS = ["quote", "quotation", "pricing", "price", "moq", "unit price",
                 "payment terms", "delivery time", "报价", "价格", "单价", "交期",
-                "付款条款", "最小起订量"]
-_SAMPLE_TERMS = ["sample", "samples", "trial piece", "prototype", "样品", "样"]
+                "付款条款", "最小起订量",
+                # 西语 / 葡语价格词
+                "precio", "precios", "cotización", "cotizacion", "cotação",
+                "preço", "preços", "costo", "costos", "custo", "fob", "oem"]
+_SAMPLE_TERMS = ["sample", "samples", "trial piece", "prototype", "样品", "样",
+                 "muestra", "muestras", "amostra", "amostras"]
 _MEETING_TERMS = ["meet", "meeting", "call", "schedule", "visit", "video", "zoom",
-                  "teams", "booth", "见面", "会议", "电话", "视频", "参观", "展位", "预约"]
+                  "teams", "booth", "见面", "会议", "电话", "视频", "参观", "展位", "预约",
+                  "reunión", "reunion", "cita", "visita", "llamada", "reunião", "encontro",
+                  "agendar", "coordinar"]
 # catalogue/catalog 单独不算 quote_request
-_CATALOGUE_ONLY = ["catalogue", "catalog", "brochure", "目录", "产品手册", "资料"]
+_CATALOGUE_ONLY = ["catalogue", "catalog", "brochure", "目录", "产品手册", "资料",
+                   "catálogo", "catalogo", "catálogos", "folleto"]
 
 
 def _now() -> str:

@@ -335,11 +335,11 @@ def localize_email(buyer_name, buyer_company, buyer_domain, product, usp,
     """生成本地化邮件"""
     lang = COUNTRY_LANG.get((buyer_country or "").upper(), "en")
     t = LANG_TEMPLATES.get(lang, LANG_TEMPLATES["en"])
-
+    
     name = buyer_name or "there"
     company = buyer_company or ""
     domain = buyer_domain or ""
-
+    
     greeting = t["greeting"].format(name=name)
     intro = t["intro"].format(company=company, domain=domain)
     who = t["who_we_are"].format(enterprise=enterprise, product=product)
@@ -347,7 +347,7 @@ def localize_email(buyer_name, buyer_company, buyer_domain, product, usp,
     cta = t["cta"].format()
     sign = t["sign"].format(sender=sender_name, enterprise=enterprise, email=sender_email)
     subject = t["subject"].format(product=product)
-
+    
     body = f"{greeting}\n\n{intro}\n\n{who}\n{usp_text}\n\n{cta}\n\n{sign}\n{_legal_footer(lang)}"
     return {"subject": subject, "text": body, "lang": lang}
 
@@ -466,7 +466,7 @@ if __name__ == "__main__":
     profile = load_company_profile(enterprise="kmlbeltcom")
 
     buyer = {"name":"Bonnie","company":"Pacific Transmission","domain":"pacifictransmission.com",
-             "country":"MY","email":"user@example.com"}
+             "country":"MY","email":"bonnie.ptsb@gmail.com"}
 
     result = ce.generate(buyer, profile)
 
@@ -498,3 +498,5 @@ if __name__ == "__main__":
             sender_name=sender_name,
             sender_email=sender_email,
         )
+
+

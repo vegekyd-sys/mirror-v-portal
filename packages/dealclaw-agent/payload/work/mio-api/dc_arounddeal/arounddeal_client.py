@@ -37,6 +37,20 @@ from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+# ── 复用 find-buyers 公共客户端（post_json / env，带 X-Feishu-Open-Id / X-Supplier-Id header）──
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SKILL_SCRIPTS = os.path.normpath(os.path.join(
+    _HERE, "..", "..", "..", "skills", "dealclaw-find-buyers", "scripts"))
+if not os.path.isdir(_SKILL_SCRIPTS):
+    _SKILL_SCRIPTS = os.path.normpath(os.path.join(
+        _HERE, "..", "..", "skills", "dealclaw-find-buyers", "scripts"))
+if _SKILL_SCRIPTS not in sys.path:
+    sys.path.insert(0, _SKILL_SCRIPTS)
+
+from _client import post_json, env  # noqa: E402
+
+DEFAULT_BASE_URL = "https://micro.tradechina.com/blade-agent-adapter"
+
 # ── 自动加载 .env ─────────────────────────────────────────
 # 采用 skills/*/scripts/_client.py 的「向上遍历目录树」写法,而不是
 # apollo_client.py 的「固定 3 目录」。放到 work/mio-api/ 下时两者等效,
@@ -963,14 +977,135 @@ DEFAULT_SOURCING_TITLES = [
 ]
 
 
-class AroundDealClient:
-    """AroundDeal API Matrix 客户端"""
+# ── 内部网关端点映射 ─────────────────────────────────────────
+# 旧 function_name → (gateway path, body 字段映射, 需转逗号串的字段, 额外固定字段)。
+# 语义与旧 AroundDeal 直连保持一致，仅底层换成 blade-agent-adapter（防 key 泄漏）。
+_GATEWAY: Dict[str, Dict[str, Any]] = {
+    "account_overview": {
+        "path": "/agent/arounddeal/accountBalance.json",
+        "fields": {},
+    },
+    "company_enrichment": {
+        "path": "/agent/arounddeal/companyEnrichment.json",
+        "fields": {"linkedin_url": "linkedinUrl", "website": "website", "name": "name"},
+    },
+    "people_enrichment": {
+        "path": "/agent/arounddeal/enrichPerson.json",
+        "fields": {"linkedin_url": "linkedinUrl", "email": "email", "name": "name", "company": "company"},
+    },
+    "resume_enrichment": {
+        "path": "/agent/arounddeal/resumeEnrichment.json",
+        "fields": {"linkedin_url": "linkedinUrl", "email": "email"},
+    },
+    "company_contact_discovery": {
+        "path": "/agent/arounddeal/findContacts.json",
+        "fields": {
+            "linkedin_url": "linkedinUrl", "website": "website", "name": "name",
+            "job_level": "jobLevel", "function": "function", "country_code": "countryCode",
+            "industry": "industry", "employee_range": "employeeRange",
+            "company_hq_country_code": "companyHqCountryCode",
+            "require_email_business": "requireEmailBusiness",
+            "start": "start", "limit": "limit", "page": "page", "size": "size",
+        },
+        "csv_fields": {"jobLevel", "function", "countryCode", "industry", "employeeRange", "companyHqCountryCode"},
+    },
+    "company_search": {
+        "path": "/agent/arounddeal/searchCompanies.json",
+        "fields": {"keyword": "keyword", "country_code": "countryCode", "industry": "industry",
+                   "employee_range": "employeeRange", "page": "page", "size": "size"},
+        "csv_fields": {"countryCode", "industry", "employeeRange"},
+    },
+    "people_search": {
+        "path": "/agent/arounddeal/searchPeople.json",
+        "fields": {"title": "title", "job_level": "jobLevel", "function": "function",
+                   "country_code": "countryCode", "location": "location", "industry": "industry",
+                   "employee_range": "employeeRange", "company_hq_country_code": "companyHqCountryCode",
+                   "start": "start", "limit": "limit", "page": "page", "size": "size"},
+        "csv_fields": {"jobLevel", "function", "countryCode", "industry", "employeeRange", "companyHqCountryCode"},
+    },
+    "contact_verification_email": {
+        "path": "/agent/arounddeal/verifyContact.json",
+        "fields": {"email": "email"},
+    },
+    "contact_verification_phone": {
+        "path": "/agent/arounddeal/verifyContact.json",
+        "fields": {"phone": "phone"},
+    },
+    "email_to_linkedin_profile": {
+        "path": "/agent/arounddeal/emailToLinkedin.json",
+        "fields": {"email": "email"},
+    },
+    "company_clients": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"name": "name", "website": "website"},
+        "extra": {"type": "clients"},
+    },
+    "company_suppliers": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"name": "name", "website": "website"},
+        "extra": {"type": "suppliers"},
+    },
+    "company_events": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"name": "name", "website": "website"},
+        "extra": {"type": "events"},
+    },
+    "company_product": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"name": "name", "website": "website"},
+        "extra": {"type": "products"},
+    },
+    "company_job": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"linkedin_url": "linkedinUrl", "website": "website", "name": "name"},
+        "extra": {"type": "jobs"},
+    },
+    "orgchart": {
+        "path": "/agent/arounddeal/companyIntel.json",
+        "fields": {"linkedin_url": "linkedinUrl", "website": "website", "name": "name"},
+        "extra": {"type": "orgchart"},
+    },
+    "company_relationship_check": {
+        "path": "/agent/arounddeal/checkRelationship.json",
+        "fields": {"name_a": "nameA", "website_a": "websiteA",
+                   "name_b": "nameB", "website_b": "websiteB"},
+    },
+}
 
-    BASE = "https://api-matrix-ep.arounddeal.com/ep"
+
+def _to_csv(v: Any) -> Any:
+    """列表/元组 → 逗号分隔字符串（网关枚举字段用）；标量原样返回。"""
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x) for x in v)
+    return v
+
+
+def _transform_body(cfg: Dict[str, Any], body: dict) -> dict:
+    """snake_case 入参 → 网关 camelCase body。None/未知字段丢弃。"""
+    out: Dict[str, Any] = {}
+    fields = cfg.get("fields", {})
+    csv_fields = cfg.get("csv_fields", set())
+    for k, v in body.items():
+        if v is None:
+            continue
+        ck = fields.get(k)
+        if ck is None:
+            continue
+        out[ck] = _to_csv(v) if ck in csv_fields else v
+    out.update(cfg.get("extra", {}))
+    return out
+
+
+class AroundDealClient:
+    """AroundDeal 客户端（经内部 blade-agent-adapter 网关，防 key 泄漏）"""
 
     def __init__(self, api_key: Optional[str] = None, timeout: int = 60,
                  max_retries: int = 3, strict: bool = True):
-        self.api_key = api_key or _refresh_arounddeal_key()
+        # api_key 参数保留以兼容旧调用方（_ad.py 的 --api-key），但底层已改走内部网关，
+        # 不再需要 AroundDeal 的 Bearer key，此处忽略。
+        self.base_url = env("MEO_ADAPTER_BASE_URL", DEFAULT_BASE_URL)
+        self.open_id = env("MIO_V_OPEN_ID", "") or ""
+        self.supplier_id = env("MIO_CDP_SUPPLIER_ID", "") or ""
         self.timeout = timeout
         self.max_retries = max_retries
         #: True(默认):参数不合法时在【发请求前】抛 AroundDealParamError,
@@ -979,14 +1114,10 @@ class AroundDealClient:
         #: 注意官方枚举字典已知不完整(见 UNDOCUMENTED_JOB_FUNCTIONS),
         #: 若确认某个字典外取值合法,加进对应集合而不是关掉 strict。
         self.strict = strict
-        self._headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer {}".format(self.api_key),
-        }
         #: 本实例累计的估算花费(USD)。【上界,实测偏高约 2~25%】,
         #: 只用于粗略感知,不可当账 —— 真实成本查 account_overview()。
         self.estimated_spend = 0.0
-        #: 最近一次调用的完整响应包(含 status/hint),排查用
+        #: 最近一次调用的完整响应包,排查用
         self.last_raw: Any = None
 
     # ── 账户 ──────────────────────────────────────────────
@@ -1183,9 +1314,15 @@ class AroundDealClient:
         成功: {"success": True, "status": "SUCCESS", "data": ..., "hint": ...}
         失败: {"success": False, "status": "ERROR", "error": {"code","detail"}, ...}
         """
-        if not self.api_key:
-            return {"success": False, "error": {"code": "AUTH:NO_KEY",
-                    "detail": "缺少 AROUNDDEAL_API_KEY(检查 .env 或环境变量)"}}
+        cfg = _GATEWAY.get(function_name)
+        if cfg is None:
+            return {"success": False,
+                    "error": {"code": "UNSUPPORTED",
+                              "detail": "未映射到内部网关: {}".format(function_name)}}
+        if not self.open_id or not self.supplier_id:
+            return {"success": False,
+                    "error": {"code": "AUTH:NO_ID",
+                              "detail": "缺少 MIO_V_OPEN_ID / MIO_CDP_SUPPLIER_ID(检查 .env)"}}
 
         self._guard_per_record_billing(function_name, body)
 
@@ -1198,47 +1335,44 @@ class AroundDealClient:
             for problem in problems:
                 warnings.warn("[{}] {}".format(function_name, problem), stacklevel=3)
 
-        url = "{}/{}".format(self.BASE, function_name)
-        data = json.dumps(body, ensure_ascii=False).encode()
-        req = Request(url, data=data, headers=self._headers, method="POST")
+        gw_body = _transform_body(cfg, body)
 
-        last_transport_err = None
+        resp: Dict[str, Any] = {}
         for attempt in range(self.max_retries):
-            try:
-                with urlopen(req, timeout=self.timeout) as resp:
-                    raw = json.loads(resp.read().decode())
-                break
-            except HTTPError as e:
-                err_body = e.read().decode("utf-8", "replace")
-                try:
-                    raw = json.loads(err_body)
-                except json.JSONDecodeError:
-                    if e.code >= 500 and attempt < self.max_retries - 1:
-                        last_transport_err = "HTTP {}".format(e.code)
-                        time.sleep(1.5 ** attempt)
-                        continue
-                    return {"success": False, "http_status": e.code,
-                            "error": {"code": "HTTP:{}".format(e.code),
-                                      "detail": err_body[:200]}}
-                break
-            except (URLError, TimeoutError, json.JSONDecodeError) as e:
-                last_transport_err = str(e)
-                if attempt < self.max_retries - 1:
-                    time.sleep(1.5 ** attempt)
-                    continue
-                return {"success": False,
-                        "error": {"code": "TRANSPORT", "detail": str(e)}}
-        else:
-            return {"success": False,
-                    "error": {"code": "TRANSPORT",
-                              "detail": last_transport_err or "重试耗尽"}}
+            resp = post_json(
+                base_url=self.base_url,
+                path=cfg["path"],
+                body=gw_body,
+                open_id=self.open_id,
+                supplier_id=self.supplier_id,
+                timeout=self.timeout,
+            )
+            # 仅传输层失败(网络 -1 / 服务端 >=500)才重试；业务失败不重试
+            code = resp.get("code")
+            transport_fail = (not resp.get("success")) and (
+                code == -1 or (isinstance(code, int) and code >= 500))
+            if transport_fail and attempt < self.max_retries - 1:
+                time.sleep(1.5 ** attempt)
+                continue
+            break
 
-        self.last_raw = raw
-        ok = raw.get("status") == "SUCCESS"
+        self.last_raw = resp
+        if not resp.get("success"):
+            return {"success": False,
+                    "error": {"code": str(resp.get("code", "?")),
+                              "detail": resp.get("msg") or "(无 detail)"}}
+
+        inner = resp.get("data") or {}
+        status = inner.get("status")
+        ok = status == "SUCCESS"
         if ok:
             # 未命中(PROFILE:NOT_FOUND)实测不扣费,只在成功时累计
             self.estimated_spend += PRICING.get(function_name, 0.0)
-        return {"success": ok, **raw}
+            return {"success": True, "status": status,
+                    "data": inner.get("data"), "hint": inner.get("hint", "")}
+        return {"success": False, "status": status,
+                "error": inner.get("error") or {"code": "UNKNOWN",
+                                               "detail": inner.get("msg", "")}}
 
 
 def _compact(**kwargs) -> dict:
