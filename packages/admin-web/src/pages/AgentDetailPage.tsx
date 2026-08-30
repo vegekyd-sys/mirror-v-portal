@@ -594,6 +594,93 @@ export default function AgentDetailPage() {
     void loadLlmUsage();
   }, [loadLlmUsage]);
 
+  // ── 对话记录（dealclaw-chatlog 插件上报的 chat_messages） ──
+  interface ChatSession {
+    session_key: string;
+    message_count: number;
+    first_at: string;
+    last_at: string;
+    last_sender_name: string | null;
+    last_sender_open_id: string | null;
+  }
+  interface ChatMsg {
+    id: number;
+    direction: 'in' | 'out';
+    channel: string | null;
+    sender_open_id: string | null;
+    sender_name: string | null;
+    content: string;
+    session_key: string | null;
+    message_id: string | null;
+    run_id: string | null;
+    success: boolean | null;
+    created_at: string;
+  }
+  const [chatSessions, setChatSessions] = useState<ChatSession[] | null>(null);
+  const [chatTotal, setChatTotal] = useState(0);
+  const [chatOffset, setChatOffset] = useState(0);
+  const [chatSel, setChatSel] = useState('');
+  const [chatMsgs, setChatMsgs] = useState<ChatMsg[] | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatHideProactive, setChatHideProactive] = useState(true);
+
+  const loadChatSessions = useCallback(async (offset = 0) => {
+    setChatBusy(true);
+    try {
+      const r = await api<{ sessions: ChatSession[]; total: number }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/chat-messages/sessions?limit=20&offset=${offset}`,
+      );
+      setChatSessions(r.sessions);
+      setChatTotal(r.total);
+      setChatOffset(offset);
+    } catch {
+      setChatSessions([]);
+      setChatTotal(0);
+    } finally {
+      setChatBusy(false);
+    }
+  }, [tenantId]);
+
+  const loadChatMsgs = useCallback(async (sessionKey: string) => {
+    setChatBusy(true);
+    try {
+      const r = await api<{ messages: ChatMsg[]; total: number }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/chat-messages?sessionKey=${encodeURIComponent(sessionKey)}&limit=200`,
+      );
+      // API 返回最新在前，气泡视图按时间正序渲染
+      setChatMsgs([...r.messages].reverse());
+    } catch {
+      setChatMsgs([]);
+    } finally {
+      setChatBusy(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadChatSessions(0);
+  }, [loadChatSessions]);
+
+  const chatOpenSession = (sessionKey: string) => {
+    setChatSel(sessionKey);
+    setChatMsgs(null);
+    void loadChatMsgs(sessionKey);
+  };
+
+  /** 入站消息的发送者显示名：姓名快照 → 截短 open_id。 */
+  const chatSenderLabel = (m: ChatMsg): string => {
+    if (m.direction === 'out') return 'Agent';
+    if (m.sender_name) return m.sender_name;
+    if (m.sender_open_id) {
+      const oid = m.sender_open_id;
+      return oid.length > 16 ? `${oid.slice(0, 10)}…${oid.slice(-4)}` : oid;
+    }
+    return '未知用户';
+  };
+
+  const chatVisibleMsgs = (chatMsgs ?? []).filter(
+    (m) => !(chatHideProactive && m.direction === 'out' && !m.run_id),
+  );
+
   const saveLlmSelection = async () => {
     setLlmBusy(true);
     try {
@@ -1285,6 +1372,110 @@ export default function AgentDetailPage() {
               )}
               <div className="hint" style={{ marginBottom: 0 }}>
                 数据来自 nexus-gateway LLM 出口代理上报的 <span className="mono">llm_usage_events</span>（shadow 记账，不扣减 credits）。
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── 对话记录 ── */}
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        对话记录
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          {chatSessions === null ? (
+            <span className="hint" style={{ margin: 0 }}>加载中…</span>
+          ) : chatSessions.length === 0 ? (
+            <span className="hint" style={{ margin: 0 }}>
+              暂无记录（Agent 尚未收到消息，或 chatlog 插件未随最新镜像上线）
+            </span>
+          ) : (
+            <>
+              <div className="form-row" style={{ marginBottom: 10 }}>
+                <label className="field-label">会话（{chatTotal}）</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flex: 1 }}>
+                  {chatSessions.map((s) => (
+                    <button
+                      key={s.session_key}
+                      className={s.session_key === chatSel ? 'btn-primary' : 'btn-secondary'}
+                      style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => chatOpenSession(s.session_key)}
+                      title={s.session_key}
+                    >
+                      {s.last_sender_name
+                        || (s.last_sender_open_id && s.last_sender_open_id.length > 12
+                          ? `${s.last_sender_open_id.slice(0, 8)}…`
+                          : s.last_sender_open_id)
+                        || '未知'}
+                      （{s.message_count} 条）
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-row" style={{ marginBottom: 10 }}>
+                <label className="field-label">翻页</label>
+                <button className="btn-secondary" disabled={chatOffset === 0 || chatBusy}
+                  onClick={() => void loadChatSessions(Math.max(0, chatOffset - 20))}>
+                  上一页
+                </button>
+                <span className="hint" style={{ margin: 0 }}>
+                  第 {Math.floor(chatOffset / 20) + 1} / {Math.max(1, Math.ceil(chatTotal / 20))} 页
+                </span>
+                <button className="btn-secondary" disabled={chatOffset + 20 >= chatTotal || chatBusy}
+                  onClick={() => void loadChatSessions(chatOffset + 20)}>
+                  下一页
+                </button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginLeft: 16 }}>
+                  <input type="checkbox" checked={chatHideProactive}
+                    onChange={(e) => setChatHideProactive(e.target.checked)} />
+                  隐藏主动消息（cron/心跳推送）
+                </label>
+              </div>
+              {chatSel && (
+                <div style={{ border: '1px solid #e5e8f0', borderRadius: 8, padding: 12, background: '#fafbfe' }}>
+                  <div className="hint" style={{ marginBottom: 8 }}>
+                    会话 <span className="mono">{chatSel}</span>
+                  </div>
+                  {chatBusy && chatMsgs === null ? (
+                    <span className="hint" style={{ margin: 0 }}>加载中…</span>
+                  ) : chatVisibleMsgs.length === 0 ? (
+                    <span className="hint" style={{ margin: 0 }}>（当前过滤条件下无消息）</span>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 420, overflowY: 'auto' }}>
+                      {chatVisibleMsgs.map((m) => (
+                        <div key={m.id} style={{
+                          display: 'flex',
+                          justifyContent: m.direction === 'in' ? 'flex-start' : 'flex-end',
+                        }}>
+                          <div style={{
+                            maxWidth: '76%',
+                            padding: '8px 12px',
+                            borderRadius: 10,
+                            fontSize: 13,
+                            lineHeight: 1.55,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            background: m.direction === 'in' ? '#fff' : '#e8f1ff',
+                            border: '1px solid #e5e8f0',
+                          }}>
+                            <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                              {chatSenderLabel(m)}
+                              {' · '}
+                              {fmtTime(m.created_at)}
+                              {m.direction === 'out' && !m.run_id && ' · 主动消息'}
+                              {m.direction === 'out' && m.success === false && ' · 发送失败'}
+                            </div>
+                            {m.content}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="hint" style={{ marginBottom: 0 }}>
+                数据来自 agent 内 dealclaw-chatlog 插件上报的 <span className="mono">chat_messages</span>；发送者姓名为入库时快照（未开通通讯录权限时显示匿名 ID）。
               </div>
             </>
           )}

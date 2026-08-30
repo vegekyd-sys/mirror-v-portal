@@ -96,6 +96,14 @@ describe('write-config channels.feishu (P2)', () => {
     expect(config.plugins.entries['dealclaw-contact']?.enabled).toBe(true);
     expect(config.plugins.load.paths.some((p: string) => p.includes('dealclaw-contact'))).toBe(true);
   });
+
+  it('registers the dealclaw-chatlog plugin regardless of plane', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+    });
+    expect(config.plugins.entries['dealclaw-chatlog']?.enabled).toBe(true);
+    expect(config.plugins.load.paths.some((p: string) => p.includes('dealclaw-chatlog'))).toBe(true);
+  });
 });
 
 describe('write-config runtime tuning (queue / pruning / compaction / session)', () => {

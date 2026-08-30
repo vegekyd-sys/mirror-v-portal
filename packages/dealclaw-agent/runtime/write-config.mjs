@@ -191,6 +191,7 @@ if (messagePlane === 'openclaw' && !feishuDirect) {
 const pluginLoadPaths = [
   path.join(workspace, 'plugins', 'dealclaw-billing'),
   path.join(workspace, 'plugins', 'dealclaw-contact'),
+  path.join(workspace, 'plugins', 'dealclaw-chatlog'),
 ];
 if (feishuDirect && process.env.DEALCLAW_FEISHU_TRUSTED !== '1') pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
 
@@ -330,6 +331,9 @@ const config = {
         enabled: true,
       },
       'dealclaw-contact': {
+        enabled: true,
+      },
+      'dealclaw-chatlog': {
         enabled: true,
       },
       ...(feishuDirect ? { feishu: { enabled: true } } : {}),

@@ -8,6 +8,7 @@ import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
 import { createPodConsoleRoutes } from './routes/pod-console.js';
+import { createChatMessageRoutes } from './routes/chat-messages.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 
@@ -45,6 +46,9 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // terminal (exec) is NOT here: it is a WebSocket and attaches to the HTTP
   // server directly in index.ts (see ws/pod-exec.ts).
   app.use(createPodConsoleRoutes(pool, config, auth));
+  // Chat message log — ingest from the in-agent dealclaw-chatlog plugin +
+  // conversation-history queries for the admin console.
+  app.use(createChatMessageRoutes(pool, config, auth));
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(auth));

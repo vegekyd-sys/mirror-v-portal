@@ -1,0 +1,14 @@
+{
+  "id": "dealclaw-chatlog",
+  "name": "DealClaw Chat Log",
+  "description": "Reports every inbound/outbound message (full text, sender name snapshot) to provisioning-service so the admin console can render a per-agent conversation history.",
+  "version": "1.0.0",
+  "contracts": {},
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

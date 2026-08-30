@@ -174,6 +174,41 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_external_api_keys_status ON external_api_keys(status);
     `);
 
+    // Chat message log (v0.8): the in-agent dealclaw-chatlog plugin reports
+    // every inbound/outbound message (full text) so the admin console can
+    // render a conversation history per agent.
+    //   - direction: 'in' = user message, 'out' = agent reply.
+    //   - sender_name/username: snapshot at ingest time (contact API may be
+    //     unavailable or the org may rename people later); NULL when the
+    //     tenant's Feishu app lacks contact:user.base:readonly.
+    //   - run_id NULL/empty on outbound rows = proactive message (cron /
+    //     heartbeat), used by the UI to filter them out.
+    //   - Partial UNIQUE on message_id gives idempotent ingest: the plugin
+    //     is fire-and-forget and may retry after timeouts.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id              BIGSERIAL PRIMARY KEY,
+        tenant_id       TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        direction       TEXT NOT NULL CHECK (direction IN ('in','out')),
+        channel         TEXT,
+        sender_open_id  TEXT,
+        sender_name     TEXT,
+        sender_username TEXT,
+        content         TEXT NOT NULL,
+        session_key     TEXT,
+        message_id      TEXT,
+        run_id          TEXT,
+        success         BOOLEAN,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_tenant_msgid_uq
+        ON chat_messages(tenant_id, message_id) WHERE message_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_tenant_time
+        ON chat_messages(tenant_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_tenant_session
+        ON chat_messages(tenant_id, session_key, created_at DESC);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',
