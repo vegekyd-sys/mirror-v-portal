@@ -335,6 +335,10 @@ const config = {
       },
       'dealclaw-chatlog': {
         enabled: true,
+        // agent_end 属会话级钩子（读完整对话消息）：非 bundled 插件必须显式
+        // 声明 allowConversationAccess=true，否则注册时被安全门静默拦截
+        // （2026-08-31 Build #142 实证：typed hook "agent_end" blocked）。
+        hooks: { allowConversationAccess: true },
       },
       ...(feishuDirect ? { feishu: { enabled: true } } : {}),
     },

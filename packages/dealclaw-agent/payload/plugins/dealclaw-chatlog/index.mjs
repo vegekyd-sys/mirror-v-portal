@@ -19,8 +19,16 @@
  *   message_sending / message_sent / reply_payload_sending 在飞书回复路径
  *   **全部不触发**（探针三次零输出）。飞书回复走 feishu 插件自己的
  *   streaming-card 投递管线，不经核心 outbound 投递链；但每次 run 结束
- *   嵌入运行器（selection-*.js）必发 agent_end，事件里 messagesSnapshot
- *   与 Control UI 读的 session JSONL 同源——这是出站内容的可靠采集点。
+ *   运行器必发 agent_end，事件里 messages 快照与 Control UI 读的
+ *   session JSONL 同源——这是出站内容的可靠采集点。
+ *
+ * ⚠️ 注册前置条件（2026-08-31 Build #142 实证）：
+ *   agent_end 是会话级钩子，非 bundled 插件必须在 openclaw.json 的
+ *   plugins.entries.dealclaw-chatlog.hooks.allowConversationAccess=true
+ *   显式声明（write-config.mjs 已写入），否则钩子注册被安全门拦截：
+ *   `typed hook "agent_end" blocked because non-bundled plugins must set
+ *   plugins.entries.dealclaw-chatlog.hooks.allowConversationAccess=true`——
+ *   插件其余钩子（message_received）照常工作，只有 agent_end 静默失效。
  *
  * 工程约束（与 dealclaw-contact 一致）：
  *   - fire-and-forget：钩子内**不 await** report()——agent_end 侧在
