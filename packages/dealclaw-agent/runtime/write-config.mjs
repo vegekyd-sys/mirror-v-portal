@@ -323,6 +323,9 @@ const config = {
     elevated: { enabled: false },
   },
   plugins: {
+    // 只放行 feishu 非内置插件自动加载（PVC trusted 副本），
+    // 其余 npm projects 里发现的可插拔组件一律不自动加载。
+    allow: ['feishu'],
     load: {
       paths: pluginLoadPaths,
     },

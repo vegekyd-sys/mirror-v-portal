@@ -623,6 +623,8 @@ export default function AgentDetailPage() {
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[] | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatHideProactive, setChatHideProactive] = useState(true);
+  // 消息展示模式：默认列表，可切换对话气泡
+  const [chatView, setChatView] = useState<'list' | 'bubble'>('list');
 
   const loadChatSessions = useCallback(async (offset = 0) => {
     setChatBusy(true);
@@ -664,6 +666,12 @@ export default function AgentDetailPage() {
     setChatSel(sessionKey);
     setChatMsgs(null);
     void loadChatMsgs(sessionKey);
+  };
+
+  /** 刷新：重载会话列表；已选中会话时同时重载该会话最新消息。 */
+  const chatRefresh = () => {
+    void loadChatSessions(chatOffset);
+    if (chatSel) void loadChatMsgs(chatSel);
   };
 
   /** 入站消息的发送者显示名：姓名快照 → 截短 open_id。 */
@@ -1432,6 +1440,32 @@ export default function AgentDetailPage() {
                   隐藏主动消息（cron/心跳推送）
                 </label>
               </div>
+              <div className="form-row" style={{ marginBottom: 10 }}>
+                <label className="field-label">显示</label>
+                <button
+                  className={chatView === 'list' ? 'btn-primary' : 'btn-secondary'}
+                  style={{ fontSize: 12, padding: '4px 10px' }}
+                  onClick={() => setChatView('list')}
+                >
+                  列表
+                </button>
+                <button
+                  className={chatView === 'bubble' ? 'btn-primary' : 'btn-secondary'}
+                  style={{ fontSize: 12, padding: '4px 10px' }}
+                  onClick={() => setChatView('bubble')}
+                >
+                  对话气泡
+                </button>
+                <button
+                  className="btn-secondary"
+                  style={{ fontSize: 12, padding: '4px 10px', marginLeft: 'auto' }}
+                  disabled={chatBusy}
+                  onClick={chatRefresh}
+                  title="重载会话列表与当前会话最新消息"
+                >
+                  ↻ 刷新
+                </button>
+              </div>
               {chatSel && (
                 <div style={{ border: '1px solid #e5e8f0', borderRadius: 8, padding: 12, background: '#fafbfe' }}>
                   <div className="hint" style={{ marginBottom: 8 }}>
@@ -1441,6 +1475,48 @@ export default function AgentDetailPage() {
                     <span className="hint" style={{ margin: 0 }}>加载中…</span>
                   ) : chatVisibleMsgs.length === 0 ? (
                     <span className="hint" style={{ margin: 0 }}>（当前过滤条件下无消息）</span>
+                  ) : chatView === 'list' ? (
+                    <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>时间</th>
+                            <th>方向</th>
+                            <th>发送者</th>
+                            <th>内容</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {chatVisibleMsgs.map((m) => (
+                            <tr key={m.id}>
+                              <td style={{ fontSize: 11, color: '#777', whiteSpace: 'nowrap' }}>
+                                {fmtTime(m.created_at)}
+                              </td>
+                              <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {m.direction === 'in' ? '⬅ 入站' : '➡ 出站'}
+                              </td>
+                              <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {chatSenderLabel(m)}
+                              </td>
+                              <td style={{
+                                fontSize: 12,
+                                maxWidth: 520,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                              }}>
+                                {m.content}
+                                {(m.direction === 'out' && !m.run_id) && (
+                                  <span className="hint" style={{ margin: '0 0 0 6' }}>（主动消息）</span>
+                                )}
+                                {m.direction === 'out' && m.success === false && (
+                                  <span className="hint" style={{ margin: '0 0 0 6', color: '#c0392b' }}>（发送失败）</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 420, overflowY: 'auto' }}>
                       {chatVisibleMsgs.map((m) => (
