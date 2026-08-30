@@ -56,11 +56,12 @@ function defaultModelSpec(id, reasoning, vision) {
   };
 }
 
-// No built-in fallback provider: with an empty library the agent boots with
-// no model configured (admin must add providers in the console first).
-const providers = {};
-let primaryModel = null;
-let imageModel = null;
+  // No built-in fallback provider: with an empty library the agent boots with
+  // no model configured (admin must add providers in the console first).
+  const providers = {};
+  let primaryModel = null;
+  let imageModel = null;
+  const fallbackModels = [];
 
 if (llmDoc && llmDoc.providers.length > 0) {
   const exportLines = [];
@@ -83,6 +84,10 @@ if (llmDoc && llmDoc.providers.length > 0) {
       baseUrl: p.baseUrl.replace(/\/+$/, ''),
       api: 'openai-completions',
       apiKey: { source: 'env', provider: 'default', id: envName },
+      // Per-request idle timeout: cloud default is 120s which trips on slow
+      // upstreams; raise to 600s so transient stalls fall through to the
+      // fallback chain instead of hard-failing the turn.
+      timeoutSeconds: Number(process.env.DEALCLAW_LLM_PROVIDER_TIMEOUT_SECONDS || 600),
       models: p.models.map((m) => {
         const spec = typeof m === 'string' ? { id: m } : m;
         if (!spec || typeof spec.id !== 'string' || !spec.id) {
@@ -113,6 +118,27 @@ if (llmDoc && llmDoc.providers.length > 0) {
     primaryModel = `${first.name}/${first.models[0]?.id ?? ''}`;
   }
 
+  // ── Fallback chain (OpenClaw model failover) ───────────────────────
+  // llmDoc.fallbackModels: ordered '<provider>/<model>' refs. Fail-open:
+  // entries that no longer resolve are skipped with a warning (the blob is
+  // materialised server-side already filtered, this is belt-and-braces for
+  // hand-edited Secrets). The primary itself is excluded (no-op retry).
+  if (Array.isArray(llmDoc.fallbackModels)) {
+    for (const ref of llmDoc.fallbackModels) {
+      if (typeof ref !== 'string' || !ref || ref === primaryModel) continue;
+      const [pName, ...rest] = ref.split('/');
+      const modelId = rest.join('/');
+      if (!nextProviders[pName] || !nextProviders[pName].models.some((m) => m.id === modelId)) {
+        console.warn(`[dealclaw-runtime] LLM_PROVIDERS: fallbackModel ${ref} not found in configured providers — skipped`);
+        continue;
+      }
+      if (!fallbackModels.includes(ref)) fallbackModels.push(ref);
+    }
+    if (fallbackModels.length > 0) {
+      console.log(`[dealclaw-runtime] model fallback chain: ${fallbackModels.join(' -> ')}`);
+    }
+  }
+
   // ── Image (vision) model ────────────────────────────────────────────
   // llmDoc.imageModel is a '<provider>/<modelId>' ref; it must resolve to a
   // model marked vision: true, otherwise we fail closed (a mis-configured
@@ -140,10 +166,14 @@ if (llmDoc && llmDoc.providers.length > 0) {
 
 // ── Feishu channel (P2 direct connection) ─────────────────────────────
 // DEALCLAW_MESSAGE_PLANE=openclaw switches the tenant's message plane
-// from the nexus-gateway bridge to the official @openclaw/feishu plugin
-// (pre-baked at /opt/dealclaw/plugins/feishu — version-pinned to the base
-// image). Credentials come from the tenant's bot Secret (envFrom); the
-// appSecret is referenced by env id, never inlined into the config file.
+// from the nexus-gateway bridge to the official @openclaw/feishu plugin.
+// Preferred source: the trusted install managed by entrypoint.sh
+// (`openclaw plugins install` into the PVC state dir — trusted plugins get
+// openKeyedStore access, i.e. persistent feishu-dedup). Fallback: the
+// image-baked sideload copy at /opt/dealclaw/plugins/feishu (load.paths —
+// no trusted identity, dedup degrades to in-memory). Credentials come
+// from the tenant's bot Secret (envFrom); the appSecret is referenced by
+// env id, never inlined into the config file.
 const FEISHU_PLUGIN_DIR = '/opt/dealclaw/plugins/feishu/node_modules/@openclaw/feishu';
 const messagePlane = process.env.DEALCLAW_MESSAGE_PLANE || 'gateway';
 const feishuAppId = (process.env.DEALCLAW_APP_ID || '').trim();
@@ -162,7 +192,7 @@ const pluginLoadPaths = [
   path.join(workspace, 'plugins', 'dealclaw-billing'),
   path.join(workspace, 'plugins', 'dealclaw-contact'),
 ];
-if (feishuDirect) pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
+if (feishuDirect && process.env.DEALCLAW_FEISHU_TRUSTED !== '1') pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
 
 const deniedTools = [
   'message',
@@ -209,8 +239,22 @@ const config = {
   agents: {
     defaults: {
       workspace,
-      ...(primaryModel ? { model: { primary: primaryModel } } : {}),
+      ...(primaryModel
+        ? {
+            model: {
+              primary: primaryModel,
+              // OpenClaw model failover: on failover-worthy errors (timeout /
+              // rate limit / auth failure / provider outage) the turn retries
+              // with the next candidate; turn-local — next turn back to primary.
+              ...(fallbackModels.length > 0 ? { fallbacks: fallbackModels } : {}),
+            },
+          }
+        : {}),
       ...(imageModel ? { imageModel: { primary: imageModel } } : {}),
+      // Run-level ceiling: default is 300s which truncates long multi-tool
+      // tasks (e.g. find-buyers crawls). 900s accommodates them; provider
+      // idle timeouts stay lower (see provider timeoutSeconds below).
+      timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 900),
       // reasoning off (skip reasoning tokens — faster first-token + streaming)
       reasoningDefault: 'off',
       thinkingDefault: 'high',

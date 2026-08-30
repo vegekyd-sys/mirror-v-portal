@@ -40,6 +40,49 @@ if [[ -d /overlay ]]; then
   rsync -a --delete /overlay/ "$OPENCLAW_WORKSPACE_DIR/memory/customer/"
 fi
 
+# ── feishu 插件 trusted 安装（幂等）────────────────────────────────
+# openKeyedStore（feishu-dedup 持久化去重）只对 trusted 插件开放，而 trusted
+# 身份来自 `openclaw plugins install` 的安装记录（落在 PVC 的 state 目录，跨
+# 重启持久）。镜像内 /opt/dealclaw/plugins/feishu 的 npm 拷贝走 load.paths
+# sideload，拿不到 trusted 身份（上游 issue #92452）。
+# 启动时幂等确保已安装：版本 marker 匹配 → 跳过（零开销）；不匹配/缺失 →
+# 安装（首装约 15-20s，需 npm 出网）；失败 → 回退镜像内 sideload 副本
+# （功能可用，仅 dedup 降级内存去重）。DEALCLAW_FEISHU_TRUSTED 告知
+# write-config.mjs 是否需要把 sideload 路径写进 plugins.load.paths。
+FEISHU_PLUGIN_VERSION="2026.7.1"
+export DEALCLAW_FEISHU_TRUSTED=0
+feishu_bot_ready() {
+  [[ "${DEALCLAW_MESSAGE_PLANE:-gateway}" == "openclaw" \
+     && -n "${DEALCLAW_APP_ID:-}" && -n "${DEALCLAW_APP_SECRET:-}" \
+     && ! "${DEALCLAW_APP_ID}" == placeholder-* ]]
+}
+ensure_feishu_trusted() {
+  local marker="${OPENCLAW_STATE_DIR}/npm/.dealclaw-feishu-version"
+  if [[ -f "$marker" && "$(cat "$marker" 2>/dev/null || true)" == "$FEISHU_PLUGIN_VERSION" ]]; then
+    return 0
+  fi
+  local force=""
+  if compgen -G "${OPENCLAW_STATE_DIR}/npm/projects/openclaw-feishu-*" >/dev/null; then
+    force="--force" # 已有安装（旧版本或无 marker）→ 替换升级
+  fi
+  if openclaw plugins install "npm:@openclaw/feishu@${FEISHU_PLUGIN_VERSION}" $force >/dev/null 2>&1; then
+    mkdir -p "${OPENCLAW_STATE_DIR}/npm"
+    printf '%s' "$FEISHU_PLUGIN_VERSION" > "$marker"
+    echo "[dealclaw-runtime] feishu 插件 trusted 安装完成（v${FEISHU_PLUGIN_VERSION}）"
+    return 0
+  fi
+  if [[ -n "$force" ]]; then
+    # 升级失败但已有旧版 trusted 安装 → 继续用（避免回退 sideload 丢 dedup 持久化）
+    echo "[dealclaw-runtime] feishu 插件升级到 v${FEISHU_PLUGIN_VERSION} 失败，保留旧 trusted 安装" >&2
+    return 0
+  fi
+  echo "[dealclaw-runtime] feishu 插件 trusted 安装失败（无出网？），回退镜像内 sideload 副本" >&2
+  return 1
+}
+if feishu_bot_ready && ensure_feishu_trusted; then
+  export DEALCLAW_FEISHU_TRUSTED=1
+fi
+
 node /opt/dealclaw/runtime/write-config.mjs
 
 # ── lark-cli 初始化（bot 身份，非交互、幂等）─────────────────────────

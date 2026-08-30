@@ -9,6 +9,11 @@ FROM ghcr.io/openclaw/openclaw:2026.7.1
 
 # Feishu channel plugin — MUST match the base image's OpenClaw version
 # (plugins are version-coupled to the host runtime). Pinned, not `latest`.
+# This baked copy is the OFFLINE FALLBACK only: entrypoint.sh installs the
+# plugin via `openclaw plugins install` into the PVC state dir at first boot
+# (trusted identity → openKeyedStore / persistent feishu-dedup); when that
+# install fails (no egress) write-config.mjs falls back to this sideload
+# copy via plugins.load.paths (untrusted → in-memory dedup only).
 USER root
 RUN npm install --omit=dev --no-save --legacy-peer-deps \
       --prefix /opt/dealclaw/plugins/feishu \
