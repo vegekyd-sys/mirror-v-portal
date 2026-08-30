@@ -79,8 +79,25 @@ ensure_feishu_trusted() {
   echo "[dealclaw-runtime] feishu 插件 trusted 安装失败（无出网？），回退镜像内 sideload 副本" >&2
   return 1
 }
+# trusted 副本补丁：aochi Dockerfile 的 patch-feishu-latest-frame.mjs 只作用于
+# 镜像内 /opt 副本；trusted install 后网关加载 PVC 副本，必须对它重放同一补丁
+# （幂等：已打过则 markers 全中直接跳过）。失败仅告警不阻塞——插件功能不受
+# 影响，只是流式卡片吐字可能变慢。
+patch_feishu_trusted_copy() {
+  local dir=""
+  for d in "${OPENCLAW_STATE_DIR}"/npm/projects/openclaw-feishu-*/node_modules/@openclaw/feishu; do
+    [[ -d "$d" ]] && dir="$d" && break
+  done
+  [[ -n "$dir" ]] || return 1
+  if FEISHU_PLUGIN_ROOT="$dir" node /opt/dealclaw/runtime/patch-feishu-latest-frame.mjs; then
+    echo "[dealclaw-runtime] feishu trusted 副本已应用 latest-frame 补丁（${dir}）"
+  else
+    echo "[dealclaw-runtime] feishu trusted 副本补丁失败（bundle 变更？吐字可能变慢）" >&2
+  fi
+}
 if feishu_bot_ready && ensure_feishu_trusted; then
   export DEALCLAW_FEISHU_TRUSTED=1
+  patch_feishu_trusted_copy || true
 fi
 
 node /opt/dealclaw/runtime/write-config.mjs
