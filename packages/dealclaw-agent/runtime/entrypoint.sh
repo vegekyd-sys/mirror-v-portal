@@ -84,16 +84,18 @@ ensure_feishu_trusted() {
 # （幂等：已打过则 markers 全中直接跳过）。失败仅告警不阻塞——插件功能不受
 # 影响，只是流式卡片吐字可能变慢。
 patch_feishu_trusted_copy() {
-  local dir=""
+  local patched=0
   for d in "${OPENCLAW_STATE_DIR}"/npm/projects/openclaw-feishu-*/node_modules/@openclaw/feishu; do
-    [[ -d "$d" ]] && dir="$d" && break
+    # 残缺目录（无 dist）直接跳过，避免误报
+    [[ -d "$d/dist" ]] || continue
+    if FEISHU_PLUGIN_ROOT="$d" node /opt/dealclaw/runtime/patch-feishu-latest-frame.mjs; then
+      echo "[dealclaw-runtime] feishu trusted 副本已应用 latest-frame 补丁（${d}）"
+      patched=1
+    else
+      echo "[dealclaw-runtime] feishu trusted 副本补丁失败：${d}（bundle 变更？吐字可能变慢）" >&2
+    fi
   done
-  [[ -n "$dir" ]] || return 1
-  if FEISHU_PLUGIN_ROOT="$dir" node /opt/dealclaw/runtime/patch-feishu-latest-frame.mjs; then
-    echo "[dealclaw-runtime] feishu trusted 副本已应用 latest-frame 补丁（${dir}）"
-  else
-    echo "[dealclaw-runtime] feishu trusted 副本补丁失败（bundle 变更？吐字可能变慢）" >&2
-  fi
+  [[ $patched -eq 1 ]]
 }
 if feishu_bot_ready && ensure_feishu_trusted; then
   export DEALCLAW_FEISHU_TRUSTED=1
