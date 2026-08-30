@@ -75,7 +75,9 @@ export async function startFeishuRegistration(
         appPreset: APP_PRESET,
         addons: {
           preset: true,
-          scopes: { tenant: ['im:message:send_as_bot'], user: [] },
+          // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录
+          // 基本信息只读（feishu 插件解析发送者姓名必需，缺失会报 41050）。
+          scopes: { tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'], user: [] },
         } as lark.AppAddons,
         createOnly: true,
         signal: abortController.signal,
