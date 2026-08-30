@@ -111,10 +111,21 @@ export default definePluginEntry({
       }
     });
 
+    api.on('message_sending', async (event) => {
+      // 只读探针：验证 message_sending 是否在飞书回复路径触发（排查期临时）
+      console.log(`[dc-chatlog] probe message_sending fired: keys=${Object.keys(event ?? {}).join(',')} contentLen=${typeof event?.content === 'string' ? event.content.length : 'n/a'}`);
+    });
+
+    api.on('message_sent', async (event) => {
+      // 只读探针：验证 message_sent 是否在飞书回复路径触发（排查期临时）
+      console.log(`[dc-chatlog] probe message_sent fired: keys=${Object.keys(event ?? {}).join(',')} content=${typeof event?.content === 'string' ? event.content.slice(0, 30) : 'n/a'}`);
+    });
+
     api.on('reply_payload_sending', async (event, ctx) => {
       try {
         // 修改型钩子：返回 undefined，绝不 cancel / 改写 payload
         const payload = event?.payload;
+        console.log(`[dc-chatlog] reply_payload_sending fired: kind=${event?.kind} channel=${event?.channel} runId=${event?.runId ?? ctx?.runId ?? '-'} sessionKey=${event?.sessionKey ?? ctx?.sessionKey ?? '-'} textLen=${typeof payload?.text === 'string' ? payload.text.length : 'n/a'} payloadKeys=${payload ? Object.keys(payload).join(',') : '-'}`);
         const content = typeof payload?.text === 'string' ? payload.text : '';
         if (!content.trim()) return;
         const sessionKey = str(event?.sessionKey || ctx?.sessionKey, 256);
