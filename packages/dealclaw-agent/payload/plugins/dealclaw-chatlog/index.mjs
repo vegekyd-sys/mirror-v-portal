@@ -23,7 +23,9 @@
  *   合成 messageId）。
  *
  * 工程约束（与 dealclaw-contact 一致）：
- *   - fire-and-forget，绝不阻塞/失败消息主链路
+ *   - fire-and-forget：钩子内**不 await** report()——reply_payload_sending
+ *     是顺序修改型钩子，await 会让消息投递等上报完成，provisioning 卡顿
+ *     会直接拖慢用户收到回复（吐字慢回归）
  *   - reply_payload_sending 是修改型钩子，handler 必须返回 undefined——
  *     返回 {cancel} 或 {payload} 会吞掉/改写用户回复
  *   - 内存去重 messageId（重启后重报无害，端点按 (tenant_id, message_id)
@@ -92,7 +94,8 @@ export default definePluginEntry({
         if (!content.trim()) return;
         const messageId = str(event?.messageId, 128);
         if (seen(messageId)) return;
-        await report({
+        // 不 await：绝不阻塞消息主链路
+        void report({
           direction: 'in',
           channel: str(ctx?.channelId || event?.metadata?.originatingChannel, 32) || 'feishu',
           senderOpenId: str(ctx?.senderId || event?.senderId || event?.from || event?.metadata?.senderId, 128),
@@ -124,7 +127,8 @@ export default definePluginEntry({
           .slice(0, 12);
         const messageId = str(event?.messageId, 128) || `dc-out-${Date.now().toString(36)}-${contentHash}`;
         if (seen(messageId)) return;
-        await report({
+        // 不 await：reply_payload_sending 顺序执行，await 会拖慢回复投递
+        void report({
           direction: 'out',
           channel: str(event?.channel || ctx?.channelId, 32) || 'feishu',
           senderOpenId: null,
