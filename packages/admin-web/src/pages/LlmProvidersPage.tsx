@@ -43,10 +43,12 @@ interface LlmDoc {
   providers: LlmProvider[];
   defaultModel: string | null;
   imageModel: string | null;
+  /** 有序备用模型链（'<provider>/<model>'，最多 5 个，不含主模型）。 */
+  fallbackModels: string[];
 }
 
 export default function LlmProvidersPage() {
-  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null, imageModel: null });
+  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null, imageModel: null, fallbackModels: [] });
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -98,7 +100,13 @@ export default function LlmProvidersPage() {
   const load = useCallback(async () => {
     try {
       const r = await api<{ config: LlmDoc | null }>('/v1/admin/llm-providers');
-      setLlmDoc(r.config || { providers: [], defaultModel: null, imageModel: null });
+      // 老后端返回的 config 可能没有 fallbackModels 字段，做兼容回退
+      const cfg = r.config;
+      setLlmDoc(
+        cfg
+          ? { providers: cfg.providers, defaultModel: cfg.defaultModel, imageModel: cfg.imageModel, fallbackModels: cfg.fallbackModels ?? [] }
+          : { providers: [], defaultModel: null, imageModel: null, fallbackModels: [] },
+      );
       setError('');
     } catch (e) {
       setError(errMsg(e));
@@ -195,14 +203,19 @@ export default function LlmProvidersPage() {
     const imageModel = isVisionRefValid(providers, llmDoc.imageModel)
       ? llmDoc.imageModel
       : null;
-    setLlmDoc({ providers, defaultModel, imageModel });
+    // 模型列表可能变化（编辑供应商删掉某模型），同步清理失效的备用链引用
+    const fallbackModels = sanitizeFallbacks(providers, defaultModel, llmDoc.fallbackModels);
+    if (fallbackModels.length !== llmDoc.fallbackModels.length) {
+      flashLp('部分备用模型引用已因模型列表变化失效，已自动移除');
+    }
+    setLlmDoc({ providers, defaultModel, imageModel, fallbackModels });
     setLpEditing(null);
     setLpName('');
     setLpBaseUrl('');
     setLpApiKey('');
     setLpModels('');
     flashLp(lpEditing ? `正在更新供应商 ${name}…` : `正在写入供应商 ${name}…`);
-    void persistLibrary(providers, defaultModel, imageModel, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, fallbackModels, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
   };
 
   const editProvider = (p: LlmProvider) => {
@@ -226,7 +239,12 @@ export default function LlmProvidersPage() {
       imageModel = null;
       flashLp(`系统视觉模型 ${llmDoc.imageModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
     }
-    setLlmDoc({ providers, defaultModel, imageModel });
+    // 被移除供应商下的备用模型引用一并清掉
+    const fallbackModels = sanitizeFallbacks(providers, defaultModel, llmDoc.fallbackModels);
+    if (fallbackModels.length !== llmDoc.fallbackModels.length) {
+      flashLp(`备用链中 ${llmDoc.fallbackModels.filter((r) => !fallbackModels.includes(r)).join('、')} 属于被移除的供应商，已一并移除`);
+    }
+    setLlmDoc({ providers, defaultModel, imageModel, fallbackModels });
     if (lpEditing === name) {
       setLpEditing(null);
       setLpName('');
@@ -234,7 +252,7 @@ export default function LlmProvidersPage() {
       setLpApiKey('');
       setLpModels('');
     }
-    void persistLibrary(providers, defaultModel, imageModel, `移除供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, fallbackModels, `移除供应商 ${name}`);
   };
 
   /**
@@ -246,6 +264,7 @@ export default function LlmProvidersPage() {
     providers: LlmProvider[],
     defaultModel: string | null,
     imageModel: string | null,
+    fallbackModels: string[],
     opText: string,
   ) => {
     setBusy(true);
@@ -257,7 +276,7 @@ export default function LlmProvidersPage() {
       } else {
         const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
           method: 'PUT',
-          body: { providers, defaultModel, imageModel },
+          body: { providers, defaultModel, imageModel, fallbackModels },
         });
         flash(`${opText}，已生效。${r.push?.hint || ''}`);
         log(`${opText}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
@@ -271,6 +290,28 @@ export default function LlmProvidersPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 模型引用（'<provider>/<model>'）是否仍存在于供应商库。 */
+  const modelRefExists = (providers: LlmProvider[], ref: string): boolean => {
+    const [pName, ...rest] = ref.split('/');
+    const modelId = rest.join('/');
+    return providers.some((p) => p.name === pName && p.models.some((m) => m.id === modelId));
+  };
+
+  /**
+   * 清理备用模型链：剔除失效引用、与主模型相同的项，去重并截断到 5 个。
+   * 供应商增删/模型列表变化/切换默认模型后调用，保证提交给后端的链始终合法。
+   */
+  const sanitizeFallbacks = (providers: LlmProvider[], defaultModel: string | null, fallbacks: string[]): string[] => {
+    const out: string[] = [];
+    for (const ref of fallbacks) {
+      if (!ref || ref === defaultModel || out.includes(ref)) continue;
+      if (!modelRefExists(providers, ref)) continue;
+      out.push(ref);
+      if (out.length >= 5) break;
+    }
+    return out;
   };
 
   /** 视觉模型引用是否仍然有效（存在于库且标记了 vision）。 */
@@ -294,8 +335,14 @@ export default function LlmProvidersPage() {
       }
     }
     const imageModel = isVisionRefValid(llmDoc.providers, llmDoc.imageModel) ? llmDoc.imageModel : null;
-    setLlmDoc((d) => ({ ...d, defaultModel: next, imageModel }));
-    void persistLibrary(llmDoc.providers, next, imageModel, next ? `设置系统默认模型为 ${next}` : '清空系统默认模型');
+    // 新默认模型若在备用链中需移出（后端校验备用链不得包含主模型）
+    const removedFromChain = next !== null && llmDoc.fallbackModels.includes(next);
+    const fallbackModels = sanitizeFallbacks(llmDoc.providers, next, llmDoc.fallbackModels);
+    setLlmDoc((d) => ({ ...d, defaultModel: next, imageModel, fallbackModels }));
+    const opText = next
+      ? `设置系统默认模型为 ${next}${removedFromChain ? '（已从备用链移出）' : ''}`
+      : '清空系统默认模型';
+    void persistLibrary(llmDoc.providers, next, imageModel, fallbackModels, opText);
   };
 
   /** 切换系统视觉模型：替换已有值时弹确认，确认后即时保存。 */
@@ -310,7 +357,36 @@ export default function LlmProvidersPage() {
       }
     }
     setLlmDoc((d) => ({ ...d, imageModel: next }));
-    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, next, next ? `设置系统视觉模型为 ${next}` : '清空系统视觉模型');
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, next, llmDoc.fallbackModels, next ? `设置系统视觉模型为 ${next}` : '清空系统视觉模型');
+  };
+
+  /** 备用链变更统一入口：校验后即时保存（与默认/视觉模型一致的即时生效模式）。 */
+  const mutateFallbacks = (next: string[], opText: string) => {
+    const fallbackModels = sanitizeFallbacks(llmDoc.providers, llmDoc.defaultModel, next);
+    setLlmDoc((d) => ({ ...d, fallbackModels }));
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, llmDoc.imageModel, fallbackModels, opText);
+  };
+
+  const addFallback = (ref: string) => {
+    if (!ref) return;
+    if (llmDoc.fallbackModels.includes(ref)) return;
+    if (llmDoc.fallbackModels.length >= 5) {
+      flash('备用模型最多 5 个，请先移除部分条目', true);
+      return;
+    }
+    mutateFallbacks([...llmDoc.fallbackModels, ref], `添加备用模型 ${ref}`);
+  };
+
+  const removeFallback = (ref: string) => {
+    mutateFallbacks(llmDoc.fallbackModels.filter((r) => r !== ref), `移除备用模型 ${ref}`);
+  };
+
+  const moveFallback = (idx: number, delta: number) => {
+    const j = idx + delta;
+    if (j < 0 || j >= llmDoc.fallbackModels.length) return;
+    const next = [...llmDoc.fallbackModels];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    mutateFallbacks(next, `调整备用模型顺序（${next.join(' → ')}）`);
   };
 
   const libraryEmpty = llmDoc.providers.length === 0;
@@ -496,6 +572,74 @@ export default function LlmProvidersPage() {
             )}
           </select>
           <span className="hint">仅列出带 :vision 标记的模型（替换已有视觉模型会先弹确认）</span>
+        </div>
+        <div className="form-row" style={{ alignItems: 'flex-start' }}>
+          <label className="field-label" style={{ paddingTop: 8 }}>备用模型链</label>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {llmDoc.fallbackModels.length === 0 ? (
+              <div className="hint" style={{ margin: 0, marginBottom: 6 }}>
+                未配置。主模型调用失败（超时/限流/供应商故障）时按顺序自动切换备用模型，下一轮回到主模型。
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                {llmDoc.fallbackModels.map((ref, idx) => (
+                  <span
+                    key={ref}
+                    className="badge mono"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px' }}
+                    title={`第 ${idx + 1} 顺位备用模型`}
+                  >
+                    {idx + 1}. {ref}
+                    <button
+                      type="button"
+                      style={{ border: 'none', background: 'none', cursor: idx === 0 || busy ? 'default' : 'pointer', padding: 0, fontSize: 12, opacity: idx === 0 || busy ? 0.3 : 0.8 }}
+                      disabled={idx === 0 || busy}
+                      onClick={() => moveFallback(idx, -1)}
+                      title="上移"
+                    >↑</button>
+                    <button
+                      type="button"
+                      style={{ border: 'none', background: 'none', cursor: idx === llmDoc.fallbackModels.length - 1 || busy ? 'default' : 'pointer', padding: 0, fontSize: 12, opacity: idx === llmDoc.fallbackModels.length - 1 || busy ? 0.3 : 0.8 }}
+                      disabled={idx === llmDoc.fallbackModels.length - 1 || busy}
+                      onClick={() => moveFallback(idx, 1)}
+                      title="下移"
+                    >↓</button>
+                    <button
+                      type="button"
+                      style={{ border: 'none', background: 'none', cursor: busy ? 'default' : 'pointer', padding: 0, fontSize: 12, opacity: busy ? 0.3 : 0.8 }}
+                      disabled={busy}
+                      onClick={() => removeFallback(ref)}
+                      title="移除"
+                    >✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <select
+              value=""
+              onChange={(e) => addFallback(e.target.value)}
+              style={{ flex: '0 1 320px', display: 'block' }}
+              disabled={busy || libraryEmpty || llmDoc.fallbackModels.length >= 5}
+            >
+              <option value="">
+                {libraryEmpty ? '— 供应商库为空 —' : llmDoc.fallbackModels.length >= 5 ? '— 已达上限（5 个） —' : '+ 添加备用模型（触发切换时按顺序尝试） —'}
+              </option>
+              {llmDoc.providers.flatMap((p) =>
+                p.models.map((m) => {
+                  const ref = `${p.name}/${m.id}`;
+                  if (ref === llmDoc.defaultModel || llmDoc.fallbackModels.includes(ref)) return null;
+                  return (
+                    <option key={ref} value={ref}>
+                      {ref}
+                    </option>
+                  );
+                }),
+              )}
+            </select>
+            <span className="hint" style={{ display: 'block', marginTop: 4 }}>
+              最多 5 个；切换为 turn 级（下一轮对话回到主模型），保存后立即生效并推送所有租户
+            </span>
+          </div>
         </div>
       </div>
 

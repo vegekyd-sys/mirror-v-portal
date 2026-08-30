@@ -60,6 +60,15 @@ export interface LlmProvidersConfig {
   defaultModel: string | null;
   /** '<providerName>/<modelId>' — the agent's image-understanding (vision) model. */
   imageModel: string | null;
+  /**
+   * Ordered '<providerName>/<modelId>' fallback chain baked into the agent's
+   * `agents.defaults.model.fallbacks` (OpenClaw model failover). When the
+   * primary model fails over-worthy (timeout / rate limit / auth failure /
+   * provider outage), OpenClaw retries with the next candidate in order;
+   * the chain is turn-local — the next turn returns to the primary. Entries
+   * may cross providers. Empty = no fallback.
+   */
+  fallbackModels: string[];
 }
 
 /** A tenant's model selection: primary + image model refs into the library. */
@@ -80,6 +89,7 @@ const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 const MAX_PROVIDERS = 10;
 const MAX_MODELS = 20;
+const MAX_FALLBACK_MODELS = 5;
 
 export class LlmProvidersError extends Error {
   constructor(message: string) {
@@ -198,7 +208,30 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     }
   }
 
-  return { providers, defaultModel, imageModel };
+  const fallbackModels: string[] = [];
+  const fallbacksRaw = raw.fallbackModels;
+  if (fallbacksRaw !== undefined && fallbacksRaw !== null) {
+    if (!Array.isArray(fallbacksRaw)) {
+      throw new LlmProvidersError('fallbackModels 必须是数组');
+    }
+    if (fallbacksRaw.length > MAX_FALLBACK_MODELS) {
+      throw new LlmProvidersError(`备用模型最多 ${MAX_FALLBACK_MODELS} 个`);
+    }
+    for (const f of fallbacksRaw) {
+      const ref = str(f);
+      if (!ref) continue;
+      if (!modelExistsIn({ providers, defaultModel, imageModel, fallbackModels }, ref)) {
+        throw new LlmProvidersError(`备用模型 ${ref} 不在已配置的提供商/模型列表中`);
+      }
+      if (defaultModel && ref === defaultModel) {
+        throw new LlmProvidersError(`备用模型 ${ref} 与默认模型相同（备用链不应包含主模型）`);
+      }
+      if (fallbackModels.includes(ref)) continue; // 去重
+      fallbackModels.push(ref);
+    }
+  }
+
+  return { providers, defaultModel, imageModel, fallbackModels };
 }
 
 /** True when '<provider>/<modelId>' exists in the given provider doc. */
@@ -245,6 +278,21 @@ export function effectiveImageRefIn(
   if (imageSelection && visionModelExistsIn(doc, imageSelection)) return imageSelection;
   if (doc.imageModel && visionModelExistsIn(doc, doc.imageModel)) return doc.imageModel;
   return null;
+}
+
+/**
+ * The effective fallback chain for a tenant: the library's fallbackModels
+ * filtered down to entries that still resolve into the library, minus the
+ * tenant's effective primary (OpenClaw failover starts from the primary —
+ * a candidate equal to it would be a no-op retry of the same model).
+ */
+export function effectiveFallbacksIn(
+  doc: LlmProvidersConfig | null,
+  selection: string | null,
+): string[] {
+  if (!doc || doc.fallbackModels.length === 0) return [];
+  const primary = effectiveRefIn(doc, selection);
+  return doc.fallbackModels.filter((ref) => ref !== primary && modelExistsIn(doc, ref));
 }
 
 /**
@@ -318,10 +366,24 @@ export function tenantNeedsLlmRestart(
   if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
     return true;
   }
-  return (
+  if (
     providerCredentialSignature(prev, beforeImage) !==
     providerCredentialSignature(now, afterImage)
-  );
+  ) {
+    return true;
+  }
+
+  // Fallback chain: a changed chain (or changed credentials behind any of
+  // its models) must re-materialise the agent's fallbacks at boot.
+  const beforeFallbacks = effectiveFallbacksIn(prev, selDefault);
+  const afterFallbacks = effectiveFallbacksIn(now, selDefault);
+  if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) return true;
+  for (const ref of afterFallbacks) {
+    if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -422,6 +484,8 @@ export interface EffectiveLlmProviders {
   effectiveModel: string | null;
   /** imageSelection ?? globalConfig.imageModel ?? null */
   effectiveImageModel: string | null;
+  /** Library fallbacks minus the tenant's effective primary, resolvable only. */
+  effectiveFallbacks: string[];
   /** Serialised blob to inject as the LLM_PROVIDERS env var, or null. */
   blob: string | null;
 }
@@ -444,6 +508,7 @@ export async function resolveEffectiveLlmProviders(
       imageSelection: null,
       effectiveModel: null,
       effectiveImageModel: null,
+      effectiveFallbacks: [],
       blob: null,
     };
   }
@@ -463,10 +528,14 @@ export async function resolveEffectiveLlmProviders(
     imageSelection ?? (globalConfig.imageModel && visionModelExistsIn(globalConfig, globalConfig.imageModel)
       ? globalConfig.imageModel
       : null);
+  // Fallbacks are library-global but must exclude THIS tenant's effective
+  // primary (no-op retry) and any entry that no longer resolves.
+  const effectiveFallbacks = effectiveFallbacksIn(globalConfig, selection);
   const blob = JSON.stringify({
     ...globalConfig,
     defaultModel: effectiveModel,
     imageModel: effectiveImageModel,
+    fallbackModels: effectiveFallbacks,
   });
   return {
     globalConfig,
@@ -474,6 +543,7 @@ export async function resolveEffectiveLlmProviders(
     imageSelection,
     effectiveModel,
     effectiveImageModel,
+    effectiveFallbacks,
     blob,
   };
 }

@@ -275,9 +275,9 @@ export function createRuntimeConfigRoutes(
   // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
-      const { providers, defaultModel, imageModel } = req.body ?? {};
+      const { providers, defaultModel, imageModel, fallbackModels } = req.body ?? {};
 
-      const doc = validateLlmProviders({ providers, defaultModel, imageModel });
+      const doc = validateLlmProviders({ providers, defaultModel, imageModel, fallbackModels });
 
       // Snapshot the PREVIOUS library before overwriting — the differential
       // push uses it to roll only tenants whose live model actually changed.

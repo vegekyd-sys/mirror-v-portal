@@ -30,6 +30,7 @@ import {
   pushLlmProviders,
   effectiveRefIn,
   effectiveImageRefIn,
+  effectiveFallbacksIn,
   providerCredentialSignature,
   tenantNeedsLlmRestart,
   LLM_PROVIDERS_KEY,
@@ -235,6 +236,100 @@ describe('validateLlmProviders', () => {
   });
 });
 
+// ── fallbackModels validation ────────────────────────────────────────
+
+describe('validateLlmProviders fallbackModels', () => {
+  it('defaults to an empty chain and preserves a valid ordered chain', () => {
+    expect(validateLlmProviders(goodDoc).fallbackModels).toEqual([]);
+    const doc = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['glm/glm-4.5', 'qwen/qwq-plus'],
+    });
+    expect(doc.fallbackModels).toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
+  });
+
+  it('deduplicates and drops blank entries', () => {
+    const doc = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['glm/glm-4.5', '', 'glm/glm-4.5', 'qwen/qwq-plus'],
+    });
+    expect(doc.fallbackModels).toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
+  });
+
+  it('rejects references outside the configured providers', () => {
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, fallbackModels: ['kimi/moonshot'] }),
+    ).toThrow(/不在已配置的提供商\/模型列表中/);
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, fallbackModels: ['qwen/nope'] }),
+    ).toThrow(/不在已配置的提供商\/模型列表中/);
+  });
+
+  it('rejects the primary model inside the chain', () => {
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, fallbackModels: ['qwen/qwen-max'] }),
+    ).toThrow(/与默认模型相同/);
+  });
+
+  it('rejects more than 5 fallbacks and non-array values', () => {
+    const sixModelDoc = {
+      ...goodDoc,
+      imageModel: null,
+      providers: [
+        {
+          name: 'qwen',
+          baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          apiKey: 'sk-qwen',
+          models: ['qwen-max', 'm1', 'm2', 'm3', 'm4', 'm5'],
+        },
+        goodDoc.providers[1],
+      ],
+    };
+    expect(() =>
+      validateLlmProviders({
+        ...sixModelDoc,
+        fallbackModels: ['qwen/m1', 'qwen/m2', 'qwen/m3', 'qwen/m4', 'qwen/m5', 'glm/glm-4.5'],
+      }),
+    ).toThrow(/备用模型最多/);
+    expect(() =>
+      validateLlmProviders({ ...goodDoc, fallbackModels: 'glm/glm-4.5' } as any),
+    ).toThrow(/fallbackModels 必须是数组/);
+  });
+});
+
+// ── effectiveFallbacksIn ─────────────────────────────────────────────
+
+describe('effectiveFallbacksIn', () => {
+  const doc = validateLlmProviders({
+    ...goodDoc,
+    fallbackModels: ['glm/glm-4.5', 'qwen/qwq-plus', 'qwen/qwen-vl-plus'],
+  });
+
+  it('filters out the effective primary (selection wins)', () => {
+    // selection=glm → glm removed from chain
+    expect(effectiveFallbacksIn(doc, 'glm/glm-4.5')).toEqual(['qwen/qwq-plus', 'qwen/qwen-vl-plus']);
+    // no selection → global default qwen/qwen-max stays out of the chain anyway
+    expect(effectiveFallbacksIn(doc, null)).toEqual(['glm/glm-4.5', 'qwen/qwq-plus', 'qwen/qwen-vl-plus']);
+  });
+
+  it('drops refs that no longer resolve inside the document', () => {
+    // 存量数据可能漂移（例如库曾被别处改写）：校验只发生在 PUT 时，
+    // effectiveFallbacksIn 读取时必须防御性过滤失效引用。
+    const stale = {
+      providers: goodDoc.providers.filter((p) => p.name !== 'glm'),
+      defaultModel: 'qwen/qwen-max',
+      imageModel: 'qwen/qwen-vl-plus',
+      fallbackModels: ['glm/glm-4.5', 'qwen/qwq-plus'],
+    } as ReturnType<typeof validateLlmProviders>;
+    expect(effectiveFallbacksIn(stale, null)).toEqual(['qwen/qwq-plus']);
+  });
+
+  it('returns an empty chain for null docs or empty chains', () => {
+    expect(effectiveFallbacksIn(null, 'qwen/qwen-max')).toEqual([]);
+    expect(effectiveFallbacksIn(validateLlmProviders(goodDoc), null)).toEqual([]);
+  });
+});
+
 // ── library + selection resolution ───────────────────────────────────
 
 describe('resolveEffectiveLlmProviders', () => {
@@ -256,6 +351,25 @@ describe('resolveEffectiveLlmProviders', () => {
     expect(r.effectiveModel).toBe('qwen/qwen-max');
     expect(JSON.parse(r.blob!).defaultModel).toBe('qwen/qwen-max');
     expect(JSON.parse(r.blob!).providers).toHaveLength(2);
+    expect(r.effectiveFallbacks).toEqual([]);
+  });
+
+  it('materialises the fallback chain into the blob (minus the effective primary)', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({ ...goodDoc, fallbackModels: ['glm/glm-4.5', 'qwen/qwq-plus'] }),
+        },
+      ],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.effectiveModel).toBe('glm/glm-4.5');
+    // selection wins → primary glm removed from the chain
+    expect(r.effectiveFallbacks).toEqual(['qwen/qwq-plus']);
+    expect(JSON.parse(r.blob!).fallbackModels).toEqual(['qwen/qwq-plus']);
   });
 
   it('prefers a resolvable tenant selection over the global default', async () => {
@@ -403,6 +517,41 @@ describe('tenantNeedsLlmRestart', () => {
   it('identical libraries never require a restart; empty→empty neither', () => {
     expect(tenantNeedsLlmRestart(prev, prev, sel('glm/glm-4.5'))).toBe(false);
     expect(tenantNeedsLlmRestart(null, null, null)).toBe(false);
+  });
+
+  it('changing the fallback chain requires a restart for followers', () => {
+    const withChain = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['glm/glm-4.5'],
+    });
+    // chain added → the baked fallbacks in openclaw.json change
+    expect(tenantNeedsLlmRestart(prev, withChain, null)).toBe(true);
+    // chain removed → also a restart
+    expect(tenantNeedsLlmRestart(withChain, prev, null)).toBe(true);
+  });
+
+  it('a tenant whose selection equals a chain member is unaffected when the chain changes around it', () => {
+    // prev chain [glm], now chain [qwq]: tenant on glm primary sees chain
+    // [qwq] vs [] (glm filtered out as primary) → restart
+    const withOtherChain = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['qwen/qwq-plus'],
+    });
+    const prevChain = validateLlmProviders({ ...goodDoc, fallbackModels: ['glm/glm-4.5'] });
+    expect(tenantNeedsLlmRestart(prevChain, withOtherChain, sel('glm/glm-4.5'))).toBe(true);
+    // same doc, tenant selection qwen-max: chain [glm] vs [qwq] differ → restart
+    expect(tenantNeedsLlmRestart(prevChain, withOtherChain, sel('qwen/qwen-max'))).toBe(true);
+  });
+
+  it('rotating credentials of a fallback-chain provider requires a restart', () => {
+    const prevChain = validateLlmProviders({ ...goodDoc, fallbackModels: ['glm/glm-4.5'] });
+    const rotatedGlm = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['glm/glm-4.5'],
+      providers: goodDoc.providers.map((p) => (p.name === 'glm' ? { ...p, apiKey: 'k-glm-v2' } : p)),
+    });
+    // primary is qwen with unchanged credentials; only the fallback provider rotated
+    expect(tenantNeedsLlmRestart(prevChain, rotatedGlm, null)).toBe(true);
   });
 });
 
