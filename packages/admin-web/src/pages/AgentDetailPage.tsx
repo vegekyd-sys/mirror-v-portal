@@ -522,6 +522,9 @@ export default function AgentDetailPage() {
     effectiveModel: string | null;
     imageSelection: string | null;
     effectiveImageModel: string | null;
+    rawFallbackSelection: string[] | null;
+    effectiveFallbacks: string[];
+    globalFallbacks: string[];
     libraryEmpty: boolean;
     globalDefaultModel: string | null;
     globalImageModel: string | null;
@@ -536,6 +539,10 @@ export default function AgentDetailPage() {
   const [llmChoice, setLlmChoice] = useState('');
   const [llmImageChoice, setLlmImageChoice] = useState('');
   const [llmDirect, setLlmDirect] = useState(false);
+  // 备用模型链：false = 跟随系统默认链（存 null）；true = 本 Agent 单独配置。
+  const [llmFallbackOwn, setLlmFallbackOwn] = useState(false);
+  const [llmFallbacks, setLlmFallbacks] = useState<string[]>([]);
+  const [llmFallbackPick, setLlmFallbackPick] = useState('');
   const [llmBusy, setLlmBusy] = useState(false);
 
   const loadLlmSelection = useCallback(async () => {
@@ -553,6 +560,9 @@ export default function AgentDetailPage() {
       setLlmChoice(sel.selection || '');
       setLlmImageChoice(sel.imageSelection || '');
       setLlmDirect(sel.directMode === true);
+      setLlmFallbackOwn(sel.rawFallbackSelection !== null);
+      setLlmFallbacks(sel.rawFallbackSelection || []);
+      setLlmFallbackPick('');
     } catch {
       setLlmSel(null);
     }
@@ -589,13 +599,24 @@ export default function AgentDetailPage() {
     try {
       const r = await api<{ push?: { hint?: string } }>('/v1/admin/llm-providers/selection', {
         method: 'PUT',
-        body: { tenantId, defaultModel: llmChoice || null, imageModel: llmImageChoice || null, directMode: llmDirect },
+        body: {
+          tenantId,
+          defaultModel: llmChoice || null,
+          imageModel: llmImageChoice || null,
+          fallbackModels: llmFallbackOwn ? llmFallbacks : null,
+          directMode: llmDirect,
+        },
       });
       const parts: string[] = [];
       if (llmChoice) parts.push(`主模型：${llmChoice}`);
       else parts.push('主模型：跟随系统默认');
       if (llmImageChoice) parts.push(`视觉模型：${llmImageChoice}`);
       else parts.push('视觉模型：跟随系统默认');
+      if (llmFallbackOwn) {
+        parts.push(`备用链：${llmFallbacks.length ? llmFallbacks.join(' → ') : '不启用'}`);
+      } else {
+        parts.push('备用链：跟随系统默认');
+      }
       parts.push(`大模型接入：${llmDirect ? '直连上游（绕过网关）' : '经网关代理（含增值服务）'}`);
       flash(`已保存本 Agent 模型选择（${parts.join('；')}）。${r.push?.hint || ''}`);
       await loadLlmSelection();
@@ -604,6 +625,29 @@ export default function AgentDetailPage() {
     } finally {
       setLlmBusy(false);
     }
+  };
+
+  // 备用链操作：候选 = 全库模型 − 当前主模型选择 − 已在链中的引用。
+  const llmAllModels = llmLib.flatMap((p) => p.models.map((m) => `${p.name}/${m.id}`));
+  const llmPrimaryRef = llmChoice || llmSel?.globalDefaultModel || '';
+  const llmFallbackCandidates = llmAllModels.filter(
+    (ref) => ref !== llmPrimaryRef && !llmFallbacks.includes(ref),
+  );
+  const llmFallbackAdd = () => {
+    const ref = llmFallbackPick;
+    if (!ref || llmFallbacks.includes(ref) || llmFallbacks.length >= 5) return;
+    setLlmFallbacks([...llmFallbacks, ref]);
+    setLlmFallbackPick('');
+  };
+  const llmFallbackRemove = (ref: string) => {
+    setLlmFallbacks(llmFallbacks.filter((r) => r !== ref));
+  };
+  const llmFallbackMove = (idx: number, delta: -1 | 1) => {
+    const next = [...llmFallbacks];
+    const target = idx + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setLlmFallbacks(next);
   };
 
   // ── 运行镜像更新 ──
@@ -1034,7 +1078,14 @@ export default function AgentDetailPage() {
                 <label className="field-label">选择模型</label>
                 <select
                   value={llmChoice}
-                  onChange={(e) => setLlmChoice(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLlmChoice(v);
+                    // 新主模型若在备用链中需移出（后端校验会拒绝主模型出现在链里）
+                    if (v && llmFallbacks.includes(v)) {
+                      setLlmFallbacks(llmFallbacks.filter((r) => r !== v));
+                    }
+                  }}
                   style={{ flex: '0 1 320px' }}
                 >
                   <option value="">跟随系统默认（{llmSel.globalDefaultModel || '未设置'}）</option>
@@ -1067,6 +1118,97 @@ export default function AgentDetailPage() {
                   )}
                 </select>
                 <span className="hint">本 Agent 图片理解模型（view_image 等）</span>
+              </div>
+              <div className="form-row" style={{ alignItems: 'flex-start' }}>
+                <label className="field-label" style={{ paddingTop: 4 }}>备用模型链</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={!llmFallbackOwn}
+                      onChange={(e) => setLlmFallbackOwn(!e.target.checked)}
+                      disabled={llmBusy}
+                    />
+                    <span>
+                      跟随系统默认链（
+                      {llmSel.globalFallbacks.length
+                        ? llmSel.globalFallbacks.join(' → ')
+                        : '系统未配置'}
+                      ）
+                    </span>
+                  </label>
+                  {llmFallbackOwn && (
+                    <>
+                      {llmFallbacks.length === 0 ? (
+                        <span className="hint" style={{ margin: 0 }}>
+                          未添加备用模型（主模型失败时直接报错，不切换）
+                        </span>
+                      ) : (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {llmFallbacks.map((ref, i) => (
+                            <span key={ref} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {i > 0 && <span className="hint" style={{ margin: 0 }}>→</span>}
+                              <span className="badge badge-active mono">{ref}</span>
+                              <button
+                                className="btn-text"
+                                style={{ padding: '0 4px' }}
+                                disabled={llmBusy || i === 0}
+                                onClick={() => llmFallbackMove(i, -1)}
+                                title="上移"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                className="btn-text"
+                                style={{ padding: '0 4px' }}
+                                disabled={llmBusy || i === llmFallbacks.length - 1}
+                                onClick={() => llmFallbackMove(i, 1)}
+                                title="下移"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                className="btn-text"
+                                style={{ padding: '0 4px' }}
+                                disabled={llmBusy}
+                                onClick={() => llmFallbackRemove(ref)}
+                                title="移除"
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      {llmFallbacks.length < 5 && llmFallbackCandidates.length > 0 && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <select
+                            value={llmFallbackPick}
+                            onChange={(e) => setLlmFallbackPick(e.target.value)}
+                            style={{ flex: '0 1 320px' }}
+                            disabled={llmBusy}
+                          >
+                            <option value="">添加备用模型…</option>
+                            {llmFallbackCandidates.map((ref) => (
+                              <option key={ref} value={ref}>{ref}</option>
+                            ))}
+                          </select>
+                          <button
+                            className="btn-text"
+                            disabled={llmBusy || !llmFallbackPick}
+                            onClick={llmFallbackAdd}
+                          >
+                            添加
+                          </button>
+                        </span>
+                      )}
+                      <span className="hint" style={{ margin: 0 }}>
+                        主模型失败（超时/限流/鉴权/供应商故障）时按序切换，最多 5 个；下一轮对话回到主模型。当前生效链：
+                        {llmSel.effectiveFallbacks.length ? llmSel.effectiveFallbacks.join(' → ') : '（保存后更新）'}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
               <div className="form-row">
                 <label className="field-label">大模型接入</label>

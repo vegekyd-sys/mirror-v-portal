@@ -76,6 +76,14 @@ export interface TenantModelSelection {
   defaultModel: string | null;
   imageModel: string | null;
   /**
+   * Tenant-scoped override of the fallback chain. null → follow the global
+   * library chain; an array (possibly empty) → the tenant's own ordered
+   * '<provider>/<modelId>' chain (empty = never fall back). Unresolvable
+   * entries are dropped at resolve time, mirroring the global chain's
+   * fail-open semantics.
+   */
+  fallbackModels: string[] | null;
+  /**
    * True → configure the REAL upstream baseUrl + apiKey directly into the
    * agent's OpenClaw config, bypassing the nexus-gateway LLM egress proxy
    * (and its value-added interceptions). False (default) → baseUrl is
@@ -296,6 +304,22 @@ export function effectiveFallbacksIn(
 }
 
 /**
+ * The effective fallback chain for a tenant WITH its own override applied:
+ * selection.fallbackModels (when set) wins over the library chain, then the
+ * same filtering as effectiveFallbacksIn applies — drop the tenant's
+ * effective primary and entries that no longer resolve into the library.
+ */
+export function effectiveFallbacksFor(
+  doc: LlmProvidersConfig | null,
+  selection: TenantModelSelection | null,
+): string[] {
+  if (!doc) return [];
+  const primary = effectiveRefIn(doc, selection?.defaultModel ?? null);
+  const chain = selection?.fallbackModels ?? doc.fallbackModels;
+  return chain.filter((ref) => ref !== primary && modelExistsIn(doc, ref));
+}
+
+/**
  * Credential signature of the provider backing a model ref (baseUrl + apiKey).
  * Models are deliberately excluded: adding a model to a provider does not
  * invalidate the currently-running config of tenants not using that model.
@@ -373,10 +397,11 @@ export function tenantNeedsLlmRestart(
     return true;
   }
 
-  // Fallback chain: a changed chain (or changed credentials behind any of
-  // its models) must re-materialise the agent's fallbacks at boot.
-  const beforeFallbacks = effectiveFallbacksIn(prev, selDefault);
-  const afterFallbacks = effectiveFallbacksIn(now, selDefault);
+  // Fallback chain (tenant override-aware): a changed chain (or changed
+  // credentials behind any of its models) must re-materialise the agent's
+  // fallbacks at boot.
+  const beforeFallbacks = effectiveFallbacksFor(prev, selection);
+  const afterFallbacks = effectiveFallbacksFor(now, selection);
   if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) return true;
   for (const ref of afterFallbacks) {
     if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
@@ -436,7 +461,13 @@ export async function getTenantModelSelection(
       const imageModel =
         typeof parsed.imageModel === 'string' ? parsed.imageModel.trim() || null : null;
       const directMode = parsed.directMode === true;
-      return { defaultModel, imageModel, directMode };
+      // Array (even empty) = tenant's own chain; anything else = follow global.
+      const fallbackModels = Array.isArray(parsed.fallbackModels)
+        ? (parsed.fallbackModels as unknown[])
+            .filter((r): r is string => typeof r === 'string' && r.trim() !== '')
+            .map((r: string) => r.trim())
+        : null;
+      return { defaultModel, imageModel, fallbackModels, directMode };
     }
     return null;
   } catch {
@@ -480,11 +511,13 @@ export interface EffectiveLlmProviders {
   selection: string | null;
   /** Tenant's own image-model selection, if it resolves (vision). */
   imageSelection: string | null;
+  /** Tenant's own fallback chain override (null = follows the global chain). */
+  fallbackSelection: string[] | null;
   /** selection ?? globalConfig.defaultModel ?? null */
   effectiveModel: string | null;
   /** imageSelection ?? globalConfig.imageModel ?? null */
   effectiveImageModel: string | null;
-  /** Library fallbacks minus the tenant's effective primary, resolvable only. */
+  /** (fallbackSelection ?? library chain) minus the effective primary, resolvable only. */
   effectiveFallbacks: string[];
   /** Serialised blob to inject as the LLM_PROVIDERS env var, or null. */
   blob: string | null;
@@ -506,6 +539,7 @@ export async function resolveEffectiveLlmProviders(
       globalConfig: null,
       selection: null,
       imageSelection: null,
+      fallbackSelection: null,
       effectiveModel: null,
       effectiveImageModel: null,
       effectiveFallbacks: [],
@@ -514,8 +548,9 @@ export async function resolveEffectiveLlmProviders(
   }
   let selection: string | null = null;
   let imageSelection: string | null = null;
+  let sel: TenantModelSelection | null = null;
   if (tenantId) {
-    const sel = await getTenantModelSelection(pool, tenantId);
+    sel = await getTenantModelSelection(pool, tenantId);
     if (sel?.defaultModel && modelExistsIn(globalConfig, sel.defaultModel)) {
       selection = sel.defaultModel;
     }
@@ -528,9 +563,11 @@ export async function resolveEffectiveLlmProviders(
     imageSelection ?? (globalConfig.imageModel && visionModelExistsIn(globalConfig, globalConfig.imageModel)
       ? globalConfig.imageModel
       : null);
-  // Fallbacks are library-global but must exclude THIS tenant's effective
-  // primary (no-op retry) and any entry that no longer resolves.
-  const effectiveFallbacks = effectiveFallbacksIn(globalConfig, selection);
+  // Tenant override wins over the library chain; both are then filtered to
+  // exclude THIS tenant's effective primary (no-op retry) and entries that
+  // no longer resolve.
+  const fallbackSelection = sel?.fallbackModels ?? null;
+  const effectiveFallbacks = effectiveFallbacksFor(globalConfig, sel);
   const blob = JSON.stringify({
     ...globalConfig,
     defaultModel: effectiveModel,
@@ -541,6 +578,7 @@ export async function resolveEffectiveLlmProviders(
     globalConfig,
     selection,
     imageSelection,
+    fallbackSelection,
     effectiveModel,
     effectiveImageModel,
     effectiveFallbacks,

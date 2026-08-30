@@ -348,6 +348,9 @@ export function createRuntimeConfigRoutes(
         effectiveModel: eff.effectiveModel,
         imageSelection: eff.imageSelection,
         effectiveImageModel: eff.effectiveImageModel,
+        rawFallbackSelection: rawSelection?.fallbackModels ?? null,
+        effectiveFallbacks: eff.effectiveFallbacks,
+        globalFallbacks: library?.fallbackModels ?? [],
         libraryEmpty: !library || library.providers.length === 0,
         globalDefaultModel: library?.defaultModel ?? null,
         globalImageModel: library?.imageModel ?? null,
@@ -375,11 +378,14 @@ export function createRuntimeConfigRoutes(
       const libraryEmpty = !library || library.providers.length === 0;
 
       // Explicitly-provided keys (string OR null) override; missing keys keep
-      // the tenant's current value. null/'' clears that slot.
+      // the tenant's current value. null/'' clears that slot. fallbackModels
+      // is tri-state: missing → keep; null → follow the global chain; array
+      // → the tenant's own (possibly empty) chain.
       const body = (req.body ?? {}) as Record<string, unknown>;
       const hasDefaultKey = 'defaultModel' in body;
       const hasImageKey = 'imageModel' in body;
       const hasDirectKey = 'directMode' in body;
+      const hasFallbackKey = 'fallbackModels' in body;
 
       const ref = typeof body.defaultModel === 'string' ? body.defaultModel.trim() : '';
       const imgRef = typeof body.imageModel === 'string' ? body.imageModel.trim() : '';
@@ -399,8 +405,53 @@ export function createRuntimeConfigRoutes(
         ? body.directMode === true
         : current?.directMode === true;
 
-      if (nextDefault || nextImage || nextDirect) {
-        if (nextDefault && libraryEmpty) {
+      let nextFallbacks: string[] | null = hasFallbackKey
+        ? null
+        : current?.fallbackModels ?? null;
+      if (hasFallbackKey && body.fallbackModels !== null && body.fallbackModels !== undefined) {
+        if (!Array.isArray(body.fallbackModels)) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: 'fallbackModels 必须是数组（null=跟随系统默认链）',
+          });
+          return;
+        }
+        const MAX_FALLBACK_MODELS = 5;
+        if (body.fallbackModels.length > MAX_FALLBACK_MODELS) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: `备用模型最多 ${MAX_FALLBACK_MODELS} 个`,
+          });
+          return;
+        }
+        if (!libraryEmpty) {
+          const effectivePrimary = nextDefault ?? library?.defaultModel ?? null;
+          const chain: string[] = [];
+          for (const f of body.fallbackModels) {
+            const item = typeof f === 'string' ? f.trim() : '';
+            if (!item) continue;
+            if (!modelExistsIn(library!, item)) {
+              res.status(400).json({
+                code: 'VALIDATION',
+                message: `备用模型 ${item} 不在全局供应商库中（请重新选择）`,
+              });
+              return;
+            }
+            if (effectivePrimary && item === effectivePrimary) {
+              res.status(400).json({
+                code: 'VALIDATION',
+                message: `备用模型 ${item} 与本 Agent 的主模型相同（备用链不应包含主模型）`,
+              });
+              return;
+            }
+            if (!chain.includes(item)) chain.push(item);
+          }
+          nextFallbacks = chain;
+        }
+      }
+
+      if (nextDefault || nextImage || nextDirect || nextFallbacks) {
+        if ((nextDefault || nextFallbacks) && libraryEmpty) {
           res.status(400).json({
             code: 'VALIDATION',
             message: '供应商库为空：请先在「模型供应商」页添加供应商并设置默认模型',
@@ -424,9 +475,14 @@ export function createRuntimeConfigRoutes(
         await upsertRuntimeConfig(pool, {
           tenantId,
           key: LLM_MODEL_SELECTION_KEY,
-          value: JSON.stringify({ defaultModel: nextDefault, imageModel: nextImage, directMode: nextDirect }),
+          value: JSON.stringify({
+            defaultModel: nextDefault,
+            imageModel: nextImage,
+            fallbackModels: nextFallbacks,
+            directMode: nextDirect,
+          }),
           isSecret: false,
-          description: '租户模型选择（引用全局供应商库，默认跟随系统默认；directMode 控制是否绕过网关直连上游）',
+          description: '租户模型选择（引用全局供应商库，默认跟随系统默认；fallbackModels=null 跟随全局备用链；directMode 控制是否绕过网关直连上游）',
         });
       } else {
         // No model chosen and direct mode off — clear the selection row;
@@ -440,6 +496,7 @@ export function createRuntimeConfigRoutes(
         tenantId,
         selection: nextDefault,
         imageSelection: nextImage,
+        fallbackModels: nextFallbacks,
         directMode: nextDirect,
         push,
       });

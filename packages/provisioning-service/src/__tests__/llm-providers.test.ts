@@ -31,6 +31,7 @@ import {
   effectiveRefIn,
   effectiveImageRefIn,
   effectiveFallbacksIn,
+  effectiveFallbacksFor,
   providerCredentialSignature,
   tenantNeedsLlmRestart,
   LLM_PROVIDERS_KEY,
@@ -330,6 +331,38 @@ describe('effectiveFallbacksIn', () => {
   });
 });
 
+// ── effectiveFallbacksFor (tenant override) ─────────────────────────
+
+describe('effectiveFallbacksFor', () => {
+  const doc = validateLlmProviders({
+    ...goodDoc,
+    fallbackModels: ['glm/glm-4.5', 'qwen/qwq-plus'],
+  });
+
+  it('null selection falls back to the library chain', () => {
+    expect(effectiveFallbacksFor(doc, null)).toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
+    expect(effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: null, directMode: false }))
+      .toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
+  });
+
+  it('a tenant chain overrides the library chain (even when empty)', () => {
+    expect(
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: ['qwen/qwen-vl-plus'], directMode: false }),
+    ).toEqual(['qwen/qwen-vl-plus']);
+    // empty own chain = never fall back
+    expect(
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: [], directMode: false }),
+    ).toEqual([]);
+  });
+
+  it('filters the tenant primary and unresolvable refs out of the tenant chain', () => {
+    // primary = glm → dropped from chain; stale 'qwen/nope' dropped defensively
+    expect(
+      effectiveFallbacksFor(doc, { defaultModel: 'glm/glm-4.5', imageModel: null, fallbackModels: ['glm/glm-4.5', 'qwen/nope', 'qwen/qwq-plus'], directMode: false }),
+    ).toEqual(['qwen/qwq-plus']);
+  });
+});
+
 // ── library + selection resolution ───────────────────────────────────
 
 describe('resolveEffectiveLlmProviders', () => {
@@ -370,6 +403,49 @@ describe('resolveEffectiveLlmProviders', () => {
     // selection wins → primary glm removed from the chain
     expect(r.effectiveFallbacks).toEqual(['qwen/qwq-plus']);
     expect(JSON.parse(r.blob!).fallbackModels).toEqual(['qwen/qwq-plus']);
+  });
+
+  it('materialises the TENANT fallback chain when the tenant overrides it', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({ ...goodDoc, fallbackModels: ['glm/glm-4.5'] }),
+        },
+      ],
+      tenantSelectionRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({ defaultModel: 'qwen/qwen-max', fallbackModels: ['qwen/qwq-plus', 'qwen/qwen-vl-plus'] }),
+        },
+      ],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.fallbackSelection).toEqual(['qwen/qwq-plus', 'qwen/qwen-vl-plus']);
+    // tenant chain (not the library's [glm]) is what gets baked
+    expect(r.effectiveFallbacks).toEqual(['qwen/qwq-plus', 'qwen/qwen-vl-plus']);
+    expect(JSON.parse(r.blob!).fallbackModels).toEqual(['qwen/qwq-plus', 'qwen/qwen-vl-plus']);
+  });
+
+  it('an EMPTY tenant chain disables fallbacks even when the library has one', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [
+        {
+          encrypted_value:
+            'enc:' +
+            JSON.stringify({ ...goodDoc, fallbackModels: ['glm/glm-4.5'] }),
+        },
+      ],
+      tenantSelectionRow: [
+        { encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'qwen/qwen-max', fallbackModels: [] }) },
+      ],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.fallbackSelection).toEqual([]);
+    expect(r.effectiveFallbacks).toEqual([]);
+    expect(JSON.parse(r.blob!).fallbackModels).toEqual([]);
   });
 
   it('prefers a resolvable tenant selection over the global default', async () => {
@@ -452,7 +528,11 @@ describe('tenantNeedsLlmRestart', () => {
     expect(providerCredentialSignature(null, 'qwen/qwen-max')).toBeNull();
   });
 
-  const sel = (defaultModel: string | null, imageModel: string | null = null) => ({ defaultModel, imageModel, directMode: false });
+  const sel = (
+    defaultModel: string | null,
+    imageModel: string | null = null,
+    fallbackModels: string[] | null = null,
+  ) => ({ defaultModel, imageModel, fallbackModels, directMode: false });
 
   it('adding an unrelated provider does NOT require a restart', () => {
     expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);
@@ -552,6 +632,38 @@ describe('tenantNeedsLlmRestart', () => {
     });
     // primary is qwen with unchanged credentials; only the fallback provider rotated
     expect(tenantNeedsLlmRestart(prevChain, rotatedGlm, null)).toBe(true);
+  });
+
+  it('a tenant with its own chain is immune to GLOBAL chain changes', () => {
+    const withGlobalChain = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['glm/glm-4.5'],
+    });
+    const withOtherGlobalChain = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['qwen/qwq-plus'],
+    });
+    const tenantChain = sel('qwen/qwen-max', null, ['glm/glm-4.5']);
+    // library chain changed, but the tenant pinned its own chain → no restart
+    expect(tenantNeedsLlmRestart(withGlobalChain, withOtherGlobalChain, tenantChain)).toBe(false);
+    // same library, tenant chain present both sides → no restart
+    expect(tenantNeedsLlmRestart(withGlobalChain, withGlobalChain, tenantChain)).toBe(false);
+  });
+
+  it('a tenant with its own chain restarts when a chain provider credential rotates', () => {
+    const doc = validateLlmProviders({ ...goodDoc, fallbackModels: ['qwen/qwq-plus'] });
+    const rotated = validateLlmProviders({
+      ...goodDoc,
+      fallbackModels: ['qwen/qwq-plus'],
+      providers: goodDoc.providers.map((p) => (p.name === 'glm' ? { ...p, apiKey: 'k-glm-v2' } : p)),
+    });
+    // tenant chain [glm] (qwen/qwen-max primary); glm credentials rotated
+    expect(tenantNeedsLlmRestart(doc, rotated, sel('qwen/qwen-max', null, ['glm/glm-4.5']))).toBe(true);
+  });
+
+  it('a tenant chain referencing a removed provider shrinks and requires a restart', () => {
+    // library without glm; tenant chain [glm, qwq] → effective [qwq] → changed
+    expect(tenantNeedsLlmRestart(prev, withoutQwen, sel('qwen/qwen-max', null, ['glm/glm-4.5', 'qwen/qwq-plus']))).toBe(true);
   });
 });
 
