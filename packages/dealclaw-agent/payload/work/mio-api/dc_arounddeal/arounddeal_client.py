@@ -8,9 +8,6 @@ AroundDeal API Matrix 客户端 — Meorient
     from arounddeal_client import AroundDealClient
     client = AroundDealClient()
 
-    # 查余额(免费)
-    client.account_overview()
-
     # 公司画像 —— 务必优先传 linkedin_url,只传域名可能匹配到子品牌
     client.company_enrichment(linkedin_url="https://www.linkedin.com/company/microsoft/")
 
@@ -114,9 +111,7 @@ _load_env()
 # 仅用于成本估算和费用保护的报错文案,不参与实际计费(钱由服务端扣)。
 # ⚠️ 这是【上界】,实测偏高:$4.43 估 / $4.33 实扣、$0.81 估 / $0.61 实扣。
 #    原因至少有 people_enrichment 的分档计价,未逐项测准。
-#    要准确成本一律用 account_overview() 查余额差,别拿 estimated_spend 记账。
 PRICING: Dict[str, float] = {
-    "account_overview": 0.00,
     "contact_verification_email": 0.01,
     "contact_verification_phone": 0.02,
     "resume_enrichment": 0.10,
@@ -981,10 +976,6 @@ DEFAULT_SOURCING_TITLES = [
 # 旧 function_name → (gateway path, body 字段映射, 需转逗号串的字段, 额外固定字段)。
 # 语义与旧 AroundDeal 直连保持一致，仅底层换成 blade-agent-adapter（防 key 泄漏）。
 _GATEWAY: Dict[str, Dict[str, Any]] = {
-    "account_overview": {
-        "path": "/agent/arounddeal/accountBalance.json",
-        "fields": {},
-    },
     "company_enrichment": {
         "path": "/agent/arounddeal/companyEnrichment.json",
         "fields": {"linkedin_url": "linkedinUrl", "website": "website", "name": "name"},
@@ -1115,22 +1106,10 @@ class AroundDealClient:
         #: 若确认某个字典外取值合法,加进对应集合而不是关掉 strict。
         self.strict = strict
         #: 本实例累计的估算花费(USD)。【上界,实测偏高约 2~25%】,
-        #: 只用于粗略感知,不可当账 —— 真实成本查 account_overview()。
+        #: 只用于粗略感知,不可当账。
         self.estimated_spend = 0.0
         #: 最近一次调用的完整响应包,排查用
         self.last_raw: Any = None
-
-    # ── 账户 ──────────────────────────────────────────────
-
-    def account_overview(self) -> dict:
-        """查询账户余额,不计费。"""
-        return self._call("account_overview", {})
-
-    def balance(self) -> Optional[float]:
-        r = self.account_overview()
-        if not r.get("success"):
-            return None
-        return float(r.get("data", {}).get("balance", 0))
 
     # ── Enrichment ────────────────────────────────────────
 
@@ -1414,14 +1393,11 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("用法:")
-        print("  python arounddeal_client.py --balance")
-        print("    查账户余额(免费)")
         print("  python arounddeal_client.py <linkedin_url|domain> [--enrich|--sourcing|--brand|--orgchart]")
         print("    公司画像 / 找采购决策人 / 找高管 / 组织架构")
         print("  python arounddeal_client.py --companies <keyword> [--country US] [--employees D]")
         print("    按关键词搜公司")
         print("示例:")
-        print("  python arounddeal_client.py --balance")
         print("  python arounddeal_client.py https://www.linkedin.com/company/microsoft/ --sourcing")
         print("  python arounddeal_client.py --companies Technology --country US --employees D")
         sys.exit(1)
@@ -1429,16 +1405,6 @@ if __name__ == "__main__":
     def _fail(r: dict) -> str:
         e = r.get("error") or {}
         return "{}: {}".format(e.get("code", "?"), e.get("detail", "") or "(无 detail)")
-
-    # ── 余额 ──
-    if sys.argv[1] == "--balance":
-        r = client.account_overview()
-        if r.get("success"):
-            d = r["data"]
-            print("✅ {} | 余额 {} {}".format(d.get("user"), d.get("balance"), d.get("currency")))
-        else:
-            print("❌ {}".format(_fail(r)))
-        sys.exit(0)
 
     # ── 公司搜索 ──
     if sys.argv[1] == "--companies":
