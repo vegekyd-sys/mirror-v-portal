@@ -183,6 +183,9 @@ describe('bindTenantFeishuApp', () => {
     expect(r.agentUrl).toBe('http://dealclaw-agent.dealclaw-nexus-production:18789');
     const update = pool.queries.find((q: FakeQuery) => q.sql.includes('UPDATE tenants SET app_id'));
     expect(update?.params).toEqual(['cli_abc123', 'secret123', 'default']);
+    // Rebinding must invalidate the old app's captured contact (open_id is
+    // app-scoped in Feishu — the old value is a dead identity under the new bot).
+    expect(update?.sql).toContain('im_open_id = NULL');
   });
 
   it('binds a regular tenant into its own namespace (dry-run)', async () => {
@@ -224,6 +227,9 @@ describe('unbindTenantFeishuApp', () => {
     expect(r.restarted).toBe(false);
     const update = pool.queries.find((q: FakeQuery) => q.sql.includes('app_id = NULL'));
     expect(update?.params).toEqual(['default']);
+    // Unbinding must clear the captured contact too — no bot is bound, so
+    // any previously captured open_id is meaningless for notifications.
+    expect(update?.sql).toContain('im_open_id = NULL');
   });
 });
 

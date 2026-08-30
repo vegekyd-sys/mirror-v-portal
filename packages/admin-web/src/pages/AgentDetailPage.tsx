@@ -350,6 +350,30 @@ export default function AgentDetailPage() {
     }
   };
 
+  // 通知联系人 = 绑定后第一个私聊机器人的人（first-capture-wins，后端锁定）。
+  // 锁定错误时管理员在此重置，下一个私聊的人重新成为联系人。
+  const resetContact = async () => {
+    if (
+      !window.confirm(
+        '确认重置通知联系人？\n重置后，生命周期通知（低余额、停机提醒等）将暂停投递，直到下一个私聊该机器人的人重新成为联系人。',
+      )
+    )
+      return;
+    setFsBusy(true);
+    try {
+      await api<{ ok?: boolean }>(
+        `/v1/tenants/${encodeURIComponent(tenantId)}/contact`,
+        { method: 'DELETE' },
+      );
+      flash('通知联系人已重置，等待下一个私聊用户重新捕获');
+      await loadBinding();
+    } catch (e) {
+      flash(`重置失败：${errMsg(e)}`);
+    } finally {
+      setFsBusy(false);
+    }
+  };
+
   // ── Skill 环境变量（.env） ──
   const [skillEnv, setSkillEnv] = useState<SkillEnvEntry[] | null>(null);
   const [seKey, setSeKey] = useState('');
@@ -1147,9 +1171,19 @@ export default function AgentDetailPage() {
                 <span className="badge badge-active">已绑定</span>
                 <span className="mono" style={{ fontSize: 12 }}>{fsBinding.appId}</span>
                 {fsBinding.imOpenId && (
-                  <span className="hint" style={{ margin: 0 }}>
-                    通知联系人 open_id：{fsBinding.imOpenId.slice(0, 12)}…
-                  </span>
+                  <>
+                    <span className="hint" style={{ margin: 0 }}>
+                      通知联系人 open_id：{fsBinding.imOpenId.slice(0, 12)}…
+                    </span>
+                    <button
+                      className="btn-secondary"
+                      disabled={fsBusy}
+                      style={{ flex: '0 0 auto' }}
+                      onClick={() => void resetContact()}
+                    >
+                      重置联系人
+                    </button>
+                  </>
                 )}
                 <button className="btn-danger" disabled={fsBusy} onClick={() => void unbindFeishu()}>
                   解绑
@@ -1191,6 +1225,7 @@ export default function AgentDetailPage() {
             </button>
           </div>
           <div className="hint">
+            通知联系人 = 绑定后<b>第一个私聊机器人的人</b>（锁定后不随他人消息变化，群聊消息不参与捕获；换绑/解绑自动清空，需重新捕获）。
             {tenant?.status === 'pending'
               ? '开通 Agent = 保存凭据 + 自动完成 K8s 开通（gateway 出口代理 + agent 内 @openclaw/feishu 插件直连飞书）。要求应用已启用「机器人」能力并开启「长连接」接收模式。'
               : '绑定后该 Agent 即可在飞书中对话：网关通过长连接接入飞书，无需公网回调。要求应用已启用「机器人」能力并开启「长连接」接收模式。绑定时会先向飞书校验凭据，校验通过才生效；同一应用同时只能绑定一个 Agent。'}

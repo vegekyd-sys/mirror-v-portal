@@ -213,9 +213,15 @@ export async function bindTenantFeishuApp(
   // 1. Verify against the Feishu open API before touching anything.
   const verified = await verifyFeishuApp(appId, appSecret, fetchImpl);
 
-  // 2. Persist on the tenants row.
+  // 2. Persist on the tenants row. im_open_id is cleared: open_id is
+  //    app-scoped in Feishu, so the old app's captured contact is an
+  //    invalid identity under the new bot — the notify relay must not
+  //    keep delivering lifecycle notifications to it. The next person
+  //    to DM the new bot re-captures (first-capture-wins, see
+  //    routes/tenants.ts PATCH /contact).
   await pool.query(
-    `UPDATE tenants SET app_id = $1, app_secret = $2, platform = 'feishu', updated_at = NOW()
+    `UPDATE tenants SET app_id = $1, app_secret = $2, platform = 'feishu',
+      im_open_id = NULL, updated_at = NOW()
       WHERE tenant_id = $3`,
     [appId, appSecret, tenantId],
   );
@@ -443,8 +449,13 @@ export async function unbindTenantFeishuApp(
     }
   }
 
+  // im_open_id cleared alongside the unbind: no bot is bound, so any
+  // previously captured contact is meaningless (and would make the notify
+  // relay deliver to a dead identity if the tenant re-binds later without
+  // the clear happening in between).
   await pool.query(
-    `UPDATE tenants SET app_id = NULL, app_secret = NULL, platform = 'web', updated_at = NOW()
+    `UPDATE tenants SET app_id = NULL, app_secret = NULL, platform = 'web',
+      im_open_id = NULL, updated_at = NOW()
       WHERE tenant_id = $1`,
     [tenantId],
   );

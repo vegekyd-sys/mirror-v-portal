@@ -575,10 +575,17 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
 
-  // PATCH /v1/tenants/:id/contact — write back IM contact captured by nexus-gateway
-  // (sender open_id of the first bot message). Used by the notify relay to
-  // deliver lifecycle notifications. Does NOT bump updated_at — ops-agent
-  // derives daysInCurrentStatus from it.
+  // PATCH /v1/tenants/:id/contact — write back IM contact captured by the
+  // in-agent dealclaw-contact plugin (sender open_id of the first DM).
+  // Used by the notify relay to deliver lifecycle notifications.
+  //
+  // First-capture-wins: the UPDATE only lands while im_open_id IS NULL, so
+  // the notification contact is the FIRST person to DM the bot after
+  // binding/rebinding (almost always the binding admin), and can never be
+  // overwritten by other employees' later messages or by pod-restart
+  // re-reports. A captured contact can only change via rebind or the
+  // DELETE /contact reset endpoint below.
+  // Does NOT bump updated_at — ops-agent derives daysInCurrentStatus from it.
   router.patch("/v1/tenants/:id/contact", async (req, res) => {
     try {
       const { platform, imOpenId } = req.body ?? {};
@@ -588,10 +595,37 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
       const safePlatform = ['feishu', 'dingtalk', 'wecom'].includes(platform) ? platform : 'feishu';
       const result = await pool.query(
-        "UPDATE tenants SET platform=$1, im_open_id=$2 WHERE tenant_id=$3",
+        "UPDATE tenants SET platform=$1, im_open_id=$2 WHERE tenant_id=$3 AND im_open_id IS NULL",
         [safePlatform, imOpenId.trim().slice(0, 128), req.params.id],
       );
+      if (result.rowCount === 0) {
+        // Distinguish "tenant missing" from "contact already captured".
+        const { rows } = await pool.query(
+          "SELECT im_open_id FROM tenants WHERE tenant_id=$1", [req.params.id],
+        );
+        if (!rows.length) { res.status(404).json({ code: "NOT_FOUND" }); return; }
+        res.json({ ok: true, captured: false });
+        return;
+      }
+      res.json({ ok: true, captured: true });
+    } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
+  });
+
+  // DELETE /v1/tenants/:id/contact — reset the notification contact.
+  // Admin-console escape hatch for "wrong person got captured" (e.g. an
+  // employee DM'd the bot before the binding admin did): clears im_open_id
+  // so the next DM re-captures (first-capture-wins).
+  router.delete("/v1/tenants/:id/contact", async (req, res) => {
+    try {
+      const result = await pool.query(
+        "UPDATE tenants SET im_open_id = NULL, updated_at = NOW() WHERE tenant_id=$1",
+        [req.params.id],
+      );
       if (result.rowCount === 0) { res.status(404).json({ code: "NOT_FOUND" }); return; }
+      await pool.query(
+        "INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)",
+        [req.params.id, 'active', 'Notification contact reset from admin console'],
+      );
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
