@@ -9,7 +9,7 @@ export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18790}"
 export OPENCLAW_RUNTIME_URL="${OPENCLAW_RUNTIME_URL:-http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}}"
 export OPENCLAW_AGENT_ID="${OPENCLAW_AGENT_ID:-dealclaw}"
 
-mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR/memory/customer" "$OPENCLAW_WORKSPACE_DIR/work/mio-api/data"
+mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR/memory/customer" "$OPENCLAW_WORKSPACE_DIR/work/mio-api/data" "$OPENCLAW_WORKSPACE_DIR/data"
 
 # Base payload is immutable in the image. Refresh it exactly on every start,
 # while preserving only the declared customer-mutable paths.
@@ -17,6 +17,7 @@ rsync -a --delete \
   --exclude='/memory/customer/' \
   --exclude='/work/mio-api/data/' \
   --exclude='/work/mio-api/.env' \
+  --exclude='/data/' \
   /opt/dealclaw/payload/ "$OPENCLAW_WORKSPACE_DIR/"
 rm -rf "$OPENCLAW_WORKSPACE_DIR/node_modules"
 ln -s /opt/dealclaw/runtime/dependencies/node_modules "$OPENCLAW_WORKSPACE_DIR/node_modules"
