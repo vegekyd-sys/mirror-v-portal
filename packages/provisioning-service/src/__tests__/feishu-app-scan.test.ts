@@ -1,4 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+/**
+ * Mock the Feishu SDK at the network edge so the DEFAULT registerApp
+ * implementation can be exercised for real (no injection) and we can
+ * capture the exact scopes handed to Feishu when creating the app.
+ */
+const larkMocks = vi.hoisted(() => ({
+  registerApp: vi.fn(),
+  lastAddons: undefined as unknown,
+}));
+
+vi.mock('@larksuiteoapi/node-sdk', () => ({
+  registerApp: larkMocks.registerApp,
+}));
 
 /**
  * FeishuAppScanStore unit tests — registerApp is injected as a fake, so no
@@ -185,5 +199,38 @@ describe('feishu-app-scan routes', () => {
     const app = makeApp(new FeishuAppScanStore(makeFakeRegisterApp()));
     await request(app).post('/v1/admin/feishu-app/scan/cancel').send({}).expect(400);
     await request(app).post('/v1/admin/feishu-app/scan/cancel').send({ deviceCode: 'x' }).expect(404);
+  });
+});
+
+// ── Default registerApp → Feishu scopes (guards against scope drift) ────────
+
+describe('default registerApp scopes', () => {
+  it('requests im:message:send_as_bot + contact:user.base:readonly tenant scopes', async () => {
+    larkMocks.registerApp.mockImplementation((opts: any) => {
+      larkMocks.lastAddons = opts.addons;
+      opts.onQRCodeReady?.({ url: 'https://open.feishu.cn/device?user_code=DCSCOPES', expireIn: 600 });
+      return Promise.resolve({ client_id: 'cli_scopes', client_secret: 'sec_scopes' });
+    });
+
+    // Default store — no injection, so defaultRegisterApp (the real preset
+    // with the mocked SDK) is what actually runs.
+    const store = new FeishuAppScanStore();
+    const session = await store.start();
+    await session._completionPromise;
+
+    expect(session.status).toBe('completed');
+    expect(larkMocks.registerApp).toHaveBeenCalledTimes(1);
+    expect(larkMocks.lastAddons).toMatchObject({
+      preset: true,
+      scopes: {
+        tenant: expect.arrayContaining(['im:message:send_as_bot', 'contact:user.base:readonly']),
+        user: [],
+      },
+    });
+    // Exact match — fails loudly if anyone edits the scopes on one side only.
+    expect((larkMocks.lastAddons as { scopes: { tenant: string[] } }).scopes.tenant).toEqual([
+      'im:message:send_as_bot',
+      'contact:user.base:readonly',
+    ]);
   });
 });

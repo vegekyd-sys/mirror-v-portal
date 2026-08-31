@@ -52,6 +52,21 @@ const APP_PRESET = {
   desc: 'AI-powered sales assistant for global trade — 全天候帮你找客户、写邮件、跟线索',
 };
 
+/**
+ * Addons requested from Feishu when creating the app via registerApp.
+ *
+ * MUST stay in sync with packages/central-gateway/src/services/feishu-register.ts:
+ *  - im:message:send_as_bot           — send messages as the bot
+ *  - contact:user.base:readonly       — read sender basic info (feishu plugin
+ *    needs this to resolve the sender name; missing it → Feishu error 41050)
+ *
+ * Exported so tests can assert the exact scopes handed to Feishu.
+ */
+export const APP_ADDONS: lark.AppAddons = {
+  preset: true,
+  scopes: { tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'], user: [] },
+};
+
 /** Sessions are dropped after 20 min (QR codes expire well before that). */
 export const SCAN_SESSION_TTL_MS = 20 * 60 * 1000;
 /** Completed sessions linger briefly so the polling browser still sees the result. */
@@ -81,10 +96,7 @@ async function defaultRegisterApp(handlers: RegisterAppHandlers) {
     onQRCodeReady: handlers.onQRCodeReady,
     onStatusChange: handlers.onStatusChange,
     appPreset: APP_PRESET,
-    addons: {
-      preset: true,
-      scopes: { tenant: ['im:message:send_as_bot'], user: [] },
-    } as lark.AppAddons,
+    addons: APP_ADDONS,
     createOnly: true,
     signal: handlers.signal,
   }) as unknown as Promise<{ client_id: string; client_secret: string }>;
