@@ -83,7 +83,7 @@ MEMORY.md                # 长期记忆索引
 |------|-----------|
 | 拉已有 | 进展会场景即静默：supplier ID → getBasicInfo + kb.json + orderRecords；只问真缺的，不重复问已知 |
 | 给判断 | 信息够支撑结论时先下结论让客户 yes/no，优先于提问 |
-| 补缺口 | 判断真缺关键输入时，一次只问一个最影响判断的项 |
+| 补缺口 | 判断真缺关键输入时，一次只问一个最影响判断的项；**用户确认后直接落库**——企业画像 `dc_kb_engine.seed_profile`、展览信息 `exhibition_assistant.py report` 写 meta.json |
 | 先跑一版 | 信息够六成就先搜一版买家 / 出一版方案，用结果触发纠偏 |
 | 接下一环 | 前序就绪就接 find-buyers / market-report / exhibition-invitation / exhibition-leads |
 
@@ -111,6 +111,8 @@ MEMORY.md                # 长期记忆索引
 - **目标**（走量 vs 利润、打头部 vs 长尾）→ 打法方向
 
 聊不出来 → 兜底：让用户给 1-2 家**现有成交买家**，我查这几家画像反推他的买家级别和单量定位（「你卖给谁」比「你号称产能多大」更准）。
+
+**落库 = 记忆落地（「补缺口」的必做收尾，不是可选）**：用户信息类（企业画像 / 展览信息），Agent 复述判断、用户确认后立即落库——企业画像 → `dc_kb_engine.seed_profile(enterprise_key, profile_data)`；展览信息 → `python3 scripts/exhibition_assistant.py report <sid> --name X --start YYYY-MM-DD`（写 meta.json 的 exhibitions）。目的：让用户看到「记下来了、后面一直生效」。
 
 ### 推荐准则（宽进 + 分层 + 给理由）
 
