@@ -7,6 +7,7 @@ import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
+import { createConversationExternalRoutes } from './routes/conversation-external.js';
 import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import type { ProvisioningConfig } from './config.js';
@@ -38,6 +39,9 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // call router.use(authMiddleware) (no path), which would otherwise block
   // /api/external/* with the admin/service-token gate before it reaches here.
   app.use(createExternalApiRoutes(pool, config));
+  // External conversation-log pull endpoint (米奥 Agent 对话日志拉取) — same
+  // external API-key auth + supplier→tenant isolation as supplier-summary above.
+  app.use(createConversationExternalRoutes(pool, config));
 
   app.use(createTenantRoutes(pool, config, auth));
   app.use(createRuntimeConfigRoutes(pool, config, auth));
