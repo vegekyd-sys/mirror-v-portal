@@ -22,7 +22,8 @@
  *   POST /api/external/conversation/logs
  *     body: { supplierId, startDate: YYYY-MM-DD, endDate: YYYY-MM-DD,
  *             cursor?: string, limit?: number }
- *     resp: { records: MessageRow[], nextCursor: string|null, hasMore: boolean }
+ *     resp: { records: MessageRow[], nextCursor: string|null, hasMore: boolean,
+ *             total: number }
  *
  * MessageRow (raw chat_messages row, camelCased):
  *   messageId, sessionKey, direction('in'|'out'), channel, senderOpenId,
@@ -141,7 +142,19 @@ export function createConversationExternalRoutes(
         createdAt: r.created_at,
       }));
 
-      res.json({ records, nextCursor, hasMore });
+      // --- total count: same tenant + time-range filter, no cursor/limit ---
+      // 走 idx_chat_messages_tenant_time (tenant_id, created_at DESC) 索引，成本可控
+      const countRes = await pool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM chat_messages
+         WHERE tenant_id = $1
+           AND created_at >= ($2::date AT TIME ZONE 'Asia/Shanghai')
+           AND created_at <  (($3::date + 1) AT TIME ZONE 'Asia/Shanghai')`,
+        [tenantId, startDate, endDate],
+      );
+      const total = countRes.rows[0]?.total ?? 0;
+
+      res.json({ records, nextCursor, hasMore, total });
     } catch (err: any) {
       res.status(500).json({ code: 'INTERNAL', message: err?.message || 'conversation logs failed' });
     }
