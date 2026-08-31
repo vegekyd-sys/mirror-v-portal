@@ -26,6 +26,11 @@ def _now() -> str:
 
 
 def _load_env() -> None:
+    try:
+        from _tenant_env import load_tenant_env
+        load_tenant_env()
+    except ImportError:
+        pass
     f = Path(__file__).resolve().parent / ".env"
     if not f.exists():
         return

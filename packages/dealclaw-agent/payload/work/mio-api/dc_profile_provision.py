@@ -18,6 +18,11 @@ from pathlib import Path
 
 def _load_env() -> None:
     """加载 work/mio-api/.env（不覆盖已有环境变量）。"""
+    try:
+        from _tenant_env import load_tenant_env
+        load_tenant_env()
+    except ImportError:
+        pass
     f = Path(__file__).resolve().parent / ".env"
     if not f.exists():
         return

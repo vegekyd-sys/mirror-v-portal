@@ -38,6 +38,11 @@ MAJOR_SUPPLIERS = [
 
 
 def _load_env() -> None:
+    try:
+        from _tenant_env import load_tenant_env
+        load_tenant_env()
+    except ImportError:
+        pass
     dirs = []
     d = os.path.dirname(os.path.abspath(__file__))
     while d and d != os.path.dirname(d):

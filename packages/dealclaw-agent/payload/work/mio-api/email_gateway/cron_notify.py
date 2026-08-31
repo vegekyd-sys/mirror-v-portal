@@ -38,7 +38,19 @@ def _sign(secret: str, timestamp: str) -> str:
 
 
 def _env_value(name: str, default: str = "") -> str:
-    """读 .env 文件（cron 环境 .env 不自动加载，与 dc_resend_source 一致）。"""
+    """读 tenant-env.json 优先，.env（Secret）兜底。"""
+    try:
+        import json as _json
+        _root = os.environ.get("OPENCLAW_WORKSPACE_DIR", "")
+        if not _root:
+            _root = str(Path(__file__).resolve().parents[3])
+        _tf = Path(_root) / "data" / "memory" / "tenant-env.json"
+        if _tf.exists():
+            _data = _json.loads(_tf.read_text(encoding="utf-8"))
+            if isinstance(_data, dict) and name in _data and _data[name]:
+                return str(_data[name]).strip()
+    except Exception:
+        pass
     for f in [Path(__file__).resolve().parent / ".env",
               Path(__file__).resolve().parent.parent / ".env"]:
         if f.exists():

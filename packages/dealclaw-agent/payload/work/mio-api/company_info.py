@@ -21,6 +21,11 @@ DEFAULT_BASE_URL = "https://micro.tradechina.com/blade-agent-adapter"
 
 def _load_env() -> None:
     """从当前目录及上级目录加载 .env（不覆盖已有环境变量）。"""
+    try:
+        from _tenant_env import load_tenant_env
+        load_tenant_env()
+    except ImportError:
+        pass
     dirs = []
     d = os.path.dirname(os.path.abspath(__file__))
     while d and d != os.path.dirname(d):

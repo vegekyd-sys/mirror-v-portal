@@ -23,6 +23,24 @@ while _d and _d != os.path.dirname(_d):
     _ENV_DIRS.append(_d)
     _d = os.path.dirname(_d)
 _ENV_DIRS.append(os.path.join(os.environ.get("HOME", ""), ".openclaw"))
+# ── 加载 tenant-env.json（租户可写，优先级高于 .env/Secret）──────
+try:
+    import json as _json
+    _troot = os.environ.get("OPENCLAW_WORKSPACE_DIR", "")
+    if not _troot:
+        _tp = os.path.dirname(os.path.abspath(__file__))
+        while _tp and _tp != os.path.dirname(_tp):
+            if os.path.isdir(os.path.join(_tp, "work", "mio-api")):
+                _troot = _tp
+                break
+            _tp = os.path.dirname(_tp)
+    _tfile = os.path.join(_troot, "data", "memory", "tenant-env.json")
+    if _troot and os.path.isfile(_tfile):
+        for _tk, _tv in _json.load(open(_tfile, encoding="utf-8")).items():
+            if _tv is not None:
+                os.environ[_tk] = str(_tv)
+except Exception:
+    pass
 for _d in _ENV_DIRS:
     _ENV_FILE = os.path.join(_d, ".env")
     if os.path.exists(_ENV_FILE):

@@ -67,6 +67,11 @@ if os.environ.get("AROUNDDEAL_ENV_DIR"):
 
 def _load_env() -> None:
     """读取 .env 写入 os.environ(已存在的键不覆盖,进程 env 优先)。"""
+    try:
+        from _tenant_env import load_tenant_env
+        load_tenant_env()
+    except ImportError:
+        pass
     for _dir in _ENV_DIRS:
         _env_file = os.path.join(_dir, ".env")
         if not os.path.exists(_env_file):
