@@ -22,6 +22,41 @@ description: "手动配置 DealClaw 租户环境变量（work/mio-api/.env）。
 | 运行报错提示 `MIO_CDP_SUPPLIER_ID` / `MIO_V_OPEN_ID` 缺失或非法 | 先 `list` 确认状态，再引导配置 |
 | 用户只说「配置环境变量」但没说是哪个 | 先 `list` 看哪些是「未配置」，让用户指认 |
 
+## 取 open_id 子流程（机器人自己的 open_id）
+
+**触发**：需要机器人自己的 open_id（配 `MIO_V_OPEN_ID`、绑定 `mention_open_id` 等），但用户没直接给值。
+
+**首选（有 app_secret 时，无需进群，一条命令）**：
+
+```bash
+python3 work/mio-api/dc_env_openid.py
+```
+
+- 内部走 `bot/v3/info` 权威路径，直接探测并写入 `MIO_V_OPEN_ID`，返回即已完成 + 校验。
+- 只探测不写入用 `--dry-run`。
+- 依赖环境变量 `DEALCLAW_APP_SECRET`（镜像启动注入）；本地无 secret 时用下面的兜底。
+
+**兜底（无 secret / 交互式排查，一条命令）**：
+
+```bash
+lark-cli im +chat-members-list --chat-id <oc_群id> --as bot --member-types bot \
+  --jq '.data.bots[] | select(.name=="V - Makaron") | .member_id'
+```
+
+- 输出的 `member_id`（`ou_` 开头）就是机器人自己的 open_id。
+- 群里多个 bot 时，`--jq` 按 `name` / `app_id` 过滤出自己；不确定就用 `.data.bots[] | {name, app_id, member_id}` 先看一遍再选。
+- `<oc_群id>` 直接取当前会话 inbound 的群 id（`oc_` 开头）；DM 场景先 `lark-cli im +chat-list --types=p2p` 定位。
+
+**禁止走的弯路（已验证全是坑，慢就慢在这）**：
+- ❌ 全盘 grep `.env` / `ou_` / 历史日志 jsonl —— 值就在 bot 身份里，翻磁盘没必要
+- ❌ 用 lark-cli 的 `api GET /open-apis/bot/v3/info` —— 它吞掉 `bot` 字段返回空 data，直接 HTTP 才能拿到（即 dc_env_openid.py 内部做法）
+- ❌ 试 `contact +get-user` / `whoami` 等多轮网络往返
+- 真正干活（读配置 + 写入 + 校验）不到 2s，别被弯路拖到 8s+
+
+**校验**：拿到的值必须 `ou_` 开头，否则不是 open_id，不写入。
+
+**备注**：查到的 open_id 属账号/路由信息，不写进群聊外的报告，不外泄。
+
 ## 配置流程
 
 1. **确定键 + 值**：
@@ -61,5 +96,6 @@ description: "手动配置 DealClaw 租户环境变量（work/mio-api/.env）。
 ## 相关
 
 - `work/mio-api/dc_env_config.py` — 本工具（list/get/set，安全读写单个键）
+- `work/mio-api/dc_env_openid.py` — 一键固化 `MIO_V_OPEN_ID`（bot 自身 open_id，无需进群）
 - `packages/dealclaw-agent/runtime/dc-env-config.sh` — 启动时用默认值写 `.env`（镜像入口）
 - 读 `MIO_CDP_SUPPLIER_ID` / `MIO_V_OPEN_ID` 的引擎：`buyer_leads_daily.py`、`company_info.py`、`dc_daily_cycle.py`、`dc_auto_campaign.py`、`dc_lead_push_init.py`、`dc_profile_provision.py`
