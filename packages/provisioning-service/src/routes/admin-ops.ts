@@ -20,6 +20,7 @@ import { syncImageReleases } from '../services/registry-sync.js';
 import { actorFromRequest, writeAuditLog } from '../services/audit.js';
 import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from '../services/external-api-keys.js';
 import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
+import { backfillSenderNames } from '../services/sender-name-backfill.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -471,6 +472,25 @@ export function createAdminOpsRoutes(
     } catch (err: unknown) {
       const e = err as any;
       console.error('chatlog env backfill failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'backfill failed' });
+    }
+  });
+
+  // POST /v1/admin/tenants/backfill-sender-names — 存量 sender_name 回填。
+  // 用租户自己的飞书应用凭据（tenants.app_id/app_secret）调
+  // contact.v3.user.batch_get，把 chat_messages 里 sender_name 缺失或等于
+  // open_id 的行解析成真实姓名回填。幂等、可重跑。
+  // body: { tenantId?: string }（可选，仅处理指定租户，便于单租户验收）。
+  router.post('/v1/admin/tenants/backfill-sender-names', async (req: Request, res: Response) => {
+    try {
+      const tenantId = typeof req.body?.tenantId === 'string' && req.body.tenantId.trim()
+        ? req.body.tenantId.trim()
+        : undefined;
+      const result = await backfillSenderNames(pool, { tenantId });
+      res.json({ ok: true, operator: adminIdentity(req), ...result });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('sender name backfill failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'backfill failed' });
     }
   });
