@@ -18,6 +18,7 @@ import pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
 import { syncImageReleases } from '../services/registry-sync.js';
 import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from '../services/external-api-keys.js';
+import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -339,6 +340,22 @@ export function createAdminOpsRoutes(
       const e = err as any;
       console.error('Chat proxy failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Chat failed' });
+    }
+  });
+
+  // POST /v1/admin/tenants/backfill-chatlog-env — 存量租户补 chatlog 所需
+  // 的 PROVISIONING_SERVICE_URL / PROVISIONING_API_TOKEN 两个 env（插件上线
+  // 前 provision 的 agent Deployment 没有这两个变量 → 对话 0 条）。幂等，
+  // 可安全重跑。body: { restart?: boolean }（默认 true，patch 后 scale 0→N 重启）。
+  router.post('/v1/admin/tenants/backfill-chatlog-env', async (req: Request, res: Response) => {
+    try {
+      const restart = req.body?.restart !== false;
+      const result = await backfillChatlogEnv(pool, config, { restart });
+      res.json({ ok: true, operator: adminIdentity(req), ...result });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('chatlog env backfill failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'backfill failed' });
     }
   });
 
