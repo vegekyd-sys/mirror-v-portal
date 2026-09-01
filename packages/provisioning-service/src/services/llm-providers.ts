@@ -76,6 +76,13 @@ export interface TenantModelSelection {
   defaultModel: string | null;
   imageModel: string | null;
   /**
+   * '<provider>/<modelId>' ref the agent's context-compaction (history
+   * summarisation) runs on. null → follow the effective primary model
+   * (default). Useful when the primary is a slow heavyweight model — the
+   * compaction prompt is long-context and benefits from a faster TTFB model.
+   */
+  compactionModel: string | null;
+  /**
    * Tenant-scoped override of the fallback chain. null → follow the global
    * library chain; an array (possibly empty) → the tenant's own ordered
    * '<provider>/<modelId>' chain (empty = never fall back). Unresolvable
@@ -369,6 +376,7 @@ export function tenantNeedsLlmRestart(
 ): boolean {
   const selDefault = selection?.defaultModel ?? null;
   const selImage = selection?.imageModel ?? null;
+  const selCompaction = selection?.compactionModel ?? null;
 
   const beforeRef = effectiveRefIn(prev, selDefault);
   const afterRef = effectiveRefIn(now, selDefault);
@@ -393,6 +401,24 @@ export function tenantNeedsLlmRestart(
   if (
     providerCredentialSignature(prev, beforeImage) !==
     providerCredentialSignature(now, afterImage)
+  ) {
+    return true;
+  }
+
+  // Compaction model (tenant override-aware, falls back to the primary).
+  const beforeCompaction = selCompaction && prev && modelExistsIn(prev, selCompaction)
+    ? selCompaction
+    : effectiveRefIn(prev, selDefault);
+  const afterCompaction = selCompaction && now && modelExistsIn(now, selCompaction)
+    ? selCompaction
+    : effectiveRefIn(now, selDefault);
+  if (beforeCompaction !== afterCompaction) return true;
+  if (modelSpecSignature(prev, beforeCompaction) !== modelSpecSignature(now, afterCompaction)) {
+    return true;
+  }
+  if (
+    providerCredentialSignature(prev, beforeCompaction) !==
+    providerCredentialSignature(now, afterCompaction)
   ) {
     return true;
   }
@@ -460,6 +486,8 @@ export async function getTenantModelSelection(
         typeof parsed.defaultModel === 'string' ? parsed.defaultModel.trim() || null : null;
       const imageModel =
         typeof parsed.imageModel === 'string' ? parsed.imageModel.trim() || null : null;
+      const compactionModel =
+        typeof parsed.compactionModel === 'string' ? parsed.compactionModel.trim() || null : null;
       const directMode = parsed.directMode === true;
       // Array (even empty) = tenant's own chain; anything else = follow global.
       const fallbackModels = Array.isArray(parsed.fallbackModels)
@@ -467,7 +495,7 @@ export async function getTenantModelSelection(
             .filter((r): r is string => typeof r === 'string' && r.trim() !== '')
             .map((r: string) => r.trim())
         : null;
-      return { defaultModel, imageModel, fallbackModels, directMode };
+      return { defaultModel, imageModel, compactionModel, fallbackModels, directMode };
     }
     return null;
   } catch {
@@ -511,12 +539,16 @@ export interface EffectiveLlmProviders {
   selection: string | null;
   /** Tenant's own image-model selection, if it resolves (vision). */
   imageSelection: string | null;
+  /** Tenant's own compaction-model selection, if it resolves. */
+  compactionSelection: string | null;
   /** Tenant's own fallback chain override (null = follows the global chain). */
   fallbackSelection: string[] | null;
   /** selection ?? globalConfig.defaultModel ?? null */
   effectiveModel: string | null;
   /** imageSelection ?? globalConfig.imageModel ?? null */
   effectiveImageModel: string | null;
+  /** compactionSelection ?? effectiveModel (compaction follows the primary by default). */
+  effectiveCompactionModel: string | null;
   /** (fallbackSelection ?? library chain) minus the effective primary, resolvable only. */
   effectiveFallbacks: string[];
   /** Serialised blob to inject as the LLM_PROVIDERS env var, or null. */
@@ -539,15 +571,18 @@ export async function resolveEffectiveLlmProviders(
       globalConfig: null,
       selection: null,
       imageSelection: null,
+      compactionSelection: null,
       fallbackSelection: null,
       effectiveModel: null,
       effectiveImageModel: null,
+      effectiveCompactionModel: null,
       effectiveFallbacks: [],
       blob: null,
     };
   }
   let selection: string | null = null;
   let imageSelection: string | null = null;
+  let compactionSelection: string | null = null;
   let sel: TenantModelSelection | null = null;
   if (tenantId) {
     sel = await getTenantModelSelection(pool, tenantId);
@@ -557,12 +592,19 @@ export async function resolveEffectiveLlmProviders(
     if (sel?.imageModel && visionModelExistsIn(globalConfig, sel.imageModel)) {
       imageSelection = sel.imageModel;
     }
+    if (sel?.compactionModel && modelExistsIn(globalConfig, sel.compactionModel)) {
+      compactionSelection = sel.compactionModel;
+    }
   }
   const effectiveModel = selection ?? globalConfig.defaultModel ?? null;
   const effectiveImageModel =
     imageSelection ?? (globalConfig.imageModel && visionModelExistsIn(globalConfig, globalConfig.imageModel)
       ? globalConfig.imageModel
       : null);
+  // Compaction follows the effective primary unless the tenant overrides it
+  // (compaction prompts are long-context; a faster-TTFB model keeps the
+  // safeguard from timing out — the 2026-09-01 foldin incident).
+  const effectiveCompactionModel = compactionSelection ?? effectiveModel;
   // Tenant override wins over the library chain; both are then filtered to
   // exclude THIS tenant's effective primary (no-op retry) and entries that
   // no longer resolve.
@@ -572,15 +614,18 @@ export async function resolveEffectiveLlmProviders(
     ...globalConfig,
     defaultModel: effectiveModel,
     imageModel: effectiveImageModel,
+    compactionModel: effectiveCompactionModel,
     fallbackModels: effectiveFallbacks,
   });
   return {
     globalConfig,
     selection,
     imageSelection,
+    compactionSelection,
     fallbackSelection,
     effectiveModel,
     effectiveImageModel,
+    effectiveCompactionModel,
     effectiveFallbacks,
     blob,
   };

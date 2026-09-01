@@ -61,6 +61,7 @@ function defaultModelSpec(id, reasoning, vision) {
   const providers = {};
   let primaryModel = null;
   let imageModel = null;
+  let compactionModel = null;
   const fallbackModels = [];
 
 if (llmDoc && llmDoc.providers.length > 0) {
@@ -154,6 +155,23 @@ if (llmDoc && llmDoc.providers.length > 0) {
       fail(`LLM_PROVIDERS: imageModel ${llmDoc.imageModel} is not vision-capable (add :vision to its model entry)`);
     }
     imageModel = llmDoc.imageModel;
+  }
+
+  // ── Compaction model ─────────────────────────────────────────────────
+  // llmDoc.compactionModel is a '<provider>/<modelId>' ref for the context-
+  // engine's safeguard compaction (history summarisation). Compaction prompts
+  // are long-context, so a tenant whose primary is a slow heavyweight model
+  // may point compaction at a faster one (see the 2026-09-01 foldin
+  // incident: 6-minute compaction timeouts). Fail-open: an unresolvable ref
+  // falls back to the primary with a warning instead of blocking boot.
+  if (typeof llmDoc.compactionModel === 'string' && llmDoc.compactionModel) {
+    const [pName, ...rest] = llmDoc.compactionModel.split('/');
+    const modelId = rest.join('/');
+    if (!nextProviders[pName] || !nextProviders[pName].models.some((m) => m.id === modelId)) {
+      console.warn(`[dealclaw-runtime] LLM_PROVIDERS: compactionModel ${llmDoc.compactionModel} not found in configured providers — falling back to primary`);
+    } else {
+      compactionModel = llmDoc.compactionModel;
+    }
   }
 } else {
   // No providers configured — remove any stale exports file so a
@@ -277,7 +295,8 @@ const config = {
         minPrunableToolChars: 12_000,
       },
       // Safeguard compaction: summarise history instead of hard-failing when
-      // the context overflows. Uses the primary model (tenant gateway proxy).
+      // the context overflows. Uses the dedicated compaction model when
+      // configured, else the primary model (tenant gateway proxy).
       compaction: {
         mode: 'safeguard',
         reserveTokens: 50_000,
@@ -287,7 +306,7 @@ const config = {
         recentTurnsPreserve: 3,
         truncateAfterCompaction: true,
         timeoutSeconds: 360,
-        ...(primaryModel ? { model: primaryModel } : {}),
+        ...((compactionModel || primaryModel) ? { model: compactionModel || primaryModel } : {}),
         notifyUser: true,
         qualityGuard: { enabled: true, maxRetries: 1 },
       },

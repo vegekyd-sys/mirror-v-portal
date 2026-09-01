@@ -415,10 +415,12 @@ export function createRuntimeConfigRoutes(
         tenantId,
         rawSelection: rawSelection?.defaultModel ?? null,
         rawImageSelection: rawSelection?.imageModel ?? null,
+        rawCompactionSelection: rawSelection?.compactionModel ?? null,
         selection: eff.selection,
         effectiveModel: eff.effectiveModel,
         imageSelection: eff.imageSelection,
         effectiveImageModel: eff.effectiveImageModel,
+        effectiveCompactionModel: eff.effectiveCompactionModel,
         rawFallbackSelection: rawSelection?.fallbackModels ?? null,
         effectiveFallbacks: eff.effectiveFallbacks,
         globalFallbacks: library?.fallbackModels ?? [],
@@ -455,11 +457,13 @@ export function createRuntimeConfigRoutes(
       const body = (req.body ?? {}) as Record<string, unknown>;
       const hasDefaultKey = 'defaultModel' in body;
       const hasImageKey = 'imageModel' in body;
+      const hasCompactionKey = 'compactionModel' in body;
       const hasDirectKey = 'directMode' in body;
       const hasFallbackKey = 'fallbackModels' in body;
 
       const ref = typeof body.defaultModel === 'string' ? body.defaultModel.trim() : '';
       const imgRef = typeof body.imageModel === 'string' ? body.imageModel.trim() : '';
+      const cmpRef = typeof body.compactionModel === 'string' ? body.compactionModel.trim() : '';
 
       // A selection row exists when at least one model is chosen. Direct mode
       // is a separate tenant-level switch — keep it even when the tenant
@@ -472,6 +476,9 @@ export function createRuntimeConfigRoutes(
       const nextImage = hasImageKey
         ? imgRef || null
         : current?.imageModel ?? null;
+      const nextCompaction = hasCompactionKey
+        ? cmpRef || null
+        : current?.compactionModel ?? null;
       const nextDirect = hasDirectKey
         ? body.directMode === true
         : current?.directMode === true;
@@ -521,7 +528,7 @@ export function createRuntimeConfigRoutes(
         }
       }
 
-      if (nextDefault || nextImage || nextDirect || nextFallbacks) {
+      if (nextDefault || nextImage || nextCompaction || nextDirect || nextFallbacks) {
         if ((nextDefault || nextFallbacks) && libraryEmpty) {
           res.status(400).json({
             code: 'VALIDATION',
@@ -543,17 +550,25 @@ export function createRuntimeConfigRoutes(
           });
           return;
         }
+        if (nextCompaction && !modelExistsIn(library!, nextCompaction)) {
+          res.status(400).json({
+            code: 'VALIDATION',
+            message: `压缩模型 ${nextCompaction} 不在全局供应商库中（请重新选择）`,
+          });
+          return;
+        }
         await upsertRuntimeConfig(pool, {
           tenantId,
           key: LLM_MODEL_SELECTION_KEY,
           value: JSON.stringify({
             defaultModel: nextDefault,
             imageModel: nextImage,
+            compactionModel: nextCompaction,
             fallbackModels: nextFallbacks,
             directMode: nextDirect,
           }),
           isSecret: false,
-          description: '租户模型选择（引用全局供应商库，默认跟随系统默认；fallbackModels=null 跟随全局备用链；directMode 控制是否绕过网关直连上游）',
+          description: '租户模型选择（引用全局供应商库，默认跟随系统默认；fallbackModels=null 跟随全局备用链；compactionModel=null 压缩跟随主模型；directMode 控制是否绕过网关直连上游）',
         });
       } else {
         // No model chosen and direct mode off — clear the selection row;
@@ -574,6 +589,7 @@ export function createRuntimeConfigRoutes(
           ? {
               defaultModel: current.defaultModel ?? null,
               imageModel: current.imageModel ?? null,
+              compactionModel: current.compactionModel ?? null,
               fallbackModels: current.fallbackModels ?? null,
               directMode: current.directMode === true,
             }
@@ -581,6 +597,7 @@ export function createRuntimeConfigRoutes(
         newValue: {
           defaultModel: nextDefault,
           imageModel: nextImage,
+          compactionModel: nextCompaction,
           fallbackModels: nextFallbacks,
           directMode: nextDirect,
         },
@@ -592,6 +609,7 @@ export function createRuntimeConfigRoutes(
         tenantId,
         selection: nextDefault,
         imageSelection: nextImage,
+        compactionModel: nextCompaction,
         fallbackModels: nextFallbacks,
         directMode: nextDirect,
         push,

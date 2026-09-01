@@ -518,10 +518,12 @@ export default function AgentDetailPage() {
   interface LlmSelectionView {
     rawSelection: string | null;
     rawImageSelection: string | null;
+    rawCompactionSelection: string | null;
     selection: string | null;
     effectiveModel: string | null;
     imageSelection: string | null;
     effectiveImageModel: string | null;
+    effectiveCompactionModel: string | null;
     rawFallbackSelection: string[] | null;
     effectiveFallbacks: string[];
     globalFallbacks: string[];
@@ -538,6 +540,10 @@ export default function AgentDetailPage() {
   const [llmLib, setLlmLib] = useState<LlmLibraryProvider[]>([]);
   const [llmChoice, setLlmChoice] = useState('');
   const [llmImageChoice, setLlmImageChoice] = useState('');
+  // Compaction（上下文压缩）模型：空 = 跟随主模型。
+  const [llmCompactionChoice, setLlmCompactionChoice] = useState('');
+  // directMode 开关已从 UI 隐藏（2026-09-01）：state 仅透传保存，
+  // 保持存量 direct-mode 租户的值不被静默翻转。
   const [llmDirect, setLlmDirect] = useState(false);
   // 备用模型链：false = 跟随系统默认链（存 null）；true = 本 Agent 单独配置。
   const [llmFallbackOwn, setLlmFallbackOwn] = useState(false);
@@ -559,6 +565,7 @@ export default function AgentDetailPage() {
       setLlmLib(lib.config?.providers || []);
       setLlmChoice(sel.selection || '');
       setLlmImageChoice(sel.imageSelection || '');
+      setLlmCompactionChoice(sel.rawCompactionSelection || '');
       setLlmDirect(sel.directMode === true);
       setLlmFallbackOwn(sel.rawFallbackSelection !== null);
       setLlmFallbacks(sel.rawFallbackSelection || []);
@@ -698,6 +705,7 @@ export default function AgentDetailPage() {
           tenantId,
           defaultModel: llmChoice || null,
           imageModel: llmImageChoice || null,
+          compactionModel: llmCompactionChoice || null,
           fallbackModels: llmFallbackOwn ? llmFallbacks : null,
           directMode: llmDirect,
         },
@@ -707,12 +715,13 @@ export default function AgentDetailPage() {
       else parts.push('主模型：跟随系统默认');
       if (llmImageChoice) parts.push(`视觉模型：${llmImageChoice}`);
       else parts.push('视觉模型：跟随系统默认');
+      if (llmCompactionChoice) parts.push(`压缩模型：${llmCompactionChoice}`);
+      else parts.push('压缩模型：跟随主模型');
       if (llmFallbackOwn) {
         parts.push(`备用链：${llmFallbacks.length ? llmFallbacks.join(' → ') : '不启用'}`);
       } else {
         parts.push('备用链：跟随系统默认');
       }
-      parts.push(`大模型接入：${llmDirect ? '直连上游（绕过网关）' : '经网关代理（含增值服务）'}`);
       flash(`已保存本 Agent 模型选择（${parts.join('；')}）。${r.push?.hint || ''}`);
       await loadLlmSelection();
     } catch (e) {
@@ -1214,6 +1223,27 @@ export default function AgentDetailPage() {
                 </select>
                 <span className="hint">本 Agent 图片理解模型（view_image 等）</span>
               </div>
+              <div className="form-row">
+                <label className="field-label">压缩模型</label>
+                <select
+                  value={llmCompactionChoice}
+                  onChange={(e) => setLlmCompactionChoice(e.target.value)}
+                  style={{ flex: '0 1 320px' }}
+                  disabled={llmBusy}
+                >
+                  <option value="">跟随主模型（当前：{llmSel.effectiveModel || '未设置'}）</option>
+                  {llmLib.flatMap((p) =>
+                    p.models.map((m) => (
+                      <option key={`cmp-${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
+                        {p.name}/{m.id}
+                      </option>
+                    )),
+                  )}
+                </select>
+                <span className="hint">
+                  上下文超限时的历史摘要（compaction）模型：压缩请求是长 prompt，主模型出字慢时可换快模型，避免压缩超时导致「Context is too large」
+                </span>
+              </div>
               <div className="form-row" style={{ alignItems: 'flex-start' }}>
                 <label className="field-label" style={{ paddingTop: 4 }}>备用模型链</label>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
@@ -1305,23 +1335,9 @@ export default function AgentDetailPage() {
                   )}
                 </div>
               </div>
-              <div className="form-row">
-                <label className="field-label">大模型接入</label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={llmDirect}
-                    onChange={(e) => setLlmDirect(e.target.checked)}
-                    disabled={llmBusy}
-                  />
-                  <span>
-                    <b>直连上游（绕过网关代理）</b>
-                    <span className="hint" style={{ margin: 0, marginLeft: 6 }}>
-                      勾选后把供应商真实 Base URL + API Key 直接写入 OpenClaw，跳过 nexus-gateway 的余额拦截/记账/限流，用于排查网关增值服务是否拖慢回复
-                    </span>
-                  </span>
-                </label>
-              </div>
+              {/* 大模型接入（直连上游）开关已下线（2026-09-01）：网关代理是
+                  唯一形态，directMode 仅在 state 里透传保存，防止存量
+                  direct-mode 租户的值被静默翻转。 */}
               <div className="form-row" style={{ marginBottom: 0 }}>
                 <label className="field-label" />
                 <button className="btn-primary" disabled={llmBusy} onClick={() => void saveLlmSelection()}>

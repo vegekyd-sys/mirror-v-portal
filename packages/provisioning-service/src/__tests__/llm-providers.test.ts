@@ -341,24 +341,24 @@ describe('effectiveFallbacksFor', () => {
 
   it('null selection falls back to the library chain', () => {
     expect(effectiveFallbacksFor(doc, null)).toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
-    expect(effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: null, directMode: false }))
+    expect(effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: null, directMode: false }))
       .toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
   });
 
   it('a tenant chain overrides the library chain (even when empty)', () => {
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: ['qwen/qwen-vl-plus'], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: ['qwen/qwen-vl-plus'], directMode: false }),
     ).toEqual(['qwen/qwen-vl-plus']);
     // empty own chain = never fall back
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, fallbackModels: [], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [], directMode: false }),
     ).toEqual([]);
   });
 
   it('filters the tenant primary and unresolvable refs out of the tenant chain', () => {
     // primary = glm → dropped from chain; stale 'qwen/nope' dropped defensively
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: 'glm/glm-4.5', imageModel: null, fallbackModels: ['glm/glm-4.5', 'qwen/nope', 'qwen/qwq-plus'], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: 'glm/glm-4.5', imageModel: null, compactionModel: null, fallbackModels: ['glm/glm-4.5', 'qwen/nope', 'qwen/qwq-plus'], directMode: false }),
     ).toEqual(['qwen/qwq-plus']);
   });
 });
@@ -468,6 +468,50 @@ describe('resolveEffectiveLlmProviders', () => {
     expect(r.effectiveModel).toBe('qwen/qwen-max');
   });
 
+  it('compaction follows the effective primary when no override is set', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'glm/glm-4.5' }) }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.compactionSelection).toBeNull();
+    expect(r.effectiveCompactionModel).toBe('glm/glm-4.5');
+    // blob carries the resolved compaction model for write-config.mjs
+    expect(JSON.parse(r.blob!).compactionModel).toBe('glm/glm-4.5');
+  });
+
+  it('a tenant compaction override wins over the primary and lands in the blob', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{
+        encrypted_value: 'enc:' + JSON.stringify({
+          defaultModel: 'qwen/qwen-max',
+          compactionModel: 'glm/glm-4.5',
+        }),
+      }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.compactionSelection).toBe('glm/glm-4.5');
+    expect(r.effectiveModel).toBe('qwen/qwen-max');
+    expect(r.effectiveCompactionModel).toBe('glm/glm-4.5');
+    expect(JSON.parse(r.blob!).compactionModel).toBe('glm/glm-4.5');
+  });
+
+  it('an unresolvable compaction override falls back to the effective primary', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{
+        encrypted_value: 'enc:' + JSON.stringify({
+          defaultModel: 'qwen/qwen-max',
+          compactionModel: 'kimi/moonshot',
+        }),
+      }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.compactionSelection).toBeNull();
+    expect(r.effectiveCompactionModel).toBe('qwen/qwen-max');
+  });
+
   it('getTenantModelSelection tolerates corrupt rows', async () => {
     const pool = makeFakePool({
       tenantSelectionRow: [{ encrypted_value: 'enc:not-json' }],
@@ -532,7 +576,8 @@ describe('tenantNeedsLlmRestart', () => {
     defaultModel: string | null,
     imageModel: string | null = null,
     fallbackModels: string[] | null = null,
-  ) => ({ defaultModel, imageModel, fallbackModels, directMode: false });
+    compactionModel: string | null = null,
+  ) => ({ defaultModel, imageModel, compactionModel, fallbackModels, directMode: false });
 
   it('adding an unrelated provider does NOT require a restart', () => {
     expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);
@@ -914,6 +959,8 @@ describe('llm-providers API', () => {
       rawSelection: 'glm/glm-4.5',
       selection: 'glm/glm-4.5',
       effectiveModel: 'glm/glm-4.5',
+      rawCompactionSelection: null,
+      effectiveCompactionModel: 'glm/glm-4.5',
       libraryEmpty: false,
       globalDefaultModel: 'qwen/qwen-max',
     });
@@ -945,6 +992,62 @@ describe('llm-providers API', () => {
     expect(insert!.params![0]).toBe('t123');
     expect(insert!.params![1]).toBe(LLM_MODEL_SELECTION_KEY);
     expect(JSON.parse(String(insert!.params![2]).replace(/^enc:/, '')).defaultModel).toBe('glm/glm-4.5');
+  });
+
+  it('selection PUT stores a compaction model alongside the primary', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'qwen/qwen-max', compactionModel: 'glm/glm-4.5' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, compactionModel: 'glm/glm-4.5' });
+    const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO runtime_configs'));
+    expect(insert).toBeTruthy();
+    const stored = JSON.parse(String(insert!.params![2]).replace(/^enc:/, ''));
+    expect(stored.compactionModel).toBe('glm/glm-4.5');
+  });
+
+  it('selection PUT rejects a compaction model outside the library', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'qwen/qwen-max', compactionModel: 'kimi/moonshot' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('压缩模型');
+  });
+
+  it('selection PUT clears the compaction override with null (follow primary)', async () => {
+    const pool = makeFakePool({
+      tenant: makeTenant(),
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify(goodDoc) }],
+      tenantSelectionRow: [{
+        encrypted_value: 'enc:' + JSON.stringify({
+          defaultModel: 'qwen/qwen-max',
+          compactionModel: 'glm/glm-4.5',
+        }),
+      }],
+    });
+    const app = createApp(pool, baseConfig);
+    const res = await request(app)
+      .put('/v1/admin/llm-providers/selection')
+      .set(authHeader)
+      .send({ tenantId: 't123', defaultModel: 'qwen/qwen-max', compactionModel: null });
+    expect(res.status).toBe(200);
+    expect(res.body.compactionModel).toBeNull();
+    const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO runtime_configs'));
+    expect(insert).toBeTruthy();
+    const stored = JSON.parse(String(insert!.params![2]).replace(/^enc:/, ''));
+    expect(stored.compactionModel).toBeNull();
   });
 
   it('selection PUT rejects references outside the library', async () => {

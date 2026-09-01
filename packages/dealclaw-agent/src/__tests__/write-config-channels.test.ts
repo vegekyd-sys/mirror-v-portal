@@ -133,6 +133,44 @@ describe('write-config runtime tuning (queue / pruning / compaction / session)',
   });
 });
 
+describe('write-config compaction model', () => {
+  it('defaults compaction.model to the primary when no override is configured', () => {
+    const { config } = runWriteConfig({ LLM_PROVIDERS: PROVIDERS });
+    expect(config.agents.defaults.compaction?.model).toBe('deepseek/deepseek-chat');
+  });
+
+  it('honours llmDoc.compactionModel for agents.defaults.compaction.model', () => {
+    const doc = JSON.stringify({
+      providers: [{
+        name: 'deepseek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-x',
+        models: [{ id: 'deepseek-chat' }, { id: 'deepseek-flash' }],
+      }],
+      defaultModel: 'deepseek/deepseek-chat',
+      compactionModel: 'deepseek/deepseek-flash',
+    });
+    const { config } = runWriteConfig({ LLM_PROVIDERS: doc });
+    expect(config.agents.defaults.model.primary).toBe('deepseek/deepseek-chat');
+    expect(config.agents.defaults.compaction?.model).toBe('deepseek/deepseek-flash');
+  });
+
+  it('falls back to the primary (fail-open) when compactionModel does not resolve', () => {
+    const doc = JSON.stringify({
+      providers: [{
+        name: 'deepseek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-x',
+        models: [{ id: 'deepseek-chat' }],
+      }],
+      defaultModel: 'deepseek/deepseek-chat',
+      compactionModel: 'kimi/moonshot',
+    });
+    const { config } = runWriteConfig({ LLM_PROVIDERS: doc });
+    expect(config.agents.defaults.compaction?.model).toBe('deepseek/deepseek-chat');
+  });
+});
+
 describe('write-config vision models', () => {
   const VISION_PROVIDERS = JSON.stringify({
     providers: [{
