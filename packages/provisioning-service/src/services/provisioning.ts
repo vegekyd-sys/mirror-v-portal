@@ -115,9 +115,9 @@ export async function provisionTenant(
   const pvcSize = options.agentPvcSize || process.env.AGENT_PVC_SIZE || '100Gi';
   const pvcStorageClass = options.agentPvcStorageClass || process.env.AGENT_PVC_STORAGE_CLASS || 'alibabacloud-cnfs-nas';
   const pvcAccessMode = options.agentPvcAccessMode || (process.env.AGENT_PVC_ACCESS_MODE as 'ReadWriteOnce' | 'ReadWriteMany') || 'ReadWriteOnce';
-  // dealclaw-agent 规格（2026-08-27 起 2 核 / 4Gi，可通过环境变量调整无需发版）
-  const agentCpuRequest = process.env.AGENT_CPU_REQUEST || '2';
-  const agentMemRequest = process.env.AGENT_MEM_REQUEST || '4Gi';
+  // dealclaw-agent 规格：limit 2 核 / 4Gi（OOM 防护），request 1 核 / 2Gi（调度占位，避免集群超卖）
+  const agentCpuRequest = process.env.AGENT_CPU_REQUEST || '1';
+  const agentMemRequest = process.env.AGENT_MEM_REQUEST || '2Gi';
   const agentCpuLimit = process.env.AGENT_CPU_LIMIT || '2';
   const agentMemLimit = process.env.AGENT_MEM_LIMIT || '4Gi';
 
