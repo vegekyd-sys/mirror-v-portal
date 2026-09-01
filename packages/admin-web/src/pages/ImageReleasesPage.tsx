@@ -79,19 +79,32 @@ export default function ImageReleasesPage() {
   }, [sync, load]);
 
   const promote = async (rel: ImageRelease) => {
-    if (
-      !window.confirm(
-        `确认将 ${rel.service} 的滚动发布目标提升为 ${rel.tag}？\n\nops-agent 会在下一个周期（约 10 分钟）把「所有租户」的该服务镜像更新到此版本。`,
-      )
-    )
-      return;
+    const down = isDowngrade(rel);
+    const cur = currentBuildOf(rel.service);
+    const next = buildNum(rel.buildNumber);
+    const confirmMsg = down
+      ? [
+          '⚠️ 警告：这是一次版本回退操作！',
+          '',
+          `${rel.service} 当前滚动目标为 build #${cur}，将回退到 build #${next}（落后 ${cur! - next!} 个构建）。`,
+          `旧版本可能缺少后续修复（如 /v1/llm 路由、安全补丁），回退后可能导致全部租户服务故障。`,
+          '',
+          '如非有意回滚，请点「取消」并选择列表顶部的最新版本。',
+          '确认继续回退？',
+        ].join('\n')
+      : `确认将 ${rel.service} 的滚动发布目标提升为 ${rel.tag}？\n\nops-agent 会在下一个周期（约 10 分钟）把「所有租户」的该服务镜像更新到此版本。`;
+    if (!window.confirm(confirmMsg)) return;
     setBusyTag(`${rel.service}:${rel.tag}`);
     try {
       await api('/v1/admin/image-releases/promote', {
         method: 'POST',
         body: { service: rel.service, tag: rel.tag },
       });
-      flash(`已提升 ${rel.service} → ${rel.tag}，ops-agent 将自动滚动更新全部租户`);
+      flash(
+        down
+          ? `⚠ 已回退 ${rel.service} → ${rel.tag}（build #${cur} → #${next}），ops-agent 将滚动更新全部租户，请留意服务状态`
+          : `已提升 ${rel.service} → ${rel.tag}，ops-agent 将自动滚动更新全部租户`,
+      );
       await load();
     } catch (e) {
       flash(`提升失败：${errMsg(e)}`);
@@ -107,6 +120,25 @@ export default function ImageReleasesPage() {
 
   const visible = filter ? releases.filter((r) => r.service === filter) : releases;
   const targetOf = (service: string) => targets.find((t) => t.service === service)?.tag;
+
+  // ── build 号比较：数值化 buildNumber（CI tag 格式 master.<sha>.<build>）──
+  const buildNum = (n?: string | null): number | null =>
+    n && /^\d+$/.test(n) ? Number(n) : null;
+
+  /** 当前滚动目标的 build 号（从 release 列表里找 target tag 对应的行）。 */
+  const currentBuildOf = (service: string): number | null => {
+    const tag = targetOf(service);
+    if (!tag) return null;
+    const rel = releases.find((r) => r.service === service && r.tag === tag);
+    return buildNum(rel?.buildNumber);
+  };
+
+  /** 该 release 是否为版本回退（build 号低于当前滚动目标）。 */
+  const isDowngrade = (r: ImageRelease): boolean => {
+    const cur = currentBuildOf(r.service);
+    const next = buildNum(r.buildNumber);
+    return cur !== null && next !== null && next < cur;
+  };
 
   return (
     <>
@@ -189,6 +221,10 @@ export default function ImageReleasesPage() {
                   <td>
                     {r.promoted || targetOf(r.service) === r.tag ? (
                       <span className="badge badge-active">滚动发布中</span>
+                    ) : isDowngrade(r) ? (
+                      <span className="badge badge-failed" title="此版本低于当前滚动目标，提升将回退全部租户">
+                        回退旧版
+                      </span>
                     ) : (
                       <span className="badge">已入库</span>
                     )}
@@ -198,11 +234,16 @@ export default function ImageReleasesPage() {
                       <span style={{ fontSize: 12, color: '#999' }}>当前目标</span>
                     ) : (
                       <button
-                        className="btn-secondary btn-sm"
+                        className={isDowngrade(r) ? 'btn-danger btn-sm' : 'btn-secondary btn-sm'}
                         disabled={busyTag === `${r.service}:${r.tag}`}
                         onClick={() => void promote(r)}
+                        title={
+                          isDowngrade(r)
+                            ? `警告：build #${buildNum(r.buildNumber)} 低于当前目标 #${currentBuildOf(r.service)}，提升将导致全部租户回退到旧版本`
+                            : undefined
+                        }
                       >
-                        <IconRocket size={12} /> 提升发布
+                        <IconRocket size={12} /> {isDowngrade(r) ? '回退发布' : '提升发布'}
                       </button>
                     )}
                   </td>
