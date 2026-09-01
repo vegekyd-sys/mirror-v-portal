@@ -61,6 +61,14 @@ export interface LlmProvidersConfig {
   /** '<providerName>/<modelId>' — the agent's image-understanding (vision) model. */
   imageModel: string | null;
   /**
+   * '<providerName>/<modelId>' — the SYSTEM-DEFAULT compaction (context
+   * summarisation) model. null → compaction follows each tenant's primary
+   * model. Compaction prompts are long-context, so pointing this at a
+   * fast-TTFB model fleet-wide avoids safeguard timeouts on slow primaries
+   * (see the 2026-09-01 foldin incident).
+   */
+  compactionModel: string | null;
+  /**
    * Ordered '<providerName>/<modelId>' fallback chain baked into the agent's
    * `agents.defaults.model.fallbacks` (OpenClaw model failover). When the
    * primary model fails over-worthy (timeout / rate limit / auth failure /
@@ -223,6 +231,16 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     }
   }
 
+  const compactionModel = str(raw.compactionModel) || null;
+  if (compactionModel) {
+    const [pName, ...rest] = compactionModel.split('/');
+    const modelId = rest.join('/');
+    const provider = providers.find((p) => p.name === pName);
+    if (!provider || !provider.models.some((m) => m.id === modelId)) {
+      throw new LlmProvidersError(`压缩模型 ${compactionModel} 不在已配置的提供商/模型列表中`);
+    }
+  }
+
   const fallbackModels: string[] = [];
   const fallbacksRaw = raw.fallbackModels;
   if (fallbacksRaw !== undefined && fallbacksRaw !== null) {
@@ -235,7 +253,7 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     for (const f of fallbacksRaw) {
       const ref = str(f);
       if (!ref) continue;
-      if (!modelExistsIn({ providers, defaultModel, imageModel, fallbackModels }, ref)) {
+      if (!modelExistsIn({ providers, defaultModel, imageModel, compactionModel, fallbackModels }, ref)) {
         throw new LlmProvidersError(`备用模型 ${ref} 不在已配置的提供商/模型列表中`);
       }
       if (defaultModel && ref === defaultModel) {
@@ -246,7 +264,7 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     }
   }
 
-  return { providers, defaultModel, imageModel, fallbackModels };
+  return { providers, defaultModel, imageModel, compactionModel, fallbackModels };
 }
 
 /** True when '<provider>/<modelId>' exists in the given provider doc. */
@@ -292,6 +310,22 @@ export function effectiveImageRefIn(
   if (!doc) return null;
   if (imageSelection && visionModelExistsIn(doc, imageSelection)) return imageSelection;
   if (doc.imageModel && visionModelExistsIn(doc, doc.imageModel)) return doc.imageModel;
+  return null;
+}
+
+/**
+ * The compaction model ref a tenant would actually use, WITHOUT the final
+ * fallback to the primary: a resolvable tenant selection wins, otherwise the
+ * library's global compactionModel. null → the caller falls back to the
+ * effective primary (compaction follows the primary by default).
+ */
+export function effectiveCompactionRefIn(
+  doc: LlmProvidersConfig | null,
+  compactionSelection: string | null,
+): string | null {
+  if (!doc) return null;
+  if (compactionSelection && modelExistsIn(doc, compactionSelection)) return compactionSelection;
+  if (doc.compactionModel && modelExistsIn(doc, doc.compactionModel)) return doc.compactionModel;
   return null;
 }
 
@@ -405,13 +439,11 @@ export function tenantNeedsLlmRestart(
     return true;
   }
 
-  // Compaction model (tenant override-aware, falls back to the primary).
-  const beforeCompaction = selCompaction && prev && modelExistsIn(prev, selCompaction)
-    ? selCompaction
-    : effectiveRefIn(prev, selDefault);
-  const afterCompaction = selCompaction && now && modelExistsIn(now, selCompaction)
-    ? selCompaction
-    : effectiveRefIn(now, selDefault);
+  // Compaction model (tenant override → global → primary fallback chain).
+  const beforeCompaction = effectiveCompactionRefIn(prev, selCompaction)
+    ?? effectiveRefIn(prev, selDefault);
+  const afterCompaction = effectiveCompactionRefIn(now, selCompaction)
+    ?? effectiveRefIn(now, selDefault);
   if (beforeCompaction !== afterCompaction) return true;
   if (modelSpecSignature(prev, beforeCompaction) !== modelSpecSignature(now, afterCompaction)) {
     return true;
@@ -601,10 +633,11 @@ export async function resolveEffectiveLlmProviders(
     imageSelection ?? (globalConfig.imageModel && visionModelExistsIn(globalConfig, globalConfig.imageModel)
       ? globalConfig.imageModel
       : null);
-  // Compaction follows the effective primary unless the tenant overrides it
-  // (compaction prompts are long-context; a faster-TTFB model keeps the
-  // safeguard from timing out — the 2026-09-01 foldin incident).
-  const effectiveCompactionModel = compactionSelection ?? effectiveModel;
+  // Compaction: tenant override → global compaction model → the effective
+  // primary (compaction prompts are long-context; a faster-TTFB model keeps
+  // the safeguard from timing out — the 2026-09-01 foldin incident).
+  const effectiveCompactionModel =
+    effectiveCompactionRefIn(globalConfig, sel?.compactionModel ?? null) ?? effectiveModel;
   // Tenant override wins over the library chain; both are then filtered to
   // exclude THIS tenant's effective primary (no-op retry) and entries that
   // no longer resolve.

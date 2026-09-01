@@ -307,9 +307,9 @@ export function createRuntimeConfigRoutes(
   // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
-      const { providers, defaultModel, imageModel, fallbackModels } = req.body ?? {};
+      const { providers, defaultModel, imageModel, compactionModel, fallbackModels } = req.body ?? {};
 
-      const doc = validateLlmProviders({ providers, defaultModel, imageModel, fallbackModels });
+      const doc = validateLlmProviders({ providers, defaultModel, imageModel, compactionModel, fallbackModels });
 
       // Snapshot the PREVIOUS library before overwriting — the differential
       // push uses it to roll only tenants whose live model actually changed.
@@ -347,6 +347,7 @@ export function createRuntimeConfigRoutes(
           })),
           defaultModel: doc.defaultModel,
           imageModel: doc.imageModel,
+          compactionModel: doc.compactionModel,
           push,
         },
         statusCode: 200,
@@ -427,6 +428,7 @@ export function createRuntimeConfigRoutes(
         libraryEmpty: !library || library.providers.length === 0,
         globalDefaultModel: library?.defaultModel ?? null,
         globalImageModel: library?.imageModel ?? null,
+        globalCompactionModel: library?.compactionModel ?? null,
         directMode: rawSelection?.directMode === true,
       });
     } catch (err) {

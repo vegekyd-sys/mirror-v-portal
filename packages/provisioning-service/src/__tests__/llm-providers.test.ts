@@ -171,6 +171,12 @@ describe('validateLlmProviders', () => {
     expect(doc.providers[1].models).toEqual([{ id: 'glm-4.5' }]);
     expect(doc.defaultModel).toBe('qwen/qwen-max');
     expect(doc.imageModel).toBe('qwen/qwen-vl-plus');
+    expect(doc.compactionModel).toBeNull();
+  });
+
+  it('accepts a compactionModel inside the library and rejects one outside', () => {
+    expect(validateLlmProviders({ ...goodDoc, compactionModel: 'glm/glm-4.5' }).compactionModel).toBe('glm/glm-4.5');
+    expect(() => validateLlmProviders({ ...goodDoc, compactionModel: 'kimi/moonshot' })).toThrow(/压缩模型/);
   });
 
   it('rejects duplicate provider names', () => {
@@ -510,6 +516,50 @@ describe('resolveEffectiveLlmProviders', () => {
     const r = await resolveEffectiveLlmProviders(pool, 't123');
     expect(r.compactionSelection).toBeNull();
     expect(r.effectiveCompactionModel).toBe('qwen/qwen-max');
+  });
+
+  it('the GLOBAL compaction model applies to tenants without their own override', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify({ ...goodDoc, compactionModel: 'glm/glm-4.5' }) }],
+      // tenant selects a different primary but no compaction override
+      tenantSelectionRow: [{ encrypted_value: 'enc:' + JSON.stringify({ defaultModel: 'qwen/qwen-max' }) }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.compactionSelection).toBeNull();
+    expect(r.effectiveModel).toBe('qwen/qwen-max');
+    expect(r.effectiveCompactionModel).toBe('glm/glm-4.5');
+    expect(JSON.parse(r.blob!).compactionModel).toBe('glm/glm-4.5');
+  });
+
+  it('a tenant compaction override wins over the GLOBAL compaction model', async () => {
+    const pool = makeFakePool({
+      globalLlmRow: [{ encrypted_value: 'enc:' + JSON.stringify({ ...goodDoc, compactionModel: 'glm/glm-4.5' }) }],
+      tenantSelectionRow: [{
+        encrypted_value: 'enc:' + JSON.stringify({
+          defaultModel: 'qwen/qwen-max',
+          compactionModel: 'qwen/qwq-plus',
+        }),
+      }],
+    });
+    const r = await resolveEffectiveLlmProviders(pool, 't123');
+    expect(r.effectiveCompactionModel).toBe('qwen/qwq-plus');
+  });
+
+  it('changing the global compaction model requires a restart for follower tenants', () => {
+    const prev = validateLlmProviders(goodDoc);
+    const now = validateLlmProviders({ ...goodDoc, compactionModel: 'glm/glm-4.5' });
+    // follower: no tenant selection at all
+    expect(tenantNeedsLlmRestart(prev, now, null)).toBe(true);
+    // tenant with its own compaction override is unaffected by the global change
+    expect(
+      tenantNeedsLlmRestart(prev, now, {
+        defaultModel: 'qwen/qwen-max',
+        imageModel: null,
+        compactionModel: 'qwen/qwq-plus',
+        fallbackModels: null,
+        directMode: false,
+      }),
+    ).toBe(false);
   });
 
   it('getTenantModelSelection tolerates corrupt rows', async () => {

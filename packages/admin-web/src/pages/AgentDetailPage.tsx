@@ -530,6 +530,7 @@ export default function AgentDetailPage() {
     libraryEmpty: boolean;
     globalDefaultModel: string | null;
     globalImageModel: string | null;
+    globalCompactionModel: string | null;
     directMode: boolean;
   }
   interface LlmLibraryProvider {
@@ -540,7 +541,7 @@ export default function AgentDetailPage() {
   const [llmLib, setLlmLib] = useState<LlmLibraryProvider[]>([]);
   const [llmChoice, setLlmChoice] = useState('');
   const [llmImageChoice, setLlmImageChoice] = useState('');
-  // Compaction（上下文压缩）模型：空 = 跟随主模型。
+  // Compaction（上下文压缩）模型：空 = 跟随系统默认（全局压缩模型 ?? 主模型）。
   const [llmCompactionChoice, setLlmCompactionChoice] = useState('');
   // directMode 开关已从 UI 隐藏（2026-09-01）：state 仅透传保存，
   // 保持存量 direct-mode 租户的值不被静默翻转。
@@ -1231,7 +1232,7 @@ export default function AgentDetailPage() {
                   style={{ flex: '0 1 320px' }}
                   disabled={llmBusy}
                 >
-                  <option value="">跟随主模型（当前：{llmSel.effectiveModel || '未设置'}）</option>
+                  <option value="">跟随系统默认（当前：{llmSel.effectiveCompactionModel || '未设置'}）</option>
                   {llmLib.flatMap((p) =>
                     p.models.map((m) => (
                       <option key={`cmp-${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
@@ -1241,7 +1242,7 @@ export default function AgentDetailPage() {
                   )}
                 </select>
                 <span className="hint">
-                  上下文超限时的历史摘要（compaction）模型：压缩请求是长 prompt，主模型出字慢时可换快模型，避免压缩超时导致「Context is too large」
+                  上下文超限时的历史摘要（compaction）模型：压缩请求是长 prompt，主模型出字慢时可换快模型，避免压缩超时导致「Context is too large」；默认跟随系统压缩模型（未设置时跟随主模型），本 Agent 可单独覆盖
                 </span>
               </div>
               <div className="form-row" style={{ alignItems: 'flex-start' }}>

@@ -43,12 +43,14 @@ interface LlmDoc {
   providers: LlmProvider[];
   defaultModel: string | null;
   imageModel: string | null;
+  /** 系统默认压缩模型（compaction 用；null = 跟随各租户主模型）。 */
+  compactionModel: string | null;
   /** 有序备用模型链（'<provider>/<model>'，最多 5 个，不含主模型）。 */
   fallbackModels: string[];
 }
 
 export default function LlmProvidersPage() {
-  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null, imageModel: null, fallbackModels: [] });
+  const [llmDoc, setLlmDoc] = useState<LlmDoc>({ providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [] });
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -100,12 +102,12 @@ export default function LlmProvidersPage() {
   const load = useCallback(async () => {
     try {
       const r = await api<{ config: LlmDoc | null }>('/v1/admin/llm-providers');
-      // 老后端返回的 config 可能没有 fallbackModels 字段，做兼容回退
+      // 老后端返回的 config 可能没有 fallbackModels/compactionModel 字段，做兼容回退
       const cfg = r.config;
       setLlmDoc(
         cfg
-          ? { providers: cfg.providers, defaultModel: cfg.defaultModel, imageModel: cfg.imageModel, fallbackModels: cfg.fallbackModels ?? [] }
-          : { providers: [], defaultModel: null, imageModel: null, fallbackModels: [] },
+          ? { providers: cfg.providers, defaultModel: cfg.defaultModel, imageModel: cfg.imageModel, compactionModel: cfg.compactionModel ?? null, fallbackModels: cfg.fallbackModels ?? [] }
+          : { providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [] },
       );
       setError('');
     } catch (e) {
@@ -203,19 +205,22 @@ export default function LlmProvidersPage() {
     const imageModel = isVisionRefValid(providers, llmDoc.imageModel)
       ? llmDoc.imageModel
       : null;
+    const compactionModel = llmDoc.compactionModel && modelRefExists(providers, llmDoc.compactionModel)
+      ? llmDoc.compactionModel
+      : null;
     // 模型列表可能变化（编辑供应商删掉某模型），同步清理失效的备用链引用
     const fallbackModels = sanitizeFallbacks(providers, defaultModel, llmDoc.fallbackModels);
     if (fallbackModels.length !== llmDoc.fallbackModels.length) {
       flashLp('部分备用模型引用已因模型列表变化失效，已自动移除');
     }
-    setLlmDoc({ providers, defaultModel, imageModel, fallbackModels });
+    setLlmDoc({ providers, defaultModel, imageModel, compactionModel, fallbackModels });
     setLpEditing(null);
     setLpName('');
     setLpBaseUrl('');
     setLpApiKey('');
     setLpModels('');
     flashLp(lpEditing ? `正在更新供应商 ${name}…` : `正在写入供应商 ${name}…`);
-    void persistLibrary(providers, defaultModel, imageModel, fallbackModels, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, compactionModel, fallbackModels, lpEditing ? `更新供应商 ${name}` : `添加供应商 ${name}`);
   };
 
   const editProvider = (p: LlmProvider) => {
@@ -239,12 +244,17 @@ export default function LlmProvidersPage() {
       imageModel = null;
       flashLp(`系统视觉模型 ${llmDoc.imageModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
     }
+    let compactionModel = llmDoc.compactionModel;
+    if (compactionModel && compactionModel.startsWith(`${name}/`)) {
+      compactionModel = null;
+      flashLp(`系统压缩模型 ${llmDoc.compactionModel} 属于被移除的供应商，已一并清空，请重新选择`, true);
+    }
     // 被移除供应商下的备用模型引用一并清掉
     const fallbackModels = sanitizeFallbacks(providers, defaultModel, llmDoc.fallbackModels);
     if (fallbackModels.length !== llmDoc.fallbackModels.length) {
       flashLp(`备用链中 ${llmDoc.fallbackModels.filter((r) => !fallbackModels.includes(r)).join('、')} 属于被移除的供应商，已一并移除`);
     }
-    setLlmDoc({ providers, defaultModel, imageModel, fallbackModels });
+    setLlmDoc({ providers, defaultModel, imageModel, compactionModel, fallbackModels });
     if (lpEditing === name) {
       setLpEditing(null);
       setLpName('');
@@ -252,7 +262,7 @@ export default function LlmProvidersPage() {
       setLpApiKey('');
       setLpModels('');
     }
-    void persistLibrary(providers, defaultModel, imageModel, fallbackModels, `移除供应商 ${name}`);
+    void persistLibrary(providers, defaultModel, imageModel, compactionModel, fallbackModels, `移除供应商 ${name}`);
   };
 
   /**
@@ -264,6 +274,7 @@ export default function LlmProvidersPage() {
     providers: LlmProvider[],
     defaultModel: string | null,
     imageModel: string | null,
+    compactionModel: string | null,
     fallbackModels: string[],
     opText: string,
   ) => {
@@ -276,7 +287,7 @@ export default function LlmProvidersPage() {
       } else {
         const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
           method: 'PUT',
-          body: { providers, defaultModel, imageModel, fallbackModels },
+          body: { providers, defaultModel, imageModel, compactionModel, fallbackModels },
         });
         flash(`${opText}，已生效。${r.push?.hint || ''}`);
         log(`${opText}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
@@ -335,14 +346,15 @@ export default function LlmProvidersPage() {
       }
     }
     const imageModel = isVisionRefValid(llmDoc.providers, llmDoc.imageModel) ? llmDoc.imageModel : null;
+    const compactionModel = llmDoc.compactionModel && modelRefExists(llmDoc.providers, llmDoc.compactionModel) ? llmDoc.compactionModel : null;
     // 新默认模型若在备用链中需移出（后端校验备用链不得包含主模型）
     const removedFromChain = next !== null && llmDoc.fallbackModels.includes(next);
     const fallbackModels = sanitizeFallbacks(llmDoc.providers, next, llmDoc.fallbackModels);
-    setLlmDoc((d) => ({ ...d, defaultModel: next, imageModel, fallbackModels }));
+    setLlmDoc((d) => ({ ...d, defaultModel: next, imageModel, compactionModel, fallbackModels }));
     const opText = next
       ? `设置系统默认模型为 ${next}${removedFromChain ? '（已从备用链移出）' : ''}`
       : '清空系统默认模型';
-    void persistLibrary(llmDoc.providers, next, imageModel, fallbackModels, opText);
+    void persistLibrary(llmDoc.providers, next, imageModel, compactionModel, fallbackModels, opText);
   };
 
   /** 切换系统视觉模型：替换已有值时弹确认，确认后即时保存。 */
@@ -357,14 +369,29 @@ export default function LlmProvidersPage() {
       }
     }
     setLlmDoc((d) => ({ ...d, imageModel: next }));
-    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, next, llmDoc.fallbackModels, next ? `设置系统视觉模型为 ${next}` : '清空系统视觉模型');
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, next, llmDoc.compactionModel, llmDoc.fallbackModels, next ? `设置系统视觉模型为 ${next}` : '清空系统视觉模型');
+  };
+
+  /** 切换系统压缩模型：替换已有值时弹确认，确认后即时保存。 */
+  const changeCompactionModel = (raw: string) => {
+    const next = raw || null;
+    const prev = llmDoc.compactionModel;
+    if (prev === next) return;
+    if (prev && next) {
+      if (!window.confirm(`系统压缩模型将由「${prev}」替换为「${next}」？确认后将立即生效并推送所有租户。`)) {
+        setLlmDoc((d) => ({ ...d, compactionModel: prev })); // 强制回滚 select 显示
+        return;
+      }
+    }
+    setLlmDoc((d) => ({ ...d, compactionModel: next }));
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, llmDoc.imageModel, next, llmDoc.fallbackModels, next ? `设置系统压缩模型为 ${next}` : '清空系统压缩模型');
   };
 
   /** 备用链变更统一入口：校验后即时保存（与默认/视觉模型一致的即时生效模式）。 */
   const mutateFallbacks = (next: string[], opText: string) => {
     const fallbackModels = sanitizeFallbacks(llmDoc.providers, llmDoc.defaultModel, next);
     setLlmDoc((d) => ({ ...d, fallbackModels }));
-    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, llmDoc.imageModel, fallbackModels, opText);
+    void persistLibrary(llmDoc.providers, llmDoc.defaultModel, llmDoc.imageModel, llmDoc.compactionModel, fallbackModels, opText);
   };
 
   const addFallback = (ref: string) => {
@@ -572,6 +599,27 @@ export default function LlmProvidersPage() {
             )}
           </select>
           <span className="hint">仅列出带 :vision 标记的模型（替换已有视觉模型会先弹确认）</span>
+        </div>
+        <div className="form-row">
+          <label className="field-label">系统压缩模型</label>
+          <select
+            value={llmDoc.compactionModel || ''}
+            onChange={(e) => changeCompactionModel(e.target.value)}
+            style={{ flex: '0 1 280px' }}
+            disabled={busy}
+          >
+            <option value="">— 不设置（上下文压缩跟随各租户主模型） —</option>
+            {llmDoc.providers.flatMap((p) =>
+              p.models.map((m) => (
+                <option key={`cmp-${p.name}/${m.id}`} value={`${p.name}/${m.id}`}>
+                  {p.name}/{m.id}
+                </option>
+              )),
+            )}
+          </select>
+          <span className="hint">
+            上下文超限时的历史摘要（compaction）模型：压缩请求是长 prompt，主模型出字慢的租户可统一指到快模型，避免压缩超时报「Context is too large」（替换已有压缩模型会先弹确认）
+          </span>
         </div>
         <div className="form-row" style={{ alignItems: 'flex-start' }}>
           <label className="field-label" style={{ paddingTop: 8 }}>备用模型链</label>
