@@ -209,6 +209,39 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON chat_messages(tenant_id, session_key, created_at DESC);
     `);
 
+    // Audit log (v0.9): every mutating admin/tenant operation is recorded —
+    // both an automatic Express middleware capture (method/path/body, no
+    // old-value) and explicit writes from high-risk handlers (old→new, e.g.
+    // image-release promote, llm-provider updates, tenant status changes).
+    //   - actor: admin JWT username, 'service-token' for machine callers, or
+    //     'external:<keyPrefix>' for third-party API-key callers.
+    //   - old_value/new_value: JSONB snapshots with secrets redacted.
+    // Retention: pruned after 180 days (services/audit.ts pruneAuditLogs).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id            BIGSERIAL PRIMARY KEY,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        actor         TEXT NOT NULL,
+        actor_type    TEXT NOT NULL DEFAULT 'admin' CHECK (actor_type IN ('admin','service','external')),
+        action        TEXT NOT NULL,
+        method        TEXT,
+        path          TEXT,
+        resource_type TEXT,
+        resource_id   TEXT,
+        tenant_id     TEXT,
+        old_value     JSONB,
+        new_value     JSONB,
+        status_code   INTEGER,
+        duration_ms   INTEGER,
+        ip            TEXT,
+        request_id    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_time ON audit_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant ON audit_logs(tenant_id, created_at DESC) WHERE tenant_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor, created_at DESC);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

@@ -17,6 +17,7 @@ import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
+import AuditLogsPage from './pages/AuditLogsPage';
 import ChatPage from './pages/ChatPage';
 
 // Router basename mirrors vite `base` (phase 3: '/' → empty basename).
@@ -55,6 +56,7 @@ export default function App() {
             <Route path="pricing" element={<SkillPricesPage />} />
             <Route path="skills" element={<SkillsPage />} />
             <Route path="image-releases" element={<ImageReleasesPage />} />
+            <Route path="audit-logs" element={<AuditLogsPage />} />
             <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="external-api-keys" element={<ExternalApiKeysPage />} />

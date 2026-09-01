@@ -26,6 +26,7 @@ import {
   visionModelExistsIn,
 } from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
+import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 
 /**
  * Admin API for per-tenant runtime configuration.
@@ -52,6 +53,12 @@ export function createRuntimeConfigRoutes(
   if (authMiddleware) {
     router.use(authMiddleware);
   }
+
+  /** Explicit old→new audit write for high-risk config mutations. */
+  const auditFor = (req: Request, entry: Omit<AuditEntry, 'actor' | 'actorType'>) => {
+    const { actor, actorType } = actorFromRequest(req);
+    return writeAuditLog(pool, { ...entry, actor, actorType });
+  };
 
   function masterKeyAvailable(): boolean {
     try {
@@ -181,6 +188,18 @@ export function createRuntimeConfigRoutes(
       // skill-env Secret (hot). LLM_PROVIDERS never gets here (rejected
       // above; it lives on the dedicated provider endpoint).
       const push = await pushAfterWrite(scope);
+
+      await auditFor(req, {
+        action: 'runtime-config.upsert',
+        method: 'PUT',
+        path: '/v1/admin/runtime-configs',
+        resourceType: 'runtime_config',
+        resourceId: `${scope ?? 'global'}:${key}`,
+        tenantId: scope ?? undefined,
+        newValue: { key, isSecret: isSecret === true, value: isSecret === true ? '***' : value, push },
+        statusCode: 200,
+      });
+
       res.json({ ok: true, key, tenantId: scope, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {
@@ -227,6 +246,19 @@ export function createRuntimeConfigRoutes(
         return;
       }
       const push = await pushAfterWrite(tenantId);
+
+      await auditFor(req, {
+        action: 'runtime-config.delete',
+        method: 'DELETE',
+        path: `/v1/admin/runtime-configs/${key}`,
+        resourceType: 'runtime_config',
+        resourceId: `${tenantId ?? 'global'}:${key}`,
+        tenantId: tenantId ?? undefined,
+        oldValue: { key, scope: tenantId ?? 'global' },
+        newValue: null,
+        statusCode: 200,
+      });
+
       res.json({ ok: true, key, tenantId, push });
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Invalid config key')) {
@@ -295,6 +327,31 @@ export function createRuntimeConfigRoutes(
       });
 
       const push = await pushLlmProviders(pool, config, null, prevLibrary);
+
+      // Audit: the global provider library affects every tenant's model
+      // egress. prevLibrary → doc with apiKey redacted by writeAuditLog.
+      await auditFor(req, {
+        action: 'llm-provider.update',
+        method: 'PUT',
+        path: '/v1/admin/llm-providers',
+        resourceType: 'llm_provider_library',
+        resourceId: 'global',
+        oldValue: prevLibrary
+          ? { providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }
+          : null,
+        newValue: {
+          providers: doc.providers.map((p: any) => ({
+            name: p.name,
+            baseUrl: p.baseUrl,
+            models: Array.isArray(p.models) ? p.models.length : p.models,
+          })),
+          defaultModel: doc.defaultModel,
+          imageModel: doc.imageModel,
+          push,
+        },
+        statusCode: 200,
+      });
+
       res.json({ ok: true, push });
     } catch (err) {
       if (err instanceof MasterKeyError) {
@@ -311,7 +368,7 @@ export function createRuntimeConfigRoutes(
   });
 
   // DELETE /v1/admin/llm-providers — clear the global library + push all tenants
-  router.delete('/v1/admin/llm-providers', async (_req: Request, res: Response) => {
+  router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     try {
       const prevLibrary = await getGlobalLlmProviders(pool);
       const deleted = await deleteRuntimeConfig(pool, null, LLM_PROVIDERS_KEY);
@@ -320,6 +377,20 @@ export function createRuntimeConfigRoutes(
         return;
       }
       const push = await pushLlmProviders(pool, config, null, prevLibrary);
+
+      await auditFor(req, {
+        action: 'llm-provider.delete',
+        method: 'DELETE',
+        path: '/v1/admin/llm-providers',
+        resourceType: 'llm_provider_library',
+        resourceId: 'global',
+        oldValue: prevLibrary
+          ? { providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }
+          : null,
+        newValue: null,
+        statusCode: 200,
+      });
+
       res.json({ ok: true, push });
     } catch (err) {
       console.error('DELETE llm-providers failed:', err);
@@ -491,6 +562,31 @@ export function createRuntimeConfigRoutes(
       }
 
       const push = await pushLlmProviders(pool, config, tenantId);
+
+      await auditFor(req, {
+        action: 'llm-provider.selection',
+        method: 'PUT',
+        path: '/v1/admin/llm-providers/selection',
+        resourceType: 'llm_model_selection',
+        resourceId: tenantId,
+        tenantId,
+        oldValue: current
+          ? {
+              defaultModel: current.defaultModel ?? null,
+              imageModel: current.imageModel ?? null,
+              fallbackModels: current.fallbackModels ?? null,
+              directMode: current.directMode === true,
+            }
+          : null,
+        newValue: {
+          defaultModel: nextDefault,
+          imageModel: nextImage,
+          fallbackModels: nextFallbacks,
+          directMode: nextDirect,
+        },
+        statusCode: 200,
+      });
+
       res.json({
         ok: true,
         tenantId,

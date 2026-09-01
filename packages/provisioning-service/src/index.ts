@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
 import { syncImageReleases } from './services/registry-sync.js';
+import { pruneAuditLogs } from './services/audit.js';
 import { attachPodExecWebSocket } from './ws/pod-exec.js';
 
 async function main() {
@@ -50,6 +51,20 @@ async function main() {
   runRegistrySync('boot');
   const registrySyncTimer = setInterval(() => runRegistrySync('periodic'), 30 * 60 * 1000);
   registrySyncTimer.unref();
+
+  // Audit log retention — prune rows older than 180 days, daily. Volume is
+  // small (admin operations only; chat ingest is excluded), so a simple
+  // interval keeps the table bounded without external tooling.
+  const AUDIT_RETENTION_DAYS = 180;
+  const runAuditPrune = (trigger: string) =>
+    pruneAuditLogs(pool, AUDIT_RETENTION_DAYS)
+      .then((deleted) => {
+        if (deleted > 0) console.log(`[audit] ${trigger}: pruned ${deleted} rows older than ${AUDIT_RETENTION_DAYS}d`);
+      })
+      .catch((err) => console.error(`[audit] ${trigger} error:`, err));
+  runAuditPrune('boot');
+  const auditPruneTimer = setInterval(() => runAuditPrune('daily'), 24 * 60 * 60 * 1000);
+  auditPruneTimer.unref();
 
   // Graceful shutdown
   const shutdown = async () => {

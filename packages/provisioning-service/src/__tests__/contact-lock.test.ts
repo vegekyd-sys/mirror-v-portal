@@ -49,8 +49,10 @@ function makePool(tenantExists = true) {
         state.imOpenId = String(params?.[1] ?? '');
         return { rows: [], rowCount: 1 };
       }
-      if (sql.includes('SELECT im_open_id FROM tenants')) {
-        return { rows: state.exists ? [{ im_open_id: state.imOpenId }] : [], rowCount: state.exists ? 1 : 0 };
+      // SELECT of the tenant's current contact — used by the PATCH fallback
+      // ("already captured?") and by DELETE (pre-reset snapshot for audit).
+      if (sql.includes('FROM tenants WHERE tenant_id') && sql.trim().startsWith('SELECT')) {
+        return { rows: state.exists ? [{ platform: 'feishu', im_open_id: state.imOpenId }] : [], rowCount: state.exists ? 1 : 0 };
       }
       if (sql.includes('SET im_open_id = NULL')) {
         // DELETE reset

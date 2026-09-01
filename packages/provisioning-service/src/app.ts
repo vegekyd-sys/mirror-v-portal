@@ -12,6 +12,7 @@ import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
+import { createAuditMiddleware } from './services/audit.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   const app = express();
@@ -34,6 +35,14 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // JWT (pure-frontend admin SPA calling directly, no proxy in front).
   const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
 
+  // Audit: every non-GET auth-passed request is auto-recorded (actor, path,
+  // redacted body, status). Chained AFTER auth so req.adminUser is set; high-
+  // risk handlers additionally write explicit old→new rows via writeAuditLog.
+  const audit = createAuditMiddleware(pool);
+  const authAndAudit: typeof auth = (req, res, next) => {
+    auth(req, res, () => audit(req, res, next));
+  };
+
   // External API routes — third-party API key auth (managed in admin console).
   // MUST be mounted BEFORE the auth-protected routers below: those routers
   // call router.use(authMiddleware) (no path), which would otherwise block
@@ -43,19 +52,20 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // external API-key auth + supplier→tenant isolation as supplier-summary above.
   app.use(createConversationExternalRoutes(pool, config));
 
-  app.use(createTenantRoutes(pool, config, auth));
-  app.use(createRuntimeConfigRoutes(pool, config, auth));
-  app.use(createAdminOpsRoutes(pool, config, auth));
+  app.use(createTenantRoutes(pool, config, authAndAudit));
+  app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
+  app.use(createAdminOpsRoutes(pool, config, authAndAudit));
   // Pod logs (admin console) — GET /v1/tenants/:id/logs[/stream]. The pod
   // terminal (exec) is NOT here: it is a WebSocket and attaches to the HTTP
   // server directly in index.ts (see ws/pod-exec.ts).
-  app.use(createPodConsoleRoutes(pool, config, auth));
+  app.use(createPodConsoleRoutes(pool, config, authAndAudit));
   // Chat message log — ingest from the in-agent dealclaw-chatlog plugin +
-  // conversation-history queries for the admin console.
-  app.use(createChatMessageRoutes(pool, config, auth));
+  // conversation-history queries for the admin console. (The ingest endpoint
+  // is high-volume machine traffic and is excluded from the audit net.)
+  app.use(createChatMessageRoutes(pool, config, authAndAudit));
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
-  app.use(createFeishuAppScanRoutes(auth));
+  app.use(createFeishuAppScanRoutes(authAndAudit));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

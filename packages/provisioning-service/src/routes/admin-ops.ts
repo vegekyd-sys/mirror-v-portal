@@ -17,6 +17,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
 import { syncImageReleases } from '../services/registry-sync.js';
+import { actorFromRequest, writeAuditLog } from '../services/audit.js';
 import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from '../services/external-api-keys.js';
 import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
 
@@ -121,12 +122,36 @@ export function createAdminOpsRoutes(
         return;
       }
 
+      // Audit snapshot BEFORE the update (old→new), so fleet regressions can
+      // be traced even after rollout_targets is overwritten (see the
+      // 2026-08-31 e3d43339.7 incident).
+      const { rows: prevRows } = await pool.query(
+        'SELECT tag, updated_by, updated_at FROM rollout_targets WHERE service = $1',
+        [service],
+      );
+      const { actor, actorType } = actorFromRequest(req);
+
       await pool.query(
         `INSERT INTO rollout_targets (service, tag, updated_by, updated_at)
          VALUES ($1, $2, $3, NOW())
          ON CONFLICT (service) DO UPDATE SET tag = EXCLUDED.tag, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-        [service, tag, adminIdentity(req)],
+        [service, tag, actor],
       );
+
+      await writeAuditLog(pool, {
+        actor,
+        actorType,
+        action: 'image-release.promote',
+        method: 'POST',
+        path: '/v1/admin/image-releases/promote',
+        resourceType: 'rollout_target',
+        resourceId: service,
+        oldValue: prevRows.length
+          ? { tag: prevRows[0].tag, updatedBy: prevRows[0].updated_by, updatedAt: prevRows[0].updated_at }
+          : null,
+        newValue: { tag, image: rows[0].image },
+        statusCode: 200,
+      });
 
       res.json({ ok: true, service, tag, image: rows[0].image, action: 'promoted' });
     } catch (err: unknown) {
@@ -148,6 +173,65 @@ export function createAdminOpsRoutes(
     } catch (err: unknown) {
       const e = err as any;
       console.error('List rollout targets failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'List failed' });
+    }
+  });
+
+  // GET /v1/admin/audit-logs — paginated audit trail with filters.
+  // Powers the admin console's 审计日志 page. Supported filters:
+  //   actor, action (exact), tenantId, from/to (ISO datetime), limit/offset.
+  router.get('/v1/admin/audit-logs', async (req: Request, res: Response) => {
+    try {
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      const add = (clause: string, value: unknown) => {
+        params.push(value);
+        conditions.push(clause.replace('$?', `$${params.length}`));
+      };
+
+      const { actor, action, tenantId, from, to } = req.query as Record<string, string | undefined>;
+      if (actor && actor.trim()) add('actor = $?', actor.trim());
+      if (action && action.trim()) add('action = $?', action.trim());
+      if (tenantId && tenantId.trim()) add('tenant_id = $?', tenantId.trim());
+      if (from && /^\d{4}-\d{2}-\d{2}/.test(from)) add('created_at >= $?', from);
+      if (to && /^\d{4}-\d{2}-\d{2}/.test(to)) {
+        // Date-only "to" is inclusive: append one day so the last day shows.
+        const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(to);
+        add('created_at < $?', dayOnly ? `${to}T23:59:59.999Z` : to);
+      }
+
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const { rows } = await pool.query(
+        `SELECT id, created_at, actor, actor_type, action, method, path,
+                resource_type, resource_id, tenant_id,
+                old_value, new_value, status_code, duration_ms, ip, request_id
+         FROM audit_logs ${where}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ${limit} OFFSET ${offset}`,
+        params,
+      );
+      const { rows: totalRows } = await pool.query(
+        `SELECT COUNT(*)::int AS total FROM audit_logs ${where}`,
+        params,
+      );
+
+      res.json({
+        ok: true,
+        logs: rows.map((r: any) => ({
+          ...r,
+          old_value: typeof r.old_value === 'string' ? JSON.parse(r.old_value) : r.old_value,
+          new_value: typeof r.new_value === 'string' ? JSON.parse(r.new_value) : r.new_value,
+        })),
+        total: totalRows[0]?.total ?? 0,
+        limit,
+        offset,
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('List audit logs failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'List failed' });
     }
   });
@@ -217,6 +301,18 @@ export function createAdminOpsRoutes(
         return;
       }
       const { key, id } = await createExternalApiKey(pool, { name, supplierId, createdBy: adminIdentity(req) });
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'external-api-key.create',
+        method: 'POST',
+        path: '/v1/admin/external-api-keys',
+        resourceType: 'external_api_key',
+        resourceId: id,
+        newValue: { name, supplierId, keyPrefix: key.slice(0, 12) },
+        statusCode: 200,
+      });
+
       res.json({ ok: true, id, name, keyPrefix: key.slice(0, 12), supplierId, key });
     } catch (err: unknown) {
       const e = err as any;
@@ -238,11 +334,31 @@ export function createAdminOpsRoutes(
   // DELETE /v1/admin/external-api-keys/:id — revoke a key.
   router.delete('/v1/admin/external-api-keys/:id', async (req: Request, res: Response) => {
     try {
+      // Snapshot the key row for the audit trail before revoking.
+      const { rows: keyRows } = await pool.query(
+        'SELECT name, supplier_id, key_prefix FROM external_api_keys WHERE id = $1 AND status = $2',
+        [req.params.id, 'active'],
+      );
       const revoked = await revokeExternalApiKey(pool, String(req.params.id));
       if (!revoked) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'key not found or already revoked' });
         return;
       }
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'external-api-key.revoke',
+        method: 'DELETE',
+        path: `/v1/admin/external-api-keys/${req.params.id}`,
+        resourceType: 'external_api_key',
+        resourceId: String(req.params.id),
+        oldValue: keyRows.length
+          ? { name: keyRows[0].name, supplierId: keyRows[0].supplier_id, keyPrefix: keyRows[0].key_prefix, status: 'active' }
+          : { id: req.params.id, status: 'active' },
+        newValue: { status: 'revoked' },
+        statusCode: 200,
+      });
+
       res.json({ ok: true });
     } catch (err: unknown) {
       const e = err as any;

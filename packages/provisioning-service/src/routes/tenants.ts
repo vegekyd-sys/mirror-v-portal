@@ -23,6 +23,7 @@ import {
 } from '../services/skill-env.js';
 import { getMasterKey } from '../services/crypto.js';
 import { getTenantDirectModeMap } from '../services/llm-providers.js';
+import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -45,6 +46,12 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   if (authMiddleware) {
     router.use(authMiddleware);
   }
+
+  /** Explicit old→new audit write for high-risk tenant mutations. */
+  const auditFor = (req: Request, entry: Omit<AuditEntry, 'actor' | 'actorType'>) => {
+    const { actor, actorType } = actorFromRequest(req);
+    return writeAuditLog(pool, { ...entry, actor, actorType });
+  };
 
   // POST /v1/tenants — create new tenant
   router.post('/v1/tenants', async (req: Request, res: Response) => {
@@ -412,7 +419,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   router.delete('/v1/tenants/:id', async (req: Request, res: Response) => {
     try {
       const { rows } = await pool.query(
-        `SELECT status FROM tenants WHERE tenant_id = $1`,
+        `SELECT status, company_name FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
 
@@ -452,6 +459,18 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         [req.params.id, status],
       );
 
+      await auditFor(req, {
+        action: 'tenant.destroy',
+        method: 'DELETE',
+        path: `/v1/tenants/${req.params.id}`,
+        resourceType: 'tenant',
+        resourceId: req.params.id,
+        tenantId: req.params.id,
+        oldValue: { status, companyName: rows[0].company_name },
+        newValue: { status: 'destroyed' },
+        statusCode: 200,
+      });
+
       res.json({ ok: true, deleted: result.deleted, warnings: result.warnings });
     } catch (err) {
       console.error('Delete tenant failed:', err);
@@ -475,17 +494,33 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const tenantId = req.params.id;
       const { rows } = await pool.query(
         `SELECT tenant_id, status, k8s_namespace, message_plane, plan_tier, company_name,
-                contact_email, quota_agents, quota_credits_monthly, mio_cdp_supplier_id, agent_endpoint
+                contact_email, quota_agents, quota_credits_monthly, mio_cdp_supplier_id, agent_endpoint,
+                app_id
          FROM tenants WHERE tenant_id = $1`,
         [tenantId],
       );
       if (!rows.length) { res.status(404).json({ code: 'NOT_FOUND' }); return; }
       const tenant = rows[0];
+      const previousAppId = tenant.app_id ? String(tenant.app_id) : null;
 
       await pool.query(
         `UPDATE tenants SET app_id=$1, app_secret=$2, platform='feishu', updated_at=NOW() WHERE tenant_id=$3`,
         [appId.trim(), appSecret.trim(), tenantId],
       );
+
+      // Audit: credential rotation is high-risk (masks a message-plane owner
+      // change). appId is a public identifier; the secret is never recorded.
+      await auditFor(req, {
+        action: 'tenant.credentials',
+        method: 'PUT',
+        path: `/v1/tenants/${tenantId}/credentials`,
+        resourceType: 'tenant',
+        resourceId: tenantId,
+        tenantId,
+        oldValue: previousAppId ? { appId: previousAppId } : null,
+        newValue: { appId: appId.trim(), provisioned: tenant.status === 'pending' },
+        statusCode: 200,
+      });
 
       // Already-provisioned tenants: nothing more to do (QR flow re-persists
       // the same credentials it created with).
@@ -617,6 +652,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   // so the next DM re-captures (first-capture-wins).
   router.delete("/v1/tenants/:id/contact", async (req, res) => {
     try {
+      const { rows: before } = await pool.query(
+        "SELECT platform, im_open_id FROM tenants WHERE tenant_id=$1", [req.params.id],
+      );
+      if (!before.length) { res.status(404).json({ code: "NOT_FOUND" }); return; }
       const result = await pool.query(
         "UPDATE tenants SET im_open_id = NULL, updated_at = NOW() WHERE tenant_id=$1",
         [req.params.id],
@@ -626,6 +665,17 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         "INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)",
         [req.params.id, 'active', 'Notification contact reset from admin console'],
       );
+      await auditFor(req, {
+        action: 'tenant.contact-reset',
+        method: 'DELETE',
+        path: `/v1/tenants/${req.params.id}/contact`,
+        resourceType: 'tenant',
+        resourceId: req.params.id,
+        tenantId: req.params.id,
+        oldValue: { platform: before[0].platform, imOpenId: before[0].im_open_id },
+        newValue: null,
+        statusCode: 200,
+      });
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ code: "INTERNAL" }); }
   });
@@ -646,7 +696,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       // openclaw plane requires real bot credentials (placeholder creds from
       // web-platform tenants would produce a dead WS client inside the agent).
       const { rows } = await pool.query(
-        `SELECT app_id, app_secret, platform, status FROM tenants WHERE tenant_id = $1`,
+        `SELECT app_id, app_secret, platform, status, message_plane FROM tenants WHERE tenant_id = $1`,
         [tenantId],
       );
       if (rows.length === 0) { res.status(404).json({ code: 'NOT_FOUND' }); return; }
@@ -673,6 +723,17 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         `UPDATE tenants SET message_plane = $1, updated_at = NOW() WHERE tenant_id = $2`,
         [plane, tenantId],
       );
+      await auditFor(req, {
+        action: 'tenant.message-plane',
+        method: 'PUT',
+        path: `/v1/tenants/${tenantId}/message-plane`,
+        resourceType: 'tenant',
+        resourceId: tenantId,
+        tenantId,
+        oldValue: { plane: tenant.message_plane ?? 'gateway' },
+        newValue: { plane },
+        statusCode: 200,
+      });
       res.json({ ok: true, plane, steps: result.steps, warnings: result.warnings });
     } catch (err: unknown) {
       const e = err as any;
@@ -1039,7 +1100,19 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.status(400).json({ code: 'BAD_REQUEST', message: 'appId and appSecret are required' });
         return;
       }
+      const previousBinding = await getTenantFeishuBinding(pool, req.params.id).catch(() => null);
       const result = await bindTenantFeishuApp(pool, config, req.params.id, { appId, appSecret });
+      await auditFor(req, {
+        action: 'tenant.feishu-bind',
+        method: 'PUT',
+        path: `/v1/tenants/${req.params.id}/feishu-binding`,
+        resourceType: 'tenant',
+        resourceId: req.params.id,
+        tenantId: req.params.id,
+        oldValue: previousBinding?.appId ? { appId: previousBinding.appId, platform: previousBinding.platform, imOpenId: previousBinding.imOpenId } : null,
+        newValue: { appId: result.appId, restartTarget: result.restartTarget },
+        statusCode: 200,
+      });
       const rolloutMsg =
         result.restartTarget === 'agent'
           ? `已绑定 ${result.appId}，Agent 已滚动重启以加载新凭据（约 30–90 秒生效）`
@@ -1063,7 +1136,19 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   // gateway itself is KEPT — it doubles as the tenant's LLM egress proxy.
   router.delete('/v1/tenants/:id/feishu-binding', async (req: Request, res: Response) => {
     try {
+      const previousBinding = await getTenantFeishuBinding(pool, req.params.id).catch(() => null);
       const result = await unbindTenantFeishuApp(pool, config, req.params.id);
+      await auditFor(req, {
+        action: 'tenant.feishu-unbind',
+        method: 'DELETE',
+        path: `/v1/tenants/${req.params.id}/feishu-binding`,
+        resourceType: 'tenant',
+        resourceId: req.params.id,
+        tenantId: req.params.id,
+        oldValue: previousBinding?.appId ? { appId: previousBinding.appId, platform: previousBinding.platform, imOpenId: previousBinding.imOpenId } : null,
+        newValue: { gatewayKept: result.gatewayKept, restartTarget: result.restartTarget },
+        statusCode: 200,
+      });
       const unbindMsg =
         result.restartTarget === 'agent'
           ? `已解绑飞书应用；Agent 已重启并断开飞书连接，网关 ${result.gatewayKept} 保留（LLM 出口代理）`
@@ -1193,6 +1278,18 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $3, $4)`,
         [req.params.id, oldStatus, newStatus, reason ?? 'Status updated via API'],
       );
+
+      await auditFor(req, {
+        action: 'tenant.status',
+        method: 'PATCH',
+        path: `/v1/tenants/${req.params.id}/status`,
+        resourceType: 'tenant',
+        resourceId: req.params.id,
+        tenantId: req.params.id,
+        oldValue: { status: oldStatus },
+        newValue: { status: newStatus, reason: reason ?? 'Status updated via API' },
+        statusCode: 200,
+      });
 
       res.json({ ok: true, fromStatus: oldStatus, toStatus: newStatus });
     } catch (err) {
