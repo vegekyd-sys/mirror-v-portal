@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--auth-type", default="app_password")
     add.add_argument("--display-name", default="")
     add.add_argument("--default", action="store_true")
-    add.add_argument("--daily-send-limit", type=int, default=15)
+    add.add_argument("--daily-send-limit", type=int, default=30)
 
     listing = sub.add_parser("account-list")
     listing.add_argument("--enterprise")
@@ -113,9 +113,12 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--cc", default="")
     send.add_argument("--bcc", default="")
     send.add_argument("--subject", required=True)
-    content = send.add_mutually_exclusive_group(required=True)
+    content = send.add_mutually_exclusive_group()
     content.add_argument("--text")
     content.add_argument("--text-file")
+    html_group = send.add_mutually_exclusive_group()
+    html_group.add_argument("--html")
+    html_group.add_argument("--html-file")
     send.add_argument("--reply-to")
     send.add_argument("--dry-run", action="store_true")
     return parser
@@ -203,10 +206,18 @@ def main(argv: list[str] | None = None) -> int:
         else:
             emit(results)
     elif args.command == "send":
+        text = ""
         if args.text_file:
             text = Path(args.text_file).read_text(encoding="utf-8")
-        else:
+        elif args.text:
             text = args.text
+        html = ""
+        if args.html_file:
+            html = Path(args.html_file).read_text(encoding="utf-8")
+        elif args.html:
+            html = args.html
+        if not text and not html:
+            raise ValueError("provide at least one of --text/--text-file or --html/--html-file")
         emit(
             SmtpSender(store).send(
                 account_id=args.account_id,
@@ -216,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
                 bcc=_csv(args.bcc),
                 subject=args.subject,
                 text=text,
+                html=html or None,
                 reply_to=args.reply_to,
                 dry_run=args.dry_run,
             )

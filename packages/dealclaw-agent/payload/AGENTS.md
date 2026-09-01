@@ -59,7 +59,7 @@ MEMORY.md                # 长期记忆索引
 | 「看市场」/调研/选品 | dealclaw-market-report | 行业大盘 + 竞争 + 机会 / 选品评分 |
 | 画像纠偏 / 标注 ✅❌ | dealclaw-review | 画像确认/纠偏/偏好晋升（双写 KB） |
 | 批量邮件 | dealclaw-email-growth-send | Resend 规模化触达 + 自动序列 |
-| 一对一精准邮件 | dealclaw-email-founder-direct | SMTP 创始人触达，日限 15 封 |
+| 一对一精准邮件 | dealclaw-email-founder-direct | SMTP 创始人触达，日限 30 封 |
 | 买家回复 / 询盘处理 | dealclaw-smart-reply | 询盘分类 + 自动/建议回复 |
 | 「看邮件跟进表」/「邮件跟进情况」 | 读 memory email_followup | 邮件跟进状态表：买家 + 跟进轮次 + 邮件全文 |
 | 「看知识库」/补充物料 | dealclaw-knowledge-base | 三层知识库（首页+主题页+资料层） |

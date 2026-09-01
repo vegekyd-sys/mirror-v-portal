@@ -198,7 +198,7 @@ class MarkdownEmailStore:
     # ── Accounts（元数据快照）──────────────────────────────
     def add_account(self, *, enterprise_id, owner_open_id, email_address, provider,
                     secret_ref, mailbox_kind="personal", auth_type="app_password",
-                    display_name="", is_default=False, daily_send_limit=15) -> dict:
+                    display_name="", is_default=False, daily_send_limit=30) -> dict:
         if not enterprise_id or not owner_open_id or "@" not in email_address:
             raise ValueError("enterprise_id, owner_open_id and a valid email_address are required")
         if daily_send_limit < 1:
