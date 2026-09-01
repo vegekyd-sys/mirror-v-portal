@@ -247,6 +247,15 @@ export function createConversationExternalRoutes(
           FROM scoped
           WHERE direction = 'in'
           ORDER BY session_key, created_at ASC
+        ),
+        second AS (
+          SELECT session_key, content
+          FROM (
+            SELECT session_key, content,
+                   ROW_NUMBER() OVER (PARTITION BY session_key ORDER BY created_at ASC) AS rn
+            FROM scoped
+          ) t
+          WHERE rn = 2
         )
         SELECT agg.session_key,
                agg.message_count,
@@ -256,9 +265,11 @@ export function createConversationExternalRoutes(
                to_char(agg.last_at  AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS last_at,
                agg.last_sender_name,
                agg.last_sender_open_id,
-               left(preview.content, 200) AS preview
+               left(preview.content, 200) AS preview,
+               left(second.content, 200) AS secondary_preview
         FROM agg
         LEFT JOIN preview USING (session_key)
+        LEFT JOIN second USING (session_key)
         ORDER BY agg.last_at DESC
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
@@ -283,6 +294,7 @@ export function createConversationExternalRoutes(
         lastSenderName: r.last_sender_name ?? null,
         lastSenderOpenId: r.last_sender_open_id ?? null,
         preview: r.preview ?? null,
+        secondaryPreview: r.secondary_preview ?? null,
       }));
 
       const hasMore = offset + sessions.length < total;
