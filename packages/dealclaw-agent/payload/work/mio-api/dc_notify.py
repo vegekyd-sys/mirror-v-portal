@@ -35,6 +35,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from _tenant_env import load_tenant_env
+
+load_tenant_env()
+
 # ── 路径与常量 ──────────────────────────────────────────────
 
 DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))

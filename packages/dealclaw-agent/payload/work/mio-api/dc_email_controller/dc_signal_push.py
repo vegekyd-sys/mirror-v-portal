@@ -32,6 +32,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _tenant_env import load_tenant_env
+
+load_tenant_env()
+
 _DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data")))
 ROOT = _DATA_DIR / "signal-push"
 BY_ID = ROOT / "by-id"
@@ -225,7 +229,7 @@ def _push_enabled(company_id: str) -> tuple[bool, str]:
                       if _notify_allowed_raw else None)
     if not signal_ok or notify_mode != "feishu" or not notify_enabled:
         return False, "push_disabled"
-    if company_id not in allowed:
+    if allowed and company_id not in allowed:
         return False, "not_whitelisted"
     if notify_allowed is not None and company_id not in notify_allowed:
         return False, "not_whitelisted"
@@ -294,8 +298,9 @@ def mark_candidate_failed(candidate_id: str, error: str, attempts: int = 1) -> b
                              attempts=attempts, next_retry_at=_now())
 
 
-# ── P0-E3C.1 自动触发（Shadow 灰度）────────────────────────
-SHADOW_COMPANY = "testco"
+# ── P0-E3C.1 自动触发 ──────────────────────────────────────
+# 单租户：信号推送只处理当前租户 supplier id（tenant-env 优先，.env 兜底）。
+SHADOW_COMPANY = os.getenv("MIO_CDP_SUPPLIER_ID", "testco")
 
 
 def _automation_mode() -> str:
@@ -529,20 +534,24 @@ def build_candidates(company_id: str, campaign_id: str = None, phase: str = "sca
 
 
 def run(company_id: str, campaign_id: str = None, phase: str = "scale") -> dict:
-    """生成 + 持久化 push candidate（dry-run，只 proposed/suppressed，不 queued/sent）。"""
+    """生成 + 持久化 push candidate；live 模式且路由通过时执行 publish→dispatch→mark_sent。"""
     candidates = build_candidates(company_id, campaign_id=campaign_id, phase=phase)
     recorded = []
     for cand in candidates:
         record_candidate(cand)
         recorded.append(cand)
-    return {"candidates": recorded, "count": len(recorded)}
+    mode = _automation_mode()
+    pushed = []
+    if mode == "live" and recorded and _route_verified(company_id):
+        pushed = _deliver_live(recorded)
+    return {"candidates": recorded, "count": len(recorded), "mode": mode, "pushed": pushed}
 
 
 def _cli():
     ap = argparse.ArgumentParser(description="DC Signal Push (dry-run)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="生成候选（dry-run）")
-    r.add_argument("--company-id", required=True)
+    r = sub.add_parser("run", help="生成候选（live 模式下自动推送）")
+    r.add_argument("--company-id", default=None)
     r.add_argument("--campaign-id")
     r.add_argument("--phase", default="scale", choices=["calibration", "scale", "sprint", "pre_show"])
     q = sub.add_parser("list", help="列出候选")
@@ -550,7 +559,11 @@ def _cli():
     q.add_argument("--status")
     args = ap.parse_args()
     if args.cmd == "run":
-        out = run(args.company_id, campaign_id=args.campaign_id, phase=args.phase)
+        cid = args.company_id or os.getenv("MIO_CDP_SUPPLIER_ID", "")
+        if not cid:
+            print(json.dumps({"error": "company-id 未提供且 MIO_CDP_SUPPLIER_ID 未配置"}, ensure_ascii=False))
+            return 1
+        out = run(cid, campaign_id=args.campaign_id, phase=args.phase)
         print(json.dumps(out, ensure_ascii=False, indent=2))
     elif args.cmd == "list":
         print(json.dumps(list_candidates(args.company_id, args.status), ensure_ascii=False, indent=2))
