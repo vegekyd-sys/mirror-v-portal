@@ -241,6 +241,7 @@ export function createConversationExternalRoutes(
                  (ARRAY_REMOVE(ARRAY_AGG(sender_open_id ORDER BY created_at DESC), NULL))[1] AS last_sender_open_id
           FROM scoped
           GROUP BY session_key
+          HAVING COUNT(*) FILTER (WHERE direction = 'in') > 0
         ),
         preview AS (
           SELECT DISTINCT ON (session_key) session_key, content
@@ -276,10 +277,15 @@ export function createConversationExternalRoutes(
       const { rows } = await pool.query(sql, [...params, limit, offset]);
 
       const countRes = await pool.query(
-        `SELECT COUNT(DISTINCT session_key)::int AS total
-         FROM chat_messages
-         WHERE tenant_id = $1 AND session_key IS NOT NULL
-           ${rangeWhere}`,
+        `SELECT COUNT(*)::int AS total
+         FROM (
+           SELECT session_key
+           FROM chat_messages
+           WHERE tenant_id = $1 AND session_key IS NOT NULL
+             ${rangeWhere}
+           GROUP BY session_key
+           HAVING COUNT(*) FILTER (WHERE direction = 'in') > 0
+         ) valid_sessions`,
         params,
       );
       const total = countRes.rows[0]?.total ?? 0;
