@@ -13,12 +13,22 @@ mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_WORKSPACE_DIR" "$OPEN
 
 # Base payload is immutable in the image. Refresh it exactly on every start,
 # while preserving only the declared customer-mutable paths.
+# NOTE: /memory/ is excluded here and seeded separately below — the agent
+# writes runtime memories there (MEMORY.md hot index, decision-history,
+# promotion-log, new notes) which must survive pod restarts.
 rsync -a --delete \
-  --exclude='/memory/customer/' \
+  --exclude='/memory/' \
   --exclude='/work/mio-api/data/' \
   --exclude='/work/mio-api/.env' \
   --exclude='/data/' \
   /opt/dealclaw/payload/ "$OPENCLAW_WORKSPACE_DIR/"
+# Memory template seed: copy ONLY files missing on the receiver
+# (--ignore-existing, no --delete). Template files newly added to the payload
+# still land on every restart; files the agent created or edited at runtime
+# are never overwritten or deleted. Removing/renaming a template therefore
+# requires an explicit migration, not just an image bump.
+rsync -a --ignore-existing \
+  /opt/dealclaw/payload/memory/ "$OPENCLAW_WORKSPACE_DIR/memory/"
 rm -rf "$OPENCLAW_WORKSPACE_DIR/node_modules"
 ln -s /opt/dealclaw/runtime/dependencies/node_modules "$OPENCLAW_WORKSPACE_DIR/node_modules"
 
