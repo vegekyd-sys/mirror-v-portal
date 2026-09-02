@@ -22,7 +22,8 @@ interface BatchResponse {
   total: number;
   failed: number;
   skipped?: number;
-  results?: Array<{ tenantId: string; ok: boolean; skipped?: boolean; error?: string }>;
+  alreadyCurrent?: number;
+  results?: Array<{ tenantId: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; error?: string }>;
   code?: string;
   message?: string;
 }
@@ -95,6 +96,12 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
         failed: body.failed ?? 0,
         durationMs: Date.now() - start,
       });
+
+      // Log tenants already on the desired tag (no-op skipped, no patch issued)
+      const alreadyCurrent = body.alreadyCurrent ?? 0;
+      if (alreadyCurrent > 0) {
+        console.log(`[rollout] ${target.service}: ${alreadyCurrent} tenants already on ${target.image}, no patch needed`);
+      }
 
       // Log skipped tenants (deployment not found)
       const skipped = (body.results ?? []).filter(r => r.skipped);

@@ -982,12 +982,25 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
 
-      const { patchDeploymentImage } = await import('../services/k8s-client.js');
-      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; error?: string }> = [];
+      const { patchDeploymentImage, getDeployment } = await import('../services/k8s-client.js');
+      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; error?: string }> = [];
 
       for (const row of rows) {
         const deploymentName = `${service}-${row.tenant_id}`;
         try {
+          // Skip no-op patches: read the current image first and only patch
+          // when it actually differs from the desired tag. This keeps the
+          // periodic rollout cron from churning every Deployment (and, for
+          // single-replica tenants, from triggering a rolling restart that
+          // briefly spawns a second pod contending for the SQLite PVC lock).
+          const current = await getDeployment(row.k8s_namespace, deploymentName);
+          const container = (current?.spec?.template?.spec?.containers ?? []).find(
+            (c: any) => c.name === deploymentName,
+          );
+          if (current && container?.image === fullImage) {
+            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true, alreadyCurrent: true });
+            continue;
+          }
           await patchDeploymentImage({ namespace: row.k8s_namespace, name: deploymentName, image: fullImage });
           results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
         } catch (err: unknown) {
@@ -1002,14 +1015,16 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         }
       }
 
-      const successCount = results.filter(r => r.ok).length;
+      const successCount = results.filter(r => r.ok && !r.alreadyCurrent).length;
+      const alreadyCurrentCount = results.filter(r => r.alreadyCurrent).length;
       const skippedCount = results.filter(r => r.skipped).length;
       res.json({
         ok: true,
         updated: successCount,
         total: rows.length,
-        failed: rows.length - successCount - skippedCount,
+        failed: results.filter(r => !r.ok && !r.skipped).length,
         skipped: skippedCount,
+        alreadyCurrent: alreadyCurrentCount,
         service,
         image: fullImage,
         results,

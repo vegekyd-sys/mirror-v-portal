@@ -63,7 +63,19 @@ interface RequestOptions {
   body?: unknown;
 }
 
-export async function api<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
+/**
+ * Transient gateway errors worth retrying: 502/503/504 surface when the ALB
+ * or ingress briefly has no healthy backend during a rolling update, and
+ * 0 (NETWORK) covers a short-lived connection reset. Retrying once or twice
+ * after a short backoff clears these without user-visible errors.
+ */
+const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF_MS = [400, 800, 1600];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function requestOnce<T = unknown>(path: string, opts: RequestOptions): Promise<T> {
   const token = getToken();
   let res: Response;
   try {
@@ -92,4 +104,30 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
     throw new ApiError(res.status, body.code || '', body.message || '');
   }
   return body as T;
+}
+
+export async function api<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
+  // Auto-retry only safe reads (GET/HEAD). Mutations are intentionally not
+  // retried — a 502 after a POST/PATCH may have already taken effect, and
+  // blind retries could duplicate side effects (e.g. two backup Jobs).
+  const method = (opts.method ?? 'GET').toUpperCase();
+  const retryable = method === 'GET' || method === 'HEAD';
+  const maxAttempts = retryable ? MAX_RETRIES + 1 : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await requestOnce<T>(path, opts);
+    } catch (e) {
+      const canRetry =
+        retryable &&
+        attempt < maxAttempts - 1 &&
+        e instanceof ApiError &&
+        (RETRYABLE_STATUSES.has(e.status) || e.status === 0);
+      if (!canRetry) throw e;
+      await sleep(RETRY_BACKOFF_MS[attempt]);
+    }
+  }
+
+  // Unreachable (the loop always returns or throws); kept for exhaustiveness.
+  throw new ApiError(0, 'NETWORK', '网络错误，请稍后重试');
 }
