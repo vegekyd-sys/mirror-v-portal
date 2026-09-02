@@ -23,12 +23,19 @@ RUN npm install --omit=dev --no-save --legacy-peer-deps \
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates python3 python3-flask python3-openpyxl python3-requests rsync \
+      ca-certificates python3 python3-venv python3-pip python3-flask python3-openpyxl python3-requests rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Feishu official CLI — required by lark/feishu skills (docs, base, drive).
 # Pinned; bump together with skills that reference new CLI capabilities.
 RUN npm install -g @larksuite/cli@1.0.68
+
+# 小元 CLI — 直连 blade-agent-adapter 的接口命令（替代 find-buyers 零散脚本）。
+# venv 隔离：Debian python3 是 externally-managed（PEP 668），不能直接 pip install。
+COPY blade_agent_cli-0.1.0-py3-none-any.whl /tmp/blade_agent_cli.whl
+RUN python3 -m venv /opt/xiaoyuan-venv \
+    && /opt/xiaoyuan-venv/bin/pip install /tmp/blade_agent_cli.whl \
+    && rm /tmp/blade_agent_cli.whl
 
 COPY --from=bridge-build /build/dist /opt/dealclaw/bridge/dist
 COPY --from=bridge-build /build/node_modules /opt/dealclaw/bridge/node_modules
@@ -49,7 +56,8 @@ ENV NODE_ENV=production \
     OPENCLAW_GATEWAY_PORT=18790 \
     OPENCLAW_RUNTIME_URL=http://127.0.0.1:18790 \
     OPENCLAW_AGENT_ID=dealclaw \
-    DEALCLAW_PAYLOAD_VERSION=dealclaw-base.v2
+    DEALCLAW_PAYLOAD_VERSION=dealclaw-base.v2 \
+    PATH="/opt/xiaoyuan-venv/bin:${PATH}"
 
 USER node
 EXPOSE 18789

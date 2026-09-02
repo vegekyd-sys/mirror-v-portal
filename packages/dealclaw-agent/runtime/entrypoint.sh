@@ -45,6 +45,32 @@ else
   echo "[dealclaw-runtime] skill-env Secret not mounted; work/mio-api/.env left as-is" >&2
 fi
 
+# 把 .env 的 KEY=VALUE export 到进程环境，供 shell 命令直接引用（如小元 CLI
+# 的 --open-id "$MIO_V_OPEN_ID"）。source 失败不阻断启动。
+if [[ -f "$OPENCLAW_WORKSPACE_DIR/work/mio-api/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$OPENCLAW_WORKSPACE_DIR/work/mio-api/.env" 2>/dev/null || true
+  set +a
+fi
+
+# tenant-env.json（租户可写，存 MIO_V_OPEN_ID / MIO_CDP_SUPPLIER_ID 的租户真实值）
+# 优先覆盖 .env 的全局默认值，使 $MIO_V_OPEN_ID 在 shell 里是租户值而非兜底值。
+TENV="$OPENCLAW_WORKSPACE_DIR/data/memory/tenant-env.json"
+if [[ -f "$TENV" ]]; then
+  eval "$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+if isinstance(d, dict):
+    for k, v in d.items():
+        if v is not None:
+            print("export " + k + "=" + json.dumps(str(v)))
+' "$TENV")"
+fi
+
 # A customer-specific ConfigMap/volume may supply company knowledge, but it
 # cannot overwrite the immutable identity, safety rules, Skills, or scripts.
 if [[ -d /overlay ]]; then
