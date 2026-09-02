@@ -25,6 +25,7 @@ def send(
     text: str,
     cc: list[str] | None = None,
     reply_to: str | None = None,
+    html: str | None = None,
     secret_resolver: Callable[[str], str] = resolve_secret,
 ) -> str:
     """Send via Resend API. Returns the Resend message ID."""
@@ -34,6 +35,8 @@ def send(
         "subject": subject,
         "text": text,
     }
+    if html:
+        payload["html"] = html
     if cc:
         payload["cc"] = cc
     if reply_to:

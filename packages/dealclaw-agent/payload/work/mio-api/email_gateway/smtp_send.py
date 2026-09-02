@@ -72,6 +72,7 @@ class SmtpSender:
         text: str,
         cc: list[str] | None,
         reply_to: str | None,
+        html: str | None = None,
     ) -> str:
         """Send via Resend API. Returns the real Resend email id (provider id)."""
         return resend_send(
@@ -81,6 +82,7 @@ class SmtpSender:
             text=text,
             cc=cc,
             reply_to=reply_to,
+            html=html,
             secret_resolver=self.secret_resolver,
         )
 
@@ -157,6 +159,7 @@ class SmtpSender:
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to: str | None = None,
+        html: str | None = None,
         dry_run: bool = False,
         company_id: str = "",
         campaign_id: str = "",
@@ -178,7 +181,7 @@ class SmtpSender:
         idempotency_key = build_idempotency_key(
             company_id=company_id, campaign_id=campaign_id, lead_id=lead_id,
             recipient=recipient_key, touch_number=touch_number, content_version=content_version,
-            subject=subject, text=text,
+            subject=subject, text=(text or "") + (html or ""),
         )
 
         # Try registered account first; fall back to Resend for backward compat.
@@ -192,7 +195,7 @@ class SmtpSender:
                 if not dry_run:
                     resend_id = self._send_via_resend(
                         from_address=from_addr, to=to, subject=subject,
-                        text=text, cc=cc, reply_to=reply_to,
+                        text=text, cc=cc, reply_to=reply_to, html=html,
                     )
                 return self._build_send_result(
                     from_addr=from_addr, to=to, cc=cc, bcc=bcc,
@@ -236,6 +239,8 @@ class SmtpSender:
         msg["Subject"] = subject
         msg["Message-ID"] = message_id
         msg.set_content(text)
+        if html:
+            msg.add_alternative(html, subtype="html")
 
         envelope = [*to, *(cc or []), *(bcc or [])]
         resend_id = ""
@@ -245,7 +250,7 @@ class SmtpSender:
             if account["provider"] == "resend":
                 resend_id = self._send_via_resend(
                     from_address=formataddr((account["display_name"], account["email_address"])),
-                    to=to, subject=subject, text=text, cc=cc, reply_to=reply_to,
+                    to=to, subject=subject, text=text, cc=cc, reply_to=reply_to, html=html,
                 ) or ""
                 # Only mark provider-accepted when a real Resend id was returned.
                 provider_accepted = bool(resend_id)

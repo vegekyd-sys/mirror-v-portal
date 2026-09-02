@@ -205,7 +205,13 @@ const info = await transport.sendMail(mailOpts);
 
   // Log to sent-log.jsonl
   if (!existsSync(SENT_LOG)) writeFileSync(SENT_LOG, '');
-  writeFileSync(SENT_LOG, JSON.stringify(result) + '\n', { flag: 'a' });
+  const logRecord = {
+    ...result,
+    company_id: parseArg('--company-id') || '',
+    text: mailOpts.text || '',
+    html: mailOpts.html || '',
+  };
+  writeFileSync(SENT_LOG, JSON.stringify(logRecord) + '\n', { flag: 'a' });
 }
 
 main().catch(err => {
