@@ -252,6 +252,11 @@ python3 -m email_gateway.cli account-add \
 
 ---
 
+## 脚本路径锚点（避免执行失败）
+
+- 本 skill 的绑定走 `work/mio-api` 下的 `email_gateway.cli` 和 `scripts/dc-bindings.sh`（相对工作区根），不要拼 `/data/workspace` 绝对路径。
+- 不要 `ls`/list `scripts/founder-direct/`、`scripts/resend/` 目录来「确认发信脚本存在」——发信脚本归属 email-founder-direct / email-growth-send，且其 `accounts/`、`.env` 等运行时文件不在镜像里，列目录必失败。
+
 ## 限流
 
 - 类型 A `/bindings` 接口：10 次/分钟 burst 5，超出返回 `429`。

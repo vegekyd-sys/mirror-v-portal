@@ -39,6 +39,11 @@ date: "2026-07-30"
 
 ---
 
+## 收件人选择
+
+- 群发全发，不按优先级筛；有多个联系人时，优先用采购经理/总经理的邮箱，缺则顺延。
+---
+
 ## 飞书通知自动绑定（Silent Bind）
 
 **核心原则：绑定是服务端持久化的，不依赖 session。用户 /new 后不用重新绑。**
@@ -241,6 +246,12 @@ node scripts/resend/send.mjs \
 ⚠️ `send.mjs` 的 Authorization header 直接传裸 API key，不加 `Bearer` 前缀。`RESEND_API_KEY` 格式为 `re_` 开头。
 
 ---
+
+## 脚本路径锚点（避免执行失败）
+
+- 从工作区根执行，用相对路径调用：`node scripts/resend/send.mjs ...`。
+- 不要拼 `/data/workspace` 等绝对路径前缀，也不要 `ls`/list 脚本目录来「确认脚本存在」——租户环境挂载根可能与预期不符；且 `.env`、`.reply-checkpoint.json` 等运行时文件不在镜像里（`.gitignore` 排除），列目录必失败。
+- 脚本内部用 `__dirname` 自动定位同目录的 `.env`，无需手动指定。
 
 ## 错误处理
 

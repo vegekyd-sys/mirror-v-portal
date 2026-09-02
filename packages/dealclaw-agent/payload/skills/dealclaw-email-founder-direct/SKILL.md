@@ -26,6 +26,11 @@ date: "2026-07-29"
 5. 回写线索池 → 立刻更新该买家记录：阶段→已触达、最近触达→发送时间、触达渠道→邮件。不可跳过
 ```
 
+## 收件人选择
+
+- 只发 1+2：采购经理（Purchasing/Procurement/Sourcing/Buyer）+ 总经理（CEO/Owner/Director）。
+- 不发 3（产品经理/R&D/Engineering）、4（其他）。
+
 ## 邮件内容原则
 
 V 自主生成，核心约束：
@@ -60,6 +65,12 @@ node scripts/founder-direct/send-direct.mjs \
   --subject 'Quick question — [主题]' \
   --text '...'
 ```
+
+## 脚本路径锚点（避免执行失败）
+
+- 从工作区根执行，用相对路径调用：`node scripts/founder-direct/send-direct.mjs ...`。
+- 不要拼 `/data/workspace` 等绝对路径前缀，也不要 `ls`/list 脚本目录来「确认脚本存在」——租户环境挂载根可能与预期不符；且 `accounts/`、`email-registry.json`、`sent-log.jsonl` 等运行时文件不在镜像里（`.gitignore` 排除），列目录必失败。
+- 脚本内部用 `__dirname` 自动定位同目录的 `accounts/`、`email-registry.json`，无需手动指定。
 
 ## 版本历史
 
