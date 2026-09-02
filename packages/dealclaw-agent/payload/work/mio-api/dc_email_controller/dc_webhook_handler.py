@@ -378,7 +378,8 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
     try:
         from .dc_email_signals import analyze_reply, process_reply
         from .dc_signal_push import evaluate_for_push
-        _company = outbound.get("company_id", "") or account.get("enterprise_id", "")
+        from enterprise_ids import canonical_company_id
+        _company = canonical_company_id(outbound.get("company_id", "") or account.get("enterprise_id", ""))
         _a = analyze_reply(text, buyer_domain=from_email.split("@")[-1].lower() if "@" in from_email else from_email,
                            enterprise=_company)
         _res = process_reply(

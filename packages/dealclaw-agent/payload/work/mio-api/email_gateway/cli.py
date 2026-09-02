@@ -12,6 +12,10 @@ from .smtp_send import SmtpSender
 from .store import EmailStore
 from .verify import AccountVerifier
 
+from _tenant_env import load_tenant_env
+
+load_tenant_env()
+
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -55,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init")
 
     add = sub.add_parser("account-add")
-    add.add_argument("--enterprise", required=True)
+    add.add_argument("--enterprise", default=None)
     add.add_argument("--owner-open-id", required=True)
     add.add_argument("--email", required=True)
     add.add_argument("--provider", choices=sorted(PROVIDERS), required=True)
@@ -140,8 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         get_provider(args.provider)
         if not args.secret_ref.strip():
             raise ValueError("--secret-ref must not be empty")
+        enterprise_id = args.enterprise or os.environ.get("MIO_CDP_SUPPLIER_ID", "")
+        if not enterprise_id:
+            raise ValueError("--enterprise 未提供且 MIO_CDP_SUPPLIER_ID 未配置")
         result = store.add_account(
-            enterprise_id=args.enterprise,
+            enterprise_id=enterprise_id,
             owner_open_id=args.owner_open_id,
             email_address=args.email,
             provider=args.provider,

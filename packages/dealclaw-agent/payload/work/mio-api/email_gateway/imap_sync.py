@@ -126,7 +126,8 @@ class ImapSynchronizer:
         try:
             from dc_email_controller.dc_email_signals import analyze_reply, process_reply
             from dc_email_controller.dc_signal_push import evaluate_for_push
-            _company = bound.get("company_id", "") or account.get("enterprise_id", "")
+            from enterprise_ids import canonical_company_id
+            _company = canonical_company_id(bound.get("company_id", "") or account.get("enterprise_id", ""))
             _buyer = (buyer_email.split("@")[-1].lower() if "@" in buyer_email else buyer_email)
             _a = analyze_reply(reply_text or "", buyer_domain=_buyer, enterprise=_company)
             _res = process_reply(
