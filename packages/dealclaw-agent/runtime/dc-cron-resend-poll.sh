@@ -1,7 +1,7 @@
 #!/bin/bash
 # dc-cron-resend-poll.sh — 幂等注入 DealClaw Resend poller cron（command 类型）
 #
-# 每 30 分钟拉 Resend 投递状态 + 买家回复，驱动七信号引擎。
+# 每 5 分钟拉 Resend 投递状态 + 买家回复，驱动七信号引擎。
 # 用 openclaw cron add 动态注册，幂等（declaration-key）。
 #
 # 用法:
@@ -51,12 +51,12 @@ fi
 
 # 命令跑在 MIO_DIR，dc_resend_source.py 会自行从 <MIO_DIR>/.env 读 RESEND_API_KEY
 openclaw cron add \
-  --cron "*/30 * * * *" \
+  --cron "*/5 * * * *" \
   --tz "$TZ" \
   --command "python3 -m dc_email_controller.dc_resend_source" \
   --command-cwd "$MIO_DIR" \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-resend-poll" \
-  --description "DealClaw Resend poller（*/30 @ $TZ）"
+  --description "DealClaw Resend poller（*/5 @ $TZ）"
 
-echo "[dc-cron-resend-poll] 已注入（*/30 @ $TZ）"
+echo "[dc-cron-resend-poll] 已注入（*/5 @ $TZ）"

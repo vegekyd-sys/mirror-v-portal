@@ -1,7 +1,7 @@
 #!/bin/bash
 # dc-cron-email-poll.sh — 幂等注入 DealClaw 个人邮箱回复轮询 cron（command 类型）
 #
-# 每 30 分钟 IMAP 拉取个人邮箱（163 等），有买家回复则推群卡片。
+# 每 5 分钟 IMAP 拉取个人邮箱（163 等），有买家回复则推群卡片。
 # 用 openclaw cron add 动态注册，幂等（declaration-key）。
 #
 # 用法:
@@ -51,13 +51,13 @@ fi
 
 # 命令跑在 MIO_DIR，email_gateway 从 DC_DATA_DIR（默认 <MIO_DIR>/data）读 account/binding
 openclaw cron add \
-  --cron "*/30 * * * *" \
+  --cron "*/5 * * * *" \
   --tz "$TZ" \
   --command "python3 -m email_gateway.cron_notify --all" \
   --command-cwd "$MIO_DIR" \
   --command-env "DC_DATA_DIR=$MIO_DIR/data" \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-email-reply-poll" \
-  --description "DealClaw 个人邮箱回复轮询（*/30 @ $TZ）"
+  --description "DealClaw 个人邮箱回复轮询（*/5 @ $TZ）"
 
-echo "[dc-cron-email-poll] 已注入（*/30 @ $TZ）"
+echo "[dc-cron-email-poll] 已注入（*/5 @ $TZ）"
