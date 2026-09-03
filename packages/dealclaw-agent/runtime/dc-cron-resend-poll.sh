@@ -31,24 +31,6 @@ done
 python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-resend-poll] 非法时区: $TZ" >&2; exit 1; }
 
-# ── 判断 declarationKey 是否已存在 ──
-has_cron() {
-  openclaw cron list --json 2>/dev/null | python3 -c "
-import sys, json
-try:
-    jobs = json.load(sys.stdin).get('jobs', [])
-except Exception:
-    jobs = []
-print('True' if any(j.get('declarationKey') == '$DECL_KEY' for j in jobs) else 'False')
-"
-}
-
-# ── 幂等注入 ──
-if [[ "$(has_cron)" == "True" ]]; then
-  echo "[dc-cron-resend-poll] 已存在，跳过"
-  exit 0
-fi
-
 # 命令跑在 MIO_DIR，dc_resend_source.py 会自行从 <MIO_DIR>/.env 读 RESEND_API_KEY
 openclaw cron add \
   --cron "*/5 * * * *" \
@@ -60,4 +42,4 @@ openclaw cron add \
   --name "dealclaw-resend-poll" \
   --description "DealClaw Resend poller（*/5 @ $TZ）"
 
-echo "[dc-cron-resend-poll] 已注入（*/5 @ $TZ）"
+echo "[dc-cron-resend-poll] 已同步（*/5 @ $TZ）"

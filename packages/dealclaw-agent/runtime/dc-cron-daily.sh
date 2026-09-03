@@ -1,5 +1,10 @@
 #!/bin/bash
-# dc-cron-daily.sh — 幂等注入 DealClaw 早晚报 cron（单租户，command 类型）
+# dc-cron-daily.sh — 注入 DealClaw 早晚报 cron（单租户，command 类型）
+#
+# 幂等由 `openclaw cron add --declaration-key` 原生保证：同名 declarationKey 重复
+# add 会自动 converge——无差异 no-op、有差异原地更新、缺失则新建（id 与 run 状态
+# 保持不变）。因此不需要自己先查「是否存在再跳过」，那反而会阻止脚本改动落地
+# （改了 cron expr / command / tz / env 后旧 cron 永不更新）。
 #
 # 单租户：company_id 不再显式传参，由 dc_daily_cycle.py 从 work/mio-api/.env 的
 # MIO_CDP_SUPPLIER_ID 自动读取。命令先 source .env 再跑。
@@ -32,26 +37,9 @@ done
 python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-daily] 非法时区: $TZ" >&2; exit 1; }
 
-# ── 判断 declarationKey 是否已存在 ──
-has_cron() {
-  local key="$1"
-  openclaw cron list --json 2>/dev/null | python3 -c "
-import sys, json
-try:
-    jobs = json.load(sys.stdin).get('jobs', [])
-except Exception:
-    jobs = []
-print('True' if any(j.get('declarationKey') == '$key' for j in jobs) else 'False')
-"
-}
-
-# ── 注入单个 cron（幂等）──
+# ── 注入单个 cron（add 自带 converge，幂等）──
 ensure() {
   local name="$1" cron_expr="$2" slot="$3" decl_key="$4"
-  if [[ "$(has_cron "$decl_key")" == "True" ]]; then
-    echo "[dc-cron-daily] 已存在，跳过: $name"
-    return 0
-  fi
   openclaw cron add \
     --cron "$cron_expr" \
     --tz "$TZ" \
@@ -64,7 +52,7 @@ ensure() {
     --declaration-key "$decl_key" \
     --name "$name" \
     --description "DealClaw ${slot} 报（${cron_expr} @ ${TZ}）"
-  echo "[dc-cron-daily] 已注入: $name（${cron_expr} @ ${TZ}）"
+  echo "[dc-cron-daily] 已同步: $name（${cron_expr} @ ${TZ}）"
 }
 
 # ── 早晚报（时区统一走 $TZ）──

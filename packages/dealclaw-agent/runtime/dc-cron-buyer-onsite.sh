@@ -32,24 +32,6 @@ done
 python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-buyer-onsite] 非法时区: $TZ" >&2; exit 1; }
 
-# ── 判断 declarationKey 是否已存在 ──
-has_cron() {
-  openclaw cron list --json 2>/dev/null | python3 -c "
-import sys, json
-try:
-    jobs = json.load(sys.stdin).get('jobs', [])
-except Exception:
-    jobs = []
-print('True' if any(j.get('declarationKey') == '$DECL_KEY' for j in jobs) else 'False')
-"
-}
-
-# ── 幂等注入 ──
-if [[ "$(has_cron)" == "True" ]]; then
-  echo "[dc-cron-buyer-onsite] 已存在，跳过"
-  exit 0
-fi
-
 # monitor_buyer_onsite.py 自行读 tenant-env.json 拿 MIO_V_OPEN_ID / MIO_CDP_SUPPLIER_ID；
 # 这里显式传入，避免 cron 进程环境缺失导致身份读不到。
 SUPPLIER_ID="${MIO_CDP_SUPPLIER_ID:-}"
@@ -68,4 +50,4 @@ openclaw cron add \
   --name "dealclaw-buyer-onsite-monitor" \
   --description "DealClaw 买家到场监控（*/5 @ $TZ）"
 
-echo "[dc-cron-buyer-onsite] 已注入（*/5 @ $TZ）"
+echo "[dc-cron-buyer-onsite] 已同步（*/5 @ $TZ）"

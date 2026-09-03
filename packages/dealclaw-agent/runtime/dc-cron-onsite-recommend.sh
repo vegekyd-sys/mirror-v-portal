@@ -97,28 +97,12 @@ for hh in ("10", "14", "16"):
 PY
 )
 
-has_cron() {
-  local key="$1"
-  openclaw cron list --json 2>/dev/null | python3 -c "
-import sys, json
-try:
-    jobs = json.load(sys.stdin).get('jobs', [])
-except Exception:
-    jobs = []
-print('True' if any(j.get('declarationKey') == '$key' for j in jobs) else 'False')
-"
-}
-
-# 幂等注册 3 条 cron（对应当地时间 10/14/16 点）
+# 注册 3 条 cron（对应当地时间 10/14/16 点；add 自带 converge，幂等）
 idx=0
 for slot in 10 14 16; do
   idx=$((idx + 1))
   read -r M H <<< "$(echo "$BJ_CRONS" | sed -n "${idx}p")"
   decl_key="${DECL_KEY_PREFIX}-${slot}h"
-  if [[ "$(has_cron "$decl_key")" == "True" ]]; then
-    echo "[dc-cron-onsite-recommend] 已存在，跳过: ${slot}h"
-    continue
-  fi
   openclaw cron add \
     --cron "${M} ${H} * * *" \
     --tz "Asia/Shanghai" \
@@ -131,7 +115,7 @@ for slot in 10 14 16; do
     --declaration-key "$decl_key" \
     --name "dealclaw-onsite-recommend-${slot}h" \
     --description "DealClaw 现场推荐（展会当地时间 ${slot}:00 @ ${TZ}，北京时间 ${H}:${M}）"
-  echo "[dc-cron-onsite-recommend] 已注入 ${slot}h（${H}:${M} 北京时间）"
+  echo "[dc-cron-onsite-recommend] 已同步 ${slot}h（${H}:${M} 北京时间）"
 done
 
 echo "[dc-cron-onsite-recommend] 完成（时区: $TZ）"
