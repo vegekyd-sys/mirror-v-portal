@@ -10,9 +10,9 @@ import FeishuAppScanModal from '../components/FeishuAppScanModal';
 import PodLogsModal from '../components/PodLogsModal';
 import PodTerminalModal from '../components/PodTerminalModal';
 
-// Pod 终端功能开关：等权限系统（细粒度 RBAC / 操作审计）就绪后再开启。
-// 后端 ws /pod-exec 路由保留，仅隐藏前端入口；恢复时改回 true 即可。
-const POD_TERMINAL_ENABLED = false;
+// Pod 终端功能开关：2026-09-03 由运营管理员决策开启（控制台本身有 token 认证）。
+// 如需再次关闭，改回 false 并重新构建 admin-web 即可。
+const POD_TERMINAL_ENABLED = true;
 import { IconArrowLeft, IconBox, IconChat, IconRefresh, IconTrash } from '../components/icons';
 
 interface RuntimeContainer {
