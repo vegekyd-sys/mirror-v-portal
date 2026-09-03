@@ -12,7 +12,7 @@ author: ""
 
 ## 动作
 
-确认参数 → 搜买家（米奥展会优先内部数据）→ 出名单客户确认 → **选邀请函模板（必做，从资产库给用户选）** → 访谈补变量 → 统一模板填充 → 气泡预览 → 检查邮箱绑定（未绑先引导）→ 用户确认后发送。
+确认参数 → 搜买家（米奥展会优先内部数据）→ 出名单客户确认 → **选邀请函模板（必做，从资产库给用户选）** → 访谈补变量 → 统一模板填充 → 气泡预览 → 检查邮箱绑定（未绑先引导）→ 用户确认后发送 → **发送成功回写展会邀约名单**。
 
 ### 邀请函模板选择（必做，不可跳过）
 
@@ -26,6 +26,25 @@ author: ""
 - 无完全匹配行业 → 用最接近行业模板，或「泛家居」兜底（当前无则用 DEFU 软装 / Homelife 类）。
 - 生成时替换占位字段：展会名 / 日期 / 地点 / 国家 / 展商名 / 展位号 / 产品线 / 报名入口 / 参展商名录。
 - 把可选择的模板（含文件名 + 适用行业/语言）列给用户挑，选中后再填充字段生成。
+
+## 发送成功回写展会邀约名单（必做收尾）
+
+发出去的邀约买家要单独记进「展会邀约名单」，作为回传 tradechina + 现场 check-in 比对的唯一基准。
+
+- 时机：发送成功（拿到 message id）那一刻，对每个实际发出邀约的买家写一条。名单确认阶段不算，只有真发出去才记。
+- 脚本：`python3 work/mio-api/dc_exhibition_invitation.py record ...`（幂等，按 companyCdpId 合并；无 CDP ID 用公司名+国家兜底）。
+- 字段来源：公司名/官网/国家/买家类型/匹配产品/展会ID/展会名/模板/发送渠道/发送时间/messageId 从本次发送上下文取；联系人从线索池「联系人」字段取（已解锁才有，未解锁留空）。
+- 名单落盘：`data/memory/<supplier_id>/exhibition-invitations.json`，与线索池解耦，不污染线索池口径。
+- 与线索池「阶段=已触达」回写并存不冲突：名单记「邀约事实」，阶段记「触达状态」。
+
+```bash
+python3 work/mio-api/dc_exhibition_invitation.py record \
+  --company-cdp-id <CDPID> --company-name <公司名> --website <官网> \
+  --country <国家> --buyer-type <买家类型> --product <匹配产品> \
+  --contact-name <姓名> --job-title <职位> --email <邮箱> --phone <电话> --whatsapp <WA> \
+  --exhibition-id <展会ID> --exhibition-name <展会名> --template <模板名> \
+  --send-channel email --message-id <发送返回ID>
+```
 
 ## 边界
 
