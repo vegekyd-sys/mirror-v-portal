@@ -17,6 +17,14 @@ class ProviderConfig:
 
 
 PROVIDERS: dict[str, ProviderConfig] = {
+    "aliyun_exmail": ProviderConfig(
+        key="aliyun_exmail",
+        label="阿里云企业邮箱",
+        imap_host="imap.qiye.aliyun.com",
+        imap_port=993,
+        smtp_host="smtp.qiye.aliyun.com",
+        smtp_port=465,
+    ),
     "netease_163": ProviderConfig(
         key="netease_163",
         label="网易163邮箱",

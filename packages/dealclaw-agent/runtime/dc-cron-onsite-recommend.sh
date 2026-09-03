@@ -19,6 +19,7 @@ SUPPLIER_ID="${MIO_CDP_SUPPLIER_ID:-}"
 OPEN_ID="${MIO_V_OPEN_ID:-}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}"
 DECL_KEY_PREFIX="dealclaw-onsite-recommend"
+XIAOYUAN="$(command -v xiaoyuan 2>/dev/null || echo /opt/xiaoyuan-venv/bin/xiaoyuan)"
 
 # 国家 → IANA 时区（覆盖米奥主要展会国家）
 COUNTRY_TZ='{
@@ -54,7 +55,7 @@ resolve_tz() {
   fi
   if [[ -n "$OPEN_ID" && -n "$SUPPLIER_ID" ]]; then
     local country
-    country=$(xiaoyuan --open-id "$OPEN_ID" --supplier-id "$SUPPLIER_ID" company info 2>/dev/null | python3 -c "
+    country=$("$XIAOYUAN" --open-id "$OPEN_ID" --supplier-id "$SUPPLIER_ID" company info 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)

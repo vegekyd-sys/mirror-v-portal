@@ -19,10 +19,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+_XIAOYUAN = shutil.which("xiaoyuan") or "/opt/xiaoyuan-venv/bin/xiaoyuan"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,7 +101,7 @@ def fetch_onsite_notices(page_size: int = 50, mock_file: str = "") -> list[dict]
             print(f"[monitor_buyer_onsite] mock 读取失败: {e}", file=sys.stderr)
             return []
     cmd = [
-        "xiaoyuan",
+        _XIAOYUAN,
         "--open-id", os.environ.get("MIO_V_OPEN_ID", ""),
         "--supplier-id", os.environ.get("MIO_CDP_SUPPLIER_ID", ""),
         "company", "notice-list",
