@@ -221,14 +221,14 @@ export async function activateUser(userId: string): Promise<boolean> {
   return (rowCount ?? 0) > 0;
 }
 
-/** Seed initial admin user (马晴) if table is empty */
+/** Seed initial admin user (admin/管理员) if table is empty */
 export async function seedInitialAdmin(): Promise<{ loginToken: string } | null> {
   const { rows } = await query('SELECT COUNT(*) as cnt FROM admin_users');
   if (Number(rows[0].cnt) > 0) return null;
 
   const result = await createAdminUser({
-    username: 'maqing',
-    displayName: '马晴',
+    username: 'admin',
+    displayName: '管理员',
     role: 'admin',
     createdBy: 'system',
   });

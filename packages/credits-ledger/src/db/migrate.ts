@@ -326,7 +326,7 @@ async function seedGatewayPrices() {
 }
 
 /**
- * Seed initial admin user (马晴) if admin_users table is empty.
+ * Seed initial admin user (admin/管理员) if admin_users table is empty.
  * The login token is printed to console — save it before deploying!
  */
 async function seedInitialAdmin() {
@@ -346,15 +346,15 @@ async function seedInitialAdmin() {
 
   await query(
     `INSERT INTO admin_users (id, username, display_name, token_hash, role, created_by)
-     VALUES ('adm_seed_001', 'maqing', '马晴', $1, 'admin', 'system')`,
+     VALUES ('adm_seed_001', 'admin', '管理员', $1, 'admin', 'system')`,
     [tokenHash]
   );
 
   console.log('');
   console.log('══════════════════════════════════════════════');
   console.log('  管理员账号已创建');
-  console.log('  用户名: maqing');
-  console.log('  显示名: 马晴');
+  console.log('  用户名: admin');
+  console.log('  显示名: 管理员');
   console.log('  角色: admin');
   console.log(`  登录口令: ${loginToken}`);
   console.log('  ⚠️  请立即保存此口令！不会再次显示！');
