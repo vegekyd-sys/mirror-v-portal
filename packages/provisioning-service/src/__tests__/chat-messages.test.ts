@@ -3,8 +3,9 @@
  *
  *   - POST ingest validates direction/content, truncates oversized content,
  *     and is idempotent on message_id (ON CONFLICT DO NOTHING → stored:false)
- *   - GET sessions groups by session_key, newest activity first
- *   - GET messages paginates newest-first with sessionKey/direction filters
+ *   - GET sessions groups by (session_key, natural day in Asia/Shanghai),
+ *     newest activity first
+ *   - GET messages paginates newest-first with sessionKey/day/direction filters
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
@@ -32,6 +33,11 @@ const config: ProvisioningConfig = {
   creditsLedgerToken: '',
 };
 
+/** Asia/Shanghai (UTC+8, no DST) natural day → 'YYYY-MM-DD'. */
+function shDay(d: Date): string {
+  return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 interface Row {
   tenant_id: string;
   direction: string;
@@ -44,15 +50,18 @@ interface Row {
   message_id: string | null;
   run_id: string | null;
   success: boolean | null;
+  created_at: Date;
 }
 
 /** Fake pool: chat_messages insert/select semantics only. */
 function makePool() {
   const rows: Row[] = [];
+  let now = new Date('2026-09-01T04:00:00Z'); // 12:00 +08:00
   const pool = {
     rows,
+    setNow: (iso: string) => { now = new Date(iso); },
     query: async (sql: string, params?: unknown[]) => {
-      const s = sql.toUpperCase();
+      const s = sql.toUpperCase().replace(/\s+/g, ' ').trim();
       if (s.includes('INSERT INTO CHAT_MESSAGES')) {
         const existing = params?.[8]
           ? rows.some((r) => r.message_id === params[8] && r.tenant_id === params[0])
@@ -70,43 +79,56 @@ function makePool() {
           message_id: (params?.[8] as string) ?? null,
           run_id: (params?.[9] as string) ?? null,
           success: (params?.[10] as boolean) ?? null,
+          created_at: new Date(now),
         });
         return { rows: [], rowCount: 1 };
       }
-      if (s.includes('GROUP BY SESSION_KEY')) {
-        // sessions aggregation — emulate GROUP BY on in-memory rows
-        const bySession = new Map<string, Row[]>();
+      if (s.includes('SELECT 1 FROM CHAT_MESSAGES')) {
+        // sessions total — count distinct (session_key, day) groups
+        const groups = new Set<string>();
         for (const r of rows) {
           if (r.tenant_id !== String(params?.[0]) || !r.session_key) continue;
-          const list = bySession.get(r.session_key) ?? [];
+          groups.add(`${r.session_key}|${shDay(r.created_at)}`);
+        }
+        return { rows: [{ total: groups.size }], rowCount: 1 };
+      }
+      if (s.includes('GROUP BY SESSION_KEY')) {
+        // sessions aggregation — emulate GROUP BY (session_key, day)
+        const byKey = new Map<string, Row[]>();
+        for (const r of rows) {
+          if (r.tenant_id !== String(params?.[0]) || !r.session_key) continue;
+          const k = `${r.session_key}|${shDay(r.created_at)}`;
+          const list = byKey.get(k) ?? [];
           list.push(r);
-          bySession.set(r.session_key, list);
+          byKey.set(k, list);
         }
         const limit = Number(params?.[1] ?? 20);
         const offset = Number(params?.[2] ?? 0);
-        const sessions = [...bySession.entries()]
-          .map(([session_key, list]) => {
-            const sorted = [...list].sort((a, b) => (a.content < b.content ? -1 : 1));
+        const sessions = [...byKey.entries()]
+          .map(([k, list]) => {
+            const [session_key, day] = k.split('|');
+            const sorted = [...list].sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
             return {
               session_key,
+              day,
               message_count: list.length,
-              last_sender_name: sorted[sorted.length - 1].sender_name,
-              last_sender_open_id: sorted[sorted.length - 1].sender_open_id,
+              last_sender_name: sorted[0].sender_name,
+              last_sender_open_id: sorted[0].sender_open_id,
+              _last: sorted[0].created_at.getTime(),
             };
           })
+          .sort((a, b) => b._last - a._last)
+          .map(({ _last, ...rest }) => rest)
           .slice(offset, offset + limit);
         return { rows: sessions, rowCount: sessions.length };
       }
-      if (s.includes('COUNT(DISTINCT SESSION_KEY')) {
-        const set = new Set(rows.filter((r) => r.tenant_id === String(params?.[0]) && r.session_key).map((r) => r.session_key));
-        return { rows: [{ total: set.size }], rowCount: 1 };
-      }
       if (s.includes('SELECT ID, DIRECTION, CHANNEL')) {
-        // messages list with filters: params[0]=tenant, optional direction/sessionKey, then limit/offset
+        // messages list with filters: params[0]=tenant, optional direction/sessionKey/day, then limit/offset
         let list = rows.filter((r) => r.tenant_id === String(params?.[0]));
         for (let i = 1; i < (params?.length ?? 0) - 2; i++) {
           const v = String(params?.[i]);
           if (v === 'in' || v === 'out') list = list.filter((r) => r.direction === v);
+          else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) list = list.filter((r) => shDay(r.created_at) === v);
           else list = list.filter((r) => r.session_key === v);
         }
         const limit = Number(params?.[params!.length - 2] ?? 50);
@@ -121,6 +143,7 @@ function makePool() {
         for (let i = 1; i < (params?.length ?? 0); i++) {
           const v = String(params?.[i]);
           if (v === 'in' || v === 'out') list = list.filter((r) => r.direction === v);
+          else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) list = list.filter((r) => shDay(r.created_at) === v);
           else list = list.filter((r) => r.session_key === v);
         }
         return { rows: [{ total: list.length }], rowCount: 1 };
@@ -186,11 +209,13 @@ describe('GET /v1/tenants/:id/chat-messages — queries', () => {
   beforeAll(() => {
     pool = makePool();
     const seed = [
-      { direction: 'in', content: 'a', sessionKey: 's1', messageId: 'm1', senderName: '张三' },
-      { direction: 'out', content: 'b', sessionKey: 's1', messageId: 'm2' },
-      { direction: 'in', content: 'c', sessionKey: 's2', messageId: 'm3', senderName: '李四' },
+      { day: '2026-09-01T02:00:00Z', direction: 'in', content: 'a', sessionKey: 's1', messageId: 'm1', senderName: '张三' },
+      { day: '2026-09-01T03:00:00Z', direction: 'out', content: 'b', sessionKey: 's1', messageId: 'm2' },
+      { day: '2026-09-01T04:00:00Z', direction: 'in', content: 'c', sessionKey: 's2', messageId: 'm3', senderName: '李四' },
+      { day: '2026-09-02T02:00:00Z', direction: 'in', content: 'd', sessionKey: 's1', messageId: 'm4', senderName: '张三' },
     ];
     for (const s of seed) {
+      pool.setNow(s.day);
       pool.query(
         'INSERT INTO chat_messages (tenant_id, direction, channel, sender_open_id, sender_name, sender_username, content, session_key, message_id, run_id, success) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
         ['tid1', s.direction, null, null, s.senderName ?? null, null, s.content, s.sessionKey, s.messageId, null, null],
@@ -199,22 +224,33 @@ describe('GET /v1/tenants/:id/chat-messages — queries', () => {
     app = createApp(pool, config);
   });
 
-  it('lists sessions grouped by session_key with counts', async () => {
+  it('segments sessions by natural day (Asia/Shanghai)', async () => {
     const r = await request(app).get('/v1/tenants/tid1/chat-messages/sessions').set(auth);
     expect(r.status).toBe(200);
-    expect(r.body.total).toBe(2);
-    const s1 = r.body.sessions.find((s: any) => s.session_key === 's1');
-    expect(s1.message_count).toBe(2);
+    expect(r.body.total).toBe(3);
+    const s1d1 = r.body.sessions.find((s: any) => s.session_key === 's1' && s.day === '2026-09-01');
+    expect(s1d1.message_count).toBe(2);
+    const s1d2 = r.body.sessions.find((s: any) => s.session_key === 's1' && s.day === '2026-09-02');
+    expect(s1d2.message_count).toBe(1);
   });
 
-  it('paginates messages newest-first with sessionKey filter', async () => {
+  it('paginates messages newest-first with sessionKey+day filter', async () => {
     const r = await request(app)
-      .get('/v1/tenants/tid1/chat-messages?sessionKey=s1&limit=10')
+      .get('/v1/tenants/tid1/chat-messages?sessionKey=s1&day=2026-09-01&limit=10')
       .set(auth);
     expect(r.status).toBe(200);
     expect(r.body.total).toBe(2);
     expect(r.body.messages.length).toBe(2);
     expect(r.body.messages.map((m: any) => m.content)).toEqual(['b', 'a']);
+  });
+
+  it('day filter isolates a single calendar day', async () => {
+    const r = await request(app)
+      .get('/v1/tenants/tid1/chat-messages?sessionKey=s1&day=2026-09-02&limit=10')
+      .set(auth);
+    expect(r.status).toBe(200);
+    expect(r.body.total).toBe(1);
+    expect(r.body.messages[0].content).toBe('d');
   });
 
   it('filters by direction', async () => {

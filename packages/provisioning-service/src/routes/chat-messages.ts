@@ -73,23 +73,90 @@ export function createChatMessageRoutes(pool: pg.Pool, _config: ProvisioningConf
     try {
       const limit = Math.max(1, Math.min(Number(req.query.limit ?? 20) || 20, 100));
       const offset = Math.max(0, Number(req.query.offset ?? 0) || 0);
-      const { rows } = await pool.query(
-        `SELECT session_key,
-                COUNT(*)::int              AS message_count,
-                MAX(created_at)            AS last_at,
-                MIN(created_at)            AS first_at,
-                (ARRAY_REMOVE(ARRAY_AGG(sender_name ORDER BY created_at DESC), NULL))[1] AS last_sender_name,
-                (ARRAY_REMOVE(ARRAY_AGG(sender_open_id ORDER BY created_at DESC), NULL))[1] AS last_sender_open_id
-         FROM chat_messages
-         WHERE tenant_id = $1 AND session_key IS NOT NULL
-         GROUP BY session_key
-         ORDER BY MAX(created_at) DESC
-         LIMIT $2 OFFSET $3`,
-        [req.params.id, limit, offset],
-      );
+      // 按「session_key + 自然日（Asia/Shanghai）+ 客户」分桶：同一用户/渠道的历史消息
+      // 不再跨天塞进一个会话，也不再因 OpenClaw 会话重置而同日被拆成多个；群聊里
+      // 同一天不同人也会拆成独立条目（out 消息归属到紧邻的前一条 in 的客户）。
+      const sql = `
+        WITH scoped AS (
+          SELECT session_key, direction, sender_name, sender_open_id, created_at, id
+          FROM chat_messages
+          WHERE tenant_id = $1 AND session_key IS NOT NULL
+        ),
+        marked AS (
+          SELECT scoped.*,
+                 SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY session_key ORDER BY created_at, id) AS in_seq,
+                 TO_CHAR(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS day
+          FROM scoped
+        ),
+        person AS (
+          SELECT DISTINCT ON (session_key, in_seq)
+                 session_key, in_seq,
+                 sender_open_id AS person_open_id,
+                 sender_name    AS person_name
+          FROM marked
+          WHERE direction = 'in'
+          ORDER BY session_key, in_seq, created_at, id
+        ),
+        seg AS (
+          SELECT m.session_key, m.day, m.direction, m.sender_name, m.sender_open_id, m.created_at,
+                 p.person_open_id, p.person_name
+          FROM marked m
+          JOIN person p USING (session_key, in_seq)
+        ),
+        agg AS (
+          SELECT session_key, day, person_open_id, person_name,
+                 COUNT(*)::int AS message_count,
+                 MIN(created_at) AS first_at,
+                 MAX(created_at) AS last_at,
+                 (ARRAY_REMOVE(ARRAY_AGG(sender_name ORDER BY created_at DESC), NULL))[1]    AS last_sender_name,
+                 (ARRAY_REMOVE(ARRAY_AGG(sender_open_id ORDER BY created_at DESC), NULL))[1] AS last_sender_open_id
+          FROM seg
+          GROUP BY session_key, day, person_open_id, person_name
+          HAVING COUNT(*) FILTER (WHERE direction = 'in') > 0
+        )
+        SELECT session_key,
+               day,
+               person_open_id,
+               person_name,
+               message_count,
+               first_at,
+               last_at,
+               last_sender_name,
+               last_sender_open_id
+        FROM agg
+        ORDER BY last_at DESC
+        LIMIT $2 OFFSET $3
+      `;
+      const { rows } = await pool.query(sql, [req.params.id, limit, offset]);
+
       const { rows: totalRows } = await pool.query(
-        `SELECT COUNT(DISTINCT session_key)::int AS total
-         FROM chat_messages WHERE tenant_id = $1 AND session_key IS NOT NULL`,
+        `WITH scoped AS (
+           SELECT session_key, direction, sender_open_id, created_at, id
+           FROM chat_messages
+           WHERE tenant_id = $1 AND session_key IS NOT NULL
+         ),
+         marked AS (
+           SELECT session_key, direction, sender_open_id, created_at, id,
+                  SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END)
+                    OVER (PARTITION BY session_key ORDER BY created_at, id) AS in_seq,
+                  TO_CHAR(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS day
+           FROM scoped
+         ),
+         person AS (
+           SELECT DISTINCT ON (session_key, in_seq)
+                  session_key, in_seq, sender_open_id AS person_open_id
+           FROM marked
+           WHERE direction = 'in'
+           ORDER BY session_key, in_seq, created_at, id
+         ),
+         seg AS (
+           SELECT m.session_key, m.day, p.person_open_id
+           FROM marked m
+           JOIN person p USING (session_key, in_seq)
+         )
+         SELECT COUNT(*)::int AS total
+         FROM (SELECT DISTINCT session_key, day, person_open_id FROM seg) s`,
         [req.params.id],
       );
       res.json({ sessions: rows, total: totalRows[0]?.total ?? 0, limit, offset });
@@ -107,11 +174,14 @@ export function createChatMessageRoutes(pool: pg.Pool, _config: ProvisioningConf
         ? (req.query.direction as string) : null;
       const sessionKey = typeof req.query.sessionKey === 'string' && req.query.sessionKey.trim()
         ? req.query.sessionKey.trim().slice(0, 256) : null;
+      const day = typeof req.query.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day)
+        ? req.query.day : null;
 
       const where: string[] = ['tenant_id = $1'];
       const params: unknown[] = [req.params.id];
       if (direction) { params.push(direction); where.push(`direction = $${params.length}`); }
       if (sessionKey) { params.push(sessionKey); where.push(`session_key = $${params.length}`); }
+      if (day) { params.push(day); where.push(`TO_CHAR(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') = $${params.length}`); }
       const whereSql = where.join(' AND ');
 
       const { rows } = await pool.query(
