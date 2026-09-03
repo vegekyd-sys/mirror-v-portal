@@ -235,10 +235,13 @@ class ImapSynchronizer:
                 in_reply_to = (msg.get("In-Reply-To") or "").strip()
                 references = _message_ids(msg.get("References"))
                 reference_candidates = [*_message_ids(in_reply_to), *references]
-                related = self.store.has_outbound_reference(account_id, reference_candidates)
                 sender = ", ".join(address for _, address in getaddresses(msg.get_all("From", [])))
                 from_addresses = [address for _, address in getaddresses(msg.get_all("From", []))]
                 first_from = from_addresses[0] if from_addresses else sender
+                related = self.store.has_outbound_reference(account_id, reference_candidates)
+                if not related:
+                    # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
+                    related = self.store.find_outbound_by_contact(account_id, first_from) is not None
                 recipients = [address for _, address in getaddresses(msg.get_all("To", []))]
                 sent_at = None
                 if msg.get("Date"):
