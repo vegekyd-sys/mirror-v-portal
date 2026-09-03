@@ -55,6 +55,7 @@ openclaw cron add \
   --tz "$TZ" \
   --command "python3 -m dc_email_controller.dc_resend_source" \
   --command-cwd "$MIO_DIR" \
+  --no-deliver \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-resend-poll" \
   --description "DealClaw Resend poller（*/5 @ $TZ）"

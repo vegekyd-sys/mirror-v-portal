@@ -16,6 +16,8 @@ set -euo pipefail
 
 TZ="${DEALCLAW_CRON_TZ:-Asia/Shanghai}"
 MIO_DIR="${DEALCLAW_MIO_DIR:-/data/workspace/work/mio-api}"
+# 租户身份：entrypoint 已 source .env，这里直接继承进程环境；Secret 未挂载时为空
+SUPPLIER_ID="${MIO_CDP_SUPPLIER_ID:-}"
 
 # ── 参数解析 ──
 while [[ $# -gt 0 ]]; do
@@ -53,11 +55,12 @@ ensure() {
   openclaw cron add \
     --cron "$cron_expr" \
     --tz "$TZ" \
-    --command "set -a; . .env; set +a; python3 -m dc_daily_cycle run --slot $slot --execute --dispatch" \
+    --command "python3 -m dc_daily_cycle run --slot $slot --execute --dispatch" \
     --command-cwd "$MIO_DIR" \
-    --command-env "DC_NOTIFY_SENDER_MODE=feishu" \
-    --command-env "DC_NOTIFY_SEND_ENABLED=1" \
+    --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
+    --command-env "DC_NOTIFY_ALLOWED_COMPANIES=$SUPPLIER_ID" \
     --command-env "DC_DATA_DIR=$MIO_DIR/data" \
+    --no-deliver \
     --declaration-key "$decl_key" \
     --name "$name" \
     --description "DealClaw ${slot} 报（${cron_expr} @ ${TZ}）"
