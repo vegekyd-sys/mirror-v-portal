@@ -242,6 +242,22 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor, created_at DESC);
     `);
 
+    // Per-tenant image override ("pin", v0.10): lets the admin console lock a
+    // single tenant's dealclaw-agent / nexus-gateway Deployment to a specific
+    // image, so ops-agent's rollout cron (POST /v1/tenants/batch/deployment)
+    // SKIPS that tenant instead of reverting it to the promoted rollout_target.
+    // Absence of a row = "follow the fleet" (existing behaviour, zero backfill).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tenant_image_overrides (
+        tenant_id  TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        service    TEXT NOT NULL CHECK (service IN ('dealclaw-agent','nexus-gateway')),
+        image      TEXT NOT NULL,
+        updated_by TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id, service)
+      );
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

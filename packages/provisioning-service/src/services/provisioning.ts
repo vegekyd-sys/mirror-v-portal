@@ -29,7 +29,7 @@ import {
   SKILL_ENV_SECRET_NAME,
 } from './skill-env.js';
 import { getPromotedTag } from './rollout-targets.js';
-
+import { getOverride } from './tenant-image-overrides.js';
 /** Per-tenant namespace name — each tenant is fully isolated in its own namespace. */
 export function tenantNamespace(tenantId: string): string {
   return `dealclaw-${tenantId}`;
@@ -180,6 +180,20 @@ export async function provisionTenant(
     const promotedAgentTag = await getPromotedTag(options.dbPool, 'dealclaw-agent');
     if (promotedAgentTag) agentTag = promotedAgentTag;
 
+    // Full image references (tag-based resolution above). A pinned per-tenant
+    // override stores the FULL image path, so it must replace the full image
+    // (not just the tag) below.
+    let gwImage = `${registry}/nexus-gateway:${gwTag}`;
+    let agentImage = `${registry}/dealclaw-agent:${agentTag}`;
+
+    // 0a2. A pinned per-tenant override wins over the promoted tag — an
+    // operator may have locked this tenant to a specific image; a (re)build
+    // of its Deployments must honour that pin, not silently drift to fleet.
+    const overrideGw = await getOverride(options.dbPool, tenant.tenantId, 'nexus-gateway');
+    if (overrideGw) gwImage = overrideGw;
+    const overrideAgent = await getOverride(options.dbPool, tenant.tenantId, 'dealclaw-agent');
+    if (overrideAgent) agentImage = overrideAgent;
+
     // 0. Create per-tenant namespace first
     await createNamespace(nsName);
 
@@ -281,7 +295,7 @@ export async function provisionTenant(
       await createDeployment({
         name: gatewayName,
         namespace: nsName,
-        image: `${registry}/nexus-gateway:${gwTag}`,
+        image: gwImage,
         port: 8080,
         labels: gwLabels,
         envFrom: [
@@ -330,7 +344,7 @@ export async function provisionTenant(
     await createDeployment({
       name: agentName,
       namespace: nsName,
-      image: `${registry}/dealclaw-agent:${agentTag}`,
+      image: agentImage,
       port: 18789,
       labels: agentLabels,
       envFrom: [

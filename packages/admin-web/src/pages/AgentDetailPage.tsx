@@ -36,6 +36,7 @@ interface RuntimeStatus {
   namespace?: string;
   deployments: { name: string; replicas: number; readyReplicas: number; unavailableReplicas: number }[];
   pods: RuntimePod[];
+  pinnedImages?: { tenantId: string; service: string; image: string }[];
 }
 
 interface FeishuBinding {
@@ -759,6 +760,7 @@ export default function AgentDetailPage() {
   const [releases, setReleases] = useState<ImageRelease[]>([]);
   const [imgService, setImgService] = useState<'dealclaw-agent' | 'nexus-gateway'>('dealclaw-agent');
   const [imgTag, setImgTag] = useState('');
+  const [imgPin, setImgPin] = useState(true);
   const [imgBusy, setImgBusy] = useState(false);
 
   useEffect(() => {
@@ -769,6 +771,8 @@ export default function AgentDetailPage() {
 
   const serviceReleases = releases.filter((r) => r.service === imgService);
 
+  const pinnedForService = (runtime?.pinnedImages ?? []).find((p) => p.service === imgService);
+
   const updateImage = async () => {
     const tag = imgTag.trim();
     if (!tag) {
@@ -777,21 +781,43 @@ export default function AgentDetailPage() {
     }
     if (
       !window.confirm(
-        `确认将该 Agent 的 ${imgService} 镜像更新为 ${tag}？\nPod 将滚动重启，期间服务短暂不可用。`,
+        `确认将该 Agent 的 ${imgService} 镜像更新为 ${tag}？\nPod 将滚动重启，期间服务短暂不可用。` +
+          (imgPin ? `\n\n已勾选「锁定」：更新后该 Agent 不会随舰队滚动。` : `\n\n未勾选「锁定」：下次全量滚动时会回到舰队版本。`),
       )
     )
       return;
     setImgBusy(true);
     try {
-      const r = await api<{ image: string }>(
+      const r = await api<{ image: string; pinned: boolean }>(
         `/v1/tenants/${encodeURIComponent(tenantId)}/deployment`,
-        { method: 'PATCH', body: { service: imgService, image: tag } },
+        { method: 'PATCH', body: { service: imgService, image: tag, pin: imgPin } },
       );
-      flash(`已触发滚动更新：${imgService} → ${r.image || tag}`);
+      flash(`已触发滚动更新：${imgService} → ${r.image || tag}${r.pinned ? '（已锁定）' : ''}`);
       setImgTag('');
       await loadRuntime();
     } catch (e) {
       flash(`镜像更新失败：${errMsg(e)}`);
+    } finally {
+      setImgBusy(false);
+    }
+  };
+
+  const unpinImage = async () => {
+    if (
+      !window.confirm(
+        `取消锁定 ${imgService}？\n该 Agent 将在下一个滚动周期（约 10 分钟）回到舰队版本。`,
+      )
+    )
+      return;
+    setImgBusy(true);
+    try {
+      await api(`/v1/tenants/${encodeURIComponent(tenantId)}/deployment-pin?service=${encodeURIComponent(imgService)}`, {
+        method: 'DELETE',
+      });
+      flash(`已取消锁定 ${imgService}，将随舰队滚动`);
+      await loadRuntime();
+    } catch (e) {
+      flash(`取消锁定失败：${errMsg(e)}`);
     } finally {
       setImgBusy(false);
     }
@@ -1813,9 +1839,33 @@ export default function AgentDetailPage() {
               {imgBusy ? '更新中…' : (<><IconBox /> 更新此 Agent 镜像</>)}
             </button>
           </div>
+          <div className="form-row" style={{ marginTop: 8 }}>
+            <label className="field-label">锁定</label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={imgPin}
+                onChange={(e) => setImgPin(e.target.checked)}
+              />
+              锁定此版本（不随舰队滚动）
+            </label>
+            {pinnedForService && (
+              <span className="badge badge-warn" title={pinnedForService.image}>
+                已锁定：{pinnedForService.image.split(':').pop()}
+              </span>
+            )}
+          </div>
+          {pinnedForService && (
+            <div className="form-row" style={{ marginTop: 4 }}>
+              <label className="field-label" />
+              <button className="btn-secondary" onClick={() => void unpinImage()} disabled={imgBusy}>
+                取消锁定 / 跟随舰队
+              </button>
+            </div>
+          )}
           <div className="hint">
-            仅更新当前 Agent（滚动重启该服务的 Deployment）。如需把某个版本推给全部租户，请到
-            「镜像版本」页使用「提升发布」。
+            仅更新当前 Agent（滚动重启该服务的 Deployment）。勾选「锁定」后，本 Agent 会停留在所选版本，
+            不再随「镜像版本」页的全量发布滚动；取消锁定后将在下一个滚动周期回到舰队版本。
           </div>
         </div>
       </div>

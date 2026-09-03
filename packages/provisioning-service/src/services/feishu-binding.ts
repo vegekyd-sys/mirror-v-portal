@@ -46,6 +46,7 @@ import {
 } from './k8s-client.js';
 import { LLM_PROXY_CONFIG_SECRET } from './llm-providers.js';
 import { getPromotedTag } from './rollout-targets.js';
+import { getOverride } from './tenant-image-overrides.js';
 
 const FEISHU_APP_ID_PATTERN = /^cli_[a-zA-Z0-9]{4,64}$/;
 const FEISHU_TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
@@ -293,10 +294,14 @@ export async function bindTenantFeishuApp(
   await createSecret(gatewayNs, LLM_PROXY_CONFIG_SECRET, { LLM_UPSTREAMS: '{}' });
 
   // 4. Gateway Deployment + Service. Prefer the promoted rollout target so a
-  // freshly created gateway picks up the same version the fleet runs.
+  // freshly created gateway picks up the same version the fleet runs; a pinned
+  // per-tenant override (admin console lock) wins over the promoted tag.
   let gwTag = config.nexusGatewayImageTag;
   const promotedGwTag = await getPromotedTag(pool, 'nexus-gateway');
   if (promotedGwTag) gwTag = promotedGwTag;
+  // The override stores the FULL image path (unlike the tag above), so it
+  // replaces the final image reference directly.
+  const gwImage = await getOverride(pool, tenantId, 'nexus-gateway') || `${config.imageRegistry}/nexus-gateway:${gwTag}`;
 
   const gatewayName = `nexus-gateway-${tenantId}`;
   const gwLabels = {
@@ -309,7 +314,7 @@ export async function bindTenantFeishuApp(
   await createDeployment({
     name: gatewayName,
     namespace: gatewayNs,
-    image: `${config.imageRegistry}/nexus-gateway:${gwTag}`,
+    image: gwImage,
     port: 8080,
     labels: gwLabels,
     envFrom: [

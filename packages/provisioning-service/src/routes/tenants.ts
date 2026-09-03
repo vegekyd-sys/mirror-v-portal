@@ -24,6 +24,7 @@ import {
 import { getMasterKey } from '../services/crypto.js';
 import { getTenantDirectModeMap } from '../services/llm-providers.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
+import { getOverrideMap, setOverride, clearOverride, listOverrides } from '../services/tenant-image-overrides.js';
 import type { ProvisioningConfig } from '../config.js';
 
 export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
@@ -363,12 +364,18 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           tenantId: req.params.id,
           deployments: [],
           pods: [],
+          pinnedImages: await listOverrides(pool, req.params.id),
         });
         return;
       }
 
       const runtime = await getTenantRuntimeStatus(tenantNamespace(req.params.id), req.params.id);
-      res.json({ ok: true, dryRun: false, ...runtime });
+      res.json({
+        ok: true,
+        dryRun: false,
+        pinnedImages: await listOverrides(pool, req.params.id),
+        ...runtime,
+      });
     } catch (err) {
       console.error('Get tenant runtime status failed:', err);
       res.status(500).json({ code: 'RUNTIME_STATUS_FAILED', message: 'Failed to query tenant runtime status' });
@@ -782,7 +789,11 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   // PATCH /v1/tenants/:id/deployment — rolling update deployment image
   router.patch('/v1/tenants/:id/deployment', async (req: Request, res: Response) => {
     try {
-      const { service, image } = req.body;
+      const { service, image, pin } = req.body;
+      // Default to pinning: the operator's intent when updating a single
+      // tenant's image is almost always "keep it on this version" — otherwise
+      // the ops-agent rollout cron reverts it to the promoted tag within ~10m.
+      const shouldPin = pin !== false;
 
       if (!service || !['dealclaw-agent', 'nexus-gateway'].includes(service)) {
         res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
@@ -818,9 +829,28 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { patchDeploymentImage } = await import('../services/k8s-client.js');
       await patchDeploymentImage({ namespace, name: deploymentName, image: fullImage });
 
+      // Persist (or clear) the pin so the rollout cron respects this override.
+      const { actor } = actorFromRequest(req);
+      if (shouldPin) {
+        await setOverride(pool, { tenantId, service, image: fullImage, updatedBy: actor });
+      } else {
+        await clearOverride(pool, tenantId, service);
+      }
+
+      await auditFor(req, {
+        action: shouldPin ? 'image-release.pin' : 'image-release.unpin',
+        method: 'PATCH',
+        path: `/v1/tenants/${tenantId}/deployment`,
+        resourceType: 'tenant_image_override',
+        resourceId: `${tenantId}/${service}`,
+        tenantId,
+        newValue: { service, image: fullImage, pinned: shouldPin },
+        statusCode: 200,
+      });
+
       await pool.query(
         `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)`,
-        [tenantId, rows[0].status, `Deployment ${service} updated to ${image}`],
+        [tenantId, rows[0].status, `Deployment ${service} updated to ${image}${shouldPin ? ' (pinned)' : ''}`],
       );
 
       res.json({
@@ -829,12 +859,52 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         service,
         deployment: deploymentName,
         image: fullImage,
+        pinned: shouldPin,
         action: 'rolling_update',
       });
     } catch (err: unknown) {
       const e = err as any;
       console.error('Patch deployment failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Deployment update failed' });
+    }
+  });
+
+  // DELETE /v1/tenants/:id/deployment-pin?service= — remove a pinned image so
+  // the tenant follows the fleet again (next rollout cycle converges it to the
+  // promoted tag). Idempotent: no pin is not an error.
+  router.delete('/v1/tenants/:id/deployment-pin', async (req: Request, res: Response) => {
+    try {
+      const service = typeof req.query.service === 'string' ? req.query.service : '';
+      if (!service || !['dealclaw-agent', 'nexus-gateway'].includes(service)) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'service must be dealclaw-agent or nexus-gateway' });
+        return;
+      }
+
+      const tenantId = req.params.id;
+      const { rows } = await pool.query('SELECT tenant_id FROM tenants WHERE tenant_id = $1', [tenantId]);
+      if (!rows.length) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+
+      await clearOverride(pool, tenantId, service);
+
+      await auditFor(req, {
+        action: 'image-release.unpin',
+        method: 'DELETE',
+        path: `/v1/tenants/${tenantId}/deployment-pin`,
+        resourceType: 'tenant_image_override',
+        resourceId: `${tenantId}/${service}`,
+        tenantId,
+        newValue: { service, pinned: false },
+        statusCode: 200,
+      });
+
+      res.json({ ok: true, tenantId, service, pinned: false, action: 'unpin' });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Delete deployment pin failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Unpin failed' });
     }
   });
 
@@ -983,10 +1053,18 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const { patchDeploymentImage, getDeployment } = await import('../services/k8s-client.js');
-      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; error?: string }> = [];
+      // Pinned tenants are exempt from fleet rollout: load all overrides for
+      // this service in one query, then skip any tenant with a matching row.
+      const overrides = await getOverrideMap(pool, service);
+      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; pinned?: boolean; error?: string }> = [];
 
       for (const row of rows) {
         const deploymentName = `${service}-${row.tenant_id}`;
+        // Skip pinned tenants — their image is operator-locked, not "deviant".
+        if (overrides.has(row.tenant_id)) {
+          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true, pinned: true });
+          continue;
+        }
         try {
           // Skip no-op patches: read the current image first and only patch
           // when it actually differs from the desired tag. This keeps the
@@ -1015,8 +1093,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         }
       }
 
-      const successCount = results.filter(r => r.ok && !r.alreadyCurrent).length;
+      const successCount = results.filter(r => r.ok && !r.alreadyCurrent && !r.pinned).length;
       const alreadyCurrentCount = results.filter(r => r.alreadyCurrent).length;
+      const pinnedCount = results.filter(r => r.pinned).length;
       const skippedCount = results.filter(r => r.skipped).length;
       res.json({
         ok: true,
@@ -1025,6 +1104,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         failed: results.filter(r => !r.ok && !r.skipped).length,
         skipped: skippedCount,
         alreadyCurrent: alreadyCurrentCount,
+        pinned: pinnedCount,
         service,
         image: fullImage,
         results,

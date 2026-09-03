@@ -110,4 +110,33 @@ describe('provisionTenant image tags', () => {
     expect(images).toContain('reg.example.com/dealclaw/nexus-gateway:master.gw.9');
     expect(images).toContain('reg.example.com/dealclaw/dealclaw-agent:master.env.7');
   });
+
+  it('a pinned per-tenant override wins over the promoted tag (full image)', async () => {
+    // Pool that answers both getPromotedTag (service param) and getOverride
+    // (tenant_id + service params) queries.
+    const pool = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes('tenant_image_overrides')) {
+          const service = String(params?.[1] ?? '');
+          if (service === 'dealclaw-agent') {
+            return { rows: [{ image: 'reg.example.com/dealclaw/dealclaw-agent:master.pinned.99' }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        const service = String(params?.[0] ?? '');
+        const promoted: Record<string, string> = {
+          'nexus-gateway': 'master.c43b3c7f.62',
+          'dealclaw-agent': 'master.c43b3c7f.62',
+        };
+        return { rows: service in promoted ? [{ tag: promoted[service] }] : [], rowCount: 1 };
+      },
+    } as any;
+
+    await provisionTenant(tenant, { ...baseOptions, dbPool: pool });
+    const images = deploymentImages();
+    // Agent honours the pinned full image; gateway still uses promoted tag.
+    expect(images).toContain('reg.example.com/dealclaw/dealclaw-agent:master.pinned.99');
+    expect(images).toContain('reg.example.com/dealclaw/nexus-gateway:master.c43b3c7f.62');
+    expect(images.some((i) => i.endsWith(':master.c43b3c7f.62') && i.includes('dealclaw-agent'))).toBe(false);
+  });
 });

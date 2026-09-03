@@ -23,7 +23,8 @@ interface BatchResponse {
   failed: number;
   skipped?: number;
   alreadyCurrent?: number;
-  results?: Array<{ tenantId: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; error?: string }>;
+  pinned?: number;
+  results?: Array<{ tenantId: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; pinned?: boolean; error?: string }>;
   code?: string;
   message?: string;
 }
@@ -101,6 +102,12 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
       const alreadyCurrent = body.alreadyCurrent ?? 0;
       if (alreadyCurrent > 0) {
         console.log(`[rollout] ${target.service}: ${alreadyCurrent} tenants already on ${target.image}, no patch needed`);
+      }
+
+      // Log pinned tenants (operator-locked image, exempt from fleet rollout)
+      const pinned = body.pinned ?? 0;
+      if (pinned > 0) {
+        console.log(`[rollout] ${target.service}: ${pinned} tenants pinned (skipped, operator-locked image)`);
       }
 
       // Log skipped tenants (deployment not found)
