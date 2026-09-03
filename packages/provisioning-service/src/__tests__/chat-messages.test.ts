@@ -57,6 +57,49 @@ interface Row {
 function makePool() {
   const rows: Row[] = [];
   let now = new Date('2026-09-01T04:00:00Z'); // 12:00 +08:00
+
+  // Emulate the sessions CTE: each message belongs to the sender of the most
+  // recent inbound message in its session; buckets by (session_key, day, person).
+  const segmentList = (tenantId: string) => {
+    const bySession = new Map<string, Row[]>();
+    for (const r of rows) {
+      if (r.tenant_id !== tenantId || !r.session_key) continue;
+      const l = bySession.get(r.session_key) ?? [];
+      l.push(r);
+      bySession.set(r.session_key, l);
+    }
+    const segs: Array<{
+      session_key: string;
+      day: string;
+      person_open_id: string | null;
+      person_name: string | null;
+      messages: Row[];
+    }> = [];
+    for (const [session_key, list] of bySession) {
+      const sorted = [...list].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+      let person: { open_id: string | null; name: string | null } = { open_id: null, name: null };
+      for (const r of sorted) {
+        if (r.direction === 'in') person = { open_id: r.sender_open_id, name: r.sender_name };
+        const day = shDay(r.created_at);
+        let seg = segs.find(
+          (s) => s.session_key === session_key && s.day === day && s.person_open_id === person.open_id,
+        );
+        if (!seg) {
+          seg = {
+            session_key,
+            day,
+            person_open_id: person.open_id,
+            person_name: person.name,
+            messages: [],
+          };
+          segs.push(seg);
+        }
+        seg.messages.push(r);
+      }
+    }
+    return segs;
+  };
+
   const pool = {
     rows,
     setNow: (iso: string) => { now = new Date(iso); },
@@ -83,35 +126,24 @@ function makePool() {
         });
         return { rows: [], rowCount: 1 };
       }
-      if (s.includes('SELECT 1 FROM CHAT_MESSAGES')) {
-        // sessions total — count distinct (session_key, day) groups
-        const groups = new Set<string>();
-        for (const r of rows) {
-          if (r.tenant_id !== String(params?.[0]) || !r.session_key) continue;
-          groups.add(`${r.session_key}|${shDay(r.created_at)}`);
-        }
-        return { rows: [{ total: groups.size }], rowCount: 1 };
+      if (s.includes('SELECT DISTINCT SESSION_KEY')) {
+        // sessions total — count distinct (session_key, day, person) segments
+        return { rows: [{ total: segmentList(String(params?.[0])).length }], rowCount: 1 };
       }
       if (s.includes('GROUP BY SESSION_KEY')) {
-        // sessions aggregation — emulate GROUP BY (session_key, day)
-        const byKey = new Map<string, Row[]>();
-        for (const r of rows) {
-          if (r.tenant_id !== String(params?.[0]) || !r.session_key) continue;
-          const k = `${r.session_key}|${shDay(r.created_at)}`;
-          const list = byKey.get(k) ?? [];
-          list.push(r);
-          byKey.set(k, list);
-        }
+        // sessions aggregation — emulate (session_key, day, person) bucketing
+        const segs = segmentList(String(params?.[0]));
         const limit = Number(params?.[1] ?? 20);
         const offset = Number(params?.[2] ?? 0);
-        const sessions = [...byKey.entries()]
-          .map(([k, list]) => {
-            const [session_key, day] = k.split('|');
-            const sorted = [...list].sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+        const sessions = segs
+          .map((seg) => {
+            const sorted = [...seg.messages].sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
             return {
-              session_key,
-              day,
-              message_count: list.length,
+              session_key: seg.session_key,
+              day: seg.day,
+              person_open_id: seg.person_open_id,
+              person_name: seg.person_name,
+              message_count: seg.messages.length,
               last_sender_name: sorted[0].sender_name,
               last_sender_open_id: sorted[0].sender_open_id,
               _last: sorted[0].created_at.getTime(),
