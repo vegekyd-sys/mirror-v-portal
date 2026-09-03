@@ -212,6 +212,7 @@ init_runtime() {
   bash /opt/dealclaw/runtime/dc-cron-daily.sh       || echo "[dealclaw-runtime] dc-cron-daily.sh 失败" >&2
   bash /opt/dealclaw/runtime/dc-cron-resend-poll.sh || echo "[dealclaw-runtime] dc-cron-resend-poll.sh 失败" >&2
   bash /opt/dealclaw/runtime/dc-cron-email-poll.sh  || echo "[dealclaw-runtime] dc-cron-email-poll.sh 失败" >&2
+  bash /opt/dealclaw/runtime/dc-cron-buyer-onsite.sh || echo "[dealclaw-runtime] dc-cron-buyer-onsite.sh 失败" >&2
 
   # 3. agent 预加载：画像 + 线索池
   bash /opt/dealclaw/runtime/dc-ensure-agent-preload.sh || echo "[dealclaw-runtime] dc-ensure-agent-preload.sh 失败" >&2
