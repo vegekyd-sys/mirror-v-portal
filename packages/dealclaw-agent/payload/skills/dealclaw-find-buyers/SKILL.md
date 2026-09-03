@@ -44,6 +44,8 @@ author: ""
 - 公司名、品牌名使用 `--company-name`；产品词不得放入公司名字段。
 - 采购标签只认英文；国家统一使用大写 ISO2；一次只传一个搜索概念或完整短语。
 - 正常请求必须读取 `current_search_profile` 并应用其校准（国家、买家类型、avoid_current、prefer）；不得跳过校准。
+- CLI 鉴权必须显式传 `--open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID"`，不得靠环境变量自动读（CLI 认 `MEO_*`，工程注入 `MIO_*`，无映射）。
+- CLI 国家参数用 `--countries`（逗号分隔，如 `BR` / `US,DE`）；`--countries-json` 是旧脚本参数，CLI 不识别。
 
 ### 模型判断
 

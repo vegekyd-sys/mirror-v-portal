@@ -8,7 +8,13 @@
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" <group> <cmd> [选项]
 ```
 
+> ⚠️ **机器铁律（鉴权必须显式传，禁止靠环境变量自动读）**
+> `xiaoyuan` CLI 只认 `MEO_OPEN_ID` / `MEO_SUPPLIER_ID` 环境变量，而本工程注入的是 `MIO_V_OPEN_ID` / `MIO_CDP_SUPPLIER_ID`，两者**无映射 shim**。不显式传参时 CLI 会报「缺少身份」。因此每次调用必须写成：
+> `xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" <group> <cmd> [选项]`
+> 不得省略 `--open-id` / `--supplier-id`，也不得改成 `--api-key` 兜底（本工程无 `MEO_API_KEY`，用了只会缺 key）。
+
 - `--open-id` / `--supplier-id` 读自 `.env` 的 `MIO_V_OPEN_ID` / `MIO_CDP_SUPPLIER_ID`（entrypoint 已 source 进进程环境）。
+- 国家参数用 `--countries`（逗号分隔，如 `US,DE`）；`--countries-json` 是旧脚本参数，CLI 不识别。
 - 数组参数用**逗号分隔**（不是 JSON 数组）。
 - 返回结构：`response.data`，买家列表在 `response.data.page.records`，翻页 token 在 `response.data.backendParam`。
 
