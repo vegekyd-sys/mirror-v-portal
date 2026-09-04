@@ -15,6 +15,7 @@ resources:
   - ../../base/central-gateway
   - ../../base/admin-dashboard
   - ../../base/email-webhook
+  - ../../base/whatsapp-bridge
 
 # Production-specific config overrides
 patches:

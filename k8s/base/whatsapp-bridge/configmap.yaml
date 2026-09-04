@@ -1,0 +1,47 @@
+# 非敏感配置。凭据走 Secret（YCloud API Key、飞书应用密钥等，见本目录 README）。
+# 改完需要 kubectl rollout restart 才生效（envFrom 不会自动触发滚动）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whatsapp-bridge-config
+  labels:
+    app: whatsapp-bridge
+data:
+  # loadEnv.ts 靠 npm_lifecycle_event 推断环境，容器里跑 node dist/index.js
+  # 拿不到那个变量，不显式给就会当成 development
+  APP_ENV: "production"
+  PORT: "8086"
+
+  # 应用自身在这个前缀下提供服务，与 email-webhook 共用一个 ALB host。
+  # /health 额外无条件挂在根路径，供探针直连 Pod。
+  ROUTE_PREFIX: "/whatsapp"
+
+  # 独立 schema，和 email-webhook 的表在同一个库里互不打扰。
+  # initContainer 会先 CREATE SCHEMA IF NOT EXISTS 再跑 prisma migrate deploy。
+  DATABASE_SCHEMA: "whatsapp_platform_bridge"
+
+  # 智能体回调桥接时用的基址（服务自身监听不依赖它）
+  WHATSAPP_BRIDGE_BASE_URL: "https://webhook.dealclaw.io/whatsapp"
+
+  # YCloud 嵌入式注册的 partnerCustomerId
+  MIO_CDP_SUPPLIER_ID: "151897148668"
+
+  FEISHU_BASE_URL: "https://open.feishu.cn"
+
+  # 飞书应用凭据（APP_ID/APP_SECRET/VERIFICATION_TOKEN/ENCRYPT_KEY）不放这里。
+  # 上游已支持多应用：通过 POST /api/feishu/apps 注册进 FeishuApp 表，
+  # 每个应用有自己的 webhook 地址 /whatsapp/webhooks/feishu/{appId}。
+  # Secret 里那 4 个 env 只是「单应用模式」的兜底（库里查不到 appId 时才用）。
+
+  # 以下都可留空：客服群没配会自动建「WhatsApp 客服」群
+  FEISHU_CHAT_ID: ""
+  FEISHU_NOTIFY_CHAT_IDS: ""
+  FEISHU_NOTIFY_CHAT_NAMES: ""
+  FEISHU_INVITE_OPEN_IDS: ""
+  FEISHU_INVITE_EMAILS: ""
+  FEISHU_INVITE_MOBILES: ""
+  FEISHU_INVITE_APP_IDS: ""
+
+  # YCLOUD_WABA_ID / YCLOUD_FROM 有意不写：绑定 WABA 后由服务自己写进
+  # app_setting 表，启动时 hydrateYCloudBindingFromStore() 读回来。
+  # 在这里写死反而会盖掉运行期绑定的结果。

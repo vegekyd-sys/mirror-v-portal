@@ -1,0 +1,30 @@
+{
+  "name": "@dealclaw/whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bridge WhatsApp (YCloud) conversations into Feishu group topics",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "prisma generate && tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/channel/whatsapp/signature.test.ts src/channel/whatsapp/ycloud.parse.test.ts src/platform/feishu/crypto.test.ts src/lib/envPersist.test.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "tsx scripts/run-with-env.ts prisma migrate dev",
+    "db:setup": "node dist/scripts/dbSetup.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.14.0",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.5.0",
+    "prisma": "^6.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,128 @@
+# WhatsApp ↔ 飞书桥接服务
+
+Node 服务：YCloud WhatsApp 与飞书客服群话题双向同步。买家 WhatsApp 消息写入固定客服群里的一条话题；客服在该话题回复后回发 WhatsApp。也支持 Partner Direct Link 嵌入式注册，为客户开通 WABA。
+
+## 能力（第一版）
+
+- 文本双向同步
+- 每个「买家 × 企业号」会话对应一条飞书话题
+- YCloud / 飞书 webhook 验签与事件幂等
+- 24h 窗口外禁止自由文本，并在话题里提示需要模板
+- 忽略机器人自己发的飞书消息，避免回环
+- Partner Direct Link：服务端创建一次性 Onboarding Link，Webhook 落库 WABA 绑定
+
+## 启动
+
+完整步骤（环境变量、数据库、飞书/YCloud Webhook、生产进程守护）见 **[docs/部署.md](docs/部署.md)**。
+
+本地最快路径：
+
+本包已并入 `dealclaw` monorepo，依赖在仓库根统一安装（pnpm workspace）：
+
+```bash
+cd ../.. && pnpm install
+```
+
+```bash
+cp .env.example .env.development   # 填入 YCloud / 飞书 / 数据库配置
+pnpm --filter @dealclaw/whatsapp-bridge build
+pnpm --filter @dealclaw/whatsapp-bridge dev
+```
+
+建表 + 迁移一步到位（幂等，可重复执行）：
+
+```bash
+pnpm --filter @dealclaw/whatsapp-bridge db:setup
+```
+
+健康检查：`GET /health`。生产不要用 `prisma migrate dev`（RDS 通常没有 shadow DB），`db:setup` 内部走的是 `migrate deploy`。
+
+## Webhook
+
+| 通道 | 路径 |
+|------|------|
+| YCloud | `POST /webhooks/ycloud` |
+飞书事件：每个应用使用智能体注册后返回的 `POST /webhooks/feishu/<appId>`。兼容旧配置 `POST /webhooks/feishu`（仅当桥接 env 里仍有 `FEISHU_*` 时）。
+
+公网调试可用 ngrok / Cloudflare Tunnel，把上述 URL 配进 YCloud Webhook 与飞书事件订阅。飞书需订阅 `im.message.receive_v1`。买家来信时：没有客服群会自动创建「WhatsApp 客服」群再拉话题；已有该群则只创建话题。`FEISHU_CHAT_ID` 可空。
+
+智能体**只调桥接 HTTP**（不要直连 YCloud）：
+
+| 用途 | 方法 |
+|------|------|
+| 探活 | `GET /health` |
+| 注册飞书应用（智能体初始化） | `POST /api/feishu/apps` |
+| 发文本/模板 | `POST /api/whatsapp/messages`（body 带 `wabaId`、建议 `feishuAppId`） |
+| 列企业号 | `GET /api/whatsapp/phones?wabaId=` |
+| 列已批准模板 | `GET /api/whatsapp/templates?wabaId=`（可选 `&name=`） |
+| 查会话窗口 | `GET /api/whatsapp/conversations?phone=` |
+| 嵌入式注册（创建 Onboarding Link） | `POST /api/whatsapp/onboarding-links` |
+| 查询 WABA 绑定状态 | `GET /api/whatsapp/wabas` |
+
+YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message.updated`，以及嵌入式注册用的 `whatsapp.business_account.updated`。绑定成功后桥接会落库，并可通知发起飞书群 / 客服群。
+
+嵌入式注册的 `partnerCustomerId` 使用环境变量 **`MIO_CDP_SUPPLIER_ID`**（CDP 供应商 ID）。`POST /api/whatsapp/onboarding-links` 可不传该字段；`GET /health` 会回显当前值。未配置时创建链接会 400。
+
+未配置 **`YCLOUD_WABA_ID`** 时，智能体应先走嵌入式注册。列号、列模板、发消息都由调用方把 env 里的 `YCLOUD_WABA_ID` 传入 `wabaId`，桥接**不会**用进程环境变量或库里旧 `CONNECTED` 顶上。绑定成功后后端会把 `YCLOUD_WABA_ID` 和 `YCLOUD_FROM` 写入 env 文件，供下次读取。发消息时 `from` 必须属于该 WABA；窗外自由文本会 409 `WHATSAPP_TEMPLATE_REQUIRED`。
+
+## 环境变量
+
+见 [`.env.example`](.env.example) 与 [部署文档](docs/部署.md)。本地无密钥时可设 `YCLOUD_SKIP_SIGNATURE=1` 与 `FEISHU_SKIP_SIGNATURE=1`，仅用于联调，生产必须关闭。
+
+## 路由前缀
+
+`ROUTE_PREFIX` 决定所有业务路由的前缀：本地默认为空，集群里是 `/whatsapp`
+（与 email-webhook 共用一个 ALB host，按路径分流）。所以线上要填给外部平台的是：
+
+```
+https://webhook.dealclaw.io/whatsapp/webhooks/ycloud            ← YCloud
+https://webhook.dealclaw.io/whatsapp/webhooks/feishu            ← 飞书（单应用）
+https://webhook.dealclaw.io/whatsapp/webhooks/feishu/{appId}    ← 飞书（多应用，见 POST /api/feishu/apps 返回的 webhookUrl）
+```
+
+`/health` 是唯一例外，它**无论前缀怎么设都额外挂在根路径上** —— k8s 探针直连 Pod，
+拿不到网关前缀。
+
+`POST /api/feishu/apps` 返回的 `webhookUrl` 由 `WHATSAPP_BRIDGE_BASE_URL` 拼成，
+**该配置必须自带前缀**（集群 ConfigMap 里是 `https://webhook.dealclaw.io/whatsapp`）；
+没配时会从请求头推导并自动补上 `ROUTE_PREFIX`。
+
+## 部署（k8s）
+
+和 monorepo 其他服务一致：包根一个 `Dockerfile`，清单在根 `k8s/base/whatsapp-bridge/`。
+
+```bash
+docker build -t dealclaw-acr-registry.cn-hangzhou.aliyuncs.com/dealclaw-nexus/whatsapp-bridge:$(git rev-parse --short HEAD) .
+```
+
+```bash
+kubectl apply -k k8s/base/whatsapp-bridge
+```
+
+几个和别的服务不同的点：
+
+- **initContainer 跑 `node dist/scripts/dbSetup.js`**（建 schema + `prisma migrate deploy`）。
+  不能直接在 initContainer 里调 prisma CLI —— 表要落进 `DATABASE_SCHEMA` 指定的
+  schema，而这个路由靠 `DATABASE_URL` 上的 `?schema=` 参数，那是应用侧
+  `loadEnvFiles()` 拼进去的，CLI 不走那段代码，结果会落进 `public`。
+- **独立 schema `whatsapp_platform_bridge`**，与 email-webhook 的表同库不同 schema。
+- **`APP_ENV=production` 必须显式给**。`loadEnv.ts` 靠 `npm_lifecycle_event` 推断环境，
+  容器里跑的是 `node dist/index.js`，没有那个变量，不给就会当成 development。
+- 容器里没有任何 `.env` 文件，配置全部来自 ConfigMap / Secret。
+
+需要的凭据（`whatsapp-bridge-secret`）：
+
+| 键 | 必需性 |
+|---|---|
+| `YCLOUD_API_KEY` | **必需**，所有出站 YCloud 调用都读它 |
+| `YCLOUD_WEBHOOK_SECRET` | **必需**（生产），校验 YCloud 回调签名 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 可选，见下 |
+| `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY` | 可选，见下 |
+
+**飞书那 4 个是「单应用模式」的兜底。** 现在的主路径是多应用：智能体调
+`POST /api/feishu/apps` 把凭据注册进 `FeishuApp` 表，拿回一个专属的
+`webhookUrl`（`/whatsapp/webhooks/feishu/{appId}`）配到飞书后台。
+`resolveFeishuAppCreds()` 先查库，查不到才回落到这 4 个环境变量。
+所以如果全部走 API 注册，这 4 个可以不配。
+
+`DATABASE_URL` 复用集群里已有的 `dealclaw-db` Secret。

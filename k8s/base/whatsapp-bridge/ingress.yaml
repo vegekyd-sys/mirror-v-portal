@@ -1,0 +1,36 @@
+# ALB Ingress，与 email-webhook 共用 webhook.dealclaw.io，按路径前缀分流。
+# 应用自身就监听 /whatsapp/*，**不要**配 rewrite/StripPrefix。
+#
+# 对外地址：
+#   https://webhook.dealclaw.io/whatsapp/webhooks/ycloud   ← YCloud 后台填这个
+#   https://webhook.dealclaw.io/whatsapp/webhooks/feishu   ← 飞书事件订阅填这个
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whatsapp-bridge
+  labels:
+    app: whatsapp-bridge
+  annotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # ALB 健康检查默认打 "/" 且方法 HEAD；本服务 "/" 没有路由，
+    # 必须显式指到 /health（它无论 ROUTE_PREFIX 怎么设都挂在根路径）
+    alb.ingress.kubernetes.io/healthcheck-enabled: "true"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: "8086"
+    alb.ingress.kubernetes.io/healthcheck-method: GET
+    # 同 host 下的相对优先级。email-webhook 占了 1/2/20，这里排 30，
+    # 两边路径前缀不重叠（/webhook 与 /whatsapp），互不影响。
+    alb.ingress.kubernetes.io/order: "30"
+spec:
+  ingressClassName: alb
+  rules:
+    - host: webhook.dealclaw.io
+      http:
+        paths:
+          - path: /whatsapp
+            pathType: Prefix
+            backend:
+              service:
+                name: whatsapp-bridge
+                port:
+                  number: 8086

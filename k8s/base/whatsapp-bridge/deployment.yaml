@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whatsapp-bridge
+  labels:
+    app: whatsapp-bridge
+    dealclaw.io/component: messaging
+spec:
+  # 无状态：会话、客户、webhook 去重全在 PostgreSQL 里（Prisma）。
+  # 可以正常滚动更新，也可按需扩副本。
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whatsapp-bridge
+  template:
+    metadata:
+      labels:
+        app: whatsapp-bridge
+        dealclaw.io/component: messaging
+    spec:
+      securityContext:
+        # 与镜像里的 USER node 对齐（node:22-alpine 的 node 用户是 1000）
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      initContainers:
+        # 先建 schema 再跑迁移。两步都幂等，可重复执行。
+        # 放 initContainer 而不是应用启动时做：多副本时只有一个在跑迁移，
+        # 且迁移失败会让 Pod 起不来，比带着旧表结构提供服务安全。
+        - name: migrate
+          image: dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/whatsapp-bridge:latest
+          imagePullPolicy: IfNotPresent
+          # 建 schema + 应用迁移。不能直接调 prisma CLI —— 表要落进
+          # DATABASE_SCHEMA 指定的 schema，而这个路由靠 DATABASE_URL 上的
+          # ?schema= 参数，那是应用侧 loadEnvFiles() 拼进去的，CLI 不走那段。
+          command: ["node", "dist/scripts/dbSetup.js"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dealclaw-db
+                  key: DATABASE_URL
+                  optional: true
+          envFrom:
+            - configMapRef:
+                name: whatsapp-bridge-config
+            - secretRef:
+                name: whatsapp-bridge-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      containers:
+        - name: whatsapp-bridge
+          image: dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/whatsapp-bridge:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8086
+              name: http
+          env:
+            # 和 credits-ledger / email-webhook 用同一个 Secret 同一个 key
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dealclaw-db
+                  key: DATABASE_URL
+                  optional: true
+          envFrom:
+            # 顺序有意义：同名键以后者（Secret）为准
+            - configMapRef:
+                name: whatsapp-bridge-config
+            - secretRef:
+                name: whatsapp-bridge-secret
+          # 探针直连 Pod，不经过 Ingress，所以走根路径的 /health（与 ROUTE_PREFIX 无关）
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: whatsapp-bridge
+  labels:
+    app: whatsapp-bridge
+spec:
+  type: ClusterIP
+  selector:
+    app: whatsapp-bridge
+  ports:
+    - name: http
+      port: 8086
+      targetPort: http

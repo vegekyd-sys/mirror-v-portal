@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.shared
+.env.development
+.env.test
+.env.production
+.env.*.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+.DS_Store
+.idea/
+
+# 会话工具状态，不入库
+.omc/
+.omx/

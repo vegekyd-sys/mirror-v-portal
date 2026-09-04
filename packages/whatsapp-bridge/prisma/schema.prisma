@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id                   String   @id @default(cuid())
+  phoneNumber          String?
+  whatsappUserId       String?
+  whatsappParentUserId String?
+  name                 String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  conversations Conversation[]
+
+  @@index([phoneNumber])
+  @@index([whatsappUserId])
+  @@index([whatsappParentUserId])
+}
+
+model Conversation {
+  id                     String    @id @default(cuid())
+  customerId             String
+  businessPhone          String
+  status                 String    @default("OPEN")
+  /** 智能体发起时所在飞书群；买家回复时提醒该群 */
+  sourceChatId           String?
+  /** 智能体发起人 open_id；群提醒失败时私聊兜底 */
+  sourceOpenId           String?
+  /** 该会话所属飞书应用（智能体注册后传入） */
+  feishuAppId            String?
+  lastInboundAt          DateTime?
+  lastOutboundAt         DateTime?
+  serviceWindowExpiresAt DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  customer        Customer         @relation(fields: [customerId], references: [id])
+  messages        Message[]
+  platformThreads PlatformThread[]
+
+  @@unique([customerId, businessPhone])
+  @@index([businessPhone])
+  @@index([feishuAppId])
+}
+
+model Message {
+  id              String    @id @default(cuid())
+  conversationId  String
+  direction       String
+  source          String
+  messageType     String    @default("text")
+  status          String    @default("received")
+  content         String
+  ycloudMessageId String?   @unique
+  wamid           String?
+  feishuMessageId String?   @unique
+  errorCode       String?
+  errorMessage    String?
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+model WebhookEvent {
+  id            String    @id @default(cuid())
+  provider      String
+  eventId       String
+  eventType     String
+  payload       String
+  processStatus String    @default("PENDING")
+  errorMessage  String?
+  receivedAt    DateTime  @default(now())
+  processedAt   DateTime?
+
+  @@unique([provider, eventId])
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model PlatformThread {
+  id             String   @id @default(cuid())
+  conversationId String
+  platform       String
+  chatId         String
+  threadId       String
+  rootMessageId  String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@unique([conversationId, platform])
+  @@unique([platform, threadId])
+}
+
+/** Partner Direct Link / 嵌入式注册：PENDING 等客户完成 Meta 流程，CONNECTED 表示 Webhook 已绑定。 */
+model WabaOnboarding {
+  id                       String    @id @default(cuid())
+  partnerCustomerId        String
+  onboardingType           String    @default("WHATSAPP_BUSINESS_PLATFORM")
+  locale                   String?
+  /** 短期凭证，仅 PENDING 且未过期时通过 API 返回；不要写入日志。 */
+  onboardingUrl            String?
+  expiresAt                DateTime?
+  status                   String    @default("PENDING")
+  wabaId                   String?
+  wabaName                 String?
+  phoneNumberId            String?
+  businessId               String?
+  businessName             String?
+  accountReviewStatus      String?
+  businessVerificationStatus String?
+  ownershipType            String?
+  messagingLimit           String?
+  paymentMethodAttached    Boolean?
+  updateEvent              String?
+  lastEventId              String?
+  sourceChatId             String?
+  sourceOpenId             String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([partnerCustomerId])
+  @@index([status])
+  @@index([wabaId])
+}
+
+/** 智能体初始化时注册的飞书应用。桥接启动不必带 FEISHU_*。 */
+model FeishuApp {
+  appId             String   @id
+  appSecret         String
+  verificationToken String?
+  encryptKey        String?
+  csChatId          String?
+  /** 拉进客服群的其它机器人 App ID，逗号分隔（智能体 FEISHU_INVITE_APP_IDS） */
+  inviteAppIds      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
