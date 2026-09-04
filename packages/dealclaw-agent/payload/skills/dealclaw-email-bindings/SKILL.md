@@ -165,13 +165,13 @@ cd work/mio-api
 export DC_DATA_DIR="$(pwd)/data"
 SUPPLIER_ID="$(grep '^MIO_CDP_SUPPLIER_ID=' .env | cut -d= -f2-)"
 
-# 1) 建 account（enterprise 用 supplier id；授权码用 env:/file:/明文 三种 secret-ref 之一，见下）
+# 1) 建 account（授权码默认裸明文直接传，不碰 chmod；例：授权码=Abc123xyz）
 python3 -m email_gateway.cli account-add \
   --enterprise "$SUPPLIER_ID" \
   --owner-open-id ou_xxx \
   --email waqa1988@163.com \
   --provider netease_163 \
-  --secret-ref env:WQA1988_163_APP_PASSWORD \
+  --secret-ref "Abc123xyz" \
   --display-name "王强163"
 
 # 2) 绑群
@@ -185,13 +185,21 @@ python3 -m email_gateway.cli bind-group \
 
 `bind-group` 关键参数：`--account-id` `--chat-id`（必填），`--filter`（默认 `dealclaw_replies`）、`--webhook`、`--webhook-secret` 可选。
 
-### secret-ref 三种形式
+### secret-ref 三种形式（授权码存储，选一种，别混）
 
-- `env:NAME` —— 环境变量（cron 环境 `.env` 不自动加载，需确保 cron 注入了该变量，否则解析失败）
-- `file:/绝对路径` —— 0600 权限文件（cron 可直接读，推荐）
-- 裸明文 —— 直接存密码（简单，但会落进 account 记录文件；用户明确接受泄漏面时才用）
+- **裸明文**（默认，最简单）—— 授权码直接作为 `--secret-ref` 的值传。**不涉及任何 chmod**。仅当用户明确要求不落明文时才换下面的。
+- `env:NAME` —— 环境变量（需先 `export NAME=授权码`；cron 环境 `.env` 不自动加载，需确保 cron 注入了该变量，否则解析失败）。**不涉及 chmod**。
+- `file:/绝对路径` —— 0600 权限文件。**只有用户明确要求用文件形式时才走这条**，步骤写死在下面（顺序不能乱：先写文件 → 再 chmod → 最后 account-add）：
 
-> 提醒：如果授权码解析失败（`SecretResolutionError`），先确认 cron 进程环境里读得到该 secret（env 需注入、file 需存在且 600、明文无需外部依赖）。
+```bash
+printf '%s' '授权码' > /data/workspace/work/mio-api/.secret-<邮箱别名>
+chmod 600 /data/workspace/work/mio-api/.secret-<邮箱别名>
+python3 -m email_gateway.cli account-add ... --secret-ref "file:/data/workspace/work/mio-api/.secret-<邮箱别名>"
+```
+
+> **绑定成功的唯一标志 = `account-check` 认证通过（见「验证」），不是 chmod 成功。**
+> 授权码用裸明文 / env 时根本不会走到 chmod，别画蛇添足去 chmod 一个不存在的文件；chmod 失败不阻塞绑定，也不要在回复里外发「Exec failed」这类内部报错。
+> 如果授权码解析失败（`SecretResolutionError`），先确认 cron 进程环境里读得到该 secret（env 需注入、file 需存在且 600、明文无需外部依赖）。
 
 ### 验证（最小验证门）
 
