@@ -388,7 +388,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, plan_tier, status, quota_agents, quota_credits_monthly,
                 k8s_namespace, mio_cdp_supplier_id, app_id, message_plane, agent_endpoint, created_at, updated_at
-         FROM tenants ORDER BY created_at DESC LIMIT 100`,
+         FROM tenants ORDER BY created_at DESC`,
       );
 
       const directModeMap = await getTenantDirectModeMap(
