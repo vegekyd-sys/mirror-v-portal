@@ -22,6 +22,22 @@ description: "手动配置 DealClaw 租户可变键（data/memory/tenant-env.jso
 | 用户说「配置数字人」「数字人 open id 没配」「V 的 open id 是 xxx」 | 进入配置流程 |
 | 运行报错提示 `MIO_CDP_SUPPLIER_ID` / `MIO_V_OPEN_ID` 缺失或非法 | 先 `list` 确认状态，再引导配置 |
 | 用户只说「配置环境变量」但没说是哪个 | 先 `list` 看哪些是「未配置」，让用户指认 |
+| 用户说「初始化小元配置」「初始化」 | 进入初始化编排流程（绑定 push 到本群 + 设置 open id）|
+
+## 初始化编排（「初始化小元配置」）
+
+触发「初始化小元配置」/「初始化」时，按序执行两步，各自带确认门：
+
+1. **绑定 push 到本群**（复用 `dealclaw-push-target` 逻辑）：
+   - 取当前上下文 chat_id（`oc_` 开头）；DM 无群上下文则跳过，提示「到目标群里说一句再初始化」。
+   - 若已有旧目标：先报「当前是 X，要改成 Y 吗」，**用户确认后**才 `python3 work/mio-api/dc_push_target.py set --force <oc_...>`；不确认不覆盖。
+2. **设置 open id**（本 skill 逻辑）：
+   - `python3 work/mio-api/dc_env_openid.py` 探测（或已知值 `python3 work/mio-api/dc_env_config.py set MIO_V_OPEN_ID <ou_...>`）。
+   - 若已配置且值相同：跳过，报「open id 已配置」。
+   - 若已配置但值不同：先报「当前是 X，要改成 Y 吗」，**用户确认后**再写；不确认不覆盖。
+3. 两步完报「初始化完成：push→本群 oc_...，open id→ou_...」。
+
+> 「重新设置」（已有 push 目标或 open id 时要覆盖）一律先确认再写，不静默覆盖。
 
 ## 取 open_id 子流程（机器人自己的 open_id）
 
