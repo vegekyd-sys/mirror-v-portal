@@ -23,28 +23,39 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 ## 基址（必读环境变量）
 
-调用前先解析 `$BRIDGE`、`$SUPPLIER`、`$WABA`，**不要写死** `http://127.0.0.1:3000`，**不要编造** `partnerCustomerId` / `wabaId`：
+调用前先解析 `$BRIDGE`、`$SUPPLIER`、`$WABA`、`$FEISHU_APP`，**不要写死** `http://127.0.0.1:3000`，**不要编造** `partnerCustomerId` / `wabaId`：
 
 1. 读 **`WHATSAPP_BRIDGE_BASE_URL`**（当前 shell，或桥接项目根目录 `.env` / `.env.development` / `.env.shared`）。
 2. 未配置时：可读同文件里的 **`PORT`**，拼成 `http://127.0.0.1:$PORT`（`PORT` 缺省按 `3000`）。
 3. 读 **`MIO_CDP_SUPPLIER_ID`**（同一组 env 文件）。也可 `GET $BRIDGE/health`，用返回的 `partnerCustomerId`（以后端进程里的值为准）。
 4. `$SUPPLIER` 仍为空则停，提示在桥接项目 `.env.development`（或对应环境文件）补上 `MIO_CDP_SUPPLIER_ID`。
 5. `$BRIDGE` 仍不确定则停，提示补上 `WHATSAPP_BRIDGE_BASE_URL`。
-6. 读 **`YCLOUD_WABA_ID`**（同一组 env 文件）作为 `$WABA`。有值 → 发消息流程，不要再调 `/health`、`/wabas` 做绑定校验。空 → 先做嵌入式注册，**不要发消息、不要列号/列模板**。不要用 `GET /health` 判断有没有 WABA。
+6. 读**当前智能体自己的环境变量** **`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`**，以及 **`FEISHU_INVITE_APP_IDS`**（要拉进「WhatsApp 客服」群的其它机器人 App ID，`cli_` 开头，可多个逗号分隔；通常是本智能体应用）。这是**该飞书应用**的凭证。禁止从桥接项目 `.env` 里抄这些（桥接启动不必有它们）。不要打印 Secret / Encrypt Key。四个密钥都要有值；缺 `FEISHU_ENCRYPT_KEY` 不要 POST。然后 `POST $BRIDGE/api/feishu/apps`：
+
+```json
+{
+  "appId": "$FEISHU_APP_ID",
+  "appSecret": "$FEISHU_APP_SECRET",
+  "verificationToken": "$FEISHU_VERIFICATION_TOKEN",
+  "encryptKey": "$FEISHU_ENCRYPT_KEY",
+  "inviteAppIds": "$FEISHU_INVITE_APP_IDS"
+}
+```
+
+返回 `appId`、`webhookUrl`、`hasEncryptKey`、`inviteAppIds`。`$FEISHU_APP` = `appId`。`hasEncryptKey` 必须为 `true` 才算注册成功；`false`、返回 `warning`、或 400 说密钥是占位符/非 ASCII 时，说明**没读到真实环境变量**。停下来让用户把该飞书应用「加密策略」里的 Encrypt Key / Verification Token 配进**智能体环境**，再 POST。禁止用中文、`***`、`$FEISHU_ENCRYPT_KEY` 原文或自己编一串去注册。Encrypt Key 和 Verification Token 不要抄反。`inviteAppIds` 应包含智能体环境的 `FEISHU_INVITE_APP_IDS`（本智能体 `cli_…`）；返回空数组说明没带上，其它机器人不会被拉进客服群。把该飞书应用「事件配置」请求地址设为 `webhookUrl`（`/webhooks/feishu/<appId>`）。每个应用配一次；凭证变了再 POST 覆盖。桥接启动**不必**带这些变量。保存 URL 若仍报「Challenge code没有返回」，是登记的 Encrypt Key 与开放平台不一致，重新用「加密策略」里的值 POST，不要改 URL 路径。
+7. 读 **`YCLOUD_WABA_ID`** 作为 `$WABA`。有值 → 发消息流程。空 → 先做嵌入式注册。不要用 `GET /health` 判断有没有 WABA。
 
 后端自己用 `PORT` 监听；智能体只用 `WHATSAPP_BRIDGE_BASE_URL`（或上面的回退）当 HTTP 基址。  
-`$BRIDGE` 去掉末尾 `/`。服务未启动则先停，提示启动后端。
+`$BRIDGE` 去掉末尾 `/`。服务未启动则先停，提示启动后端。`webhookUrl` 必须是飞书能访问的公网 HTTPS（ngrok / 已部署域名）。
 
 ```text
 进度：
-- [ ] 解析 $BRIDGE（WHATSAPP_BRIDGE_BASE_URL）
-- [ ] 解析 $SUPPLIER（MIO_CDP_SUPPLIER_ID）
-- [ ] 解析 $WABA（YCLOUD_WABA_ID）
-- [ ] 无 $WABA → 嵌入式注册；成功后后端会写入 YCLOUD_WABA_ID / YCLOUD_FROM，再重新读 env
-- [ ] GET $BRIDGE/api/whatsapp/phones?wabaId=$WABA（只要 current / defaultFrom，from 必须是该 WABA 企业号）
-- [ ] 查窗口：GET $BRIDGE/api/whatsapp/conversations?phone=买家号&from=当前企业号
-- [ ] 窗内（windowOpen=true）：POST text，wabaId=$WABA，from=当前企业号
-- [ ] 窗外（windowOpen=false）：GET templates?wabaId=$WABA → 回填 → POST template，wabaId=$WABA，from=当前企业号
+- [ ] 解析 $BRIDGE
+- [ ] POST /api/feishu/apps 注册当前飞书应用，记下 webhookUrl / $FEISHU_APP
+- [ ] 解析 $SUPPLIER、$WABA
+- [ ] 无 $WABA → 嵌入式注册
+- [ ] GET phones?wabaId=$WABA
+- [ ] 查窗口 → POST messages 带 wabaId 与 feishuAppId=$FEISHU_APP
 ```
 
 ## 发消息（WABA + 企业号 + 24h 窗口）
@@ -57,7 +68,7 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 4. `GET $BRIDGE/api/whatsapp/conversations?phone=买家号&from=当前企业号`，看这对账号的 `windowOpen`：
    - `true`：发自由文本（`text`），不要无故改模板。
    - `false` / 无会话：走下面「窗外」模板流程。
-5. `POST /api/whatsapp/messages` 始终带 `wabaId=$WABA`、`from`（该 WABA 企业号）和 `to`（买家）。
+5. `POST /api/whatsapp/messages` 始终带 `wabaId=$WABA`、`feishuAppId=$FEISHU_APP`、`inviteAppIds=$FEISHU_INVITE_APP_IDS`、`from`（该 WABA 企业号）和 `to`（买家）。
 
 发消息这条链路**不要** `GET /wabas`，**不要**用 `health.wabaBound`。env 和库里 `CONNECTED` 对不上时，以 env 为准，直接发。
 
@@ -158,7 +169,7 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 窗内自由文本：
 
 ```json
-{ "to": "+85290000000", "from": "+85251111111", "wabaId": "$WABA", "text": "你好", "sourceChatId": "oc_当前飞书群", "sourceOpenId": "ou_当前用户" }
+{ "to": "+85290000000", "from": "+85251111111", "wabaId": "$WABA", "feishuAppId": "$FEISHU_APP", "inviteAppIds": "$FEISHU_INVITE_APP_IDS", "text": "你好", "sourceChatId": "oc_当前飞书群", "sourceOpenId": "ou_当前用户" }
 ```
 
 `from` **必须是该 `wabaId` 下的企业号**（`GET /phones?wabaId=$WABA` 的 `defaultFrom` / `current=true`）。不传 `from` 时用该 WABA 列表第一个号；传入其它 WABA 的号会 `409 WHATSAPP_FROM_NOT_IN_WABA`。
@@ -178,6 +189,8 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
   "to": "+8613800138000",
   "from": "+85251111111",
   "wabaId": "$WABA",
+  "feishuAppId": "$FEISHU_APP",
+  "inviteAppIds": "$FEISHU_INVITE_APP_IDS",
   "sourceChatId": "oc_当前飞书群",
   "sourceOpenId": "ou_当前用户",
   "template": {
@@ -198,6 +211,7 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 - `to` 必填，E.164。
 - `wabaId` 必填，值为 env 的 `YCLOUD_WABA_ID`。
+- `feishuAppId` 建议必填，值为初始化注册返回的 appId。
 - `accepted` / `ok:true` 只表示后端已提交给 YCloud，**不等于已送达**。投递失败时飞书客服话题会跟「系统：WhatsApp 发送失败」。
 - 409 + `code=WHATSAPP_TEMPLATE_REQUIRED`：窗外，智能体改走模板流程并**自行回填后发送**。
 - 409 + `code=WHATSAPP_WABA_REQUIRED` 或 400 `WABA_ID_REQUIRED`：没传 `wabaId` / env 没有 `YCLOUD_WABA_ID`。改走嵌入式注册。
