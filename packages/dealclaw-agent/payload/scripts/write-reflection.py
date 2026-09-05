@@ -1,132 +1,73 @@
 #!/usr/bin/env python3
+"""write-reflection.py — 自进化反思落库
+
+把 agent 学到的「可复用经验」写进 reflections.jsonl，供日报「最近更懂你了」和后续任务读取。
+
+用法:
+  python3 write-reflection.py --type preference --what "东南亚只做印尼越南" --how "推荐自动过滤泰国"
+  python3 write-reflection.py --type pattern --what "CDP getBasicInfo 返回测试号名" --how "公司名走绑定/画像解析"
+
+type 枚举:
+  preference  用户稳定偏好（跨会话生效）
+  fact        用户提供的事实（企业/产品/市场等）
+  pattern     发现的规律/技术经验（可复用）
+  correction  用户纠正（口径/认知校准）
+
+⚠️ 口径：reflection 只存「业务层学习」（用户偏好/业务事实/业务纠偏/业务规律），
+这是会给用户看的（日报「最近更懂你了」/对话表达）。
+技术内部经验（接口坑/授权边界/系统实现）不走 reflection，走每日 memory 的「关键坑与经验」。
 """
-write-reflection.py — Write a reflection after task completion.
 
-Usage:
-  python3 scripts/write-reflection.py \
-    --context "Task title" \
-    --what_worked "What went well" \
-    --what_failed "What did not work" \
-    --next_time "How to improve" \
-    --tags "execution,memory" \
-    --session_type "heartbeat" \
-    --confidence 3
-
-Storage backends:
-  - local (default): appends JSON to {workspace}/memory/reflections/YYYY-MM-DD.jsonl
-  - supabase: POST to Supabase REST API (requires storage.supabase.enabled=true in config)
-"""
-
-import json
-import os
-import sys
 import argparse
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+# reflections 存储路径：memory/projects/dealclaw/reflections.jsonl
+REFLECTIONS_PATH = (
+    Path(__file__).resolve().parents[1] / "memory" / "projects" / "dealclaw" / "reflections.jsonl"
+)
 
-def load_config():
-    """Load knight config from project or global path."""
-    config_paths = [
-        Path.cwd() / "knight.config.json",
-        Path.home() / ".knight" / "config.json",
-    ]
-    for p in config_paths:
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"Warning: failed to read {p}: {e}", file=sys.stderr)
-    return {}
+VALID_TYPES = {"preference", "fact", "pattern", "correction"}
 
 
-def resolve_workspace(config):
-    ws = config.get("workspace", "~/.openclaw/workspace")
-    return Path(ws).expanduser()
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def write_local(payload, config):
-    """Write reflection as a JSON line to local file."""
-    workspace = resolve_workspace(config)
-    local_cfg = config.get("storage", {}).get("local", {})
-    reflections_dir = workspace / local_cfg.get("reflections_dir", "memory/reflections")
-    reflections_dir.mkdir(parents=True, exist_ok=True)
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    filepath = reflections_dir / f"{today}.jsonl"
-
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-    print(f"[knight] reflection written to {filepath}")
-
-
-def write_supabase(payload, config):
-    """Write reflection to Supabase REST API."""
-    import urllib.request
-
-    supabase_cfg = config.get("storage", {}).get("supabase", {})
-    url = supabase_cfg.get("url", "")
-    key = supabase_cfg.get("service_key", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
-
-    if not url or not key:
-        print("Error: Supabase URL or service key not configured.", file=sys.stderr)
-        sys.exit(1)
-
-    req = urllib.request.Request(
-        f"{url}/rest/v1/reflections",
-        data=json.dumps(payload).encode(),
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            d = json.load(r)
-            print(f"[knight] reflection written to Supabase: {d[0]['id'][:8]}...")
-    except Exception as e:
-        print(f"Error: Supabase write failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Write a reflection after task completion.")
-    parser.add_argument("--context", required=True, help="Task context or title")
-    parser.add_argument("--what_worked", default="", help="What went well")
-    parser.add_argument("--what_failed", default="", help="What did not work")
-    parser.add_argument("--next_time", default="", help="Improvement for next time")
-    parser.add_argument("--tags", default="execution", help="Comma-separated tags")
-    parser.add_argument("--session_type", default="heartbeat", help="Session type")
-    parser.add_argument("--confidence", type=int, default=3, help="Confidence 1-5")
-    parser.add_argument("--task_type", default="", help="Task type")
-    args = parser.parse_args()
-
-    config = load_config()
-
-    payload = {
-        "context": args.context,
-        "what_worked": args.what_worked,
-        "what_failed": args.what_failed,
-        "next_time": args.next_time,
-        "tags": [t.strip() for t in args.tags.split(",") if t.strip()],
-        "session_type": args.session_type,
-        "confidence": args.confidence,
-        "task_type": args.task_type,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+def write_reflection(what: str, how: str, rtype: str = "pattern", user: str = "", ts: str = "") -> dict:
+    """追加一条反思。返回 {ok, entry, path} 或 {ok:False, error}。"""
+    if rtype not in VALID_TYPES:
+        return {"ok": False, "error": f"type 必须是 {sorted(VALID_TYPES)}"}
+    what = (what or "").strip()
+    how = (how or "").strip()
+    if not what:
+        return {"ok": False, "error": "what（学到了什么）不能为空"}
+    entry = {
+        "ts": (ts or _now_iso()).strip(),
+        "type": rtype,
+        "what": what,
+        "how": how,
+        "user": (user or "").strip(),
     }
+    REFLECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(REFLECTIONS_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return {"ok": True, "entry": entry, "path": str(REFLECTIONS_PATH)}
 
-    storage_cfg = config.get("storage", {})
-    backend = storage_cfg.get("backend", "local")
 
-    if backend == "supabase" or storage_cfg.get("supabase", {}).get("enabled"):
-        write_supabase(payload, config)
-    else:
-        write_local(payload, config)
+def main() -> int:
+    ap = argparse.ArgumentParser(description="写一条自进化反思到 reflections.jsonl")
+    ap.add_argument("--type", default="pattern", choices=sorted(VALID_TYPES))
+    ap.add_argument("--what", required=True, help="学到了什么")
+    ap.add_argument("--how", default="", help="后面怎么用")
+    ap.add_argument("--user", default="", help="关联用户 open_id（可选）")
+    ap.add_argument("--ts", default="", help="时间戳（可选，默认当前 UTC）")
+    args = ap.parse_args()
+    result = write_reflection(args.what, args.how, args.type, args.user, args.ts)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

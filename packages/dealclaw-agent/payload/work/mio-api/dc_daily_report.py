@@ -69,6 +69,36 @@ def _distill_brief(company_id: str) -> str:
     return ""
 
 
+def _self_evolution_brief(company_id: str, days: int = 7) -> str:
+    """读最近 N 天的业务 reflection（只取 what），拼「最近又学会了」段落；有数据才写，没数据静默。"""
+    try:
+        refl_path = Path(__file__).resolve().parents[2] / "memory" / "projects" / "dealclaw" / "reflections.jsonl"
+        if not refl_path.exists():
+            return ""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        whats = []
+        for line in refl_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            ts = (entry.get("ts") or "").strip()
+            what = (entry.get("what") or "").strip()
+            if not ts or not what or ts < cutoff:
+                continue
+            whats.append(what)
+        if not whats:
+            return ""
+        # 去重（保持顺序）+ 取最近 3 条 + 倒序（最新在前）
+        recent = list(dict.fromkeys(whats))[-3:][::-1]
+        return "最近又学会了：\n" + "\n".join(f"· {w}" for w in recent)
+    except Exception:
+        return ""
+
+
 def collect_metrics(company_id: str, campaign_id: str = None) -> dict:
     """聚合发送/送达/回复/退信等指标（EmailStore + 信号层，统一口径）。"""
     from email_gateway.store import EmailStore
@@ -238,6 +268,10 @@ def build_morning_report(company_id: str) -> dict:
         distill = _distill_brief(company_id)
         if distill:
             text += "\n\n" + distill
+    # 自进化感知：最近又学会了（业务 reflection，有数据才写）
+    evolution = _self_evolution_brief(company_id)
+    if evolution:
+        text += "\n\n" + evolution
     return {
         "company_id": company_id,
         "slot": "morning",
@@ -259,6 +293,10 @@ def build_evening_report(company_id: str) -> dict:
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
     strategy = _strategy(company_id)
+    text = _format_evening(company_id, m, drafts, followups, funnel, strategy)
+    evolution = _self_evolution_brief(company_id)
+    if evolution:
+        text += "\n\n" + evolution
     return {
         "company_id": company_id,
         "slot": "evening",
@@ -267,7 +305,7 @@ def build_evening_report(company_id: str) -> dict:
         "strategy": strategy,
         "pending_draft_count": len(drafts),
         "due_followup_count": len(followups),
-        "text": _format_evening(company_id, m, drafts, followups, funnel, strategy),
+        "text": text,
         "generated_at": _now(),
     }
 
