@@ -9,7 +9,11 @@ import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./patch-feishu-footer.mjs', import.meta.url));
 const fixture = `function resolveCardNote(agentId, identity, prefixCtx) {
-  return [agentId, identity.name, prefixCtx.model, prefixCtx.provider, prefixCtx.agentRuntime].join(' | ');
+\tconst parts = [\`Agent: \${identity?.name?.trim() || agentId}\`];
+\tif (prefixCtx.model) parts.push(\`Model: \${prefixCtx.model}\`);
+\tif (prefixCtx.provider) parts.push(\`Provider: \${prefixCtx.provider}\`);
+\tif (prefixCtx.agentRuntime) parts.push(\`Runtime: \${prefixCtx.agentRuntime}\`);
+\treturn parts.join(" | ");
 }
 function createFeishuReplyDispatcher() {}`;
 function patched(source) {
@@ -22,15 +26,17 @@ function patched(source) {
   assert.equal(fs.readFileSync(file, 'utf8'), first, 'patch must be idempotent');
   return first;
 }
-function checkNote(source) {
+function noteFunction(source, env = {}) {
   const start = source.indexOf('function resolveCardNote(');
-  const end = source.indexOf('\nfunction ', start + 1);
-  const code = source.slice(start, end < 0 ? undefined : end);
+  const end = source.indexOf('\n}', start) + 2;
+  const code = source.slice(start, end);
+  return vm.runInNewContext(`${code}; resolveCardNote`, { process: { env } });
+}
+function checkNote(source) {
   const identity = { name: 'Test Agent' };
   const ctx = { model: 'test-model', provider: 'test-provider', agentRuntime: 'test-runtime' };
-  const evaluate = value => vm.runInNewContext(`${code}; resolveCardNote`, {
-    process: { env: value === undefined ? {} : { DEALCLAW_FEISHU_SHOW_FOOTER: value } },
-  })('test-agent', identity, ctx);
+  const evaluate = value => noteFunction(source,
+    value === undefined ? {} : { DEALCLAW_FEISHU_SHOW_FOOTER: value })('test-agent', identity, ctx);
   const baseline = evaluate(undefined);
   assert.match(baseline, /Test Agent/);
   assert.match(baseline, /test-model/);
@@ -38,9 +44,37 @@ function checkNote(source) {
   for (const value of ['false', ' FALSE ']) assert.equal(evaluate(value), undefined);
   return { baseline, hidden: evaluate('false') };
 }
+function checkCombinations(source, labels) {
+  const identity = { name: 'V | Model: name-text' };
+  const ctx = { model: 'gpt-example', provider: 'example', agentRuntime: 'codex' };
+  const parts = ['Agent: V | Model: name-text', 'Model: gpt-example', 'Provider: example', 'Runtime: codex'];
+  for (let mask = 0; mask < 16; mask++) {
+    const env = {};
+    ['Agent', 'Model', 'Provider', 'Runtime'].forEach((label, i) => {
+      env[`DEALCLAW_FEISHU_SHOW_${label.toUpperCase()}`] = mask & (1 << i) ? 'true' : 'false';
+    });
+    const expected = parts.filter((_, i) => labels.includes(['Agent', 'Model', 'Provider', 'Runtime'][i]) && (mask & (1 << i))).join(' | ') || undefined;
+    assert.equal(noteFunction(source, env)('agent', identity, ctx), expected, `combination ${mask}`);
+    env.DEALCLAW_FEISHU_SHOW_FOOTER = 'false';
+    assert.equal(noteFunction(source, env)('agent', identity, ctx), undefined, 'whole-footer switch takes precedence');
+  }
+}
 test('footer switch preserves default output, hides the whole note, and is idempotent', () => {
   const result = checkNote(patched(fixture));
   assert.match(result.baseline, /test-runtime/);
+});
+test('all 16 field combinations preserve values and separators, including Runtime', () => {
+  const source = patched(fixture);
+  checkCombinations(source, ['Agent', 'Model', 'Provider', 'Runtime']);
+  const env = { DEALCLAW_FEISHU_SHOW_AGENT: ' FALSE ' };
+  assert.equal(noteFunction(source, env)('agent', {}, {}), undefined, 'missing metadata is not fabricated');
+});
+test('v1 whole-footer patch upgrades to independent switches without duplicate gates', () => {
+  const v1 = fixture.replace('function resolveCardNote(agentId, identity, prefixCtx) {',
+    'function resolveCardNote(agentId, identity, prefixCtx) {\n\t// dealclaw-feishu-footer-toggle-v1\n\tif (process.env.DEALCLAW_FEISHU_SHOW_FOOTER?.trim().toLowerCase() === "false") return undefined;');
+  const source = patched(v1);
+  assert.ok(!source.includes('dealclaw-feishu-footer-toggle-v1'));
+  checkCombinations(source, ['Agent', 'Model', 'Provider', 'Runtime']);
 });
 test('unknown bundle is rejected without modification', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feishu-footer-test-'));
@@ -57,6 +91,7 @@ test('official installed bundle uses the same footer gate for all reply paths', 
   const original = fs.readFileSync(path.join(dist, file), 'utf8');
   const result = patched(original);
   const notes = checkNote(result);
+  checkCombinations(result, ['Agent', 'Model', 'Provider']);
   const rendererFile = fs.readdirSync(dist).find(name => /^send-.*\.js$/.test(name)
     && fs.readFileSync(path.join(dist, name), 'utf8').includes('function buildStructuredCard('));
   const renderer = fs.readFileSync(path.join(dist, rendererFile), 'utf8');
@@ -72,6 +107,11 @@ test('official installed bundle uses the same footer gate for all reply paths', 
   assert.equal(hidden.body.elements.length, 1, 'hidden note must also remove separator');
   assert.equal(hidden.body.elements[0].content, 'Keep body');
   assert.equal(hidden.header.title.content, 'Keep title');
+  const allHidden = noteFunction(result, {
+    DEALCLAW_FEISHU_SHOW_AGENT: 'false', DEALCLAW_FEISHU_SHOW_MODEL: 'false',
+    DEALCLAW_FEISHU_SHOW_PROVIDER: 'false', DEALCLAW_FEISHU_SHOW_RUNTIME: 'false',
+  })('agent', {}, { model: 'model', provider: 'provider' });
+  assert.equal(build('Keep body', { header, note: allHidden }).body.elements.length, 1);
   assert.ok((original.match(/resolveCardNote\(agentId, identity,/g) || []).length >= 4,
     'expected shared call sites for initial streaming, final streaming, and static cards');
 });

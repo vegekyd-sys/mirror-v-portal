@@ -5,6 +5,23 @@
 `true` or an unset variable preserves existing visibility. Case and surrounding
 whitespace are ignored for `false`; other values preserve the existing default.
 
+Four independent switches select which existing fields to display:
+
+```text
+DEALCLAW_FEISHU_SHOW_AGENT=true
+DEALCLAW_FEISHU_SHOW_MODEL=false
+DEALCLAW_FEISHU_SHOW_PROVIDER=false
+DEALCLAW_FEISHU_SHOW_RUNTIME=true
+```
+
+Each defaults to visible when unset. The example displays Agent and Runtime only
+(when Runtime is supplied by the plugin). Setting all four to `false` removes
+the note and its separator. The whole-footer switch takes precedence over the
+four field switches. Labels remain in Agent / Model / Provider / Runtime order;
+hidden fields leave no extra separators. Field values still come from the real
+reply context, not from these switches. The v2 patch automatically upgrades an
+existing v1 whole-footer patch in the trusted PVC copy.
+
 This controls the generated note only, not the card title, reply body, typing
 indicator, tool status, or user-authored card footers. It covers initial streaming,
 final streaming, and static reply cards via the shared `resolveCardNote` function.
