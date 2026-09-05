@@ -38,8 +38,7 @@ function checkNote(source) {
   const evaluate = value => noteFunction(source,
     value === undefined ? {} : { DEALCLAW_FEISHU_SHOW_FOOTER: value })('test-agent', identity, ctx);
   const baseline = evaluate(undefined);
-  assert.match(baseline, /Test Agent/);
-  assert.match(baseline, /test-model/);
+  assert.equal(baseline, 'Agent: Test Agent');
   for (const value of ['true', '', 'invalid']) assert.equal(evaluate(value), baseline);
   for (const value of ['false', ' FALSE ']) assert.equal(evaluate(value), undefined);
   return { baseline, hidden: evaluate('false') };
@@ -59,9 +58,31 @@ function checkCombinations(source, labels) {
     assert.equal(noteFunction(source, env)('agent', identity, ctx), undefined, 'whole-footer switch takes precedence');
   }
 }
-test('footer switch preserves default output, hides the whole note, and is idempotent', () => {
-  const result = checkNote(patched(fixture));
-  assert.match(result.baseline, /test-runtime/);
+test('footer defaults to Agent only, supports whole-note hiding, and is idempotent', () => {
+  const source = patched(fixture);
+  checkNote(source);
+  for (const value of [undefined, '', 'invalid']) {
+    const env = Object.fromEntries(['AGENT', 'MODEL', 'PROVIDER', 'RUNTIME'].map(key => [`DEALCLAW_FEISHU_SHOW_${key}`, value]));
+    assert.equal(noteFunction(source, env)('agent', { name: 'Test' }, {
+      model: 'model', provider: 'provider', agentRuntime: 'codex',
+    }), 'Agent: Test');
+  }
+  assert.equal(noteFunction(source, { DEALCLAW_FEISHU_SHOW_MODEL: ' TRUE ' })(
+    'agent', { name: 'Test' }, { model: 'model', provider: 'provider', agentRuntime: 'codex' },
+  ), 'Agent: Test | Model: model');
+});
+test('v2 all-visible defaults upgrade to Agent-only without losing overrides', () => {
+  const current = patched(fixture);
+  const old = current.replace('dealclaw-feishu-footer-toggle-v3', 'dealclaw-feishu-footer-toggle-v2')
+    .replace(`\t\tif (!label) return true;
+\t\tconst value = process.env[visibilityKeys[label]]?.trim().toLowerCase();
+\t\tif (value === "true") return true;
+\t\tif (value === "false") return false;
+\t\treturn label === "Agent: ";`,
+      '\t\treturn !label || process.env[visibilityKeys[label]]?.trim().toLowerCase() !== "false";');
+  const upgraded = patched(old);
+  checkNote(upgraded);
+  checkCombinations(upgraded, ['Agent', 'Model', 'Provider', 'Runtime']);
 });
 test('all 16 field combinations preserve values and separators, including Runtime', () => {
   const source = patched(fixture);

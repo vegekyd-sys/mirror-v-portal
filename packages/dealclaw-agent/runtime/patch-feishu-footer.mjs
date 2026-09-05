@@ -20,9 +20,10 @@ const target = files[0];
 const before = 'function resolveCardNote(agentId, identity, prefixCtx) {';
 const gate = '\n\tif (process.env.DEALCLAW_FEISHU_SHOW_FOOTER?.trim().toLowerCase() === "false") return undefined;';
 const v1 = `${before}\n\t// dealclaw-feishu-footer-toggle-v1${gate}`;
-const after = `${before}\n\t// dealclaw-feishu-footer-toggle-v2${gate}`;
+const v2 = `${before}\n\t// dealclaw-feishu-footer-toggle-v2${gate}`;
+const after = `${before}\n\t// dealclaw-feishu-footer-toggle-v3${gate}`;
 const originalReturn = '\treturn parts.join(" | ");';
-const filteredReturn = `\tconst visibilityKeys = {
+const v2Return = `\tconst visibilityKeys = {
 \t\t"Agent: ": "DEALCLAW_FEISHU_SHOW_AGENT",
 \t\t"Model: ": "DEALCLAW_FEISHU_SHOW_MODEL",
 \t\t"Provider: ": "DEALCLAW_FEISHU_SHOW_PROVIDER",
@@ -33,6 +34,14 @@ const filteredReturn = `\tconst visibilityKeys = {
 \t\treturn !label || process.env[visibilityKeys[label]]?.trim().toLowerCase() !== "false";
 \t});
 \treturn visibleParts.length ? visibleParts.join(" | ") : undefined;`;
+const filteredReturn = v2Return.replace(
+  '\t\treturn !label || process.env[visibilityKeys[label]]?.trim().toLowerCase() !== "false";',
+  `\t\tif (!label) return true;
+\t\tconst value = process.env[visibilityKeys[label]]?.trim().toLowerCase();
+\t\tif (value === "true") return true;
+\t\tif (value === "false") return false;
+\t\treturn label === "Agent: ";`,
+);
 const original = fs.readFileSync(target, 'utf8');
 if (original.split(before).length !== 2) throw new Error('Unsupported Feishu bundle: expected one resolveCardNote');
 const start = original.indexOf(before);
@@ -42,13 +51,15 @@ const body = original.slice(start, end);
 const alreadyPatched = body.includes(after) && body.includes(filteredReturn);
 let next = original;
 if (!alreadyPatched) {
-  if (body.includes('dealclaw-feishu-footer-toggle-v2') ||
+  if (body.includes('dealclaw-feishu-footer-toggle-v3') ||
+      (body.includes('dealclaw-feishu-footer-toggle-v2') && !(body.includes(v2) && body.includes(v2Return))) ||
       (body.includes('dealclaw-feishu-footer-toggle-v1') && !body.includes(v1))) {
     throw new Error('Incomplete footer patch');
   }
-  if (body.split(originalReturn).length !== 2) throw new Error('Unsupported Feishu bundle: expected parts return');
+  const unpatched = body.replace(v2, before).replace(v2Return, originalReturn).replace(v1, before);
+  if (unpatched.split(originalReturn).length !== 2) throw new Error('Unsupported Feishu bundle: expected parts return');
   // Upgrade the previous whole-footer patch in existing PVC installations too.
-  const updated = body.replace(v1, before).replace(before, after).replace(originalReturn, filteredReturn);
+  const updated = unpatched.replace(before, after).replace(originalReturn, filteredReturn);
   next = original.slice(0, start) + updated + original.slice(end);
 }
 // Validate before writing so an unsupported bundle is never left half-patched.

@@ -2,8 +2,9 @@
 
 `DEALCLAW_FEISHU_SHOW_FOOTER=false` hides the entire automatic reply-card note
 (Agent / Model / Provider, plus any Runtime field present in the plugin).
-`true` or an unset variable preserves existing visibility. Case and surrounding
-whitespace are ignored for `false`; other values preserve the existing default.
+`true` or an unset variable enables the footer with the field defaults below.
+Case and surrounding whitespace are ignored. Unknown/empty field values use
+their field default; an unknown/empty whole-footer value leaves it enabled.
 
 Four independent switches select which existing fields to display:
 
@@ -11,16 +12,18 @@ Four independent switches select which existing fields to display:
 DEALCLAW_FEISHU_SHOW_AGENT=true
 DEALCLAW_FEISHU_SHOW_MODEL=false
 DEALCLAW_FEISHU_SHOW_PROVIDER=false
-DEALCLAW_FEISHU_SHOW_RUNTIME=true
+DEALCLAW_FEISHU_SHOW_RUNTIME=false
 ```
 
-Each defaults to visible when unset. The example displays Agent and Runtime only
-(when Runtime is supplied by the plugin). Setting all four to `false` removes
+The values above are the built-in defaults: only Agent is shown when no keys
+are configured. Explicit `true`/`false` overrides each field independently;
+for example, setting SHOW_MODEL to `true` also shows Model. Setting all four to `false` removes
 the note and its separator. The whole-footer switch takes precedence over the
 four field switches. Labels remain in Agent / Model / Provider / Runtime order;
 hidden fields leave no extra separators. Field values still come from the real
-reply context, not from these switches. The v2 patch automatically upgrades an
-existing v1 whole-footer patch in the trusted PVC copy.
+reply context, not from these switches. The v3 patch automatically upgrades
+existing v1/v2 patches in the trusted PVC copy. Previously explicit values
+continue to take precedence over the new defaults.
 
 This controls the generated note only, not the card title, reply body, typing
 indicator, tool status, or user-authored card footers. It covers initial streaming,
