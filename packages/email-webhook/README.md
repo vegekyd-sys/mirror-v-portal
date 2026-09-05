@@ -4,8 +4,8 @@
 
 TypeScript + Fastify + Node 22（pnpm 管依赖，与 dealclaw-nexus 一致）。
 
-- 线上地址：`https://webhook.dealclaw.io`（Cloudflare 代理）
-- Resend Webhook 填：`https://webhook.dealclaw.io/inbound`
+- 线上地址：`https://dealclaw.datathink.com`（k8s ALB，与其它服务共用 host）
+- Resend Webhook 填：`https://dealclaw.datathink.com/webhook/inbound`
 
 ## 接口
 
@@ -311,7 +311,7 @@ kubectl -n <namespace> exec deploy/email-webhook -- node -e "fetch('http://127.0
 走完整公网链路（推荐，顺带验证 Cloudflare 没有篡改请求体）：
 
 ```bash
-python3 tests/smoke_test.py https://webhook.dealclaw.io/webhook "$RESEND_SIGNING_SECRET"
+python3 tests/smoke_test.py https://dealclaw.datathink.com/webhook "$RESEND_SIGNING_SECRET"
 ```
 
 只测本机、跳过 Cloudflare（排查时用来区分是源站问题还是 CF 问题）：

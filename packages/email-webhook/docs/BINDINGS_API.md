@@ -3,8 +3,8 @@
 给外部系统（openclaw 等）对接「代理邮箱 → 飞书通知渠道」绑定关系用。
 
 ```
-Base URL:  https://webhook.dealclaw.io          （systemd 部署，无前缀）
-           https://webhook.dealclaw.io/webhook  （k8s 部署，ROUTE_PREFIX=/webhook）
+Base URL:  https://dealclaw.datathink.com          （systemd 部署，无前缀）
+           https://dealclaw.datathink.com/webhook  （k8s 部署，ROUTE_PREFIX=/webhook）
 认证头:    X-Admin-Token:  <向平台管理员索取>
 范围头:    X-Supplier-Id:  151897148668
 ```
@@ -241,7 +241,7 @@ Base URL:  https://webhook.dealclaw.io          （systemd 部署，无前缀）
 import time
 import httpx
 
-BASE = "https://webhook.dealclaw.io"
+BASE = "https://dealclaw.datathink.com"
 ADMIN_TOKEN = "..."
 
 

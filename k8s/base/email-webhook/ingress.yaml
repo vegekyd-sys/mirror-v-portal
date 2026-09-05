@@ -24,7 +24,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: webhook.dealclaw.io
+    - host: dealclaw.datathink.com
       http:
         paths:
           - path: /webhook
@@ -57,7 +57,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: webhook.dealclaw.io
+    - host: dealclaw.datathink.com
       http:
         paths:
           - path: /webhook/bindings
@@ -94,7 +94,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: webhook.dealclaw.io
+    - host: dealclaw.datathink.com
       http:
         paths:
           - path: /webhook/v1/events

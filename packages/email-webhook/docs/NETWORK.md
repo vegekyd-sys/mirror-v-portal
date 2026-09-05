@@ -1,5 +1,9 @@
 # 网络要求说明
 
+> ⚠️ **历史文档**：本文档描述的是早期 **systemd + Cloudflare Tunnel** 部署（`114.55.150.21`，
+> 对外域名 `webhook.dealclaw.io`）。该部署已迁移到 **k8s ALB**（`dealclaw.datathink.com/webhook`，
+> 与其它服务共用 host），下文内容仅作历史参考，不反映当前生产架构。
+
 DealClaw 邮件 Webhook 服务（`114.55.150.21`，阿里云杭州）的网络出入站需求。
 给网络/安全团队开通策略用。
 
