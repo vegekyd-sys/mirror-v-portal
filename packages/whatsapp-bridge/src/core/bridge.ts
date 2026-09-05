@@ -3,7 +3,7 @@ import { config } from "../config";
 import { isWindowOpen, toE164 } from "../lib/phone";
 import type { DeliveryUpdate, NormalizedInbound } from "./types";
 import { getOrCreateConversation, resolveConversation, saveInboundMessage } from "./conversation";
-import { WABA_REQUIRED_RESULT, resolveBusinessFrom, listCurrentWabaPhoneNumbers, resolveCurrentWabaId } from "./onboarding";
+import { WABA_REQUIRED_RESULT, resolveBusinessFrom, listCurrentWabaPhoneNumbers, resolveCurrentWabaId, resolveSupplierIdByWabaId } from "./onboarding";
 import { sendWhatsAppImage, sendWhatsAppTemplate, sendWhatsAppText, uploadWhatsAppMedia, buildTemplatePreview, downloadWhatsAppMedia } from "../channel/whatsapp/ycloud";
 import {
   ensureFeishuThread,
@@ -40,7 +40,7 @@ async function syncInboundImageToFeishu(
 
 export async function handleWhatsAppInbound(inbound: NormalizedInbound) {
   const conversation = await resolveConversation(inbound);
-  await saveInboundMessage(conversation.id, inbound);
+  await saveInboundMessage(conversation.id, inbound, conversation.supplierId || undefined);
 
   await withFeishuApp(conversation.feishuAppId || undefined, async () => {
     const app = requireFeishuApp();
@@ -306,6 +306,7 @@ export async function handleFeishuInbound(inbound: FeishuInboundMessage) {
         feishuMessageId: inbound.messageId,
         errorCode: "WHATSAPP_TEMPLATE_REQUIRED",
         errorMessage: "24h service window closed",
+        supplierId: conversation.supplierId || undefined,
       },
     });
     await postToFeishuThread(
@@ -358,6 +359,7 @@ export async function handleFeishuInbound(inbound: FeishuInboundMessage) {
         content,
         feishuMessageId: inbound.messageId,
         ycloudMessageId,
+        supplierId: conversation.supplierId || undefined,
       },
     });
     await prisma.conversation.update({
@@ -382,6 +384,7 @@ export async function handleFeishuInbound(inbound: FeishuInboundMessage) {
         feishuMessageId: inbound.messageId,
         errorCode: info.code,
         errorMessage: `${info.message}${hint}`,
+        supplierId: conversation.supplierId || undefined,
       },
     });
     await postToFeishuThread(mapping, `系统：${info.message}${hint}`);
@@ -415,7 +418,8 @@ export async function handleAgentSend(input: {
   const customerPhone = toE164(input.to);
   if (!customerPhone) throw new Error("缺少收件人 to（E.164）");
 
-  const conversation = await getOrCreateConversation(customerPhone, businessPhone);
+  const supplierId = await resolveSupplierIdByWabaId(wabaId);
+  const conversation = await getOrCreateConversation(customerPhone, businessPhone, supplierId);
   const useTemplate = Boolean(input.template?.name);
   const text = input.text?.trim() || "";
   const sourceChatId = input.sourceChatId?.trim() || undefined;
@@ -481,6 +485,7 @@ export async function handleAgentSend(input: {
       status: "accepted",
       content: preview,
       ycloudMessageId,
+      supplierId: conversation.supplierId || undefined,
     },
   });
   await prisma.conversation.update({

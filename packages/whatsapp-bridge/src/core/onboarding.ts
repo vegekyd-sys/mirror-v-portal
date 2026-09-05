@@ -133,6 +133,43 @@ export function invalidateWabaPhoneCache() {
   phoneCache = null;
 }
 
+/** 回填 WabaPhone 映射（wabaId ↔ phoneNumber），供 inbound 消息按 businessPhone 反查租户。 */
+export async function upsertWabaPhones(wabaId: string, numbers: string[]): Promise<void> {
+  if (!wabaId || !numbers.length) return;
+  try {
+    for (const phoneNumber of numbers) {
+      await prisma.wabaPhone.upsert({
+        where: { wabaId_phoneNumber: { wabaId, phoneNumber } },
+        update: { updatedAt: new Date() },
+        create: { wabaId, phoneNumber },
+      });
+    }
+  } catch (error) {
+    console.error("upsert WabaPhone mapping failed", error);
+  }
+}
+
+/** 按 wabaId 反查租户 supplierId（= partnerCustomerId）。 */
+export async function resolveSupplierIdByWabaId(wabaId: string): Promise<string | undefined> {
+  if (!wabaId) return undefined;
+  const row = await prisma.wabaOnboarding.findFirst({
+    where: { wabaId },
+    orderBy: { updatedAt: "desc" },
+  });
+  return row?.partnerCustomerId || undefined;
+}
+
+/** inbound 消息按 businessPhone（E.164 企业号）反查租户 supplierId。 */
+export async function resolveSupplierIdByBusinessPhone(
+  businessPhone: string,
+): Promise<string | undefined> {
+  const phone = toE164(businessPhone);
+  if (!phone) return undefined;
+  const wabaPhone = await prisma.wabaPhone.findFirst({ where: { phoneNumber: phone } });
+  if (!wabaPhone) return undefined;
+  return resolveSupplierIdByWabaId(wabaPhone.wabaId);
+}
+
 export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<string[]> {
   if (phoneCache && phoneCache.wabaId === wabaId && Date.now() - phoneCache.at < PHONE_CACHE_MS) {
     return phoneCache.numbers;
@@ -146,6 +183,8 @@ export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<strin
     ),
   ];
   phoneCache = { wabaId, numbers, at: Date.now() };
+  // cache miss 时同步回填 WabaPhone，保证 inbound 能反查到租户。
+  await upsertWabaPhones(wabaId, numbers);
   return numbers;
 }
 

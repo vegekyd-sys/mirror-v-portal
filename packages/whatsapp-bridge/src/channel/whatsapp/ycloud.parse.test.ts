@@ -119,16 +119,27 @@ describe("normalizeEmbeddedSignupInput", () => {
     assert.match(result.error, /MIO_CDP_SUPPLIER_ID/);
   });
 
-  it("uses MIO_CDP_SUPPLIER_ID over a request id", () => {
+  it("uses request id over MIO_CDP_SUPPLIER_ID", () => {
     const result = normalizeEmbeddedSignupInput(
       { partnerCustomerId: "test_onboard_001" },
       { defaultPartnerCustomerId: "supplier_from_env" },
     );
     assert.equal(result.ok, true);
     if (!result.ok) return;
+    assert.equal(result.partnerCustomerId, "test_onboard_001");
+    assert.equal(result.partnerCustomerIdSource, "request");
+    assert.equal(result.onboardingType, "WHATSAPP_BUSINESS_PLATFORM");
+  });
+
+  it("falls back to MIO_CDP_SUPPLIER_ID when request omits partnerCustomerId", () => {
+    const result = normalizeEmbeddedSignupInput(
+      {},
+      { defaultPartnerCustomerId: "supplier_from_env" },
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
     assert.equal(result.partnerCustomerId, "supplier_from_env");
     assert.equal(result.partnerCustomerIdSource, "MIO_CDP_SUPPLIER_ID");
-    assert.equal(result.onboardingType, "WHATSAPP_BUSINESS_PLATFORM");
   });
 
   it("rejects invalid locale and type", () => {

@@ -23,8 +23,11 @@ data:
   # 智能体回调桥接时用的基址（服务自身监听不依赖它）
   WHATSAPP_BRIDGE_BASE_URL: "https://webhook.dealclaw.io/whatsapp"
 
-  # YCloud 嵌入式注册的 partnerCustomerId
-  MIO_CDP_SUPPLIER_ID: "151897148668"
+  # MIO_CDP_SUPPLIER_ID 是租户标识（YCloud Partner Direct Link 的 partnerCustomerId）。
+  # 多租户下【不能写死】：否则所有租户请求都会被同一个值覆盖（串台）。
+  # 租户标识由请求动态传入：POST /api/whatsapp/onboarding-links 的 body.partnerCustomerId。
+  # 单租户过渡期如需兜底默认值，请在 Secret（whatsapp-bridge-secret）里配 MIO_CDP_SUPPLIER_ID，
+  # 这里留空 = 请求必须显式传 partnerCustomerId。
 
   FEISHU_BASE_URL: "https://open.feishu.cn"
 

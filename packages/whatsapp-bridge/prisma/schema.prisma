@@ -13,6 +13,8 @@ model Customer {
   whatsappUserId       String?
   whatsappParentUserId String?
   name                 String?
+  /** 租户标识（= partnerCustomerId），对齐 email-webhook 的 supplier_id。历史数据可空。 */
+  supplierId           String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -21,6 +23,7 @@ model Customer {
   @@index([phoneNumber])
   @@index([whatsappUserId])
   @@index([whatsappParentUserId])
+  @@index([supplierId])
 }
 
 model Conversation {
@@ -34,6 +37,8 @@ model Conversation {
   sourceOpenId           String?
   /** 该会话所属飞书应用（智能体注册后传入） */
   feishuAppId            String?
+  /** 租户标识（= partnerCustomerId），历史数据可空 */
+  supplierId             String?
   lastInboundAt          DateTime?
   lastOutboundAt         DateTime?
   serviceWindowExpiresAt DateTime?
@@ -47,6 +52,7 @@ model Conversation {
   @@unique([customerId, businessPhone])
   @@index([businessPhone])
   @@index([feishuAppId])
+  @@index([supplierId])
 }
 
 model Message {
@@ -62,6 +68,8 @@ model Message {
   feishuMessageId String?   @unique
   errorCode       String?
   errorMessage    String?
+  /** 租户标识（= partnerCustomerId），历史数据可空 */
+  supplierId      String?
   sentAt          DateTime?
   deliveredAt     DateTime?
   readAt          DateTime?
@@ -71,6 +79,7 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id])
 
   @@index([conversationId, createdAt])
+  @@index([supplierId])
 }
 
 model WebhookEvent {
@@ -81,10 +90,13 @@ model WebhookEvent {
   payload       String
   processStatus String    @default("PENDING")
   errorMessage  String?
+  /** 租户标识（= partnerCustomerId），历史数据可空。去重仍靠 provider+eventId 全局唯一。 */
+  supplierId    String?
   receivedAt    DateTime  @default(now())
   processedAt   DateTime?
 
   @@unique([provider, eventId])
+  @@index([supplierId])
 }
 
 model AppSetting {
@@ -138,6 +150,19 @@ model WabaOnboarding {
 
   @@index([partnerCustomerId])
   @@index([status])
+  @@index([wabaId])
+}
+
+/** 企业号 ↔ WABA 映射，用于 inbound 消息按 businessPhone 反查租户。 */
+model WabaPhone {
+  id          String   @id @default(cuid())
+  wabaId      String
+  phoneNumber String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([wabaId, phoneNumber])
+  @@index([phoneNumber])
   @@index([wabaId])
 }
 

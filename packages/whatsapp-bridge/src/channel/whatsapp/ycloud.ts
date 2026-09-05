@@ -290,16 +290,17 @@ export function normalizeEmbeddedSignupInput(
   input: EmbeddedSignupInput,
   options?: { defaultPartnerCustomerId?: string },
 ): NormalizedEmbeddedSignup {
-  const fromEnv = options?.defaultPartnerCustomerId?.trim() || "";
   const fromRequest = input.partnerCustomerId?.trim() || "";
-  const partnerCustomerId = fromEnv || fromRequest;
-  const partnerCustomerIdSource: "MIO_CDP_SUPPLIER_ID" | "request" = fromEnv
-    ? "MIO_CDP_SUPPLIER_ID"
-    : "request";
+  const fromEnv = options?.defaultPartnerCustomerId?.trim() || "";
+  // 多租户：请求优先，env 只作兜底。否则 env 写死会把所有租户覆盖成同一个值（串台）。
+  const partnerCustomerId = fromRequest || fromEnv;
+  const partnerCustomerIdSource: "MIO_CDP_SUPPLIER_ID" | "request" = fromRequest
+    ? "request"
+    : "MIO_CDP_SUPPLIER_ID";
   if (!partnerCustomerId) {
     return {
       ok: false,
-      error: "缺少 partnerCustomerId：请在环境变量配置 MIO_CDP_SUPPLIER_ID",
+      error: "缺少 partnerCustomerId：请在请求 body.partnerCustomerId 传入，或配置环境变量 MIO_CDP_SUPPLIER_ID 作兜底",
     };
   }
   if (partnerCustomerId.length > 128) {

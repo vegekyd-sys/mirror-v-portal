@@ -3,7 +3,7 @@ import { config } from "../config";
 import { prisma } from "../prisma";
 import { claimWebhookEvent, markWebhookProcessed } from "../core/conversation";
 import { handleAgentSend, handleFeishuInbound, handleWhatsAppInbound, handleWhatsAppStatus } from "../core/bridge";
-import { applyWabaAccountUpdate, createOnboardingLink, listWabaOnboardings, resolveWabaId, wabaHealth, WabaIdRequiredError } from "../core/onboarding";
+import { applyWabaAccountUpdate, createOnboardingLink, listWabaOnboardings, resolveWabaId, resolveSupplierIdByBusinessPhone, wabaHealth, WabaIdRequiredError } from "../core/onboarding";
 import { listWhatsAppPhones, listWhatsAppTemplates, parseYCloudEvent, YCloudApiError } from "../channel/whatsapp/ycloud";
 import { verifyYCloudSignature } from "../channel/whatsapp/signature";
 import { toE164 } from "../lib/phone";
@@ -399,7 +399,12 @@ export async function buildServer() {
         parsed.update?.eventId ||
         parsed.wabaUpdate?.eventId ||
         `ignored:${parsed.type}:${Date.now()}`;
-      const claimed = await claimWebhookEvent("ycloud", eventId, parsed.type, request.body);
+      // 反查租户：inbound 按企业号反查，wabaUpdate 直接用事件里的 partnerCustomerId，update 暂不反查。
+      let supplierId: string | undefined;
+      if (parsed.inbound) supplierId = await resolveSupplierIdByBusinessPhone(parsed.inbound.businessPhone);
+      else if (parsed.wabaUpdate) supplierId = parsed.wabaUpdate.partnerCustomerId;
+
+      const claimed = await claimWebhookEvent("ycloud", eventId, parsed.type, request.body, supplierId);
       reply.code(200).send({ ok: true, duplicate: !claimed });
       if (!claimed) return;
 
