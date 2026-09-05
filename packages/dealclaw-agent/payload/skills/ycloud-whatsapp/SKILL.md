@@ -4,8 +4,7 @@ description: >-
   通过公司 WhatsApp 桥接服务收发消息，以及 Partner Direct Link 嵌入式注册开通 WABA。
   禁止直连 YCloud / Meta API，禁止读取 YCLOUD_API_KEY。买家入站由后端同步到飞书客服群话题：
   无群则自动建「WhatsApp 客服」群再拉话题，有群则只建话题。窗外发模板时智能体
-  自主回填变量并发送，不要逐项问用户。无 YCLOUD_WABA_ID 时先走嵌入式注册，禁止直接发消息。开通 WABA 时 partnerCustomerId 使用
-  MIO_CDP_SUPPLIER_ID，经桥接创建 Onboarding Link。不要自己调 YCloud。适用于 WhatsApp、飞书客服、话题、模板、24h 窗口、换号、
+  自主回填变量并发送，不要逐项问用户。无 YCLOUD_WABA_ID 时先走嵌入式注册，禁止直接发消息。开通 WABA 时 partnerCustomerId 由请求动态传入（当前租户 supplier id = 智能体环境 MIO_CDP_SUPPLIER_ID），经桥接创建 Onboarding Link。不要自己调 YCloud。适用于 WhatsApp、飞书客服、话题、模板、24h 窗口、换号、
   嵌入式注册、Direct Link、Onboarding Link、WABA、CDP 供应商。不用于 SMS。
 ---
 
@@ -13,7 +12,7 @@ description: >-
 
 智能体**只调用桥接 HTTP API**。不要 curl `api.ycloud.com`，不要读或打印 `YCLOUD_API_KEY`。
 
-`partnerCustomerId` **就是环境变量 `MIO_CDP_SUPPLIER_ID`（CDP 供应商 ID）**。嵌入式注册整条链路都用它：不要问用户、不要用对话里的公司名、不要生成 `pc_` / `test_onboard_001`。
+`partnerCustomerId` **是当前租户的 supplier id（CDP 供应商 ID）**，值 = 智能体环境的 `MIO_CDP_SUPPLIER_ID`，请求里**显式传 `body.partnerCustomerId`**。桥接多租户下**不写死 env**：请求优先、env 只兜底。嵌入式注册整条链路都用它：不要问用户、不要用对话里的公司名、不要生成 `pc_` / `test_onboard_001`。
 
 **发消息前必须已有环境变量 `YCLOUD_WABA_ID`。** 智能体自己从桥接项目 env 文件读取，并在列号、列模板、发消息时**原样传入** `wabaId`。
 
@@ -23,12 +22,12 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 ## 基址（必读环境变量）
 
-调用前先解析 `$BRIDGE`、`$SUPPLIER`、`$WABA`、`$FEISHU_APP`，**不要写死** `http://127.0.0.1:3000`，**不要编造** `partnerCustomerId` / `wabaId`：
+调用前先解析 `$BRIDGE`、`$SUPPLIER`、`$WABA`、`$FEISHU_APP`，**不要写死** `http://127.0.0.1:8086`，**不要编造** `partnerCustomerId` / `wabaId`：
 
 1. 读 **`WHATSAPP_BRIDGE_BASE_URL`**（当前 shell，或桥接项目根目录 `.env` / `.env.development` / `.env.shared`）。
-2. 未配置时：可读同文件里的 **`PORT`**，拼成 `http://127.0.0.1:$PORT`（`PORT` 缺省按 `3000`）。
-3. 读 **`MIO_CDP_SUPPLIER_ID`**（同一组 env 文件）。也可 `GET $BRIDGE/health`，用返回的 `partnerCustomerId`（以后端进程里的值为准）。
-4. `$SUPPLIER` 仍为空则停，提示在桥接项目 `.env.development`（或对应环境文件）补上 `MIO_CDP_SUPPLIER_ID`。
+2. 未配置时：可读同文件里的 **`PORT`**，拼成 `http://127.0.0.1:$PORT`（`PORT` 缺省按 `8086`；集群部署走公网 `https://dealclaw.datathink.com/whatsapp`）。
+3. 读**当前智能体自己的** **`MIO_CDP_SUPPLIER_ID`**（tenant-env.json / .env，即当前租户 supplier id）作为 `$SUPPLIER`。不要用 `GET $BRIDGE/health` 返回的 `partnerCustomerId` 当权威值——那是后端进程 env 的兜底，多租户下通常为空。
+4. `$SUPPLIER` 仍为空则停，提示在当前智能体环境补上 `MIO_CDP_SUPPLIER_ID`（tenant-env.json / .env）。
 5. `$BRIDGE` 仍不确定则停，提示补上 `WHATSAPP_BRIDGE_BASE_URL`。
 6. 读**当前智能体自己的环境变量** **`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`**，以及 **`FEISHU_INVITE_APP_IDS`**（要拉进「WhatsApp 客服」群的其它机器人 App ID，`cli_` 开头，可多个逗号分隔；通常是本智能体应用）。这是**该飞书应用**的凭证。禁止从桥接项目 `.env` 里抄这些（桥接启动不必有它们）。不要打印 Secret / Encrypt Key。四个密钥都要有值；缺 `FEISHU_ENCRYPT_KEY` 不要 POST。然后 `POST $BRIDGE/api/feishu/apps`：
 
@@ -113,9 +112,9 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 ### 流程
 
-1. `GET $BRIDGE/health`（确认 `ok`；若返回 `partnerCustomerId` 则作为 `$SUPPLIER`）
+1. `GET $BRIDGE/health`（确认 `ok`。多租户下返回的 `partnerCustomerId` 是后端 env 兜底值、通常为空，**不作** `$SUPPLIER` 权威源）
 2. `$SUPPLIER` 必须已解析。禁止向用户要 partnerCustomerId，禁止用其它字符串代替。
-3. 先 `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER`（也可省略 query，桥接会默认用 `MIO_CDP_SUPPLIER_ID`）。**仅开通流程查这个接口**，发消息不要查：
+3. 先 `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER`（**多租户下必须显式传**，桥接 env 不写死，省略 query 会查不到当前租户或串台）。**仅开通流程查这个接口**，发消息不要查：
    - 已有 `status=PENDING` 且返回了 `onboardingUrl`（未过期）→ **复用**，不要再 POST
    - 用户只是查开通状态 → 报告列表，结束；不要拿列表里的 `CONNECTED` 去改 env，也不要问用户和 env 里哪个才对
    - 用户要**新增或更换 WABA** → 再 POST 新链接
@@ -132,7 +131,7 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 }
 ```
 
-`partnerCustomerId` 必须是 `$SUPPLIER`。不传时桥接也会用 `MIO_CDP_SUPPLIER_ID` 回填；**已配置时请求里的其它 ID 会被忽略**。
+`partnerCustomerId` 必须是 `$SUPPLIER`（当前租户 supplier id）。桥接请求优先：显式传 `body.partnerCustomerId` 才准；不传时桥接只用 env `MIO_CDP_SUPPLIER_ID` 兜底（多租户下该 env 为空会 400）。
 
 - `onboardingType` 默认 `WHATSAPP_BUSINESS_PLATFORM`（API WABA）。用户明确要 WhatsApp Business App / SMB 时才用 `WHATSAPP_BUSINESS_APP`。
 - `locale`：中文对话用 `zh_CN`，否则 `en_US`。只允许 `en_US` `zh_CN` `es_ES` `pt_BR` `id_ID` `ru_RU`（区分大小写）。
@@ -154,7 +153,7 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 ### 探活
 
 `GET $BRIDGE/health` → `{"ok":true,"partnerCustomerId":"...","wabaId":"...","wabaBound":true|false,"from":"+852..."}`  
-`partnerCustomerId` 即 `MIO_CDP_SUPPLIER_ID`。`wabaId` / `wabaBound` 是**后端进程**里的值，智能体不要用它判断当前会话有没有 WABA。当前 WABA 以智能体读到的 env `YCLOUD_WABA_ID` 为准，并传入请求。
+`partnerCustomerId` 是**后端进程 env 的兜底值**（多租户下通常为空，不是当前租户的权威值）。`wabaId` / `wabaBound` 是**后端进程**里的值，智能体不要用它判断当前会话有没有 WABA。当前 WABA 以智能体读到的 env `YCLOUD_WABA_ID` 为准，并传入请求。
 
 ### 查会话窗口
 
@@ -234,14 +233,14 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 `POST $BRIDGE/api/whatsapp/onboarding-links`
 
-`partnerCustomerId` 用 `$SUPPLIER`。未传时后端用 `MIO_CDP_SUPPLIER_ID`。成功返回 `onboardingUrl`、`expiresAt`、`partnerCustomerId`、`partnerCustomerIdSource`、`status=PENDING`。把链接交给客户即可。未配置 `MIO_CDP_SUPPLIER_ID` 会 400。
+`partnerCustomerId` 用 `$SUPPLIER`（当前租户 supplier id，**多租户必须显式传**）。未传时后端用 env `MIO_CDP_SUPPLIER_ID` 兜底。成功返回 `onboardingUrl`、`expiresAt`、`partnerCustomerId`、`partnerCustomerIdSource`（`request` / `MIO_CDP_SUPPLIER_ID`）、`status=PENDING`。把链接交给客户即可。请求和 env 都没有会 400。
 
 ### 查询 WABA 绑定
 
 `GET $BRIDGE/api/whatsapp/wabas`  
 可选 `?partnerCustomerId=` `?wabaId=` `?status=PENDING|CONNECTED`
 
-未传 `partnerCustomerId` 时后端默认按 `MIO_CDP_SUPPLIER_ID` 过滤。智能体查询时仍应带 `?partnerCustomerId=$SUPPLIER`。未过期的 PENDING 才会带 `onboardingUrl`。`CONNECTED` 后看 `wabaId` / `paymentMethodAttached`。智能体不要轮询 YCloud，只查本接口。
+多租户下后端不写死 env，**必须显式传 `?partnerCustomerId=$SUPPLIER`**，否则查不到当前租户的绑定或串台。未过期的 PENDING 才会带 `onboardingUrl`。`CONNECTED` 后看 `wabaId` / `paymentMethodAttached`。智能体不要轮询 YCloud，只查本接口。
 
 ## 买家来信（后端自动做，skill 不调）
 
@@ -277,6 +276,6 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 - 用非当前 WABA 的企业号发消息
 - 窗外发 text；窗内无故改用模板（用户明确要模板除外）
 - 智能体自己改 `.env` 写 `YCLOUD_WABA_ID`（由后端在绑定成功后写入）
-- 编造 `partnerCustomerId`；忽略已配置的 `MIO_CDP_SUPPLIER_ID`
+- 编造 `partnerCustomerId`；忽略当前租户的 `MIO_CDP_SUPPLIER_ID`（多租户下不显式传请求就串台）
 - 写死桥接基址（必须读 `WHATSAPP_BRIDGE_BASE_URL` / `PORT`）
 - 群聊发消息不带 `sourceChatId` / 尽量带 `sourceOpenId`（拿得到就必须带）

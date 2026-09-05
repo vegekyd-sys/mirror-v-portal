@@ -75,16 +75,16 @@ YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message
 （与 email-webhook 共用一个 ALB host，按路径分流）。所以线上要填给外部平台的是：
 
 ```
-https://webhook.dealclaw.io/whatsapp/webhooks/ycloud            ← YCloud
-https://webhook.dealclaw.io/whatsapp/webhooks/feishu            ← 飞书（单应用）
-https://webhook.dealclaw.io/whatsapp/webhooks/feishu/{appId}    ← 飞书（多应用，见 POST /api/feishu/apps 返回的 webhookUrl）
+https://dealclaw.datathink.com/whatsapp/webhooks/ycloud            ← YCloud
+https://dealclaw.datathink.com/whatsapp/webhooks/feishu            ← 飞书（单应用）
+https://dealclaw.datathink.com/whatsapp/webhooks/feishu/{appId}    ← 飞书（多应用，见 POST /api/feishu/apps 返回的 webhookUrl）
 ```
 
 `/health` 是唯一例外，它**无论前缀怎么设都额外挂在根路径上** —— k8s 探针直连 Pod，
 拿不到网关前缀。
 
 `POST /api/feishu/apps` 返回的 `webhookUrl` 由 `WHATSAPP_BRIDGE_BASE_URL` 拼成，
-**该配置必须自带前缀**（集群 ConfigMap 里是 `https://webhook.dealclaw.io/whatsapp`）；
+**该配置必须自带前缀**（集群 ConfigMap 里是 `https://dealclaw.datathink.com/whatsapp`）；
 没配时会从请求头推导并自动补上 `ROUTE_PREFIX`。
 
 ## 部署（k8s）

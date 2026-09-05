@@ -1,9 +1,9 @@
-# ALB Ingress，与 email-webhook 共用 webhook.dealclaw.io，按路径前缀分流。
+# ALB Ingress，与 email-webhook 共用 dealclaw.datathink.com，按路径前缀分流。
 # 应用自身就监听 /whatsapp/*，**不要**配 rewrite/StripPrefix。
 #
 # 对外地址：
-#   https://webhook.dealclaw.io/whatsapp/webhooks/ycloud   ← YCloud 后台填这个
-#   https://webhook.dealclaw.io/whatsapp/webhooks/feishu   ← 飞书事件订阅填这个
+#   https://dealclaw.datathink.com/whatsapp/webhooks/ycloud   ← YCloud 后台填这个
+#   https://dealclaw.datathink.com/whatsapp/webhooks/feishu   ← 飞书事件订阅填这个
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -24,7 +24,7 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: webhook.dealclaw.io
+    - host: dealclaw.datathink.com
       http:
         paths:
           - path: /whatsapp
