@@ -137,6 +137,18 @@ patch_feishu_trusted_copy() {
 if feishu_bot_ready && ensure_feishu_trusted; then
   export DEALCLAW_FEISHU_TRUSTED=1
   patch_feishu_trusted_copy || true
+  # Unlike cosmetic streaming coalescing, a requested hidden footer must not
+  # silently remain visible. Unknown bundle shapes abort startup for review.
+  footer_patched=0
+  for d in "${OPENCLAW_STATE_DIR}"/npm/projects/openclaw-feishu-*/node_modules/@openclaw/feishu; do
+    [[ -d "$d/dist" ]] || continue
+    FEISHU_PLUGIN_ROOT="$d" node /opt/dealclaw/runtime/patch-feishu-footer.mjs || exit 1
+    footer_patched=1
+  done
+  if [[ "$footer_patched" != 1 ]]; then
+    echo '[dealclaw-runtime] trusted Feishu plugin not found; footer patch cannot be verified' >&2
+    exit 1
+  fi
 fi
 
 node /opt/dealclaw/runtime/write-config.mjs

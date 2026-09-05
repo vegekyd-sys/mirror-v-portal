@@ -42,6 +42,7 @@ COPY --from=bridge-build /build/node_modules /opt/dealclaw/bridge/node_modules
 COPY --from=bridge-build /build/package.json /opt/dealclaw/bridge/package.json
 COPY payload /opt/dealclaw/payload
 COPY runtime /opt/dealclaw/runtime
+RUN node /opt/dealclaw/runtime/patch-feishu-footer.mjs
 RUN npm ci --omit=dev --legacy-peer-deps \
       --prefix /opt/dealclaw/runtime/dependencies \
     && chmod 0755 /opt/dealclaw/runtime/*.sh \

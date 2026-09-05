@@ -1,0 +1,34 @@
+# Feishu reply footer visibility
+
+`DEALCLAW_FEISHU_SHOW_FOOTER=false` hides the entire automatic reply-card note
+(Agent / Model / Provider, plus any Runtime field present in the plugin).
+`true` or an unset variable preserves existing visibility. Case and surrounding
+whitespace are ignored for `false`; other values preserve the existing default.
+
+This controls the generated note only, not the card title, reply body, typing
+indicator, tool status, or user-authored card footers. It covers initial streaming,
+final streaming, and static reply cards via the shared `resolveCardNote` function.
+It does not add a Runtime field to plugin versions that do not have one.
+
+Set the key in Nexus runtime configuration (global or per-tenant override), ensure
+the tenant's agent process receives the environment variable, and restart the
+agent after applying configuration. Updating only the mounted skill-env file does
+not update the environment of an already-running gateway. Historical cards are
+not rewritten; the new setting applies to subsequent replies.
+
+The image fallback is patched at build time in both Dockerfiles (this repository
+and aochi). The trusted PVC plugin is patched after install and before gateway
+startup. Both repositories' changes must be included in the new agent image.
+The patch is idempotent and rejects unknown bundle shapes instead of silently
+ignoring the requested visibility. Do not bypass that check during upgrades.
+
+Verification against an extracted official plugin package:
+
+```bash
+node --test packages/dealclaw-agent/runtime/patch-feishu-footer.test.mjs
+```
+
+Set `FEISHU_TEST_PLUGIN_ROOT` to the extracted package directory to additionally
+test against its actual monitor bundle and static-card renderer.
+Before rollout acceptance, verify one shown and one hidden streaming reply in a
+test tenant. Local bundle checks do not constitute a live Feishu UI acceptance.
