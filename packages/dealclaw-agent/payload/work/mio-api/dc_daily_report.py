@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
 
 MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
 
@@ -146,10 +147,40 @@ _COMPANY_INFO = {
 
 
 def company_display_name(company_id: str) -> str:
-    """supplier_id → 企业展示名。优先显式映射，兜底 registry/company_id。"""
+    """supplier_id → 企业展示名。优先级：显式映射 > 绑定信息 > 画像 kb.json > registry > company_id。"""
+    # 1. 显式映射（人工校正，最可靠，覆盖 CDP/kb.json 因 supplier id 复用产生的混乱）
     info = _COMPANY_INFO.get(company_id)
     if info and info.get("name"):
         return info["name"]
+    # 2. 企业绑定信息（buyer-leads-v10 binding.company_name，动态权威来源）
+    try:
+        v10_dir = Path(__file__).resolve().parents[2] / "data" / "buyer-leads-v10"
+        if v10_dir.exists():
+            for f in v10_dir.glob("*.json"):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                    if d.get("status") != "active":
+                        continue
+                    b = d.get("binding") or {}
+                    sid = str(b.get("tradechina_supplier_id") or "").strip()
+                    name = str(b.get("company_name") or d.get("label") or "").strip()
+                    if sid == str(company_id) and name:
+                        return name
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # 3. 画像 kb.json profile.name（动态；supplier id 复用可能混乱，故排在映射/绑定之后）
+    try:
+        kb_path = Path(__file__).resolve().parents[2] / "data" / "memory" / str(company_id) / "kb.json"
+        if kb_path.exists():
+            kb = json.loads(kb_path.read_text(encoding="utf-8"))
+            name = (kb.get("profile") or {}).get("name")
+            if name:
+                return name
+    except Exception:
+        pass
+    # 4. registry 兜底
     try:
         from dc_company_registry import CompanyRegistry
         entry = CompanyRegistry().get(company_id)
