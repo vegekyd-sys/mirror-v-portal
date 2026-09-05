@@ -20,16 +20,14 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 
 不要用 `GET /health` 的 `wabaId` / `wabaBound` 当绑定状态（那是后端进程自己的值，会和 env 文件不一致）。env 里没有 `YCLOUD_WABA_ID` → 先走嵌入式注册，**禁止** `POST /api/whatsapp/messages`。不要因为请求里带了 `from`、或以前发成功过，就跳过开通。
 
-## 基址（必读环境变量）
+## 基址（写死，全局唯一）
 
-调用前先解析 `$BRIDGE`、`$SUPPLIER`、`$WABA`、`$FEISHU_APP`，**不要写死** `http://127.0.0.1:8086`，**不要编造** `partnerCustomerId` / `wabaId`：
+桥接服务全局唯一，`$BRIDGE` **写死** `https://dealclaw.datathink.com/whatsapp`，不要读 `WHATSAPP_BRIDGE_BASE_URL`、不要拼 `127.0.0.1:PORT`。解析 `$SUPPLIER`、`$WABA`、`$FEISHU_APP` 时**不要编造** `partnerCustomerId` / `wabaId`：
 
-1. 读 **`WHATSAPP_BRIDGE_BASE_URL`**（当前 shell，或桥接项目根目录 `.env` / `.env.development` / `.env.shared`）。
-2. 未配置时：可读同文件里的 **`PORT`**，拼成 `http://127.0.0.1:$PORT`（`PORT` 缺省按 `8086`；集群部署走公网 `https://dealclaw.datathink.com/whatsapp`）。
-3. 读**当前智能体自己的** **`MIO_CDP_SUPPLIER_ID`**（tenant-env.json / .env，即当前租户 supplier id）作为 `$SUPPLIER`。不要用 `GET $BRIDGE/health` 返回的 `partnerCustomerId` 当权威值——那是后端进程 env 的兜底，多租户下通常为空。
-4. `$SUPPLIER` 仍为空则停，提示在当前智能体环境补上 `MIO_CDP_SUPPLIER_ID`（tenant-env.json / .env）。
-5. `$BRIDGE` 仍不确定则停，提示补上 `WHATSAPP_BRIDGE_BASE_URL`。
-6. 读**当前智能体自己的环境变量** **`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`**，以及 **`FEISHU_INVITE_APP_IDS`**（要拉进「WhatsApp 客服」群的其它机器人 App ID，`cli_` 开头，可多个逗号分隔；通常是本智能体应用）。这是**该飞书应用**的凭证。禁止从桥接项目 `.env` 里抄这些（桥接启动不必有它们）。不要打印 Secret / Encrypt Key。四个密钥都要有值；缺 `FEISHU_ENCRYPT_KEY` 不要 POST。然后 `POST $BRIDGE/api/feishu/apps`：
+1. `$BRIDGE` = `https://dealclaw.datathink.com/whatsapp`（固定值，末尾无 `/`）。
+2. 读**当前智能体自己的** **`MIO_CDP_SUPPLIER_ID`**（tenant-env.json / .env，即当前租户 supplier id）作为 `$SUPPLIER`。不要用 `GET $BRIDGE/health` 返回的 `partnerCustomerId` 当权威值——那是后端进程 env 的兜底，多租户下通常为空。
+3. `$SUPPLIER` 仍为空则停，提示在当前智能体环境补上 `MIO_CDP_SUPPLIER_ID`（tenant-env.json / .env）。
+4. 读**当前智能体自己的环境变量** **`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`**，以及 **`FEISHU_INVITE_APP_IDS`**（要拉进「WhatsApp 客服」群的其它机器人 App ID，`cli_` 开头，可多个逗号分隔；通常是本智能体应用）。这是**该飞书应用**的凭证。禁止从桥接项目 `.env` 里抄这些（桥接启动不必有它们）。不要打印 Secret / Encrypt Key。四个密钥都要有值；缺 `FEISHU_ENCRYPT_KEY` 不要 POST。然后 `POST $BRIDGE/api/feishu/apps`：
 
 ```json
 {
@@ -42,10 +40,9 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 ```
 
 返回 `appId`、`webhookUrl`、`hasEncryptKey`、`inviteAppIds`。`$FEISHU_APP` = `appId`。`hasEncryptKey` 必须为 `true` 才算注册成功；`false`、返回 `warning`、或 400 说密钥是占位符/非 ASCII 时，说明**没读到真实环境变量**。停下来让用户把该飞书应用「加密策略」里的 Encrypt Key / Verification Token 配进**智能体环境**，再 POST。禁止用中文、`***`、`$FEISHU_ENCRYPT_KEY` 原文或自己编一串去注册。Encrypt Key 和 Verification Token 不要抄反。`inviteAppIds` 应包含智能体环境的 `FEISHU_INVITE_APP_IDS`（本智能体 `cli_…`）；返回空数组说明没带上，其它机器人不会被拉进客服群。把该飞书应用「事件配置」请求地址设为 `webhookUrl`（`/webhooks/feishu/<appId>`）。每个应用配一次；凭证变了再 POST 覆盖。桥接启动**不必**带这些变量。保存 URL 若仍报「Challenge code没有返回」，是登记的 Encrypt Key 与开放平台不一致，重新用「加密策略」里的值 POST，不要改 URL 路径。
-7. 读 **`YCLOUD_WABA_ID`** 作为 `$WABA`。有值 → 发消息流程。空 → 先做嵌入式注册。不要用 `GET /health` 判断有没有 WABA。
+5. 读 **`YCLOUD_WABA_ID`** 作为 `$WABA`。有值 → 发消息流程。空 → 先做嵌入式注册。不要用 `GET /health` 判断有没有 WABA。
 
-后端自己用 `PORT` 监听；智能体只用 `WHATSAPP_BRIDGE_BASE_URL`（或上面的回退）当 HTTP 基址。  
-`$BRIDGE` 去掉末尾 `/`。服务未启动则先停，提示启动后端。`webhookUrl` 必须是飞书能访问的公网 HTTPS（ngrok / 已部署域名）。
+`$BRIDGE` 已写死（见上），服务未启动则先停，提示启动后端。`webhookUrl` 必须是飞书能访问的公网 HTTPS（已部署域名）。
 
 ```text
 进度：
@@ -277,5 +274,5 @@ env 里**已经有** `YCLOUD_WABA_ID` 时：这就是当前 WABA。立刻按进�
 - 窗外发 text；窗内无故改用模板（用户明确要模板除外）
 - 智能体自己改 `.env` 写 `YCLOUD_WABA_ID`（由后端在绑定成功后写入）
 - 编造 `partnerCustomerId`；忽略当前租户的 `MIO_CDP_SUPPLIER_ID`（多租户下不显式传请求就串台）
-- 写死桥接基址（必须读 `WHATSAPP_BRIDGE_BASE_URL` / `PORT`）
+- 写死其它桥接基址（`$BRIDGE` 固定为 `https://dealclaw.datathink.com/whatsapp`）
 - 群聊发消息不带 `sourceChatId` / 尽量带 `sourceOpenId`（拿得到就必须带）
