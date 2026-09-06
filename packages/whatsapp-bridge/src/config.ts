@@ -47,12 +47,8 @@ export const config = {
   },
   databaseUrl: process.env.DATABASE_URL || "",
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
-  /** CDP 供应商 ID，作为 YCloud Partner Direct Link 的 partnerCustomerId。 */
-  cdpSupplierId: optional("MIO_CDP_SUPPLIER_ID"),
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
-    wabaId: optional("YCLOUD_WABA_ID"),
-    from: optional("YCLOUD_FROM"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),
     skipSignature: flag("YCLOUD_SKIP_SIGNATURE"),
     baseUrl: "https://api.ycloud.com/v2",

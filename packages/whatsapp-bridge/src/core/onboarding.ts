@@ -1,5 +1,4 @@
 import { prisma } from "../prisma";
-import { config } from "../config";
 import type { WabaAccountUpdate } from "./types";
 import {
   createEmbeddedSignupLink,
@@ -16,7 +15,7 @@ export class WabaIdRequiredError extends Error {
   readonly wabas: { wabaId: string; wabaName?: string | null; partnerCustomerId: string }[] = [];
 
   constructor() {
-    super("缺少 wabaId：请从环境变量 YCLOUD_WABA_ID 读取后传入 ?wabaId= 或 body.wabaId");
+    super("缺少 wabaId：请先按当前租户查询 CONNECTED WABA 绑定，再传入 ?wabaId= 或 body.wabaId");
     this.name = "WabaIdRequiredError";
   }
 }
@@ -82,12 +81,6 @@ export async function resolveWabaId(explicit?: string): Promise<string> {
   throw new WabaIdRequiredError();
 }
 
-/** 飞书入站回发用：只读本进程环境变量 YCLOUD_WABA_ID，不读库、不替智能体猜。 */
-export async function resolveCurrentWabaId(explicit?: string): Promise<string | undefined> {
-  if (explicit?.trim()) return explicit.trim();
-  return config.ycloud.wabaId;
-}
-
 async function listConnectedWabas() {
   const connected = await prisma.wabaOnboarding.findMany({
     where: { status: "CONNECTED", wabaId: { not: null } },
@@ -104,13 +97,9 @@ async function listConnectedWabas() {
 }
 
 export async function wabaHealth() {
-  const wabaId = await resolveCurrentWabaId();
   const unique = await listConnectedWabas();
   return {
-    wabaId,
-    wabaBound: Boolean(wabaId),
-    wabaCount: unique.length || (wabaId ? 1 : 0),
-    from: config.ycloud.from,
+    wabaCount: unique.length,
   };
 }
 
@@ -118,7 +107,7 @@ export const WABA_REQUIRED_RESULT = {
   ok: false as const,
   code: "WHATSAPP_WABA_REQUIRED" as const,
   message:
-    "尚未绑定 WABA。请从环境变量 YCLOUD_WABA_ID 读取后，在请求里传入 wabaId；没有则先走嵌入式注册。",
+    "缺少 wabaId。请先按当前 partnerCustomerId 查询 CONNECTED WABA 绑定，再在请求里传入 wabaId。",
   next: {
     health: "GET /health",
     listWabas: "GET /api/whatsapp/wabas",
@@ -127,10 +116,11 @@ export const WABA_REQUIRED_RESULT = {
 };
 
 const PHONE_CACHE_MS = 60_000;
-let phoneCache: { wabaId: string; numbers: string[]; at: number } | null = null;
+const phoneCache = new Map<string, { numbers: string[]; at: number }>();
 
-export function invalidateWabaPhoneCache() {
-  phoneCache = null;
+export function invalidateWabaPhoneCache(wabaId?: string) {
+  if (wabaId) phoneCache.delete(wabaId);
+  else phoneCache.clear();
 }
 
 /** 回填 WabaPhone 映射（wabaId ↔ phoneNumber），供 inbound 消息按 businessPhone 反查租户。 */
@@ -152,11 +142,12 @@ export async function upsertWabaPhones(wabaId: string, numbers: string[]): Promi
 /** 按 wabaId 反查租户 supplierId（= partnerCustomerId）。 */
 export async function resolveSupplierIdByWabaId(wabaId: string): Promise<string | undefined> {
   if (!wabaId) return undefined;
-  const row = await prisma.wabaOnboarding.findFirst({
-    where: { wabaId },
-    orderBy: { updatedAt: "desc" },
+  const rows = await prisma.wabaOnboarding.findMany({
+    where: { wabaId, status: "CONNECTED" },
+    select: { partnerCustomerId: true },
   });
-  return row?.partnerCustomerId || undefined;
+  const owners = [...new Set(rows.map((row) => row.partnerCustomerId).filter(Boolean))];
+  return owners.length === 1 ? owners[0] : undefined;
 }
 
 /** inbound 消息按 businessPhone（E.164 企业号）反查租户 supplierId。 */
@@ -165,14 +156,26 @@ export async function resolveSupplierIdByBusinessPhone(
 ): Promise<string | undefined> {
   const phone = toE164(businessPhone);
   if (!phone) return undefined;
-  const wabaPhone = await prisma.wabaPhone.findFirst({ where: { phoneNumber: phone } });
-  if (!wabaPhone) return undefined;
-  return resolveSupplierIdByWabaId(wabaPhone.wabaId);
+  const mappings = await prisma.wabaPhone.findMany({
+    where: { phoneNumber: phone },
+    select: { wabaId: true },
+  });
+  if (!mappings.length) return undefined;
+  const rows = await prisma.wabaOnboarding.findMany({
+    where: {
+      wabaId: { in: [...new Set(mappings.map((mapping) => mapping.wabaId))] },
+      status: "CONNECTED",
+    },
+    select: { partnerCustomerId: true },
+  });
+  const owners = [...new Set(rows.map((row) => row.partnerCustomerId).filter(Boolean))];
+  return owners.length === 1 ? owners[0] : undefined;
 }
 
 export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<string[]> {
-  if (phoneCache && phoneCache.wabaId === wabaId && Date.now() - phoneCache.at < PHONE_CACHE_MS) {
-    return phoneCache.numbers;
+  const cached = phoneCache.get(wabaId);
+  if (cached && Date.now() - cached.at < PHONE_CACHE_MS) {
+    return cached.numbers;
   }
   const { phones } = await listWhatsAppPhones(wabaId);
   const numbers = [
@@ -182,7 +185,7 @@ export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<strin
         .filter(Boolean),
     ),
   ];
-  phoneCache = { wabaId, numbers, at: Date.now() };
+  phoneCache.set(wabaId, { numbers, at: Date.now() });
   // cache miss 时同步回填 WabaPhone，保证 inbound 能反查到租户。
   await upsertWabaPhones(wabaId, numbers);
   return numbers;
@@ -191,6 +194,7 @@ export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<strin
 export async function resolveBusinessFrom(
   requestedFrom: string | undefined,
   wabaId: string,
+  supplierId?: string,
 ): Promise<
   | { ok: true; from: string; wabaId: string; phones: string[] }
   | {
@@ -204,6 +208,9 @@ export async function resolveBusinessFrom(
 > {
   const id = wabaId.trim();
   if (!id) return WABA_REQUIRED_RESULT;
+  const tenantQuery = supplierId
+    ? `&partnerCustomerId=${encodeURIComponent(supplierId)}`
+    : "";
 
   let phones: string[];
   try {
@@ -214,7 +221,7 @@ export async function resolveBusinessFrom(
       code: "WHATSAPP_PHONE_REQUIRED",
       wabaId: id,
       message: `无法列出当前 WABA 企业号：${error instanceof Error ? error.message : String(error)}`,
-      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}` },
+      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
     };
   }
   if (!phones.length) {
@@ -223,7 +230,7 @@ export async function resolveBusinessFrom(
       code: "WHATSAPP_PHONE_REQUIRED",
       wabaId: id,
       message: "当前 WABA 下没有可用企业号，无法发送。请在 Meta / YCloud 完成号码接入后再试。",
-      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}` },
+      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
     };
   }
 
@@ -236,7 +243,7 @@ export async function resolveBusinessFrom(
         wabaId: id,
         phones,
         message: `from 必须是当前 WABA（${id}）下的企业号。可用号码：${phones.join("、")}`,
-        next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}` },
+        next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
       };
     }
     return { ok: true, from: requested, wabaId: id, phones };
@@ -245,29 +252,15 @@ export async function resolveBusinessFrom(
   return { ok: true, from: phones[0], wabaId: id, phones };
 }
 
-async function persistCurrentWabaBinding(wabaId: string) {
-  config.ycloud.wabaId = wabaId;
-  process.env.YCLOUD_WABA_ID = wabaId;
-
-  let from = config.ycloud.from;
+async function syncWabaPhoneBinding(wabaId: string): Promise<string | undefined> {
   try {
-    invalidateWabaPhoneCache();
+    invalidateWabaPhoneCache(wabaId);
     const phones = await listCurrentWabaPhoneNumbers(wabaId);
-    const configured = from ? toE164(from) : "";
-    from = configured && phones.includes(configured) ? configured : phones[0];
-    if (from) {
-      config.ycloud.from = from;
-      process.env.YCLOUD_FROM = from;
-    }
+    return phones[0];
   } catch (error) {
-    console.error("list current WABA phones after bind failed", error);
+    console.error("sync WABA phone binding after PARTNER_ADDED failed", error);
+    return undefined;
   }
-
-  // 这里原先还会把 YCLOUD_WABA_ID / YCLOUD_FROM 写回 .env 文件。已移除：
-  //   1. 冗余 —— 上面两处 appSetting.upsert 已经把同样的值写进了数据库，
-  //      hydrateYCloudBindingFromStore() 启动时会读回来，重启不丢
-  //   2. 在容器里根文件系统是只读的，写必然失败（原来被 catch 吞掉，是静默的）；
-  //      就算能写，容器重启也会丢，多副本还会各写各的
 }
 
 export async function createOnboardingLink(input: {
@@ -277,9 +270,7 @@ export async function createOnboardingLink(input: {
   sourceChatId?: string;
   sourceOpenId?: string;
 }) {
-  const normalized = normalizeEmbeddedSignupInput(input, {
-    defaultPartnerCustomerId: config.cdpSupplierId,
-  });
+  const normalized = normalizeEmbeddedSignupInput(input);
   if (!normalized.ok) {
     const error = new Error(normalized.error);
     (error as Error & { statusCode?: number }).statusCode = 400;
@@ -318,7 +309,7 @@ export async function listWabaOnboardings(query: {
   wabaId?: string;
   status?: string;
 }) {
-  const partnerCustomerId = query.partnerCustomerId?.trim() || config.cdpSupplierId;
+  const partnerCustomerId = query.partnerCustomerId?.trim();
   const wabaId = query.wabaId?.trim();
   const status = query.status?.trim();
   const rows = await prisma.wabaOnboarding.findMany({
@@ -338,6 +329,15 @@ export async function listWabaOnboardings(query: {
 
 export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   const partnerAdded = update.updateEvent === "PARTNER_ADDED" && Boolean(update.wabaId);
+  if (partnerAdded && update.wabaId && update.partnerCustomerId) {
+    const existingOwners = await prisma.wabaOnboarding.findMany({
+      where: { wabaId: update.wabaId, status: "CONNECTED" },
+      select: { partnerCustomerId: true },
+    });
+    if (existingOwners.some((row) => row.partnerCustomerId !== update.partnerCustomerId)) {
+      throw new Error("PARTNER_ADDED wabaId is already connected to another tenant");
+    }
+  }
   const data = {
     wabaId: update.wabaId,
     wabaName: update.wabaName,
@@ -355,9 +355,12 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   };
 
   let row =
-    (update.wabaId
+    (update.wabaId && update.partnerCustomerId
       ? await prisma.wabaOnboarding.findFirst({
-          where: { wabaId: update.wabaId },
+          where: {
+            wabaId: update.wabaId,
+            partnerCustomerId: update.partnerCustomerId,
+          },
           orderBy: { updatedAt: "desc" },
         })
       : null) ??
@@ -365,6 +368,12 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
       ? await prisma.wabaOnboarding.findFirst({
           where: { partnerCustomerId: update.partnerCustomerId, status: "PENDING" },
           orderBy: { createdAt: "desc" },
+        })
+      : null) ??
+    (update.wabaId && !update.partnerCustomerId
+      ? await prisma.wabaOnboarding.findFirst({
+          where: { wabaId: update.wabaId },
+          orderBy: { updatedAt: "desc" },
         })
       : null);
 
@@ -385,20 +394,16 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   }
 
   if (row && partnerAdded && row.wabaId) {
+    const businessPhone = await syncWabaPhoneBinding(row.wabaId);
     try {
-      await persistCurrentWabaBinding(row.wabaId);
-    } catch (error) {
-      console.error("persist YCLOUD_WABA_ID after bind failed", error);
-    }
-    try {
-      await notifyWabaConnected(row);
+      await notifyWabaConnected(row, businessPhone);
     } catch (error) {
       console.error("notify WABA connected failed", error);
     }
   }
 }
 
-async function notifyWabaConnected(row: OnboardingRow) {
+async function notifyWabaConnected(row: OnboardingRow, businessPhone?: string) {
   const credit =
     row.paymentMethodAttached === true
       ? "授信已完成，WABA 可使用"
@@ -409,7 +414,7 @@ async function notifyWabaConnected(row: OnboardingRow) {
     "系统：WhatsApp WABA 已通过嵌入式注册绑定",
     `客户：${row.partnerCustomerId}`,
     row.wabaName || row.wabaId ? `WABA：${row.wabaName || "-"}（${row.wabaId || "-"}）` : undefined,
-    config.ycloud.from ? `企业号：${config.ycloud.from}` : undefined,
+    businessPhone ? `企业号：${businessPhone}` : undefined,
     row.businessName ? `业务：${row.businessName}` : undefined,
     credit,
   ]

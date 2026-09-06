@@ -1,6 +1,7 @@
 import { prisma } from "../prisma";
 import { toE164, windowExpiresFromNow } from "../lib/phone";
 import { resolveSupplierIdByBusinessPhone } from "./onboarding";
+import { webhookTenantKey } from "./tenant";
 import type { NormalizedInbound } from "./types";
 
 export async function claimWebhookEvent(
@@ -8,8 +9,9 @@ export async function claimWebhookEvent(
   eventId: string,
   eventType: string,
   payload: unknown,
-  supplierId?: string,
+  context?: { supplierId?: string; fallbackScope?: string },
 ): Promise<boolean> {
+  const supplierId = context?.supplierId?.trim() || undefined;
   try {
     await prisma.webhookEvent.create({
       data: {
@@ -19,6 +21,7 @@ export async function claimWebhookEvent(
         payload: JSON.stringify(payload),
         processStatus: "PENDING",
         supplierId: supplierId || null,
+        tenantKey: webhookTenantKey(supplierId, context?.fallbackScope),
       },
     });
     return true;
@@ -29,9 +32,15 @@ export async function claimWebhookEvent(
   }
 }
 
-export async function markWebhookProcessed(provider: string, eventId: string, errorMessage?: string) {
+export async function markWebhookProcessed(
+  provider: string,
+  eventId: string,
+  context?: { supplierId?: string; fallbackScope?: string },
+  errorMessage?: string,
+) {
+  const tenantKey = webhookTenantKey(context?.supplierId, context?.fallbackScope);
   await prisma.webhookEvent.update({
-    where: { provider_eventId: { provider, eventId } },
+    where: { provider_tenantKey_eventId: { provider, tenantKey, eventId } },
     data: {
       processStatus: errorMessage ? "FAILED" : "PROCESSED",
       errorMessage,
@@ -45,17 +54,22 @@ export async function resolveConversation(inbound: NormalizedInbound) {
   const businessPhone = toE164(inbound.businessPhone);
   // inbound 消息按企业号反查租户；查不到（历史数据 / WabaPhone 未回填）则为 null。
   const supplierId = await resolveSupplierIdByBusinessPhone(inbound.businessPhone);
+  const tenantWhere = supplierId ? { supplierId } : { supplierId: null };
 
   let customer =
     (inbound.whatsappUserId
-      ? await prisma.customer.findFirst({ where: { whatsappUserId: inbound.whatsappUserId } })
+      ? await prisma.customer.findFirst({
+          where: { whatsappUserId: inbound.whatsappUserId, ...tenantWhere },
+        })
       : null) ??
     (inbound.whatsappParentUserId
       ? await prisma.customer.findFirst({
-          where: { whatsappParentUserId: inbound.whatsappParentUserId },
+          where: { whatsappParentUserId: inbound.whatsappParentUserId, ...tenantWhere },
         })
       : null) ??
-    (phoneNumber ? await prisma.customer.findFirst({ where: { phoneNumber } }) : null);
+    (phoneNumber
+      ? await prisma.customer.findFirst({ where: { phoneNumber, ...tenantWhere } })
+      : null);
 
   if (!customer) {
     customer = await prisma.customer.create({
@@ -135,18 +149,16 @@ export async function saveInboundMessage(
 export async function getOrCreateConversation(
   customerPhone: string,
   businessPhoneRaw: string,
-  supplierId?: string,
+  supplierId: string,
 ) {
   const phoneNumber = toE164(customerPhone);
   const businessPhone = toE164(businessPhoneRaw);
 
   let customer = phoneNumber
-    ? await prisma.customer.findFirst({ where: { phoneNumber } })
+    ? await prisma.customer.findFirst({ where: { phoneNumber, supplierId } })
     : null;
   if (!customer) {
-    customer = await prisma.customer.create({ data: { phoneNumber, supplierId: supplierId || null } });
-  } else if (supplierId && !customer.supplierId) {
-    customer = await prisma.customer.update({ where: { id: customer.id }, data: { supplierId } });
+    customer = await prisma.customer.create({ data: { phoneNumber, supplierId } });
   }
 
   const existing = await prisma.conversation.findUnique({
@@ -159,12 +171,8 @@ export async function getOrCreateConversation(
     include: { customer: true },
   });
   if (existing) {
-    if (supplierId && !existing.supplierId) {
-      return prisma.conversation.update({
-        where: { id: existing.id },
-        data: { supplierId },
-        include: { customer: true },
-      });
+    if (existing.supplierId !== supplierId) {
+      throw new Error("existing conversation tenant mismatch");
     }
     return existing;
   }
@@ -174,9 +182,8 @@ export async function getOrCreateConversation(
       customerId: customer.id,
       businessPhone,
       status: "OPEN",
-      supplierId: supplierId || null,
+      supplierId,
     },
     include: { customer: true },
   });
 }
-

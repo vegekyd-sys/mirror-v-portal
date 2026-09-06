@@ -280,7 +280,7 @@ export type NormalizedEmbeddedSignup =
   | {
       ok: true;
       partnerCustomerId: string;
-      partnerCustomerIdSource: "MIO_CDP_SUPPLIER_ID" | "request";
+      partnerCustomerIdSource: "request";
       onboardingType: string;
       locale?: string;
     }
@@ -288,19 +288,14 @@ export type NormalizedEmbeddedSignup =
 
 export function normalizeEmbeddedSignupInput(
   input: EmbeddedSignupInput,
-  options?: { defaultPartnerCustomerId?: string },
 ): NormalizedEmbeddedSignup {
   const fromRequest = input.partnerCustomerId?.trim() || "";
-  const fromEnv = options?.defaultPartnerCustomerId?.trim() || "";
-  // 多租户：请求优先，env 只作兜底。否则 env 写死会把所有租户覆盖成同一个值（串台）。
-  const partnerCustomerId = fromRequest || fromEnv;
-  const partnerCustomerIdSource: "MIO_CDP_SUPPLIER_ID" | "request" = fromRequest
-    ? "request"
-    : "MIO_CDP_SUPPLIER_ID";
+  const partnerCustomerId = fromRequest;
+  const partnerCustomerIdSource = "request" as const;
   if (!partnerCustomerId) {
     return {
       ok: false,
-      error: "缺少 partnerCustomerId：请在请求 body.partnerCustomerId 传入，或配置环境变量 MIO_CDP_SUPPLIER_ID 作兜底",
+      error: "缺少 partnerCustomerId：多租户请求必须显式传入当前 supplier id",
     };
   }
   if (partnerCustomerId.length > 128) {
@@ -401,10 +396,10 @@ function pageItems(json: Json): Json[] {
   return [];
 }
 
-export async function listWhatsAppPhones(wabaId = config.ycloud.wabaId) {
+export async function listWhatsAppPhones(wabaId: string) {
   const apiKey = config.ycloud.apiKey;
   if (!apiKey) throw new Error("YCLOUD_API_KEY is not configured");
-  if (!wabaId) throw new Error("YCLOUD_WABA_ID is not configured");
+  if (!wabaId?.trim()) throw new Error("wabaId is required");
 
   const url = new URL(`${config.ycloud.baseUrl}/whatsapp/phoneNumbers`);
   url.searchParams.set("limit", "100");
@@ -428,10 +423,10 @@ export async function listWhatsAppPhones(wabaId = config.ycloud.wabaId) {
   };
 }
 
-export async function listWhatsAppTemplates(filterName?: string, wabaId = config.ycloud.wabaId) {
+export async function listWhatsAppTemplates(filterName: string | undefined, wabaId: string) {
   const apiKey = config.ycloud.apiKey;
   if (!apiKey) throw new Error("YCLOUD_API_KEY is not configured");
-  if (!wabaId) throw new Error("YCLOUD_WABA_ID is not configured");
+  if (!wabaId?.trim()) throw new Error("wabaId is required");
 
   const url = new URL(`${config.ycloud.baseUrl}/whatsapp/templates`);
   url.searchParams.set("limit", "100");
@@ -589,7 +584,7 @@ export async function buildTemplatePreview(input: {
   name: string;
   language: string;
   components?: unknown[];
-  wabaId?: string;
+  wabaId: string;
 }): Promise<string> {
   const tag = `[template:${input.name}/${input.language}]`;
   try {

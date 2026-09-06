@@ -90,12 +90,14 @@ model WebhookEvent {
   payload       String
   processStatus String    @default("PENDING")
   errorMessage  String?
-  /** 租户标识（= partnerCustomerId），历史数据可空。去重仍靠 provider+eventId 全局唯一。 */
+  /** 租户标识（= partnerCustomerId），历史数据可空。 */
   supplierId    String?
+  /** 幂等租户键。历史空租户统一为 legacy，避免 PostgreSQL NULL 绕过唯一约束。 */
+  tenantKey     String    @default("legacy")
   receivedAt    DateTime  @default(now())
   processedAt   DateTime?
 
-  @@unique([provider, eventId])
+  @@unique([provider, tenantKey, eventId])
   @@index([supplierId])
 }
 

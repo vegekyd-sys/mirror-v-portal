@@ -2,9 +2,34 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { config } from "../config";
 import { prisma } from "../prisma";
 import { claimWebhookEvent, markWebhookProcessed } from "../core/conversation";
-import { handleAgentSend, handleFeishuInbound, handleWhatsAppInbound, handleWhatsAppStatus } from "../core/bridge";
-import { applyWabaAccountUpdate, createOnboardingLink, listWabaOnboardings, resolveWabaId, resolveSupplierIdByBusinessPhone, wabaHealth, WabaIdRequiredError } from "../core/onboarding";
-import { listWhatsAppPhones, listWhatsAppTemplates, parseYCloudEvent, YCloudApiError } from "../channel/whatsapp/ycloud";
+import {
+  handleAgentSend,
+  handleFeishuInbound,
+  handleWhatsAppInbound,
+  handleWhatsAppStatus,
+} from "../core/bridge";
+import {
+  applyWabaAccountUpdate,
+  createOnboardingLink,
+  listWabaOnboardings,
+  resolveWabaId,
+  resolveSupplierIdByBusinessPhone,
+  resolveSupplierIdByWabaId,
+  wabaHealth,
+  WabaIdRequiredError,
+} from "../core/onboarding";
+import {
+  assertTenantOwnsWaba,
+  resolveTenantContext,
+  TenantContextError,
+  WabaTenantError,
+} from "../core/tenant";
+import {
+  listWhatsAppPhones,
+  listWhatsAppTemplates,
+  parseYCloudEvent,
+  YCloudApiError,
+} from "../channel/whatsapp/ycloud";
 import { verifyYCloudSignature } from "../channel/whatsapp/signature";
 import { toE164 } from "../lib/phone";
 import {
@@ -22,6 +47,7 @@ import {
 } from "../platform/feishu/apps";
 import { runWithFeishuApp } from "../platform/feishu/context";
 import { addChatBots } from "../platform/feishu/client";
+import { findThreadByFeishuId } from "../platform/feishu/adapter";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -116,11 +142,19 @@ async function handleFeishuWebhook(
     return reply.send({ ok: true, ignored: parsed.type || "unknown" });
   }
 
+  const mapping = parsed.inbound.threadId
+    ? await findThreadByFeishuId(parsed.inbound.threadId)
+    : null;
+  const webhookContext = {
+    supplierId: mapping?.conversation.supplierId || undefined,
+    fallbackScope: `feishu-app:${creds.appId}`,
+  };
   const claimed = await claimWebhookEvent(
     "feishu",
     parsed.inbound.eventId,
     parsed.type || "im.message.receive_v1",
     payload,
+    webhookContext,
   );
   reply.code(200).send({ ok: true, duplicate: !claimed });
   if (!claimed) return;
@@ -130,10 +164,15 @@ async function handleFeishuWebhook(
     void (async () => {
       try {
         await runWithFeishuApp(creds, () => handleFeishuInbound(inbound));
-        await markWebhookProcessed("feishu", inbound.eventId);
+        await markWebhookProcessed("feishu", inbound.eventId, webhookContext);
       } catch (error) {
         request.log.error(error);
-        await markWebhookProcessed("feishu", inbound.eventId, (error as Error).message);
+        await markWebhookProcessed(
+          "feishu",
+          inbound.eventId,
+          webhookContext,
+          (error as Error).message,
+        );
       }
     })();
   });
@@ -151,6 +190,13 @@ function sendYCloudError(reply: FastifyReply, error: YCloudApiError) {
   });
 }
 
+function sendTenantError(reply: FastifyReply, error: unknown) {
+  if (error instanceof TenantContextError || error instanceof WabaTenantError) {
+    return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+  }
+  return undefined;
+}
+
 /**
  * 探活。无论 ROUTE_PREFIX 设成什么，它都会**额外**挂在根路径上 ——
  * k8s 探针直连 Pod，拿不到网关的前缀。
@@ -159,11 +205,7 @@ async function healthHandler() {
   const waba = await wabaHealth();
   return {
     ok: true,
-    partnerCustomerId: config.cdpSupplierId,
-    wabaId: waba.wabaId,
-    wabaBound: waba.wabaBound,
     wabaCount: waba.wabaCount,
-    from: waba.from,
   };
 }
 
@@ -240,7 +282,14 @@ export async function buildServer() {
 
     scope.get("/api/whatsapp/phones", async (request, reply) => {
       try {
-        const wabaId = await resolveWabaId((request.query as { wabaId?: string }).wabaId);
+        const query = request.query as {
+          partnerCustomerId?: string;
+          supplierId?: string;
+          wabaId?: string;
+        };
+        const supplierId = resolveTenantContext(query);
+        const wabaId = await resolveWabaId(query.wabaId);
+        await assertTenantOwnsWaba(supplierId, wabaId);
         const listed = await listWhatsAppPhones(wabaId);
         const numbers = listed.phones
           .map((item) => (item.phoneNumber ? toE164(item.phoneNumber) : ""))
@@ -256,6 +305,8 @@ export async function buildServer() {
         });
         return { wabaId, defaultFrom, phones };
       } catch (error) {
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
         if (error instanceof WabaIdRequiredError) {
           return reply.code(400).send({ error: error.message, code: error.code, wabas: error.wabas });
         }
@@ -265,10 +316,20 @@ export async function buildServer() {
 
     scope.get("/api/whatsapp/templates", async (request, reply) => {
       try {
-        const { name, wabaId } = request.query as { name?: string; wabaId?: string };
+        const query = request.query as {
+          name?: string;
+          partnerCustomerId?: string;
+          supplierId?: string;
+          wabaId?: string;
+        };
+        const supplierId = resolveTenantContext(query);
+        const { name, wabaId } = query;
         const id = await resolveWabaId(wabaId);
+        await assertTenantOwnsWaba(supplierId, id);
         return await listWhatsAppTemplates(name, id);
       } catch (error) {
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
         if (error instanceof WabaIdRequiredError) {
           return reply.code(400).send({ error: error.message, code: error.code, wabas: error.wabas });
         }
@@ -293,42 +354,68 @@ export async function buildServer() {
       }
     });
 
-    scope.get("/api/whatsapp/wabas", async (request) => {
-      const query = request.query as { partnerCustomerId?: string; wabaId?: string; status?: string };
-      return listWabaOnboardings(query);
+    scope.get("/api/whatsapp/wabas", async (request, reply) => {
+      const query = request.query as {
+        partnerCustomerId?: string;
+        supplierId?: string;
+        wabaId?: string;
+        status?: string;
+      };
+      try {
+        const partnerCustomerId = resolveTenantContext(query);
+        return listWabaOnboardings({ ...query, partnerCustomerId });
+      } catch (error) {
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
+        throw error;
+      }
     });
 
-    scope.get("/api/whatsapp/conversations", async (request) => {
-      const query = request.query as { phone?: string; from?: string };
-      const phone = query.phone;
-      const from = query.from ? toE164(query.from) : undefined;
-      const rows = await prisma.conversation.findMany({
-        where: {
-          ...(phone ? { customer: { phoneNumber: { contains: phone.replace(/^\+/, "") } } } : {}),
-          ...(from ? { businessPhone: from } : {}),
-        },
-        include: { customer: true, platformThreads: true },
-        orderBy: { updatedAt: "desc" },
-        take: 50,
-      });
-      const now = Date.now();
-      return {
-        conversations: rows.map((row) => ({
-          id: row.id,
-          customerPhone: row.customer.phoneNumber,
-          customerName: row.customer.name,
-          businessPhone: row.businessPhone,
-          windowOpen: Boolean(row.serviceWindowExpiresAt && row.serviceWindowExpiresAt.getTime() > now),
-          windowExpiresAt: row.serviceWindowExpiresAt,
-          lastInboundAt: row.lastInboundAt,
-          lastOutboundAt: row.lastOutboundAt,
-          threads: row.platformThreads.map((thread) => ({
-            platform: thread.platform,
-            chatId: thread.chatId,
-            threadId: thread.threadId,
+    scope.get("/api/whatsapp/conversations", async (request, reply) => {
+      try {
+        const query = request.query as {
+          phone?: string;
+          from?: string;
+          partnerCustomerId?: string;
+          supplierId?: string;
+        };
+        const supplierId = resolveTenantContext(query);
+        const phone = query.phone;
+        const from = query.from ? toE164(query.from) : undefined;
+        const rows = await prisma.conversation.findMany({
+          where: {
+            supplierId,
+            ...(phone ? { customer: { phoneNumber: { contains: phone.replace(/^\+/, "") } } } : {}),
+            ...(from ? { businessPhone: from } : {}),
+          },
+          include: { customer: true, platformThreads: true },
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+        });
+        const now = Date.now();
+        return {
+          supplierId,
+          conversations: rows.map((row) => ({
+            id: row.id,
+            customerPhone: row.customer.phoneNumber,
+            customerName: row.customer.name,
+            businessPhone: row.businessPhone,
+            windowOpen: Boolean(row.serviceWindowExpiresAt && row.serviceWindowExpiresAt.getTime() > now),
+            windowExpiresAt: row.serviceWindowExpiresAt,
+            lastInboundAt: row.lastInboundAt,
+            lastOutboundAt: row.lastOutboundAt,
+            threads: row.platformThreads.map((thread) => ({
+              platform: thread.platform,
+              chatId: thread.chatId,
+              threadId: thread.threadId,
+            })),
           })),
-        })),
-      };
+        };
+      } catch (error) {
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
+        throw error;
+      }
     });
 
     scope.post("/api/whatsapp/messages", async (request, reply) => {
@@ -337,6 +424,8 @@ export async function buildServer() {
         text?: string;
         from?: string;
         wabaId?: string;
+        partnerCustomerId?: string;
+        supplierId?: string;
         feishuAppId?: string;
         sourceChatId?: string;
         notifyChatId?: string;
@@ -351,6 +440,8 @@ export async function buildServer() {
           text: body.text,
           from: body.from,
           wabaId: body.wabaId,
+          partnerCustomerId: body.partnerCustomerId,
+          supplierId: body.supplierId,
           feishuAppId: body.feishuAppId,
           sourceChatId: body.sourceChatId || body.notifyChatId,
           sourceOpenId: body.sourceOpenId,
@@ -360,20 +451,38 @@ export async function buildServer() {
         if (!result.ok) return reply.code(409).send(result);
         return result;
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
+        return reply
+          .code((error as { statusCode?: number }).statusCode || 400)
+          .send({ error: (error as Error).message });
       }
     });
 
-    scope.get("/conversations", async (request) => {
-      const phone = (request.query as { phone?: string }).phone;
-      return prisma.conversation.findMany({
-        where: phone
-          ? { customer: { phoneNumber: { contains: phone.replace(/^\+/, "") } } }
-          : undefined,
-        include: { customer: true, platformThreads: true },
-        orderBy: { updatedAt: "desc" },
-        take: 50,
-      });
+    scope.get("/conversations", async (request, reply) => {
+      try {
+        const query = request.query as {
+          phone?: string;
+          partnerCustomerId?: string;
+          supplierId?: string;
+        };
+        const supplierId = resolveTenantContext(query);
+        return prisma.conversation.findMany({
+          where: {
+            supplierId,
+            ...(query.phone
+              ? { customer: { phoneNumber: { contains: query.phone.replace(/^\+/, "") } } }
+              : {}),
+          },
+          include: { customer: true, platformThreads: true },
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+        });
+      } catch (error) {
+        const tenantError = sendTenantError(reply, error);
+        if (tenantError) return tenantError;
+        throw error;
+      }
     });
 
     scope.post("/webhooks/ycloud", async (request, reply) => {
@@ -399,12 +508,31 @@ export async function buildServer() {
         parsed.update?.eventId ||
         parsed.wabaUpdate?.eventId ||
         `ignored:${parsed.type}:${Date.now()}`;
-      // 反查租户：inbound 按企业号反查，wabaUpdate 直接用事件里的 partnerCustomerId，update 暂不反查。
+      // 反查租户：inbound 按企业号，投递更新按原消息，WABA 更新按事件绑定。
       let supplierId: string | undefined;
       if (parsed.inbound) supplierId = await resolveSupplierIdByBusinessPhone(parsed.inbound.businessPhone);
-      else if (parsed.wabaUpdate) supplierId = parsed.wabaUpdate.partnerCustomerId;
+      else if (parsed.update) {
+        const message = await prisma.message.findUnique({
+          where: { ycloudMessageId: parsed.update.ycloudMessageId },
+          select: { supplierId: true },
+        });
+        supplierId = message?.supplierId || undefined;
+      } else if (parsed.wabaUpdate) {
+        supplierId =
+          parsed.wabaUpdate.partnerCustomerId ||
+          (parsed.wabaUpdate.wabaId
+            ? await resolveSupplierIdByWabaId(parsed.wabaUpdate.wabaId)
+            : undefined);
+      }
 
-      const claimed = await claimWebhookEvent("ycloud", eventId, parsed.type, request.body, supplierId);
+      const webhookContext = { supplierId };
+      const claimed = await claimWebhookEvent(
+        "ycloud",
+        eventId,
+        parsed.type,
+        request.body,
+        webhookContext,
+      );
       reply.code(200).send({ ok: true, duplicate: !claimed });
       if (!claimed) return;
 
@@ -414,10 +542,15 @@ export async function buildServer() {
             if (parsed.inbound) await handleWhatsAppInbound(parsed.inbound);
             if (parsed.update) await handleWhatsAppStatus(parsed.update);
             if (parsed.wabaUpdate) await applyWabaAccountUpdate(parsed.wabaUpdate);
-            await markWebhookProcessed("ycloud", eventId);
+            await markWebhookProcessed("ycloud", eventId, webhookContext);
           } catch (error) {
             request.log.error(error);
-            await markWebhookProcessed("ycloud", eventId, (error as Error).message);
+            await markWebhookProcessed(
+              "ycloud",
+              eventId,
+              webhookContext,
+              (error as Error).message,
+            );
           }
         })();
       });

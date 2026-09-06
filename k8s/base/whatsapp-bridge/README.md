@@ -33,12 +33,9 @@ kubectl -n dealclaw-prod create secret generic whatsapp-bridge-secret \
 
 **数据库连接**不走 `whatsapp-bridge-secret`，而是和 `credits-ledger` / `email-webhook` 共用 `dealclaw-db` Secret 的 `DATABASE_URL` key（见 `deployment.yaml` 里的 `secretKeyRef`）。
 
-## MIO_CDP_SUPPLIER_ID（租户标识）——多租户下不写死
+## 租户上下文
 
-`MIO_CDP_SUPPLIER_ID` 是租户标识（YCloud Partner Direct Link 的 `partnerCustomerId`），**不能写在 ConfigMap 里写死**，否则所有租户的请求都会被同一个值覆盖（串台）。
-
-- **多租户（当前方向）**：租户标识由请求动态传入 —— `POST /api/whatsapp/onboarding-links` 的 `body.partnerCustomerId`。ConfigMap 里留空即可。
-- **单租户过渡期**：如果确需一个兜底默认值，在 `whatsapp-bridge-secret` 里补 `--from-literal=MIO_CDP_SUPPLIER_ID=<王建填写>`；留空则请求必须显式传 `partnerCustomerId`。
+桥接进程不配置默认租户或全局当前 WABA。调用方在 onboarding、WABA、号码、模板、会话和消息接口中显式传 `partnerCustomerId`（或 `supplierId`）；`wabaId` 会由服务校验必须属于同一租户。
 
 ## 部署
 

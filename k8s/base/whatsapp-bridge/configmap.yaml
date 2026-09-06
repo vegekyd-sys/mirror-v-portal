@@ -24,11 +24,7 @@ data:
   # 与 email-webhook 共用 dealclaw.datathink.com，按路径前缀分流。
   WHATSAPP_BRIDGE_BASE_URL: "https://dealclaw.datathink.com/whatsapp"
 
-  # MIO_CDP_SUPPLIER_ID 是租户标识（YCloud Partner Direct Link 的 partnerCustomerId）。
-  # 多租户下【不能写死】：否则所有租户请求都会被同一个值覆盖（串台）。
-  # 租户标识由请求动态传入：POST /api/whatsapp/onboarding-links 的 body.partnerCustomerId。
-  # 单租户过渡期如需兜底默认值，请在 Secret（whatsapp-bridge-secret）里配 MIO_CDP_SUPPLIER_ID，
-  # 这里留空 = 请求必须显式传 partnerCustomerId。
+  # 租户标识不进入桥接进程环境：每个租户请求必须显式传 partnerCustomerId / supplierId。
 
   FEISHU_BASE_URL: "https://open.feishu.cn"
 
@@ -46,6 +42,4 @@ data:
   FEISHU_INVITE_MOBILES: ""
   FEISHU_INVITE_APP_IDS: ""
 
-  # YCLOUD_WABA_ID / YCLOUD_FROM 有意不写：绑定 WABA 后由服务自己写进
-  # app_setting 表，启动时 hydrateYCloudBindingFromStore() 读回来。
-  # 在这里写死反而会盖掉运行期绑定的结果。
+  # YCLOUD_WABA_ID / YCLOUD_FROM 有意不写：WABA 与号码均按租户数据库绑定解析。

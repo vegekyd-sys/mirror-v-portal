@@ -112,34 +112,20 @@ describe("parseYCloudEvent WABA updated", () => {
 });
 
 describe("normalizeEmbeddedSignupInput", () => {
-  it("requires MIO_CDP_SUPPLIER_ID when request omits partnerCustomerId", () => {
+  it("requires explicit partnerCustomerId", () => {
     const result = normalizeEmbeddedSignupInput({});
     assert.equal(result.ok, false);
     if (result.ok) return;
-    assert.match(result.error, /MIO_CDP_SUPPLIER_ID/);
+    assert.match(result.error, /显式传入/);
   });
 
-  it("uses request id over MIO_CDP_SUPPLIER_ID", () => {
-    const result = normalizeEmbeddedSignupInput(
-      { partnerCustomerId: "test_onboard_001" },
-      { defaultPartnerCustomerId: "supplier_from_env" },
-    );
+  it("uses the request tenant id", () => {
+    const result = normalizeEmbeddedSignupInput({ partnerCustomerId: "test_onboard_001" });
     assert.equal(result.ok, true);
     if (!result.ok) return;
     assert.equal(result.partnerCustomerId, "test_onboard_001");
     assert.equal(result.partnerCustomerIdSource, "request");
     assert.equal(result.onboardingType, "WHATSAPP_BUSINESS_PLATFORM");
-  });
-
-  it("falls back to MIO_CDP_SUPPLIER_ID when request omits partnerCustomerId", () => {
-    const result = normalizeEmbeddedSignupInput(
-      {},
-      { defaultPartnerCustomerId: "supplier_from_env" },
-    );
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    assert.equal(result.partnerCustomerId, "supplier_from_env");
-    assert.equal(result.partnerCustomerIdSource, "MIO_CDP_SUPPLIER_ID");
   });
 
   it("rejects invalid locale and type", () => {
@@ -149,7 +135,7 @@ describe("normalizeEmbeddedSignupInput", () => {
     assert.equal(type.ok, false);
   });
 
-  it("keeps a valid locale from the request when env is absent", () => {
+  it("keeps a valid locale from the request", () => {
     const result = normalizeEmbeddedSignupInput({
       partnerCustomerId: "customer_001",
       locale: "zh_CN",

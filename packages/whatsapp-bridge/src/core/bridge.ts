@@ -3,7 +3,12 @@ import { config } from "../config";
 import { isWindowOpen, toE164 } from "../lib/phone";
 import type { DeliveryUpdate, NormalizedInbound } from "./types";
 import { getOrCreateConversation, resolveConversation, saveInboundMessage } from "./conversation";
-import { WABA_REQUIRED_RESULT, resolveBusinessFrom, listCurrentWabaPhoneNumbers, resolveCurrentWabaId, resolveSupplierIdByWabaId } from "./onboarding";
+import { WABA_REQUIRED_RESULT, resolveBusinessFrom } from "./onboarding";
+import {
+  assertTenantOwnsWaba,
+  resolveConversationWabaId,
+  resolveTenantContext,
+} from "./tenant";
 import { sendWhatsAppImage, sendWhatsAppTemplate, sendWhatsAppText, uploadWhatsAppMedia, buildTemplatePreview, downloadWhatsAppMedia } from "../channel/whatsapp/ycloud";
 import {
   ensureFeishuThread,
@@ -277,21 +282,15 @@ export async function handleFeishuInbound(inbound: FeishuInboundMessage) {
     return;
   }
 
-  const wabaId = await resolveCurrentWabaId();
-  if (wabaId) {
-    try {
-      const phones = await listCurrentWabaPhoneNumbers(wabaId);
-      const current = toE164(conversation.businessPhone);
-      if (phones.length && !phones.includes(current)) {
-        await postToFeishuThread(
-          mapping,
-          `系统：该话题企业号 ${current} 不属于当前 WABA（${wabaId}）。请用当前 WABA 号码发消息：${phones.join("、")}`,
-        );
-        return;
-      }
-    } catch (error) {
-      console.error("verify Feishu reply business phone on current WABA failed", error);
-    }
+  try {
+    await resolveConversationWabaId(conversation.supplierId, conversation.businessPhone);
+  } catch (error) {
+    console.error("resolve tenant WABA for Feishu reply failed", error);
+    await postToFeishuThread(
+      mapping,
+      "系统：该话题缺少有效的租户 WABA 绑定，已阻止回发。请按当前 supplierId 重新确认 WABA 与企业号绑定。",
+    );
+    return;
   }
 
   if (!isWindowOpen(conversation.serviceWindowExpiresAt)) {
@@ -395,7 +394,10 @@ export async function handleAgentSend(input: {
   to: string;
   text?: string;
   from?: string;
-  /** 智能体从环境变量 YCLOUD_WABA_ID 读取后传入 */
+  /** 当前租户上下文；两者可任选其一，同时传时必须一致 */
+  partnerCustomerId?: string;
+  supplierId?: string;
+  /** 从当前租户 CONNECTED WABA 绑定查询后传入 */
   wabaId?: string;
   /** 智能体初始化注册的飞书应用 */
   feishuAppId?: string;
@@ -406,19 +408,20 @@ export async function handleAgentSend(input: {
   inviteAppIds?: string | string[];
   template?: { name: string; language: string; components?: unknown[] };
 }) {
+  const supplierId = resolveTenantContext(input);
   const wabaId = input.wabaId?.trim();
   if (!wabaId) {
     return WABA_REQUIRED_RESULT;
   }
+  await assertTenantOwnsWaba(supplierId, wabaId);
 
-  const fromResolved = await resolveBusinessFrom(input.from, wabaId);
+  const fromResolved = await resolveBusinessFrom(input.from, wabaId, supplierId);
   if (!fromResolved.ok) return fromResolved;
 
   const businessPhone = fromResolved.from;
   const customerPhone = toE164(input.to);
   if (!customerPhone) throw new Error("缺少收件人 to（E.164）");
 
-  const supplierId = await resolveSupplierIdByWabaId(wabaId);
   const conversation = await getOrCreateConversation(customerPhone, businessPhone, supplierId);
   const useTemplate = Boolean(input.template?.name);
   const text = input.text?.trim() || "";
@@ -434,11 +437,11 @@ export async function handleAgentSend(input: {
       ok: false as const,
       code: "WHATSAPP_TEMPLATE_REQUIRED",
       message:
-        "24 小时会话窗口已关闭，不能发自由文本。请 GET /api/whatsapp/templates?wabaId=... 查看 bodyText / variableCount / sendComponentsDraft，填好 template.components 后再发。",
+        "24 小时会话窗口已关闭，不能发自由文本。请带当前 partnerCustomerId 与 wabaId 查询模板，填好 template.components 后再发。",
       next: {
-        listTemplates: `GET /api/whatsapp/templates?wabaId=${fromResolved.wabaId}`,
-        listTemplateByName: `GET /api/whatsapp/templates?name=模板名&wabaId=${fromResolved.wabaId}`,
-        sendWithTemplate: "POST /api/whatsapp/messages 带 wabaId、from=当前WABA企业号 以及 template.name + language + components",
+        listTemplates: `GET /api/whatsapp/templates?wabaId=${fromResolved.wabaId}&partnerCustomerId=${encodeURIComponent(supplierId)}`,
+        listTemplateByName: `GET /api/whatsapp/templates?name=模板名&wabaId=${fromResolved.wabaId}&partnerCustomerId=${encodeURIComponent(supplierId)}`,
+        sendWithTemplate: "POST /api/whatsapp/messages 带 partnerCustomerId、wabaId、from=当前租户WABA企业号以及 template",
       },
       windowOpen: false as const,
       from: businessPhone,
@@ -548,6 +551,7 @@ export async function handleAgentSend(input: {
     ycloudMessageId,
     conversationId: conversation.id,
     wabaId: fromResolved.wabaId,
+    supplierId,
     from: businessPhone,
     windowOpen,
     sourceChatId,
