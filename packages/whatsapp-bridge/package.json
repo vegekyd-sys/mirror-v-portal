@@ -11,7 +11,7 @@
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/channel/whatsapp/signature.test.ts src/channel/whatsapp/ycloud.parse.test.ts src/platform/feishu/crypto.test.ts src/lib/envPersist.test.ts src/core/tenant.test.ts src/http/tenant-isolation.test.ts src/http/admin-waba-import.test.ts",
+    "test": "tsx --test src/channel/whatsapp/signature.test.ts src/channel/whatsapp/ycloud.parse.test.ts src/platform/feishu/crypto.test.ts src/lib/envPersist.test.ts src/core/tenant.test.ts src/http/tenant-isolation.test.ts src/http/admin-waba-import.test.ts src/http/skill-waba-bind.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "tsx scripts/run-with-env.ts prisma migrate dev",
     "db:setup": "node dist/scripts/dbSetup.js"

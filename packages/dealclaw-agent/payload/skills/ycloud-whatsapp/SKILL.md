@@ -2,9 +2,9 @@
 name: ycloud-whatsapp
 description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
-  完成嵌入式注册。日常操作只使用当前 supplier id 与可选企业号 from；禁止处理 WABA
-  标识、直连 YCloud / Meta API 或读取 YCLOUD_API_KEY。适用于 WhatsApp、飞书客服话题、
-  24h 窗口、模板、换号、Direct Link 和 CDP 供应商；不用于 SMS。
+  完成嵌入式注册；仅当用户明确说“绑定已有 WABA”时，调用临时 supplier allowlist
+  绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
 # WhatsApp（经桥接服务）
@@ -14,6 +14,8 @@ description: >-
 智能体只调用桥接 HTTP API。日常列号、列模板、查会话、发消息只传当前租户
 `partnerCustomerId` 和可选业务号 `from`。WABA 路由由桥接在服务端动态解析；
 智能体不读取、复制、缓存、展示或发送任何 WABA 标识，也不从响应中的内部字段推断路由。
+
+唯一例外见“绑定已有 WABA”；该 ID 不得进入日常接口或后续消息。
 
 禁止请求 `api.ycloud.com` / Meta Cloud API，禁止读取或打印 `YCLOUD_API_KEY`。
 
@@ -169,6 +171,36 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 
 `ok=true` 只表示 YCloud 已接受，不等于送达。投递失败会同步到飞书客服话题。
 
+## 绑定已有 WABA（临时 supplier allowlist）
+
+仅当用户明确要求“绑定已有 WABA”时进入。普通接入/注册、`WHATSAPP_BINDING_REQUIRED`、
+查状态或换业务号都走 Direct Link，不主动索取 WABA ID。
+
+1. 从该次请求取得 WABA ID；缺失时只询问该 ID，不从历史、日志、响应或其它租户复制。
+2. 把当前 `MIO_CDP_SUPPLIER_ID` 原样作为 `$SUPPLIER`；不接受用户或模型改写 supplier。
+3. 调用专用入口，不带 Authorization、管理员 token 或其它权限字段：
+
+```http
+POST $BRIDGE/api/whatsapp/bind-existing-waba
+```
+
+```json
+{
+  "supplierId": "$SUPPLIER",
+  "wabaId": "用户明确提供的 WABA ID"
+}
+```
+
+成功响应只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要回显 WABA ID。
+`WHATSAPP_SKILL_BIND_DISABLED` 或 `WHATSAPP_SKILL_BIND_SUPPLIER_NOT_ALLOWED` 表示服务端
+未为当前 supplier 开启，停止并说明需由运维配置
+`WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS`（逗号分隔；缺失或空值即关闭），可改走
+Direct Link。该变量仅由桥接服务端运维管理；不要读取、修改或向用户索取。
+YCloud 校验失败、跨租户归属或手机号冲突时停止，不换 supplier、不改绑、不绕过 Bridge。
+
+这是临时 server allowlist，不是通用多租户管理员授权。Skill 不读取、复用或索取
+`WHATSAPP_BRIDGE_ADMIN_TOKEN`。
+
 ## 嵌入式注册 / 状态
 
 日常接口返回 `WHATSAPP_BINDING_REQUIRED`，或用户明确要开通、注册、接入、换账户时，
@@ -217,7 +249,8 @@ POST $BRIDGE/api/whatsapp/onboarding-links
 
 ## 验证与停止条件
 
-- 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识。
+- 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识；只有用户
+  明确“绑定已有 WABA”的专用请求可携带一次 WABA ID。
 - 多号未指定：必须收到/遵循 `WHATSAPP_FROM_SELECTION_REQUIRED`，不得任取。
 - 指定 `from`：只接受桥接验证通过的当前租户号码。
 - `WHATSAPP_TEMPLATE_REQUIRED`：自行查询模板、补齐变量后发送。

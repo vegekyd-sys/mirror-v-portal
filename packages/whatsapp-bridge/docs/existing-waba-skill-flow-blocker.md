@@ -1,11 +1,11 @@
-# Existing WABA Skill flow: authorization blocker
+# Existing WABA Skill flow: temporary allowlisted exception
 
-Status: **blocked; do not implement the Skill flow yet**.
+Status: **temporary feature-first path approved for explicitly allowlisted suppliers**.
 
-The Bridge-side operator import added in `0f56193` remains the only existing-WABA
-write path. It must stay protected by `WHATSAPP_BRIDGE_ADMIN_TOKEN`, and that token
-must remain server-side. Do not inject it into a tenant workload, Skill environment,
-agent process, browser bundle/session, URL, request body, or log.
+The Bridge-side operator import added in `0f56193` remains protected by
+`WHATSAPP_BRIDGE_ADMIN_TOKEN`; that token stays server-side and is never reused by the
+Skill. The temporary Skill path is a separate endpoint that delegates to the same
+YCloud verification and atomic ownership importer without reading the admin token.
 
 ## Missing capability
 
@@ -43,10 +43,28 @@ not accept either value as an authoritative Skill/model-supplied field.
 - The admin dashboard JWT authenticates DealClaw control-plane operators. It is not a
   tenant/supplier-admin assertion available to an agent-triggered Skill request.
 
-Consequently, adding a public, tenant-selected, supplier-selected, shared-token, or
-header-trusting proxy to the Bridge would weaken isolation and is forbidden.
+Consequently, a global/open, shared-token, or header-trusting proxy remains forbidden.
+The temporary exception below is intentionally limited to exact supplier IDs configured
+by the server operator.
 
-## Required secure design before implementation
+## Temporary approved boundary
+
+`POST /api/whatsapp/bind-existing-waba` is enabled only when the request's exact
+supplier ID appears in server configuration
+`WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS`. Missing or empty configuration disables
+the endpoint. Documentation uses test supplier `123456`; the application has no
+hardcoded tenant or supplier allowlist.
+
+The endpoint accepts only `partnerCustomerId` / `supplierId` and `wabaId`. It is used
+only for explicit user intent “绑定已有 WABA”, with the supplier read from the current
+agent's `MIO_CDP_SUPPLIER_ID`. It returns no WABA ID. It does not change the routine
+phones, templates, conversations, or messages contracts.
+
+This exception is not proof of tenant-admin identity and is not a general multi-tenant
+authorization solution. It is a narrow server-operated feature gate for named test or
+pilot suppliers. Do not turn it into a global/open self-service endpoint.
+
+## Required long-term secure design
 
 1. Add or integrate a server-side identity/authorization service that validates the
    inbound human identity and returns a signed or internally trusted assertion with
@@ -64,12 +82,12 @@ header-trusting proxy to the Bridge would weaken isolation and is forbidden.
 6. Audit the actor, derived tenant/supplier, action, outcome, and a one-way WABA
    fingerprint. Never log the raw WABA ID or either server credential.
 
-## Acceptance tests for the eventual flow
+## Acceptance tests
 
-- Missing, forged, expired, wrong-audience, non-admin, cross-tenant, and
-  cross-supplier assertions fail before the Bridge is called.
-- The backend ignores/rejects model-supplied tenant and supplier overrides and uses
-  only server-derived values.
+- Missing/empty allowlist disables the temporary endpoint before YCloud is called.
+- A supplier not present in the exact server allowlist is rejected before YCloud.
+- The Skill uses only its current `MIO_CDP_SUPPLIER_ID`; conflicting aliases and extra
+  authority fields are rejected.
 - The Bridge admin token is absent from Skill payloads, agent/gateway deployments,
   browser assets, responses, URLs, and logs.
 - Routine phones/templates/conversations/messages remain WABA-ID-free; an extra WABA
@@ -81,9 +99,10 @@ header-trusting proxy to the Bridge would weaken isolation and is forbidden.
 
 ## Current change boundary
 
-Until the missing authorization capability exists:
+Until the long-term authorization capability exists:
 
-- do not add an app/backend bind endpoint;
-- do not expose or proxy the Bridge admin credential;
-- do not update either `ycloud-whatsapp` Skill copy to accept WABA IDs;
-- keep `0f56193` local and undeployed.
+- keep the Skill endpoint disabled by default and limited to the explicit server allowlist;
+- never expose, proxy, or reuse the Bridge admin credential in the Skill path;
+- accept WABA ID only in the explicit bind-existing-WABA action;
+- keep routine WhatsApp APIs WABA-free;
+- do not add shared-WABA behavior or schema changes.

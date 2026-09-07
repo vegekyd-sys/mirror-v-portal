@@ -49,6 +49,8 @@ export const config = {
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
   /** Server-side operator credential. Never expose this to tenant agents or client responses. */
   adminToken: optional("WHATSAPP_BRIDGE_ADMIN_TOKEN"),
+  /** Temporary Skill-only existing-WABA binding gate. Empty means the endpoint is disabled. */
+  skillBindAllowedSuppliers: csv("WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS"),
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),

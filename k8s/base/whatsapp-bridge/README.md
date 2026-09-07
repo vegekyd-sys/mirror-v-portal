@@ -36,6 +36,12 @@
 已有其他 `CONNECTED` owner 或号码映射冲突时事务整体拒绝。该接口及凭据不得进入日常
 agent skill，响应也不返回 WABA 标识。
 
+临时 Skill 绑定已有 WABA 的入口由非敏感服务端配置
+`WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS` 控制（逗号/空白分隔 supplier ID）。不配
+或留空即关闭；测试配置示例为 `123456`。只把明确批准的 supplier 加入部署环境，且不要
+把该变量误当作通用多租户管理员授权。该入口不读取或复用
+`WHATSAPP_BRIDGE_ADMIN_TOKEN`，routine WhatsApp API 仍不接受 WABA ID。
+
 ## 部署
 
 ```bash
