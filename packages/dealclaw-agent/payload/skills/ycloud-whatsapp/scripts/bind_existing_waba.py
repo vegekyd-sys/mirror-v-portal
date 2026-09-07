@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
-"""Submit an explicit existing-WABA bind with a short-lived machine assertion."""
+"""Submit an explicit existing-WABA import using Bridge admin-token authentication."""
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 import sys
-import time
 import urllib.error
 import urllib.request
 
 BRIDGE = "https://dealclaw.datathink.com/whatsapp"
-VERSION = "v1"
-ACTION = "bind-existing-waba"
-AUDIENCE = "whatsapp-bridge"
-
-
 def fail(code: str, status: int | None = None) -> int:
     result: dict[str, object] = {"ok": False, "code": code}
     if status is not None:
@@ -29,48 +19,26 @@ def fail(code: str, status: int | None = None) -> int:
 
 def main() -> int:
     supplier_id = os.environ.get("MIO_CDP_SUPPLIER_ID", "").strip()
-    machine_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+    admin_token = os.environ.get("WHATSAPP_BRIDGE_ADMIN_TOKEN", "")
     waba_id = sys.stdin.read().strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", supplier_id):
         return fail("TENANT_MACHINE_SUPPLIER_MISSING")
-    if len(machine_token) < 32:
-        return fail("TENANT_MACHINE_SECRET_MISSING")
+    if not admin_token:
+        return fail("WHATSAPP_BRIDGE_ADMIN_TOKEN_MISSING")
     if not re.fullmatch(r"[1-9]\d{4,31}", waba_id):
         return fail("INVALID_WABA_ID")
 
-    issued_at = int(time.time())
-    nonce = secrets.token_urlsafe(24)
-    signing_input = "\n".join([
-        "dealclaw-tenant-machine-assertion",
-        VERSION,
-        ACTION,
-        AUDIENCE,
-        supplier_id,
-        waba_id,
-        str(issued_at),
-        nonce,
-    ])
-    signature = base64.urlsafe_b64encode(
-        hmac.new(
-            machine_token.encode("utf-8"),
-            signing_input.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-    ).decode("ascii").rstrip("=")
     body = json.dumps({
-        "supplierId": supplier_id,
+        "partnerCustomerId": supplier_id,
         "wabaId": waba_id,
-        "assertion": {
-            "version": VERSION,
-            "issuedAt": issued_at,
-            "nonce": nonce,
-            "signature": signature,
-        },
     }).encode("utf-8")
     request = urllib.request.Request(
-        f"{BRIDGE}/api/whatsapp/bind-existing-waba",
+        f"{BRIDGE}/api/admin/whatsapp/import-existing-waba",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {admin_token}",
+        },
         method="POST",
     )
     try:

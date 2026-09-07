@@ -59,7 +59,7 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 | 查会话窗口 | `GET /api/whatsapp/conversations?partnerCustomerId=&phone=`（可选 `&from=`） |
 | 嵌入式注册（创建 Onboarding Link） | `POST /api/whatsapp/onboarding-links` |
 | 查询 WABA 绑定状态 | `GET /api/whatsapp/wabas?partnerCustomerId=` |
-| 绑定已有 WABA（Skill 明确意图 + 租户机器短时断言） | `POST /api/whatsapp/bind-existing-waba` |
+| 绑定已有 WABA（Skill 明确意图 + 管理员 token） | `POST /api/admin/whatsapp/import-existing-waba` |
 
 现有 WABA 导入是独立的运维接口 `POST /api/admin/whatsapp/import-existing-waba`，不属于
 智能体 API，也不得把管理员凭据或 WABA 标识交给租户智能体。它只接受服务端
@@ -67,12 +67,10 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 YCloud 列号接口核实账户及号码，再在 SERIALIZABLE 事务中写入 `CONNECTED`
 `WabaOnboarding` 和 `WabaPhone`。响应只返回 tenant、状态和号码，不返回 WABA 标识。
 
-Skill 入口 `POST /api/whatsapp/bind-existing-waba` 不使用、也不接受管理员 token。请求只允许
-当前 `supplierId`、`wabaId` 和短时租户机器断言。断言以 provisioning 为每个租户随机生成的
-`OPENCLAW_GATEWAY_TOKEN` 做用途隔离 HMAC，固定绑定 action、audience、supplier、WABA、时间戳
-与随机 nonce。Bridge 要求 120 秒内有效，调用 provisioning 的 service-token-only 内部验证器
-完成 supplier→tenant→K8s Secret 精确校验，再以共享数据库唯一约束消费 nonce，防止跨副本重放。
-内部验证器只返回布尔值，不返回机器密钥。验证后复用上述 importer 的 YCloud 校验和原子归属锁。
+Skill 在明确“绑定已有 WABA”时读取统一管理的 `WHATSAPP_BRIDGE_ADMIN_TOKEN`，以 Bearer
+认证调用 `POST /api/admin/whatsapp/import-existing-waba`。请求仅含当前租户的
+`partnerCustomerId` 与本次 `wabaId`；token 不进入日志或响应。Provisioning 的 runtime-config
+全局配置会热更新到租户 Skill 环境，确保所有租户使用同一个 Bridge 管理 token。
 
 **归属不变量：一个 WABA 只能属于一个 tenant。** 如果该 WABA 已有其他 tenant 的
 `CONNECTED` 记录，或任一号码已映射到其他 WABA，导入返回 409 且不写入。并发导入与
