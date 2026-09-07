@@ -10,13 +10,28 @@ import { ensureCsChatId } from "../platform/feishu/adapter";
 import { ensureBotInChat, sendGroupText, sendUserText } from "../platform/feishu/client";
 import { withFeishuApp } from "../platform/feishu/context";
 
-export class WabaIdRequiredError extends Error {
-  readonly code = "WABA_ID_REQUIRED";
-  readonly wabas: { wabaId: string; wabaName?: string | null; partnerCustomerId: string }[] = [];
+export class WhatsAppBindingError extends Error {
+  readonly code:
+    | "WHATSAPP_BINDING_REQUIRED"
+    | "WHATSAPP_PHONE_REQUIRED"
+    | "WHATSAPP_PHONE_LOOKUP_FAILED"
+    | "WHATSAPP_FROM_SELECTION_REQUIRED"
+    | "WHATSAPP_FROM_NOT_OWNED"
+    | "WHATSAPP_FROM_AMBIGUOUS";
+  readonly statusCode: number;
+  readonly phones?: string[];
 
-  constructor() {
-    super("缺少 wabaId：请先按当前租户查询 CONNECTED WABA 绑定，再传入 ?wabaId= 或 body.wabaId");
-    this.name = "WabaIdRequiredError";
+  constructor(
+    code: WhatsAppBindingError["code"],
+    message: string,
+    statusCode = 409,
+    phones?: string[],
+  ) {
+    super(message);
+    this.name = "WhatsAppBindingError";
+    this.code = code;
+    this.statusCode = statusCode;
+    this.phones = phones;
   }
 }
 
@@ -75,12 +90,6 @@ function publicOnboarding(row: OnboardingRow, opts?: { includeUrl?: boolean }) {
   };
 }
 
-export async function resolveWabaId(explicit?: string): Promise<string> {
-  const id = explicit?.trim();
-  if (id) return id;
-  throw new WabaIdRequiredError();
-}
-
 async function listConnectedWabas() {
   const connected = await prisma.wabaOnboarding.findMany({
     where: { status: "CONNECTED", wabaId: { not: null } },
@@ -102,18 +111,6 @@ export async function wabaHealth() {
     wabaCount: unique.length,
   };
 }
-
-export const WABA_REQUIRED_RESULT = {
-  ok: false as const,
-  code: "WHATSAPP_WABA_REQUIRED" as const,
-  message:
-    "缺少 wabaId。请先按当前 partnerCustomerId 查询 CONNECTED WABA 绑定，再在请求里传入 wabaId。",
-  next: {
-    health: "GET /health",
-    listWabas: "GET /api/whatsapp/wabas",
-    createLink: "POST /api/whatsapp/onboarding-links",
-  },
-};
 
 const PHONE_CACHE_MS = 60_000;
 const phoneCache = new Map<string, { numbers: string[]; at: number }>();
@@ -191,65 +188,115 @@ export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<strin
   return numbers;
 }
 
-export async function resolveBusinessFrom(
-  requestedFrom: string | undefined,
-  wabaId: string,
-  supplierId?: string,
-): Promise<
-  | { ok: true; from: string; wabaId: string; phones: string[] }
-  | {
-      ok: false;
-      code: "WHATSAPP_WABA_REQUIRED" | "WHATSAPP_PHONE_REQUIRED" | "WHATSAPP_FROM_NOT_IN_WABA";
-      message: string;
-      wabaId?: string;
-      phones?: string[];
-      next?: Record<string, string>;
+export type TenantBusinessPhone = {
+  /** Internal-only routing key. Never include this field in routine HTTP responses. */
+  wabaId: string;
+  from: string;
+};
+
+/**
+ * Resolve every eligible business phone for a supplier from its CONNECTED onboarding rows.
+ * YCloud is queried per WABA (with a short cache), and the WabaPhone table is refreshed as a
+ * side effect so webhook and Feishu-reply routing keep using the same mapping.
+ */
+export async function listTenantBusinessPhones(supplierId: string): Promise<TenantBusinessPhone[]> {
+  const connected = await prisma.wabaOnboarding.findMany({
+    where: { partnerCustomerId: supplierId, status: "CONNECTED", wabaId: { not: null } },
+    select: { wabaId: true, partnerCustomerId: true, status: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  const wabaIds = [
+    ...new Set(connected.map((row) => row.wabaId).filter((id): id is string => Boolean(id))),
+  ];
+  if (!wabaIds.length) {
+    throw new WhatsAppBindingError(
+      "WHATSAPP_BINDING_REQUIRED",
+      "当前租户没有 CONNECTED WhatsApp 绑定，请先完成嵌入式注册。",
+    );
+  }
+
+  // Refuse a corrupted/shared WABA binding before consulting or returning any phone number.
+  const ownershipRows = await prisma.wabaOnboarding.findMany({
+    where: { wabaId: { in: wabaIds }, status: "CONNECTED" },
+    select: { wabaId: true, partnerCustomerId: true, status: true },
+  });
+  for (const wabaId of wabaIds) {
+    const owners = new Set(
+      ownershipRows
+        .filter((row) => row.wabaId === wabaId)
+        .map((row) => row.partnerCustomerId),
+    );
+    if (owners.size !== 1 || !owners.has(supplierId)) {
+      throw new WhatsAppBindingError(
+        "WHATSAPP_FROM_AMBIGUOUS",
+        "当前租户的 WhatsApp 绑定存在归属冲突，已拒绝操作。",
+      );
     }
-> {
-  const id = wabaId.trim();
-  if (!id) return WABA_REQUIRED_RESULT;
-  const tenantQuery = supplierId
-    ? `&partnerCustomerId=${encodeURIComponent(supplierId)}`
-    : "";
-
-  let phones: string[];
-  try {
-    phones = await listCurrentWabaPhoneNumbers(id);
-  } catch (error) {
-    return {
-      ok: false,
-      code: "WHATSAPP_PHONE_REQUIRED",
-      wabaId: id,
-      message: `无法列出当前 WABA 企业号：${error instanceof Error ? error.message : String(error)}`,
-      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
-    };
-  }
-  if (!phones.length) {
-    return {
-      ok: false,
-      code: "WHATSAPP_PHONE_REQUIRED",
-      wabaId: id,
-      message: "当前 WABA 下没有可用企业号，无法发送。请在 Meta / YCloud 完成号码接入后再试。",
-      next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
-    };
   }
 
+  const candidates: TenantBusinessPhone[] = [];
+  for (const wabaId of wabaIds) {
+    let phones: string[];
+    try {
+      phones = await listCurrentWabaPhoneNumbers(wabaId);
+    } catch (error) {
+      console.error("resolve tenant WhatsApp business phones failed", error);
+      throw new WhatsAppBindingError(
+        "WHATSAPP_PHONE_LOOKUP_FAILED",
+        "暂时无法解析当前租户的 WhatsApp 企业号，请稍后重试。",
+        502,
+      );
+    }
+    for (const from of phones) candidates.push({ wabaId, from });
+  }
+  if (!candidates.length) {
+    throw new WhatsAppBindingError(
+      "WHATSAPP_PHONE_REQUIRED",
+      "当前租户没有可用 WhatsApp 企业号，请先在 Meta / YCloud 完成号码接入。",
+    );
+  }
+  return candidates;
+}
+
+/** Select one internal WABA/phone route without exposing WABA identity to the caller. */
+export async function resolveTenantBusinessPhone(
+  supplierId: string,
+  requestedFrom?: string,
+): Promise<{ selected: TenantBusinessPhone; phones: string[] }> {
+  const candidates = await listTenantBusinessPhones(supplierId);
+  const phones = [...new Set(candidates.map((candidate) => candidate.from))].sort();
   const requested = requestedFrom?.trim() ? toE164(requestedFrom) : "";
+
   if (requested) {
-    if (!phones.includes(requested)) {
-      return {
-        ok: false,
-        code: "WHATSAPP_FROM_NOT_IN_WABA",
-        wabaId: id,
+    const matches = candidates.filter((candidate) => candidate.from === requested);
+    if (matches.length === 0) {
+      throw new WhatsAppBindingError(
+        "WHATSAPP_FROM_NOT_OWNED",
+        "from 不是当前租户已绑定的 WhatsApp 企业号。",
+        403,
         phones,
-        message: `from 必须是当前 WABA（${id}）下的企业号。可用号码：${phones.join("、")}`,
-        next: { listPhones: `GET /api/whatsapp/phones?wabaId=${id}${tenantQuery}` },
-      };
+      );
     }
-    return { ok: true, from: requested, wabaId: id, phones };
+    if (matches.length > 1) {
+      throw new WhatsAppBindingError(
+        "WHATSAPP_FROM_AMBIGUOUS",
+        "from 在当前租户内匹配多个 WhatsApp 绑定，已拒绝操作。",
+        409,
+        phones,
+      );
+    }
+    return { selected: matches[0], phones };
   }
 
-  return { ok: true, from: phones[0], wabaId: id, phones };
+  if (candidates.length > 1) {
+    throw new WhatsAppBindingError(
+      "WHATSAPP_FROM_SELECTION_REQUIRED",
+      "当前租户有多个可用 WhatsApp 企业号，请从 phones 中选择并传入 from。",
+      409,
+      phones,
+    );
+  }
+  return { selected: candidates[0], phones };
 }
 
 async function syncWabaPhoneBinding(wabaId: string): Promise<string | undefined> {

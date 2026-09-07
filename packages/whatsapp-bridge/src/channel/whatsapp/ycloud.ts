@@ -528,7 +528,6 @@ function summarizeTemplate(item: Json) {
     language,
     status: str(item.status),
     category: str(item.category),
-    wabaId: str(item.wabaId),
     bodyText,
     footerText: str(footer?.text),
     header: header

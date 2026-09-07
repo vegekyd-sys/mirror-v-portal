@@ -52,16 +52,16 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 |------|------|
 | 探活 | `GET /health` |
 | 注册飞书应用（智能体初始化） | `POST /api/feishu/apps` |
-| 发文本/模板 | `POST /api/whatsapp/messages`（body 必带 `partnerCustomerId`、`wabaId`） |
-| 列企业号 | `GET /api/whatsapp/phones?partnerCustomerId=&wabaId=` |
-| 列已批准模板 | `GET /api/whatsapp/templates?partnerCustomerId=&wabaId=`（可选 `&name=`） |
-| 查会话窗口 | `GET /api/whatsapp/conversations?partnerCustomerId=&phone=` |
+| 发文本/模板 | `POST /api/whatsapp/messages`（body 带 `partnerCustomerId`，可选 `from`） |
+| 列企业号 | `GET /api/whatsapp/phones?partnerCustomerId=`（可选 `&from=`） |
+| 列已批准模板 | `GET /api/whatsapp/templates?partnerCustomerId=`（可选 `&from=` / `&name=`） |
+| 查会话窗口 | `GET /api/whatsapp/conversations?partnerCustomerId=&phone=`（可选 `&from=`） |
 | 嵌入式注册（创建 Onboarding Link） | `POST /api/whatsapp/onboarding-links` |
 | 查询 WABA 绑定状态 | `GET /api/whatsapp/wabas?partnerCustomerId=` |
 
 YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message.updated`，以及嵌入式注册用的 `whatsapp.business_account.updated`。绑定成功后桥接会落库，并可通知发起飞书群 / 客服群。
 
-所有租户请求都必须显式携带 `partnerCustomerId`（也接受别名 `supplierId`）。调用方先用该租户查询 `CONNECTED` WABA，再把返回的 `wabaId` 与同一租户上下文一起用于列号、列模板、查会话和发消息。桥接不会维护或写回全局“当前 WABA”环境变量；跨租户 WABA 会返回 `403 WABA_TENANT_MISMATCH`。发消息时 `from` 还必须属于该 WABA；窗外自由文本会返回 `409 WHATSAPP_TEMPLATE_REQUIRED`。
+所有租户请求都必须显式携带 `partnerCustomerId`（也接受别名 `supplierId`）。列号、列模板、查会话和发消息不接受也不返回 WABA 路由信息：桥接按 supplier 动态查询 CONNECTED 绑定及 `WabaPhone`，再在内部解析目标 WABA。只有一个可用企业号时自动选择；多个企业号且未传 `from` 时返回 `409 WHATSAPP_FROM_SELECTION_REQUIRED` 和不含 WABA 标识的号码列表，绝不按顺序任取。传入 `from` 时桥接必须证明它属于当前 supplier，否则返回 `403 WHATSAPP_FROM_NOT_OWNED`。无绑定返回 `409 WHATSAPP_BINDING_REQUIRED`；窗外自由文本返回 `409 WHATSAPP_TEMPLATE_REQUIRED`。Onboarding/status 与 webhook 内部仍保留 WABA 数据。
 
 ## 环境变量
 

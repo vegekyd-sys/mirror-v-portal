@@ -12,26 +12,23 @@ import {
   applyWabaAccountUpdate,
   createOnboardingLink,
   listWabaOnboardings,
-  resolveWabaId,
+  resolveTenantBusinessPhone,
   resolveSupplierIdByBusinessPhone,
   resolveSupplierIdByWabaId,
   wabaHealth,
-  WabaIdRequiredError,
+  WhatsAppBindingError,
 } from "../core/onboarding";
 import {
-  assertTenantOwnsWaba,
   resolveTenantContext,
   TenantContextError,
   WabaTenantError,
 } from "../core/tenant";
 import {
-  listWhatsAppPhones,
   listWhatsAppTemplates,
   parseYCloudEvent,
   YCloudApiError,
 } from "../channel/whatsapp/ycloud";
 import { verifyYCloudSignature } from "../channel/whatsapp/signature";
-import { toE164 } from "../lib/phone";
 import {
   decryptFeishuPayload,
   parseFeishuEvent,
@@ -194,6 +191,13 @@ function sendTenantError(reply: FastifyReply, error: unknown) {
   if (error instanceof TenantContextError || error instanceof WabaTenantError) {
     return reply.code(error.statusCode).send({ error: error.message, code: error.code });
   }
+  if (error instanceof WhatsAppBindingError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      phones: error.phones,
+    });
+  }
   return undefined;
 }
 
@@ -285,31 +289,21 @@ export async function buildServer() {
         const query = request.query as {
           partnerCustomerId?: string;
           supplierId?: string;
-          wabaId?: string;
+          from?: string;
         };
         const supplierId = resolveTenantContext(query);
-        const wabaId = await resolveWabaId(query.wabaId);
-        await assertTenantOwnsWaba(supplierId, wabaId);
-        const listed = await listWhatsAppPhones(wabaId);
-        const numbers = listed.phones
-          .map((item) => (item.phoneNumber ? toE164(item.phoneNumber) : ""))
-          .filter(Boolean);
-        const defaultFrom = numbers[0];
-        const phones = listed.phones.map((item) => {
-          const phoneNumber = item.phoneNumber ? toE164(item.phoneNumber) : item.phoneNumber;
-          return {
-            ...item,
+        const resolved = await resolveTenantBusinessPhone(supplierId, query.from);
+        return {
+          partnerCustomerId: supplierId,
+          defaultFrom: resolved.selected.from,
+          phones: resolved.phones.map((phoneNumber) => ({
             phoneNumber,
-            current: Boolean(phoneNumber && phoneNumber === defaultFrom),
-          };
-        });
-        return { wabaId, defaultFrom, phones };
+            current: phoneNumber === resolved.selected.from,
+          })),
+        };
       } catch (error) {
         const tenantError = sendTenantError(reply, error);
         if (tenantError) return tenantError;
-        if (error instanceof WabaIdRequiredError) {
-          return reply.code(400).send({ error: error.message, code: error.code, wabas: error.wabas });
-        }
         return reply.code(500).send({ error: (error as Error).message });
       }
     });
@@ -320,19 +314,14 @@ export async function buildServer() {
           name?: string;
           partnerCustomerId?: string;
           supplierId?: string;
-          wabaId?: string;
+          from?: string;
         };
         const supplierId = resolveTenantContext(query);
-        const { name, wabaId } = query;
-        const id = await resolveWabaId(wabaId);
-        await assertTenantOwnsWaba(supplierId, id);
-        return await listWhatsAppTemplates(name, id);
+        const resolved = await resolveTenantBusinessPhone(supplierId, query.from);
+        return await listWhatsAppTemplates(query.name, resolved.selected.wabaId);
       } catch (error) {
         const tenantError = sendTenantError(reply, error);
         if (tenantError) return tenantError;
-        if (error instanceof WabaIdRequiredError) {
-          return reply.code(400).send({ error: error.message, code: error.code, wabas: error.wabas });
-        }
         return reply.code(500).send({ error: (error as Error).message });
       }
     });
@@ -380,8 +369,9 @@ export async function buildServer() {
           supplierId?: string;
         };
         const supplierId = resolveTenantContext(query);
+        const resolved = await resolveTenantBusinessPhone(supplierId, query.from);
         const phone = query.phone;
-        const from = query.from ? toE164(query.from) : undefined;
+        const from = resolved.selected.from;
         const rows = await prisma.conversation.findMany({
           where: {
             supplierId,
@@ -423,7 +413,6 @@ export async function buildServer() {
         to?: string;
         text?: string;
         from?: string;
-        wabaId?: string;
         partnerCustomerId?: string;
         supplierId?: string;
         feishuAppId?: string;
@@ -439,7 +428,6 @@ export async function buildServer() {
           to: body.to || "",
           text: body.text,
           from: body.from,
-          wabaId: body.wabaId,
           partnerCustomerId: body.partnerCustomerId,
           supplierId: body.supplierId,
           feishuAppId: body.feishuAppId,
@@ -463,13 +451,16 @@ export async function buildServer() {
       try {
         const query = request.query as {
           phone?: string;
+          from?: string;
           partnerCustomerId?: string;
           supplierId?: string;
         };
         const supplierId = resolveTenantContext(query);
+        const resolved = await resolveTenantBusinessPhone(supplierId, query.from);
         return prisma.conversation.findMany({
           where: {
             supplierId,
+            businessPhone: resolved.selected.from,
             ...(query.phone
               ? { customer: { phoneNumber: { contains: query.phone.replace(/^\+/, "") } } }
               : {}),

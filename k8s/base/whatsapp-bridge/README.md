@@ -35,7 +35,7 @@ kubectl -n dealclaw-prod create secret generic whatsapp-bridge-secret \
 
 ## 租户上下文
 
-桥接进程不配置默认租户或全局当前 WABA。调用方在 onboarding、WABA、号码、模板、会话和消息接口中显式传 `partnerCustomerId`（或 `supplierId`）；`wabaId` 会由服务校验必须属于同一租户。
+桥接进程不配置默认租户或全局当前 WABA。调用方显式传 `partnerCustomerId`（或 `supplierId`）；日常号码、模板、会话和消息接口只额外接受可选业务号 `from`，WABA 由服务按租户绑定和 `WabaPhone` 动态解析。多业务号未指定 `from` 时服务拒绝任意选择；onboarding/status 与 webhook 内部才保留 WABA 数据。
 
 ## 部署
 

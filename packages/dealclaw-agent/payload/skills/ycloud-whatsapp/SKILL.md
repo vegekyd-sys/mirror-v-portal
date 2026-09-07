@@ -1,31 +1,46 @@
 ---
 name: ycloud-whatsapp
 description: >-
-  通过公司 WhatsApp 桥接服务收发消息，以及 Partner Direct Link 嵌入式注册开通 WABA。
-  禁止直连 YCloud / Meta API，禁止读取 YCLOUD_API_KEY。买家入站由后端同步到飞书客服群话题：
-  无群则自动建「WhatsApp 客服」群再拉话题，有群则只建话题。窗外发模板时智能体
-  自主回填变量并发送，不要逐项问用户。每次先按当前租户 supplier id 查询桥接里的 WABA 绑定；没有 CONNECTED 绑定时先走嵌入式注册。开通 WABA 时 partnerCustomerId 由请求动态传入，经桥接创建 Onboarding Link。不要自己调 YCloud。适用于 WhatsApp、飞书客服、话题、模板、24h 窗口、换号、
-  嵌入式注册、Direct Link、Onboarding Link、WABA、CDP 供应商。不用于 SMS。
+  通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
+  完成嵌入式注册。日常操作只使用当前 supplier id 与可选企业号 from；禁止处理 WABA
+  标识、直连 YCloud / Meta API 或读取 YCLOUD_API_KEY。适用于 WhatsApp、飞书客服话题、
+  24h 窗口、模板、换号、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
 # WhatsApp（经桥接服务）
 
-智能体**只调用桥接 HTTP API**。不要 curl `api.ycloud.com`，不要读或打印 `YCLOUD_API_KEY`。
+## 核心原则
 
-`partnerCustomerId` **是当前租户的 supplier id（CDP 供应商 ID）**，值 = 智能体运行上下文中的 `MIO_CDP_SUPPLIER_ID`。所有租户接口都显式传 `partnerCustomerId=$SUPPLIER`（或 `supplierId`）；不要问用户、不要用对话里的公司名、不要生成 `pc_` / `test_onboard_001`。
+智能体只调用桥接 HTTP API。日常列号、列模板、查会话、发消息只传当前租户
+`partnerCustomerId` 和可选业务号 `from`。WABA 路由由桥接在服务端动态解析；
+智能体不读取、复制、缓存、展示或发送任何 WABA 标识，也不从响应中的内部字段推断路由。
 
-**发消息前必须查询当前租户绑定。** 调 `GET /api/whatsapp/wabas?partnerCustomerId=$SUPPLIER&status=CONNECTED`，从返回中选择当前租户的 WABA；只有唯一可用绑定时把其 `wabaId` 记为 `$WABA`。没有绑定则进入嵌入式注册；多个绑定且用户未指定时，依据业务号/既有会话选择，仍无法唯一确定才询问用户。
+禁止请求 `api.ycloud.com` / Meta Cloud API，禁止读取或打印 `YCLOUD_API_KEY`。
 
-不要从桥接进程环境、agent env 或 `GET /health` 推断“当前 WABA”。桥接没有全局当前 WABA，也不会在 `PARTNER_ADDED` 后写 agent env。每次操作的 `$WABA` 都来自 `$SUPPLIER` 对应的桥接绑定。
+## 固定上下文
 
-## 基址（写死，全局唯一）
+- `$BRIDGE` 固定为 `https://dealclaw.datathink.com/whatsapp`（末尾无 `/`）。
+- `$SUPPLIER` = 当前智能体环境的 `MIO_CDP_SUPPLIER_ID`，也是
+  `partnerCustomerId`。不要向用户询问，不要用公司名或测试字符串代替。
+- `$SUPPLIER` 为空时停止，提示补齐当前智能体的 `MIO_CDP_SUPPLIER_ID`。
+- 不从 `GET /health`、桥接环境或历史会话推断租户、企业号或账户路由。
 
-桥接服务全局唯一，`$BRIDGE` **写死** `https://dealclaw.datathink.com/whatsapp`，不要读 `WHATSAPP_BRIDGE_BASE_URL`、不要拼 `127.0.0.1:PORT`。解析 `$SUPPLIER`、`$WABA`、`$FEISHU_APP` 时**不要编造** `partnerCustomerId` / `wabaId`：
+## 初始化飞书应用
 
-1. `$BRIDGE` = `https://dealclaw.datathink.com/whatsapp`（固定值，末尾无 `/`）。
-2. 读**当前智能体自己的** **`MIO_CDP_SUPPLIER_ID`**（tenant-env.json / .env，即当前租户 supplier id）作为 `$SUPPLIER`。不要用 `GET $BRIDGE/health` 推断租户。
-3. `$SUPPLIER` 仍为空则停，提示在当前智能体环境补上 `MIO_CDP_SUPPLIER_ID`（tenant-env.json / .env）。
-4. 读**当前智能体自己的环境变量** **`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`**，以及 **`FEISHU_INVITE_APP_IDS`**（要拉进「WhatsApp 客服」群的其它机器人 App ID，`cli_` 开头，可多个逗号分隔；通常是本智能体应用）。这是**该飞书应用**的凭证。禁止从桥接项目 `.env` 里抄这些（桥接启动不必有它们）。不要打印 Secret / Encrypt Key。四个密钥都要有值；缺 `FEISHU_ENCRYPT_KEY` 不要 POST。然后 `POST $BRIDGE/api/feishu/apps`：
+需要把 WhatsApp 入站同步到飞书时，读取当前智能体自己的：
+
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_VERIFICATION_TOKEN`
+- `FEISHU_ENCRYPT_KEY`
+- `FEISHU_INVITE_APP_IDS`（可选，逗号分隔的 `cli_...`）
+
+不要打印 Secret / Encrypt Key，不要从桥接项目的 `.env` 复制。四个凭据缺任一个
+就停止；不要用占位符或编造值。然后调用：
+
+```http
+POST $BRIDGE/api/feishu/apps
+```
 
 ```json
 {
@@ -37,152 +52,101 @@ description: >-
 }
 ```
 
-返回 `appId`、`webhookUrl`、`hasEncryptKey`、`inviteAppIds`。`$FEISHU_APP` = `appId`。`hasEncryptKey` 必须为 `true` 才算注册成功；`false`、返回 `warning`、或 400 说密钥是占位符/非 ASCII 时，说明**没读到真实环境变量**。停下来让用户把该飞书应用「加密策略」里的 Encrypt Key / Verification Token 配进**智能体环境**，再 POST。禁止用中文、`***`、`$FEISHU_ENCRYPT_KEY` 原文或自己编一串去注册。Encrypt Key 和 Verification Token 不要抄反。`inviteAppIds` 应包含智能体环境的 `FEISHU_INVITE_APP_IDS`（本智能体 `cli_…`）；返回空数组说明没带上，其它机器人不会被拉进客服群。把该飞书应用「事件配置」请求地址设为 `webhookUrl`（`/webhooks/feishu/<appId>`）。每个应用配一次；凭证变了再 POST 覆盖。桥接启动**不必**带这些变量。保存 URL 若仍报「Challenge code没有返回」，是登记的 Encrypt Key 与开放平台不一致，重新用「加密策略」里的值 POST，不要改 URL 路径。
-5. `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER&status=CONNECTED` 查询 `$WABA`。无 CONNECTED 绑定 → 嵌入式注册。
+保存返回的 `appId` 为 `$FEISHU_APP`，把 `webhookUrl` 配到该飞书应用事件地址。
+`hasEncryptKey=true` 才算成功；否则停止并让用户补正确的加密策略配置。
 
-`$BRIDGE` 已写死（见上），服务未启动则先停，提示启动后端。`webhookUrl` 必须是飞书能访问的公网 HTTPS（已部署域名）。
+## 业务号选择
 
-```text
-进度：
-- [ ] 解析 $BRIDGE
-- [ ] POST /api/feishu/apps 注册当前飞书应用，记下 webhookUrl / $FEISHU_APP
-- [ ] 解析 $SUPPLIER、$WABA
-- [ ] 无 $WABA → 嵌入式注册
-- [ ] GET phones?partnerCustomerId=$SUPPLIER&wabaId=$WABA
-- [ ] 查窗口 → POST messages 带 partnerCustomerId、wabaId 与 feishuAppId=$FEISHU_APP
+先调用：
+
+```http
+GET $BRIDGE/api/whatsapp/phones?partnerCustomerId=$SUPPLIER
 ```
 
-## 发消息（WABA + 企业号 + 24h 窗口）
+- 只有一个可用企业号：桥接自动选择，响应给出 `defaultFrom`。
+- 多个可用企业号：桥接返回
+  `409 WHATSAPP_FROM_SELECTION_REQUIRED` 和安全的 `phones` 列表。用户没有明确指定
+  企业号时必须请用户选择，禁止按顺序、更新时间或猜测任取一个。
+- 已知业务号：重试时传
+  `from=+国家码号码`。桥接会验证该号码属于当前 supplier，再在内部解析路由。
+- `403 WHATSAPP_FROM_NOT_OWNED`：停止；不要改用其它租户或相似号码。
+- `409 WHATSAPP_BINDING_REQUIRED`：进入“嵌入式注册”。
+- `409 WHATSAPP_PHONE_REQUIRED`：提示先在 Meta / YCloud 完成企业号接入。
+- `502 WHATSAPP_PHONE_LOOKUP_FAILED`：桥接暂时无法解析企业号，稍后重试；不要绕过桥接。
 
-每次发 WhatsApp **按此顺序**，不要跳过：
+业务号使用 E.164。不要把业务号写成全局环境变量；每次请求按当前租户和用户选择传递。
 
-1. `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER&status=CONNECTED` → 解析 `$WABA`。没有绑定，或接口返回 `409 WHATSAPP_WABA_REQUIRED` 时，走嵌入式注册。
-2. 绑定成功后重新查询同一 `$SUPPLIER` 的 CONNECTED 绑定；桥接和智能体都不要写 `YCLOUD_WABA_ID` / `YCLOUD_FROM`。
-3. `GET $BRIDGE/api/whatsapp/phones?partnerCustomerId=$SUPPLIER&wabaId=$WABA`。`from` **必须**是返回列表里的号码（优先 `defaultFrom` / `current=true`）。`403 WABA_TENANT_MISMATCH` 时停止，重新查询当前租户绑定，禁止改用别的租户 WABA。
-4. `GET $BRIDGE/api/whatsapp/conversations?partnerCustomerId=$SUPPLIER&phone=买家号&from=当前企业号`，看这对账号的 `windowOpen`：
-   - `true`：发自由文本（`text`），不要无故改模板。
-   - `false` / 无会话：走下面「窗外」模板流程。
-5. `POST /api/whatsapp/messages` 始终带 `partnerCustomerId=$SUPPLIER`、`wabaId=$WABA`、`feishuAppId=$FEISHU_APP`、`inviteAppIds=$FEISHU_INVITE_APP_IDS`、`from`（该 WABA 企业号）和 `to`（买家）。
+## 发消息
 
-发消息链路以当前 `$SUPPLIER` 的桥接绑定为唯一事实源。不要用 `GET /health` 或任何 WABA env 变量判断绑定。
+### 1. 查询当前 24h 窗口
 
-24h 窗口是 **当前 WABA 企业号 × 买家号** 这一对会话，不是「这个买家曾经给任意企业号来过信」。换号后要重新查窗口。
+```http
+GET $BRIDGE/api/whatsapp/conversations?partnerCustomerId=$SUPPLIER&phone=买家号
+```
 
-## 窗外 / 主动触达（必按此流程，否则走不通）
+有多个企业号或用户已指定时追加 `&from=当前企业号`。窗口按“企业号 × 买家号”
+计算：
 
-窗口外**禁止**发 `text`。收到 `409 WHATSAPP_TEMPLATE_REQUIRED` 或 `windowOpen=false` 时，智能体**自己做完选模板、回填、发送**，不要停下来问用户「{{1}} 填什么」。
+- `windowOpen=true`：发送自由文本。
+- `false` 或没有会话：使用已批准模板。
+- 多号但没传 `from`：按“业务号选择”处理，不自行挑选。
 
-收到 `409 WHATSAPP_WABA_REQUIRED`、`400 WABA_ID_REQUIRED`：重新查询当前租户绑定；仍无 CONNECTED WABA 就走嵌入式注册。收到 `403 WABA_TENANT_MISMATCH` 必须停止并纠正租户/WABA 配对。
+### 2. 窗内自由文本
 
-1. `GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&wabaId=$WABA`（或再加 `&name=某模板`）
-2. 选模板：用户指定了名字就用那个；否则按意图选最接近的已批准模板（看 `bodyText` / `category` / `name`）。只列模板、等用户挑 = 未完成任务。
-3. 读这些字段再回填，**不要猜变量个数**：
-   - `bodyText`：正文（含 `{{1}}` `{{2}}`），用来理解每个槽位语义
-   - `variableCount.body` / `header` / `urlButtons`
-   - `needsVariables`：是否必须带 `components`
-   - `exampleBodyValues`：官方示例，作缺省回填
-   - `sendComponentsDraft`：骨架；把占位换成真实值后作为 `template.components`
-4. **自主回填**（按此优先级，填满所有槽位后立刻发）：
-   1. 当前用户指令、对话里已给出的姓名/公司/展会/时间/链接等
-   2. 已知买家信息（号码、会话、飞书话题上下文）
-   3. `bodyText` 语义推断出的合理业务值
-   4. 仍缺则用 `exampleBodyValues` / `sendComponentsDraft` 里的示例值
-5. `needsVariables=true` 时**禁止**空 `components: []`，**禁止**把 `{{1}}` / `{{header_1}}` / `{{url_suffix}}` 原样发出。
-6. 立刻 `POST $BRIDGE/api/whatsapp/messages` 带完整 template。发完用一句话告诉用户用了哪个模板、填了什么，不要先展示草稿等确认。
-
-无变量模板（`needsVariables=false`）才允许 `components: []` 或不传。
-
-只有收件人 `to` 未知、或列表里没有任何可用模板时，才停下来问。变量缺失不是停下来的理由。
-
-## 嵌入式注册 / 开通 WABA（Partner Direct Link）
-
-**当前 `$SUPPLIER` 没有 CONNECTED WABA 时也会走这里**，不只是用户口头说「开通」。智能体自己创建链接并交给客户，不要先去发 WhatsApp。只认当前租户查询结果，不使用其它租户的旧绑定。
-
-用户要**开通 / 注册 / 接入 / 连接 WhatsApp WABA**、提到 Direct Link / 嵌入式注册 / Onboarding Link 时同样走此流程。
-
-前提（后端已配置，智能体不要读密钥、不要替用户配 Dashboard）：
-
-- YCloud 已开通 Partner Direct Link；Webhook 已订阅 `whatsapp.business_account.updated`
-- 创建链接**只能经桥接**。SDK Button 若需要，也是前端调**你们自己的后端/本桥接**拿 `onboardingUrl`，禁止在浏览器调 YCloud
-
-### 流程
-
-1. `GET $BRIDGE/health`（只确认 `ok`；不从健康检查解析租户或 WABA）
-2. `$SUPPLIER` 必须已解析。禁止向用户要 partnerCustomerId，禁止用其它字符串代替。
-3. 先 `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER`（必须显式传租户；发消息前也用同一查询解析绑定）：
-   - 已有 `status=PENDING` 且返回了 `onboardingUrl`（未过期）→ **复用**，不要再 POST
-   - 用户只是查开通状态 → 报告当前租户列表，结束；不要写 env
-   - 用户要**新增或更换 WABA** → 再 POST 新链接
-   - 没有可用链接 → POST
-4. `POST $BRIDGE/api/whatsapp/onboarding-links`
+```http
+POST $BRIDGE/api/whatsapp/messages
+```
 
 ```json
 {
   "partnerCustomerId": "$SUPPLIER",
-  "onboardingType": "WHATSAPP_BUSINESS_PLATFORM",
-  "locale": "zh_CN",
+  "to": "+85290000000",
+  "from": "+85251111111",
+  "feishuAppId": "$FEISHU_APP",
+  "inviteAppIds": "$FEISHU_INVITE_APP_IDS",
+  "text": "你好",
   "sourceChatId": "oc_当前飞书群",
   "sourceOpenId": "ou_当前用户"
 }
 ```
 
-`partnerCustomerId` 必须是 `$SUPPLIER`（当前租户 supplier id），不传返回 400；桥接没有默认租户兜底。
+单一企业号且用户未指定时可以省略 `from`，由桥接自动解析。多号时必须带用户选择的
+`from`。
 
-- `onboardingType` 默认 `WHATSAPP_BUSINESS_PLATFORM`（API WABA）。用户明确要 WhatsApp Business App / SMB 时才用 `WHATSAPP_BUSINESS_APP`。
-- `locale`：中文对话用 `zh_CN`，否则 `en_US`。只允许 `en_US` `zh_CN` `es_ES` `pt_BR` `id_ID` `ru_RU`（区分大小写）。
-- `sourceChatId` / `sourceOpenId`：与发消息相同；绑定成功时飞书提醒用。群聊尽量带上。
-5. 立刻把 `onboardingUrl` 交给**该客户**（可点开的链接），并说明：
-   - 打开链接 → **Continue with Meta** → 选择或创建业务、WABA、号码
-   - 默认 **2 小时**有效；**一链一次 WABA**；完成前可刷新重试，不必新建
-   - **不要**发到公开群公告、文档、分析平台
-6. 不要轮询 YCloud、不要声称已经绑定成功。告诉用户：完成 Meta 后桥接会收 Webhook并写入租户绑定；之后重新 `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER` 得到 `$WABA` 并查看 `paymentMethodAttached`。不要说桥接会写 agent env。
-7. `paymentMethodAttached=true` 才表示授信完成、WABA 可正常用；`false` 说明授信未完成。
-8. 列号、列模板、查会话、发消息都带 `partnerCustomerId=$SUPPLIER`；涉及 WABA 的接口同时带 `wabaId=$WABA`。
-9. HTTP **429**：读 `retryAfter` / `Retry-After`，等完再 POST **一次**；仍失败再告诉用户稍后再试。
-10. HTTP **400**（locale / type 错误）：按响应改参数后重试，不要把原始 JSON 丢给用户填。
+`sourceChatId` 在群聊中必填。拿得到当前 WhatsApp 客服飞书应用下的
+`sourceOpenId` 就传；其它应用的 open_id 不能混用。单聊可省略二者。不要编造 ID。
 
-智能体走 Direct Link 即可（把 URL 给客户）。不要在对话里贴带真实 Key 的 curl，不要教用户把 API Key 放进网页。
+### 3. 窗外模板
 
-## 接口
+查询模板：
 
-### 探活
-
-`GET $BRIDGE/health` → `{"ok":true,"wabaCount":N}`。只用于探活，不返回或决定当前租户/WABA。
-
-### 查会话窗口
-
-`GET $BRIDGE/api/whatsapp/conversations?partnerCustomerId=$SUPPLIER&phone=买家号&from=当前企业号`
-
-必须带当前 WABA 的 `from`，看这对账号的 `windowOpen` / `windowExpiresAt`。买家来信由后端 webhook 写入，智能体不要轮询 YCloud。
-
-### 发消息
-
-`POST $BRIDGE/api/whatsapp/messages`
-
-窗内自由文本：
-
-```json
-{ "partnerCustomerId": "$SUPPLIER", "to": "+85290000000", "from": "+85251111111", "wabaId": "$WABA", "feishuAppId": "$FEISHU_APP", "inviteAppIds": "$FEISHU_INVITE_APP_IDS", "text": "你好", "sourceChatId": "oc_当前飞书群", "sourceOpenId": "ou_当前用户" }
+```http
+GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业号
 ```
 
-`from` **必须是该租户 `wabaId` 下的企业号**（`GET /phones?partnerCustomerId=$SUPPLIER&wabaId=$WABA` 的 `defaultFrom` / `current=true`）。跨租户 WABA 会 `403 WABA_TENANT_MISMATCH`；错误企业号会 `409 WHATSAPP_FROM_NOT_IN_WABA`。
+可追加 `&name=模板名`。单一企业号时可省略 `from`。
 
-**`sourceChatId`（群聊必填）**：当前飞书会话的群 `chat_id`。买家回复时尽量提醒该群。
+用户指定模板名就用该模板；否则按 `bodyText`、`category`、`name` 选择最贴近
+意图的已批准模板。读取：
 
-**`sourceOpenId`**：必须是 **WhatsApp 客服这个飞书应用** 下的用户 `open_id`。元海精灵等其它应用的 `open_id` 不能用（会 `open_id cross app`，桥接无法私聊）。拿不到本应用的 open_id 就省略，买家消息仍会进客服话题。
+- `bodyText`
+- `variableCount.body/header/urlButtons`
+- `needsVariables`
+- `exampleBodyValues`
+- `sendComponentsDraft`
 
-后端会先对 `sourceChatId` 调 `me_join` 尝试自动进群；仅**公开群**能成功。「WA功能开发」这类私有/外部群无法 API 自助加入，靠 `sourceOpenId` 私聊兜底（或把群改为公开后再试群提醒）。
+按“用户指令与对话信息 → 已知买家信息 → 正文语义 → 官方示例”的顺序补满变量。
+`needsVariables=true` 时禁止空 `components`，也禁止保留
+`{{1}}` / `{{header_1}}` / `{{url_suffix}}`。变量缺失不是询问用户的理由；
+只有 `to` 未知或没有可用模板时才停下来问。
 
-单聊可省略二者。不要编造 ID。
-
-窗外 / 主动触达示例（有 body 变量时）：
+发送示例：
 
 ```json
 {
   "partnerCustomerId": "$SUPPLIER",
   "to": "+8613800138000",
   "from": "+85251111111",
-  "wabaId": "$WABA",
   "feishuAppId": "$FEISHU_APP",
   "inviteAppIds": "$FEISHU_INVITE_APP_IDS",
   "sourceChatId": "oc_当前飞书群",
@@ -203,77 +167,59 @@ description: >-
 }
 ```
 
-- `to` 必填，E.164。
-- `partnerCustomerId` 与 `wabaId` 都必填，且 WABA 必须属于该租户。
-- `feishuAppId` 建议必填，值为初始化注册返回的 appId。
-- `accepted` / `ok:true` 只表示后端已提交给 YCloud，**不等于已送达**。投递失败时飞书客服话题会跟「系统：WhatsApp 发送失败」。
-- 409 + `code=WHATSAPP_TEMPLATE_REQUIRED`：窗外，智能体改走模板流程并**自行回填后发送**。
-- 409 + `code=WHATSAPP_WABA_REQUIRED` 或 400 `WABA_ID_REQUIRED`：没传 `wabaId`；重新查当前租户绑定，无绑定则走嵌入式注册。
-- 403 + `code=WABA_TENANT_MISMATCH`：WABA 不属于当前租户，停止并重新查询 `$SUPPLIER` 绑定。
-- 409 + `code=WHATSAPP_FROM_NOT_IN_WABA`：`from` 不是该 `wabaId` 下的号码。改用当前租户 phones 接口返回的号码。
+`ok=true` 只表示 YCloud 已接受，不等于送达。投递失败会同步到飞书客服话题。
 
-### 列企业号
+## 嵌入式注册 / 状态
 
-`GET $BRIDGE/api/whatsapp/phones?partnerCustomerId=$SUPPLIER&wabaId=$WABA`
+日常接口返回 `WHATSAPP_BINDING_REQUIRED`，或用户明确要开通、注册、接入、换账户时，
+使用 Partner Direct Link。智能体仍只调用桥接。
 
-租户与 WABA 都必传。返回 `wabaId`、`defaultFrom`、`phones[]`（含 `current`）。发送时 `from` 只用这个列表里的号。
+1. `GET $BRIDGE/health`，只确认 `ok=true`。
+2. `GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER` 查询 onboarding/status。
+   只读取 `status`、`onboardingUrl`、`expiresAt`、`paymentMethodAttached` 等状态字段；
+   忽略且绝不复述任何账户标识字段。
+3. 有未过期 `PENDING` 链接就复用。用户只是查状态时报告状态后结束。
+4. 没有可复用链接，或用户明确新增/更换时：
 
-### 列已批准模板（含变量结构）
+```http
+POST $BRIDGE/api/whatsapp/onboarding-links
+```
 
-`GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&wabaId=$WABA`
+```json
+{
+  "partnerCustomerId": "$SUPPLIER",
+  "onboardingType": "WHATSAPP_BUSINESS_PLATFORM",
+  "locale": "zh_CN",
+  "sourceChatId": "oc_当前飞书群",
+  "sourceOpenId": "ou_当前用户"
+}
+```
 
-可选：`GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&wabaId=$WABA&name=b2b_interest_check_01`
+用户明确使用 WhatsApp Business App / SMB 时才改
+`onboardingType=WHATSAPP_BUSINESS_APP`。把 `onboardingUrl` 私下交给客户，并说明
+默认 2 小时有效、一链一次账户；不要发到公开群公告、文档或日志。
 
-租户与 `wabaId` **都必传**。缺失返回 400，跨租户返回 403。返回每项至少含：`name`、`language`、`bodyText`、`variableCount`、`needsVariables`、`exampleBodyValues`、`sendComponentsDraft`。
-发模板时以这些字段为准，不要猜变量个数，不要默认空 `components`。智能体用这些字段自己回填，不要把原始 JSON 甩给用户填。
+不要轮询 YCloud，不要在客户完成 Meta 流程前声称已绑定。Webhook 落库后再查桥接状态；
+`paymentMethodAttached=true` 才表示授信完成。HTTP 429 按 `Retry-After` 等待后只重试
+一次；400 的 locale/type 错误按响应修正，不让用户填写原始 JSON。
 
-### 创建 Onboarding Link
+## 买家来信与飞书回复
 
-`POST $BRIDGE/api/whatsapp/onboarding-links`
+这两条链路由桥接自动完成，skill 不调用：
 
-`partnerCustomerId` 用 `$SUPPLIER`（当前租户 supplier id，必须显式传）。成功返回 `onboardingUrl`、`expiresAt`、`partnerCustomerId`、`partnerCustomerIdSource=request`、`status=PENDING`。把链接交给客户即可；缺失租户会 400。
+- WhatsApp 入站 → `/webhooks/ycloud` → 按企业号映射 supplier → 创建/复用“WhatsApp
+  客服”群话题，并按 `sourceChatId` 提醒发起群。
+- 客服话题回复 → `/webhooks/feishu` → 按该会话的 supplier + 企业号在桥接内部解析
+  路由并回发 WhatsApp。
 
-### 查询 WABA 绑定
+人工和 `FEISHU_INVITE_APP_IDS` 白名单机器人可回发；带 @ 的内部讨论不回发。白名单
+机器人若已在话题直接回复，就不要再调用 messages API，避免买家收到两遍。
 
-`GET $BRIDGE/api/whatsapp/wabas?partnerCustomerId=$SUPPLIER`
+## 验证与停止条件
 
-可选再加 `&wabaId=` `&status=PENDING|CONNECTED`
-
-必须显式传 `?partnerCustomerId=$SUPPLIER`，否则返回 400。未过期的 PENDING 才会带 `onboardingUrl`；`CONNECTED` 后看 `wabaId` / `paymentMethodAttached`。智能体不要轮询 YCloud，只查本接口。
-
-## 买家来信（后端自动做，skill 不调）
-
-买家 WhatsApp → 后端 `/webhooks/ycloud`：
-
-- 无客服群 → 创建「WhatsApp 客服」群 → 为该买家拉话题
-- 已有客服群 → 只创建/复用话题
-- 若会话有 `sourceChatId`（智能体发消息时传入）→ 再往发起群发摘要/转发话题提醒
-
-客户完成嵌入式注册 → 同一 webhook 收到 `whatsapp.business_account.updated`（`updateEvent=PARTNER_ADDED`）→ 桥接落库并尽量通知发起群 / 客服群。智能体不必订阅 YCloud。
-
-客服在「WhatsApp 客服」话题回复 → `/webhooks/feishu` → WhatsApp。提醒群里直接回不会进 WhatsApp。智能体不必参与这条入站链路。
-
-话题里**只有人工**，以及 `FEISHU_INVITE_APP_IDS` 里的机器人/智能体，发言才会同步到 WhatsApp。桥接自己和其它未授权应用忽略。带 @ 的内部商量仍不同步。
-
-白名单机器人若在话题里直接回复买家，内容会按飞书原文转发；同一条不要再 `POST /api/whatsapp/messages`，否则买家会收到两遍。智能体走 HTTP 时，桥接不会再以「WhatsApp 客服」身份把正文复述进话题。
-
-## 禁止
-
-- 任何 `api.ycloud.com` 或 Meta Cloud API 请求（含 `partner/embeddedSignup/links`）
-- 读取或打印 API Key；把 Key 放进前端 / SDK 示例
-- 把 `onboardingUrl` 发到公开页面、群公告或日志
-- 未完成 Meta 流程就声称 WABA 已绑定 / 已授信
-- 轮询 YCloud 查绑定；有未过期 PENDING 链接还反复 POST
-- 窗口外发 text
-- 有变量模板却用空 `components: []` 发送
-- 窗外停下来问用户每个 `{{n}}` 填什么；只列模板等用户挑/确认
-- 编造模板名 / 变量个数；编造送达成功
-- 请求没带当前 `partnerCustomerId` / `supplierId` 或 `wabaId` 时直接发消息
-- 用 `GET /health` 或任何 WABA env 变量推断当前租户绑定
-- 收到 `WABA_TENANT_MISMATCH` 后改用其它租户 WABA
-- 用非当前租户 WABA 的企业号发消息
-- 窗外发 text；窗内无故改用模板（用户明确要模板除外）
-- 智能体或桥接把 WABA/企业号写成全局 process/agent env
-- 编造 `partnerCustomerId`；忽略当前租户的 `MIO_CDP_SUPPLIER_ID`（多租户下不显式传请求就串台）
-- 写死其它桥接基址（`$BRIDGE` 固定为 `https://dealclaw.datathink.com/whatsapp`）
-- 群聊发消息不带 `sourceChatId` / 尽量带 `sourceOpenId`（拿得到就必须带）
+- 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识。
+- 多号未指定：必须收到/遵循 `WHATSAPP_FROM_SELECTION_REQUIRED`，不得任取。
+- 指定 `from`：只接受桥接验证通过的当前租户号码。
+- `WHATSAPP_TEMPLATE_REQUIRED`：自行查询模板、补齐变量后发送。
+- 桥接不可用、租户缺失、号码归属错误、无绑定或无企业号时停止并报告明确原因。
+- 禁止外部发送前后声称“已送达”；只报告桥接接受状态或实际 webhook 投递状态。
