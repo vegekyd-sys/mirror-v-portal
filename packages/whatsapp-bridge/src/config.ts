@@ -11,6 +11,12 @@ function csv(name: string): string[] {
   return [...new Set(value.split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
+function commaSeparated(name: string): string[] {
+  const value = optional(name);
+  if (!value) return [];
+  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
+}
+
 function flag(name: string): boolean {
   const value = process.env[name]?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes";
@@ -50,7 +56,7 @@ export const config = {
   /** Server-side operator credential. Never expose this to tenant agents or client responses. */
   adminToken: optional("WHATSAPP_BRIDGE_ADMIN_TOKEN"),
   /** Temporary Skill-only existing-WABA binding gate. Empty means the endpoint is disabled. */
-  skillBindAllowedSuppliers: csv("WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS"),
+  skillBindAllowedSuppliers: commaSeparated("WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS"),
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),

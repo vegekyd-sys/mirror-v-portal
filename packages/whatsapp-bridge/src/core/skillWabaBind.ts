@@ -33,7 +33,7 @@ function normalizeSupplier(input: unknown): { partnerCustomerId: string; wabaId:
     );
   }
   const body = input as Record<string, unknown>;
-  const allowed = new Set(["partnerCustomerId", "supplierId", "wabaId"]);
+  const allowed = new Set(["supplierId", "wabaId"]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
     throw new SkillWabaBindError(
       "WHATSAPP_SKILL_BIND_INVALID_INPUT",
@@ -42,29 +42,19 @@ function normalizeSupplier(input: unknown): { partnerCustomerId: string; wabaId:
     );
   }
 
-  const partnerCustomerId =
-    typeof body.partnerCustomerId === "string" ? body.partnerCustomerId.trim() : "";
   const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
-  if (partnerCustomerId && supplierId && partnerCustomerId !== supplierId) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "partnerCustomerId and supplierId must identify the same supplier",
-      400,
-    );
-  }
-  const supplier = partnerCustomerId || supplierId;
   if (
-    !supplier ||
-    supplier.length > 128 ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(supplier)
+    !supplierId ||
+    supplierId.length > 128 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(supplierId)
   ) {
     throw new SkillWabaBindError(
       "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "partnerCustomerId or supplierId is required and must be a valid supplier identifier",
+      "supplierId is required and must be a valid supplier identifier",
       400,
     );
   }
-  return { partnerCustomerId: supplier, wabaId: body.wabaId };
+  return { partnerCustomerId: supplierId, wabaId: body.wabaId };
 }
 
 function mapImportError(error: AdminWabaImportError): SkillWabaBindError {
