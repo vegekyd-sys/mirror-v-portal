@@ -223,6 +223,64 @@ describe("tenant-isolated WhatsApp APIs", { concurrency: false }, () => {
     }
   });
 
+  it("does not allow caller-supplied WABA IDs to steer routine APIs", async (t) => {
+    const app = await buildServer();
+    t.after(() => app.close());
+    const base = `${config.routePrefix}/api/whatsapp`;
+
+    const phones = await app.inject({
+      method: "GET",
+      url: `${base}/phones?partnerCustomerId=tenant-single&wabaId=waba-other`,
+    });
+    assert.equal(phones.statusCode, 200);
+    assert.equal(phones.json().defaultFrom, "+85251111111");
+
+    const templates = await app.inject({
+      method: "GET",
+      url: `${base}/templates?partnerCustomerId=tenant-single&wabaId=waba-other`,
+    });
+    assert.equal(templates.statusCode, 200);
+    const templateRequest = fetchUrls.find((url) =>
+      url.pathname.endsWith("/whatsapp/templates"),
+    );
+    assert.equal(templateRequest?.searchParams.get("filter.wabaId"), "waba-single");
+
+    const conversations = await app.inject({
+      method: "GET",
+      url: `${base}/conversations?partnerCustomerId=tenant-single&wabaId=waba-other`,
+    });
+    assert.equal(conversations.statusCode, 200);
+    assert.equal(
+      (conversationArgs as { where: { supplierId: string; businessPhone: string } }).where
+        .supplierId,
+      "tenant-single",
+    );
+    assert.equal(
+      (conversationArgs as { where: { supplierId: string; businessPhone: string } }).where
+        .businessPhone,
+      "+85251111111",
+    );
+
+    const message = await app.inject({
+      method: "POST",
+      url: `${base}/messages`,
+      payload: {
+        partnerCustomerId: "tenant-single",
+        wabaId: "waba-other",
+        to: "+85290000000",
+        text: "routine routing test",
+      },
+    });
+    assert.equal(message.statusCode, 200);
+    assert.equal(message.json().from, "+85251111111");
+
+    for (const response of [phones, templates, conversations, message]) {
+      assert.equal(response.body.includes("wabaId"), false);
+      assert.equal(response.body.includes("waba-single"), false);
+      assert.equal(response.body.includes("waba-other"), false);
+    }
+  });
+
   it("requires explicit from when a tenant has multiple phones across multiple WABAs", async (t) => {
     const app = await buildServer();
     t.after(() => app.close());
