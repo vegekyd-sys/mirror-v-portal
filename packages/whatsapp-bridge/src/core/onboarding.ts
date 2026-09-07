@@ -9,6 +9,7 @@ import { toE164 } from "../lib/phone";
 import { ensureCsChatId } from "../platform/feishu/adapter";
 import { ensureBotInChat, sendGroupText, sendUserText } from "../platform/feishu/client";
 import { withFeishuApp } from "../platform/feishu/context";
+import { lockWabaOwnershipKeys } from "./wabaOwnershipLock";
 
 export class WhatsAppBindingError extends Error {
   readonly code:
@@ -376,15 +377,6 @@ export async function listWabaOnboardings(query: {
 
 export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   const partnerAdded = update.updateEvent === "PARTNER_ADDED" && Boolean(update.wabaId);
-  if (partnerAdded && update.wabaId && update.partnerCustomerId) {
-    const existingOwners = await prisma.wabaOnboarding.findMany({
-      where: { wabaId: update.wabaId, status: "CONNECTED" },
-      select: { partnerCustomerId: true },
-    });
-    if (existingOwners.some((row) => row.partnerCustomerId !== update.partnerCustomerId)) {
-      throw new Error("PARTNER_ADDED wabaId is already connected to another tenant");
-    }
-  }
   const data = {
     wabaId: update.wabaId,
     wabaName: update.wabaName,
@@ -401,44 +393,63 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
     ...(partnerAdded ? { status: "CONNECTED" as const } : {}),
   };
 
-  let row =
-    (update.wabaId && update.partnerCustomerId
-      ? await prisma.wabaOnboarding.findFirst({
-          where: {
-            wabaId: update.wabaId,
-            partnerCustomerId: update.partnerCustomerId,
-          },
-          orderBy: { updatedAt: "desc" },
-        })
-      : null) ??
-    (update.partnerCustomerId
-      ? await prisma.wabaOnboarding.findFirst({
-          where: { partnerCustomerId: update.partnerCustomerId, status: "PENDING" },
-          orderBy: { createdAt: "desc" },
-        })
-      : null) ??
-    (update.wabaId && !update.partnerCustomerId
-      ? await prisma.wabaOnboarding.findFirst({
-          where: { wabaId: update.wabaId },
-          orderBy: { updatedAt: "desc" },
-        })
-      : null);
+  const row = await prisma.$transaction(
+    async (tx) => {
+      if (partnerAdded && update.wabaId) {
+        await lockWabaOwnershipKeys(tx, update.wabaId, []);
+        if (update.partnerCustomerId) {
+          const existingOwners = await tx.wabaOnboarding.findMany({
+            where: { wabaId: update.wabaId, status: "CONNECTED" },
+            select: { partnerCustomerId: true },
+          });
+          if (existingOwners.some((owner) => owner.partnerCustomerId !== update.partnerCustomerId)) {
+            throw new Error("PARTNER_ADDED WABA is already connected to another tenant");
+          }
+        }
+      }
 
-  if (row) {
-    row = await prisma.wabaOnboarding.update({
-      where: { id: row.id },
-      data,
-    });
-  } else if (update.wabaId || update.partnerCustomerId) {
-    row = await prisma.wabaOnboarding.create({
-      data: {
-        partnerCustomerId: update.partnerCustomerId || `waba_${update.wabaId}`,
-        onboardingType: "WHATSAPP_BUSINESS_PLATFORM",
-        status: partnerAdded ? "CONNECTED" : "UPDATED",
-        ...data,
-      },
-    });
-  }
+      let current =
+        (update.wabaId && update.partnerCustomerId
+          ? await tx.wabaOnboarding.findFirst({
+              where: {
+                wabaId: update.wabaId,
+                partnerCustomerId: update.partnerCustomerId,
+              },
+              orderBy: { updatedAt: "desc" },
+            })
+          : null) ??
+        (update.partnerCustomerId
+          ? await tx.wabaOnboarding.findFirst({
+              where: { partnerCustomerId: update.partnerCustomerId, status: "PENDING" },
+              orderBy: { createdAt: "desc" },
+            })
+          : null) ??
+        (update.wabaId && !update.partnerCustomerId
+          ? await tx.wabaOnboarding.findFirst({
+              where: { wabaId: update.wabaId },
+              orderBy: { updatedAt: "desc" },
+            })
+          : null);
+
+      if (current) {
+        current = await tx.wabaOnboarding.update({
+          where: { id: current.id },
+          data,
+        });
+      } else if (update.wabaId || update.partnerCustomerId) {
+        current = await tx.wabaOnboarding.create({
+          data: {
+            partnerCustomerId: update.partnerCustomerId || `waba_${update.wabaId}`,
+            onboardingType: "WHATSAPP_BUSINESS_PLATFORM",
+            status: partnerAdded ? "CONNECTED" : "UPDATED",
+            ...data,
+          },
+        });
+      }
+      return current;
+    },
+    { isolationLevel: "Serializable" },
+  );
 
   if (row && partnerAdded && row.wabaId) {
     const businessPhone = await syncWabaPhoneBinding(row.wabaId);

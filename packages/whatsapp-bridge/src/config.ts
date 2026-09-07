@@ -47,6 +47,8 @@ export const config = {
   },
   databaseUrl: process.env.DATABASE_URL || "",
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
+  /** Server-side operator credential. Never expose this to tenant agents or client responses. */
+  adminToken: optional("WHATSAPP_BRIDGE_ADMIN_TOKEN"),
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),
@@ -70,3 +72,10 @@ export const config = {
     baseUrl: optional("FEISHU_BASE_URL") || "https://open.feishu.cn",
   },
 };
+
+/** Fail fast for a real server process; tests can still build an isolated Fastify instance. */
+export function assertRequiredServerConfig(): void {
+  if (!config.adminToken) {
+    throw new Error("WHATSAPP_BRIDGE_ADMIN_TOKEN is required");
+  }
+}

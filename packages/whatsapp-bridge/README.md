@@ -10,6 +10,7 @@ Node 服务：YCloud WhatsApp 与飞书客服群话题双向同步。买家 What
 - 24h 窗口外禁止自由文本，并在话题里提示需要模板
 - 忽略机器人自己发的飞书消息，避免回环
 - Partner Direct Link：服务端创建一次性 Onboarding Link，Webhook 落库 WABA 绑定
+- 管理员恢复入口：把 YCloud 中已存在、无法重新走 Direct Link 的 WABA 导入单一租户
 
 ## 启动
 
@@ -58,6 +59,16 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 | 查会话窗口 | `GET /api/whatsapp/conversations?partnerCustomerId=&phone=`（可选 `&from=`） |
 | 嵌入式注册（创建 Onboarding Link） | `POST /api/whatsapp/onboarding-links` |
 | 查询 WABA 绑定状态 | `GET /api/whatsapp/wabas?partnerCustomerId=` |
+
+现有 WABA 导入是独立的运维接口 `POST /api/admin/whatsapp/import-existing-waba`，不属于
+智能体 API，也不得把管理员凭据或 WABA 标识交给租户智能体。它只接受服务端
+`Authorization: Bearer …` 鉴权，body 仅含 `partnerCustomerId` 与 `wabaId`。服务先通过
+YCloud 列号接口核实账户及号码，再在 SERIALIZABLE 事务中写入 `CONNECTED`
+`WabaOnboarding` 和 `WabaPhone`。响应只返回 tenant、状态和号码，不返回 WABA 标识。
+
+**归属不变量：一个 WABA 只能属于一个 tenant。** 如果该 WABA 已有其他 tenant 的
+`CONNECTED` 记录，或任一号码已映射到其他 WABA，导入返回 409 且不写入。并发导入与
+`PARTNER_ADDED` Webhook 使用相同的数据库事务锁；本功能没有共享 WABA 模式。
 
 YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message.updated`，以及嵌入式注册用的 `whatsapp.business_account.updated`。绑定成功后桥接会落库，并可通知发起飞书群 / 客服群。
 
@@ -114,6 +125,7 @@ kubectl apply -k k8s/base/whatsapp-bridge
 |---|---|
 | `YCLOUD_API_KEY` | **必需**，所有出站 YCloud 调用都读它 |
 | `YCLOUD_WEBHOOK_SECRET` | **必需**（生产），校验 YCloud 回调签名 |
+| `WHATSAPP_BRIDGE_ADMIN_TOKEN` | **必需**，仅服务端运维持有；缺失时进程拒绝启动 |
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 可选，见下 |
 | `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY` | 可选，见下 |
 

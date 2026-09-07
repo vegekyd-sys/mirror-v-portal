@@ -45,6 +45,8 @@ import {
 import { runWithFeishuApp } from "../platform/feishu/context";
 import { addChatBots } from "../platform/feishu/client";
 import { findThreadByFeishuId } from "../platform/feishu/adapter";
+import { requireBridgeAdmin, AdminAuthError } from "./adminAuth";
+import { importExistingWaba, AdminWabaImportError } from "../core/adminWabaImport";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -214,7 +216,14 @@ async function healthHandler() {
 }
 
 export async function buildServer() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      redact: {
+        paths: ["req.headers.authorization"],
+        censor: "***",
+      },
+    },
+  });
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
     const raw = typeof body === "string" ? body : body.toString("utf8");
@@ -231,6 +240,22 @@ export async function buildServer() {
   await app.register(
     async (scope) => {
       scope.get("/health", healthHandler);
+      scope.post("/api/admin/whatsapp/import-existing-waba", async (request, reply) => {
+        try {
+          requireBridgeAdmin(request);
+          return await importExistingWaba(request.body);
+        } catch (error) {
+          if (error instanceof AdminAuthError || error instanceof AdminWabaImportError) {
+            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+          }
+          request.log.error({ err: error }, "admin existing WABA import failed");
+          return reply.code(500).send({
+            error: "failed to import WhatsApp business account",
+            code: "ADMIN_IMPORT_FAILED",
+          });
+        }
+      });
+
     scope.post("/api/feishu/apps", async (request, reply) => {
       const body = (request.body || {}) as {
         appId?: string;
