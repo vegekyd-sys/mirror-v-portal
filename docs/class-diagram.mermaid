@@ -1,0 +1,88 @@
+classDiagram
+    class LlmPushTask {
+        +string id
+        +string kind
+        +string scope
+        +string trigger
+        +string status
+        +string prev_library
+        +string next_library
+        +int total_count
+        +int succeeded_count
+        +int failed_count
+        +int skipped_count
+        +string error
+        +string actor
+        +string actor_type
+        +string lease_owner
+        +Date lease_expires_at
+        +bool cancel_requested
+        +Date created_at
+        +Date started_at
+        +Date finished_at
+    }
+
+    class LlmPushTaskItem {
+        +bigint id
+        +string task_id
+        +string tenant_id
+        +string status
+        +bool restarted
+        +bool gateway_restarted
+        +bool skip_restart
+        +string error
+        +int attempts
+        +Date started_at
+        +Date finished_at
+        +Date updated_at
+    }
+
+    class LlmProviderMaterialiser {
+        <<service>> llm-providers.ts
+        +applyTenantLlmConfig(pool, config, tenantId, nowLibrary, prevLibrary, scope) TenantPushOutcome
+        +resolveEffectiveLlmProviders(pool, tenantId, libraryOverride) EffectiveLlmProviders
+        +tenantNeedsLlmRestart(prev, now, selection) bool
+        +pushLlmProviders(pool, config, scope, prevLibrary) LlmPushResult
+    }
+
+    class LlmPushTaskService {
+        <<service>> llm-push-task.ts
+        +enqueueLlmPush(pool, config, input) TaskId
+        +claimNextTask(pool) LlmPushTask
+        +enumerateTargets(pool, task) void
+        +executeTask(pool, config, broker, task) void
+        +listTasks(pool, filters) TasksPage
+        +getTaskDetail(pool, taskId) TaskDetail
+        +retryFailedItems(pool, taskId, tenantIds) int
+        +requestCancel(pool, taskId) void
+        +reapStaleTasks(pool) void
+    }
+
+    class LlmPushWorker {
+        <<service>> index.ts
+        +start(pool, config, broker) void
+        -poll() Promise<void>
+        -runTask(task) Promise<void>
+    }
+
+    class SseBroker {
+        <<service>> sse-broker.ts
+        -Map~string, Set~Response~~ clients
+        +subscribe(taskId, res) void
+        +unsubscribe(taskId, res) void
+        +publish(taskId, event) void
+    }
+
+    class LlmPushRoutes {
+        <<routes>> routes/llm-push.ts
+        +createLlmPushRoutes(pool, config, broker, auth) Router
+    }
+
+    LlmPushTask "1" o-- "*" LlmPushTaskItem : contains
+    LlmPushTaskService --> LlmPushTask : persists
+    LlmPushTaskService --> LlmPushTaskItem : persists
+    LlmPushTaskService --> LlmProviderMaterialiser : delegates per-tenant work
+    LlmPushTaskService --> SseBroker : publishes progress
+    LlmPushWorker --> LlmPushTaskService : claim/execute
+    LlmPushRoutes --> LlmPushTaskService : calls
+    LlmPushRoutes --> SseBroker : subscribe

@@ -47,6 +47,8 @@ const baseConfig: ProvisioningConfig = {
   backupImage: 'test/ossutil',
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
+  llmPushWorkerIntervalMs: 100,
+  llmPushLeaseSeconds: 600,
 };
 
 const prodConfig = { ...baseConfig, k8sDryRun: false };

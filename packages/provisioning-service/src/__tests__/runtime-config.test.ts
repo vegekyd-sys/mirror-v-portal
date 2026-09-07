@@ -37,6 +37,8 @@ const baseConfig: ProvisioningConfig = {
   backupImage: 'test/ossutil',
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
+  llmPushWorkerIntervalMs: 100,
+  llmPushLeaseSeconds: 600,
 };
 
 interface FakeQuery { sql: string; params?: unknown[] }

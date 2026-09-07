@@ -5,6 +5,8 @@ import { migrate } from './db/migrate.js';
 import { syncImageReleases } from './services/registry-sync.js';
 import { pruneAuditLogs } from './services/audit.js';
 import { attachPodExecWebSocket } from './ws/pod-exec.js';
+import { SseBroker } from './services/sse-broker.js';
+import { startLlmPushWorker, startLlmPushReaper, startLlmPushPruner } from './services/llm-push-task.js';
 
 async function main() {
   const config = loadConfig();
@@ -17,7 +19,11 @@ async function main() {
   // Run migrations
   await migrate(pool);
 
-  const app = createApp(pool, config);
+  // LLM push async task: the worker publishes progress to the SseBroker the
+  // SSE routes also subscribe to, so the admin console can stream live
+  // per-tenant rollout progress.
+  const broker = new SseBroker();
+  const app = createApp(pool, config, broker);
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(JSON.stringify({
@@ -33,6 +39,12 @@ async function main() {
   // so the ws server attaches to the raw HTTP server. No-op in dry-run mode
   // (k8s exec is cluster-only; the upgrade handler rejects with 404).
   attachPodExecWebSocket(server);
+
+  // LLM push async worker + reaper (fire-and-forget intervals, unref'd).
+  startLlmPushWorker(pool, config, broker);
+  startLlmPushReaper(pool);
+  // Prune finished LLM-push tasks older than 30 days (history retention).
+  startLlmPushPruner(pool);
 
   // Registry sync — the image release registry's source of truth is the
   // container registry (replaces the removed Jenkins post-build hook).

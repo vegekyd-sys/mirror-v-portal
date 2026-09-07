@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    participant UI as admin-web<br/>(LlmProvidersPage)
+    participant API as provisioning-service<br/>HTTP (Express)
+    participant DB as PostgreSQL
+    participant W as LlmPushWorker<br/>(进程内轮询)
+    participant SSE as SseBroker<br/>(内存 pub/sub)
+    participant K8s as K8s apiserver
+
+    Note over UI,API: 保存全局默认模型
+    UI->>API: PUT /v1/admin/llm-providers (库 JSON)
+    API->>API: validateLlmProviders + 快照 prevLibrary
+    API->>DB: upsert runtime_configs(全局, 加密)
+    API->>DB: INSERT llm_push_tasks(pending, prev/next 加密快照)
+    API-->>UI: { ok, taskId, status:'pending', streamUrl, hint }
+
+    UI->>API: GET /v1/admin/llm-push-tasks/:id/stream (SSE, Bearer)
+    API->>SSE: subscribe(taskId, res)
+
+    loop Worker 每 500ms 轮询
+        W->>DB: 认领 pending 任务<br/>FOR UPDATE SKIP LOCKED
+        alt 认领到任务
+            W->>DB: task -> running (写 lease)
+            W->>SSE: publish snapshot 事件
+            W->>DB: 枚举目标租户 + 批量 INSERT items
+            loop 逐租户 item
+                W->>K8s: getSecret/putSecret/putSecret/<br/>patchEnvFrom/(restart)
+                W->>DB: UPDATE item 状态 + 任务计数器
+                W->>SSE: publish item 事件
+            end
+            W->>DB: task -> succeeded/partial/failed
+            W->>SSE: publish task + done 事件
+        end
+    end
+
+    SSE-->>UI: snapshot / item / task / done
+    UI->>UI: 渲染进度条 + 逐租户状态表

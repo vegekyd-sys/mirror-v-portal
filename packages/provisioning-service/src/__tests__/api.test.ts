@@ -71,6 +71,8 @@ beforeAll(async () => {
     backupImage: 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
     creditsLedgerUrl: 'http://credits-ledger:8081',
     creditsLedgerToken: '',
+    llmPushWorkerIntervalMs: 100,
+    llmPushLeaseSeconds: 600,
 
   };
   app = createApp(pool, config);
@@ -91,7 +93,7 @@ describe('GET /healthz', () => {
         runtimeNamespace: 'dealclaw-test', imageRegistry: 'test-registry/dealclaw',
         nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test',
         agentPvcSize: '10Gi', agentPvcStorageClass: 'alibabacloud-cnfs-nas', agentPvcAccessMode: 'ReadWriteOnce',
-        ossEndpoint: 'oss-cn-shanghai.aliyuncs.com', ossBucket: 'dealclaw-backup', ossSecretName: 'dealclaw-oss', backupImage: 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1', creditsLedgerUrl: 'http://credits-ledger:8081', creditsLedgerToken: '',
+        ossEndpoint: 'oss-cn-shanghai.aliyuncs.com', ossBucket: 'dealclaw-backup', ossSecretName: 'dealclaw-oss', backupImage: 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1', creditsLedgerUrl: 'http://credits-ledger:8081', creditsLedgerToken: '', llmPushWorkerIntervalMs: 100, llmPushLeaseSeconds: 600,
       });
     }
     const res = await request(app).get('/healthz');

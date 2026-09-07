@@ -596,8 +596,10 @@ export interface EffectiveLlmProviders {
 export async function resolveEffectiveLlmProviders(
   pool: pg.Pool,
   tenantId: string | null,
+  libraryOverride?: LlmProvidersConfig | null,
 ): Promise<EffectiveLlmProviders> {
-  const globalConfig = await getGlobalLlmProviders(pool);
+  const globalConfig =
+    libraryOverride !== undefined ? libraryOverride : await getGlobalLlmProviders(pool);
   if (!globalConfig || globalConfig.providers.length === 0) {
     return {
       globalConfig: null,
@@ -702,6 +704,156 @@ export const LLM_PROXY_CONFIG_SECRET = 'llm-proxy-config';
  * Key rotation here is NOT hot: envFrom values only apply on pod start, so
  * each affected agent is rolling-restarted (restartDeployment).
  */
+export interface TenantPushOutcome {
+  tenantId: string;
+  ok: boolean;
+  /** True when no work was done (dry-run / tenant without a namespace). */
+  skipped: boolean;
+  restarted: boolean;
+  gatewayRestarted: boolean;
+  /** True when the Secret was materialised but no restart was needed (差分). */
+  skipRestart: boolean;
+  error?: string;
+}
+
+/**
+ * Materialise ONE tenant's effective LLM_PROVIDERS blob into its Secrets and
+ * (differentially) roll its agent + gateway. The pure, reusable core shared
+ * by the synchronous selection path (pushLlmProviders) and the asynchronous
+ * worker (services/llm-push-task.ts).
+ *
+ * `nowLibrary` / `prevLibrary` are passed explicitly so the async worker can
+ * feed its encrypted task snapshot without re-reading the live global row;
+ * the synchronous path passes the just-read library. `scope !== null` (a
+ * tenant-scoped selection write) always rolls that tenant.
+ */
+export async function applyTenantLlmConfig(
+  pool: pg.Pool,
+  config: ProvisioningConfig,
+  tenantId: string,
+  nowLibrary: LlmProvidersConfig | null,
+  prevLibrary: LlmProvidersConfig | null,
+  scope: string | null,
+): Promise<TenantPushOutcome> {
+  try {
+    if (config.k8sDryRun) {
+      return { tenantId, ok: true, skipped: true, restarted: false, gatewayRestarted: false, skipRestart: false };
+    }
+    const { rows: tenantRows } = await pool.query(
+      `SELECT k8s_namespace FROM tenants WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    const namespace = tenantRows[0]?.k8s_namespace;
+    if (!namespace) {
+      return { tenantId, ok: true, skipped: true, restarted: false, gatewayRestarted: false, skipRestart: false };
+    }
+
+    // Effective blob = provided library snapshot + this tenant's selection.
+    const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId, nowLibrary);
+    const rawSelection = await getTenantModelSelection(pool, tenantId);
+    const directMode = rawSelection?.directMode === true;
+
+    // Differential roll: tenant-scoped writes always roll (their selection
+    // just changed); global writes only roll when the tenant's live model
+    // or its provider credentials actually changed.
+    const needsRestart =
+      scope !== null ||
+      tenantNeedsLlmRestart(prevLibrary, globalConfig, rawSelection);
+
+    // Proxy mode (default): rewrite each provider's baseUrl to the tenant's
+    // LLM egress proxy (nexus-gateway /v1/llm/<name>). The REAL baseUrl
+    // moves into the llm-proxy-config Secret the gateway reads via envFrom.
+    const upstreams: Record<string, string> = {};
+    let proxyBlob: string | null = null;
+    if (globalConfig && blob) {
+      const doc = JSON.parse(blob) as LlmProvidersConfig;
+      if (directMode) {
+        proxyBlob = blob; // keep real baseUrl + apiKey
+        for (const p of doc.providers) upstreams[p.name] = p.baseUrl;
+      } else {
+        doc.providers = doc.providers.map((p) => {
+          upstreams[p.name] = p.baseUrl;
+          return { ...p, baseUrl: llmProxyBaseUrl(tenantId, p.name) };
+        });
+        proxyBlob = JSON.stringify(doc);
+      }
+    }
+
+    // tenant-config: keep only envFrom-only keys, then set or drop
+    // LLM_PROVIDERS (rewritten to proxy URLs) according to the config.
+    const next: Record<string, string> = {};
+    const existing = await getSecret(namespace, 'tenant-config');
+    if (existing) {
+      for (const [k, v] of Object.entries(existing.data)) {
+        if (!ENV_FROM_ONLY_KEYS.has(k)) continue;
+        try {
+          next[k] = Buffer.from(v, 'base64').toString('utf8');
+        } catch {
+          next[k] = v;
+        }
+      }
+    }
+    if (proxyBlob) next[LLM_PROVIDERS_KEY] = proxyBlob;
+    else delete next[LLM_PROVIDERS_KEY];
+    await putSecret(namespace, 'tenant-config', next);
+
+    // llm-proxy-config: the gateway's providerName → real baseUrl map.
+    await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, {
+      LLM_UPSTREAMS: JSON.stringify(upstreams),
+    });
+
+    // 存量网关可能没有挂 llm-proxy-config envFrom——幂等补挂。
+    await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
+
+    // 存量租户的 dealclaw-credits Secret 缺 CREDITS_LEDGER_TOKEN——幂等 backfill。
+    const creditsSecretName = `dealclaw-credits-${tenantId}`;
+    if (config.creditsLedgerToken) {
+      const creditsSecret = await getSecret(namespace, creditsSecretName);
+      if (creditsSecret && !(creditsSecret.data && 'CREDITS_LEDGER_TOKEN' in creditsSecret.data)) {
+        const merged: Record<string, string> = {};
+        for (const [k, v] of Object.entries(creditsSecret.data ?? {})) {
+          merged[k] = Buffer.from(v, 'base64').toString('utf8');
+        }
+        merged['CREDITS_LEDGER_TOKEN'] = config.creditsLedgerToken;
+        await putSecret(namespace, creditsSecretName, merged);
+      }
+    }
+
+    // envFrom values only apply on pod start — roll BOTH the agent
+    // (rewritten provider blob) and the gateway (upstream map) when needed.
+    let restarted = false;
+    let gatewayRestarted = false;
+    if (needsRestart) {
+      const deployName = `dealclaw-agent-${tenantId}`;
+      restarted = (await deploymentExists(namespace, deployName))
+        ? await restartDeployment(namespace, deployName)
+        : false;
+      gatewayRestarted = (await deploymentExists(namespace, `nexus-gateway-${tenantId}`))
+        ? await restartDeployment(namespace, `nexus-gateway-${tenantId}`)
+        : false;
+    }
+
+    return {
+      tenantId,
+      ok: true,
+      skipped: false,
+      restarted,
+      gatewayRestarted,
+      skipRestart: !needsRestart,
+    };
+  } catch (err) {
+    return {
+      tenantId,
+      ok: false,
+      skipped: false,
+      restarted: false,
+      gatewayRestarted: false,
+      skipRestart: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function pushLlmProviders(
   pool: pg.Pool,
   config: ProvisioningConfig,
@@ -727,133 +879,22 @@ export async function pushLlmProviders(
     targets.push(...rows.map((r: any) => r.tenant_id));
   }
 
+  // Snapshot the live library once for the whole run (the async worker passes
+  // its encrypted task snapshot instead of re-reading here).
+  const nowLibrary = await getGlobalLlmProviders(pool);
+
   const results: LlmPushResult['tenants'] = [];
   let skippedCount = 0;
   for (const tenantId of targets) {
-    try {
-      if (config.k8sDryRun) {
-        results.push({ tenantId, ok: true, restarted: false });
-        continue;
-      }
-      const { rows: tenantRows } = await pool.query(
-        `SELECT k8s_namespace FROM tenants WHERE tenant_id = $1`,
-        [tenantId],
-      );
-      const namespace = tenantRows[0]?.k8s_namespace;
-      if (!namespace) {
-        results.push({ tenantId, ok: true, restarted: false });
-        continue;
-      }
-
-      // Effective blob = global library + this tenant's resolved default.
-      const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId);
-      const rawSelection = await getTenantModelSelection(pool, tenantId);
-      const directMode = rawSelection?.directMode === true;
-
-      // Differential roll: tenant-scoped writes always roll (their selection
-      // just changed); global writes only roll when the tenant's live model
-      // or its provider credentials actually changed. Unchanged tenants keep
-      // the materialised Secret but their agent keeps running untouched.
-      const needsRestart =
-        scope !== null ||
-        tenantNeedsLlmRestart(prevLibrary, globalConfig, rawSelection);
-
-      // Proxy mode (default): rewrite each provider's baseUrl to the tenant's
-      // LLM egress proxy (nexus-gateway /v1/llm/<name>). The REAL baseUrl
-      // moves into the llm-proxy-config Secret the gateway reads via envFrom,
-      // and the API key travels unchanged in the blob (Authorization
-      // passthrough) — OpenClaw / write-config.mjs need zero changes.
-      //
-      // Direct mode (opt-in per tenant): keep the REAL baseUrl + apiKey in
-      // the blob so OpenClaw calls the upstream directly, bypassing the
-      // gateway and its value-added interceptions (balance check, accounting
-      // tee, rate limits). Used to A/B-isolate gateway-induced latency.
-      const upstreams: Record<string, string> = {};
-      let proxyBlob: string | null = null;
-      if (globalConfig && blob) {
-        const doc = JSON.parse(blob) as LlmProvidersConfig;
-        if (directMode) {
-          proxyBlob = blob; // keep real baseUrl + apiKey
-          for (const p of doc.providers) upstreams[p.name] = p.baseUrl;
-        } else {
-          doc.providers = doc.providers.map((p) => {
-            upstreams[p.name] = p.baseUrl;
-            return { ...p, baseUrl: llmProxyBaseUrl(tenantId, p.name) };
-          });
-          proxyBlob = JSON.stringify(doc);
-        }
-      }
-
-      // tenant-config: keep only envFrom-only keys, then set or drop
-      // LLM_PROVIDERS (rewritten to proxy URLs) according to the config.
-      const next: Record<string, string> = {};
-      const existing = await getSecret(namespace, 'tenant-config');
-      if (existing) {
-        for (const [k, v] of Object.entries(existing.data)) {
-          if (!ENV_FROM_ONLY_KEYS.has(k)) continue;
-          try {
-            next[k] = Buffer.from(v, 'base64').toString('utf8');
-          } catch {
-            next[k] = v;
-          }
-        }
-      }
-      if (proxyBlob) next[LLM_PROVIDERS_KEY] = proxyBlob;
-      else delete next[LLM_PROVIDERS_KEY];
-      await putSecret(namespace, 'tenant-config', next);
-
-      // llm-proxy-config: the gateway's providerName → real baseUrl map.
-      // Written even when the library is empty so stale mappings are
-      // cleared instead of lingering in the Secret.
-      await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, {
-        LLM_UPSTREAMS: JSON.stringify(upstreams),
-      });
-
-      //存量网关可能没有挂 llm-proxy-config envFrom（代理化之前创建）——
-      // 幂等补挂；404（网关不存在）静默跳过。
-      await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
-
-      // 存量租户的 dealclaw-credits Secret 缺 CREDITS_LEDGER_TOKEN（网关
-      // 记账上报/余额查询的共享 token）——幂等 backfill，已有或本服务未
-      // 配置 token 时跳过。
-      const creditsSecretName = `dealclaw-credits-${tenantId}`;
-      if (config.creditsLedgerToken) {
-        const creditsSecret = await getSecret(namespace, creditsSecretName);
-        if (creditsSecret && !(creditsSecret.data && 'CREDITS_LEDGER_TOKEN' in creditsSecret.data)) {
-          const merged: Record<string, string> = {};
-          for (const [k, v] of Object.entries(creditsSecret.data ?? {})) {
-            merged[k] = Buffer.from(v, 'base64').toString('utf8');
-          }
-          merged['CREDITS_LEDGER_TOKEN'] = config.creditsLedgerToken;
-          await putSecret(namespace, creditsSecretName, merged);
-        }
-      }
-
-      // envFrom values only apply on pod start — roll BOTH the agent
-      // (rewritten provider blob) and the gateway (upstream map) ONLY when
-      // this tenant's live model actually changed.
-      let restarted = false;
-      let gatewayRestarted = false;
-      if (needsRestart) {
-        const deployName = `dealclaw-agent-${tenantId}`;
-        restarted = (await deploymentExists(namespace, deployName))
-          ? await restartDeployment(namespace, deployName)
-          : false;
-        gatewayRestarted = (await deploymentExists(namespace, `nexus-gateway-${tenantId}`))
-          ? await restartDeployment(namespace, `nexus-gateway-${tenantId}`)
-          : false;
-      } else {
-        skippedCount += 1;
-      }
-      results.push({ tenantId, ok: true, restarted, gatewayRestarted });
-    } catch (err) {
-      results.push({
-        tenantId,
-        ok: false,
-        restarted: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    const outcome = await applyTenantLlmConfig(pool, config, tenantId, nowLibrary, prevLibrary, scope);
+    if (outcome.ok && outcome.skipRestart) skippedCount += 1;
+    results.push({
+      tenantId,
+      ok: outcome.ok,
+      restarted: outcome.restarted,
+      gatewayRestarted: outcome.gatewayRestarted,
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
   }
 
   const okCount = results.filter((r) => r.ok).length;

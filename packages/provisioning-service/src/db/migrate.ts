@@ -258,6 +258,61 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
     `);
 
+    // ── LLM push async task (v0.11) ────────────────────────────────────────
+    // 把「全局供应商库写入 → 逐租户物化 Secret + 滚动重启」从同步 HTTP 请求
+    // 改为持久化任务：保存接口只入队（pending）立即返回，进程内 worker 用
+    // FOR UPDATE SKIP LOCKED 认领，逐租户执行并边跑边推 SSE 进度。
+    //   - prev_library / next_library 用与 runtime_configs 相同的 AES-256-GCM
+    //     加密（services/crypto.ts encryptValue），worker 执行时再解密，避免
+    //     密钥明文二处落库。快照式存储保证任务确定性（并发编辑不干扰在跑任务）。
+    //   - 租约（lease_expires_at）覆盖进程崩溃/重启：reaper 回收超时 running
+    //     任务回 pending，worker 断点续跑只处理仍 pending 的 item。
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_push_tasks (
+        id                TEXT PRIMARY KEY,               -- 应用层 randomUUID()
+        kind              TEXT NOT NULL CHECK (kind IN ('global_push','tenant_push')),
+        scope             TEXT,                            -- NULL=全局；tenant_push 时为 tenant_id
+        trigger           TEXT NOT NULL DEFAULT 'save' CHECK (trigger IN ('save','delete','selection','retry')),
+        status            TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','running','succeeded','partial','failed','cancelled')),
+        prev_library      TEXT,                            -- 加密 JSON（LlmProvidersConfig | null）
+        next_library      TEXT,                            -- 加密 JSON（LlmProvidersConfig | null）
+        total_count       INTEGER NOT NULL DEFAULT 0,
+        succeeded_count   INTEGER NOT NULL DEFAULT 0,
+        failed_count      INTEGER NOT NULL DEFAULT 0,
+        skipped_count     INTEGER NOT NULL DEFAULT 0,
+        error             TEXT,                            -- 任务级致命错误
+        actor             TEXT,
+        actor_type        TEXT NOT NULL DEFAULT 'admin' CHECK (actor_type IN ('admin','service')),
+        lease_owner       TEXT,                            -- worker 进程标识
+        lease_expires_at  TIMESTAMPTZ,                     -- 续租 TTL
+        cancel_requested  BOOLEAN NOT NULL DEFAULT FALSE,  -- 协作式取消标记（v1 预留）
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        started_at        TIMESTAMPTZ,
+        finished_at       TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_push_tasks_status ON llm_push_tasks(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_llm_push_tasks_created ON llm_push_tasks(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS llm_push_task_items (
+        id                BIGSERIAL PRIMARY KEY,
+        task_id           TEXT NOT NULL REFERENCES llm_push_tasks(id) ON DELETE CASCADE,
+        tenant_id         TEXT NOT NULL,
+        status            TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','running','succeeded','skipped','failed')),
+        restarted         BOOLEAN NOT NULL DEFAULT FALSE,  -- agent 是否滚动
+        gateway_restarted BOOLEAN NOT NULL DEFAULT FALSE,  -- gateway 是否滚动
+        skip_restart      BOOLEAN NOT NULL DEFAULT FALSE,  -- 差分判定无需重启但 Secret 已物化
+        error             TEXT,
+        attempts          INTEGER NOT NULL DEFAULT 0,
+        started_at        TIMESTAMPTZ,
+        finished_at       TIMESTAMPTZ,
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_push_items_task ON llm_push_task_items(task_id, id);
+      CREATE INDEX IF NOT EXISTS idx_llm_push_items_status ON llm_push_task_items(task_id, status);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

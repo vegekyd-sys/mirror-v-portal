@@ -34,6 +34,8 @@ const config: ProvisioningConfig = {
   backupImage: 'test/ossutil',
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
+  llmPushWorkerIntervalMs: 100,
+  llmPushLeaseSeconds: 600,
 };
 
 /** Stateful fake pool: models the tenants.im_open_id column only. */

@@ -27,6 +27,7 @@ import {
 } from '../services/llm-providers.js';
 import type { ProvisioningConfig } from '../config.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
+import { enqueueLlmPush } from '../services/llm-push-task.js';
 
 /**
  * Admin API for per-tenant runtime configuration.
@@ -326,7 +327,17 @@ export function createRuntimeConfigRoutes(
         description: '大模型供应商库（全局；agent 启动时经 envFrom 注入，改动需滚动重启生效）',
       });
 
-      const push = await pushLlmProviders(pool, config, null, prevLibrary);
+      // 异步入队：不再同步 pushLlmProviders（避免 HTTP 请求长时间阻塞）。
+      const { actor, actorType } = actorFromRequest(req);
+      const { taskId } = await enqueueLlmPush(pool, {
+        kind: 'global_push',
+        scope: null,
+        trigger: 'save',
+        prevLibrary,
+        nextLibrary: doc,
+        actor,
+        actorType: actorType === 'external' ? 'service' : actorType,
+      });
 
       // Audit: the global provider library affects every tenant's model
       // egress. prevLibrary → doc with apiKey redacted by writeAuditLog.
@@ -348,12 +359,19 @@ export function createRuntimeConfigRoutes(
           defaultModel: doc.defaultModel,
           imageModel: doc.imageModel,
           compactionModel: doc.compactionModel,
-          push,
+          taskId,
+          async: true,
         },
         statusCode: 200,
       });
 
-      res.json({ ok: true, push });
+      res.json({
+        ok: true,
+        taskId,
+        status: 'pending',
+        streamUrl: `/v1/admin/llm-push-tasks/${taskId}/stream`,
+        hint: '配置已保存，正在后台推送到所有租户（约 1–2 分钟生效），可查看进度',
+      });
     } catch (err) {
       if (err instanceof MasterKeyError) {
         res.status(503).json({ code: 'RUNTIME_CONFIG_KEY_NOT_CONFIGURED', message: err.message });
@@ -377,7 +395,17 @@ export function createRuntimeConfigRoutes(
         res.status(404).json({ code: 'NOT_FOUND', message: 'No LLM provider library configured' });
         return;
       }
-      const push = await pushLlmProviders(pool, config, null, prevLibrary);
+      // 异步入队（清库场景：nextLibrary = null）。
+      const { actor, actorType } = actorFromRequest(req);
+      const { taskId } = await enqueueLlmPush(pool, {
+        kind: 'global_push',
+        scope: null,
+        trigger: 'delete',
+        prevLibrary,
+        nextLibrary: null,
+        actor,
+        actorType: actorType === 'external' ? 'service' : actorType,
+      });
 
       await auditFor(req, {
         action: 'llm-provider.delete',
@@ -388,11 +416,17 @@ export function createRuntimeConfigRoutes(
         oldValue: prevLibrary
           ? { providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }
           : null,
-        newValue: null,
+        newValue: { taskId, async: true },
         statusCode: 200,
       });
 
-      res.json({ ok: true, push });
+      res.json({
+        ok: true,
+        taskId,
+        status: 'pending',
+        streamUrl: `/v1/admin/llm-push-tasks/${taskId}/stream`,
+        hint: '供应商库已清空，正在后台同步到所有租户，可查看进度',
+      });
     } catch (err) {
       console.error('DELETE llm-providers failed:', err);
       res.status(500).json({ code: 'INTERNAL' });

@@ -8,9 +8,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { IconAlert, IconRefresh } from '../components/icons';
+import LlmPushProgressModal from '../components/LlmPushProgressModal';
 
-interface PushSummary {
-  status?: 'ok' | 'failed' | 'skipped';
+/** PUT/DELETE 全局供应商库后，后端异步任务入队返回的响应体。 */
+interface PushEnqueueResponse {
+  ok: boolean;
+  taskId: string;
+  status: 'pending';
+  streamUrl: string;
   hint: string;
 }
 
@@ -66,6 +71,7 @@ export default function LlmProvidersPage() {
   const [lpMsgErr, setLpMsgErr] = useState(false);
   const [usage, setUsage] = useState<LlmUsageTenant[] | null>(null);
   const [usageDays, setUsageDays] = useState(7);
+  const [pushTaskId, setPushTaskId] = useState<string | null>(null);
 
   const fmtNum = (n: number): string =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n);
@@ -266,9 +272,10 @@ export default function LlmProvidersPage() {
   };
 
   /**
-   * 即时保存：每次操作（加入/更新/移除/切换默认模型）直接全量写库并推送
-   * 所有租户。库为空时走 DELETE 接口（清库）。失败后 load() 把本地状态
-   * 回滚到后端实际数据，保证界面与库一致。
+   * 即时保存：每次操作（加入/更新/移除/切换默认模型）直接全量写库。
+   * 后端将逐租户物化 + 滚动重启改为异步任务，返回 taskId；本页打开进度
+   * 弹窗实时展示推送进度。库为空时走 DELETE 接口（清库）。失败后 load()
+   * 把本地状态回滚到后端实际数据，保证界面与库一致。
    */
   const persistLibrary = async (
     providers: LlmProvider[],
@@ -281,16 +288,18 @@ export default function LlmProvidersPage() {
     setBusy(true);
     try {
       if (providers.length === 0) {
-        const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', { method: 'DELETE' });
-        flash(`已移除全部供应商。${r.push?.hint || ''}`);
-        log(`移除全部供应商${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
+        const r = await api<PushEnqueueResponse>('/v1/admin/llm-providers', { method: 'DELETE' });
+        flash('已移除全部供应商，正在后台同步到所有租户…');
+        log(`移除全部供应商 — ${r.hint || '已入队后台推送'}`);
+        setPushTaskId(r.taskId);
       } else {
-        const r = await api<{ push?: PushSummary }>('/v1/admin/llm-providers', {
+        const r = await api<PushEnqueueResponse>('/v1/admin/llm-providers', {
           method: 'PUT',
           body: { providers, defaultModel, imageModel, compactionModel, fallbackModels },
         });
-        flash(`${opText}，已生效。${r.push?.hint || ''}`);
-        log(`${opText}${r.push?.hint ? ` — ${r.push.hint}` : ''}`);
+        flash(`${opText}，正在后台推送到所有租户…`);
+        log(`${opText} — ${r.hint || '已入队后台推送'}`);
+        setPushTaskId(r.taskId);
       }
       await load();
     } catch (e) {
@@ -761,6 +770,10 @@ export default function LlmProvidersPage() {
           </div>
         ))}
       </div>
+
+      {pushTaskId && (
+        <LlmPushProgressModal taskId={pushTaskId} onClose={() => setPushTaskId(null)} />
+      )}
     </>
   );
 }

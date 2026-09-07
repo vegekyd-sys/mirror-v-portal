@@ -58,6 +58,8 @@ const baseConfig: ProvisioningConfig = {
   backupImage: 'test/ossutil',
   creditsLedgerUrl: 'http://credits-ledger:8081',
   creditsLedgerToken: '',
+  llmPushWorkerIntervalMs: 100,
+  llmPushLeaseSeconds: 600,
 };
 const prodConfig = { ...baseConfig, k8sDryRun: false, creditsLedgerToken: 'svc-token' };
 
@@ -954,13 +956,16 @@ describe('llm-providers API', () => {
     ).toBe(401);
   });
 
-  it('PUT validates and stores the encrypted GLOBAL blob, returning a push hint', async () => {
+  it('PUT validates and stores the encrypted GLOBAL blob, returning an async task id', async () => {
     const pool = makeFakePool({ allTenants: [] });
     const app = createApp(pool, baseConfig);
     const res = await request(app).put('/v1/admin/llm-providers').set(authHeader).send(goodDoc);
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.push.hint).toBeTruthy();
+    expect(res.body.taskId).toBeTruthy();
+    expect(res.body.status).toBe('pending');
+    expect(res.body.streamUrl).toContain(res.body.taskId);
+    expect(res.body.hint).toBeTruthy();
     const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO runtime_configs'));
     expect(insert).toBeTruthy();
     // stored via the crypto layer, never plaintext (mock prefixes enc:)

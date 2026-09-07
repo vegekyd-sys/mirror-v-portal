@@ -47,6 +47,10 @@ export interface ProvisioningConfig {
   creditsLedgerUrl: string;
   /** shared service token for credits-ledger admin auth (BILLING_SERVICE_TOKEN) */
   creditsLedgerToken: string;
+  /** LLM push worker 轮询间隔（毫秒） */
+  llmPushWorkerIntervalMs: number;
+  /** LLM push 任务租约 TTL（秒）——覆盖单租户最坏 ~40s 重启 */
+  llmPushLeaseSeconds: number;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -67,5 +71,7 @@ export function loadConfig(): ProvisioningConfig {
     backupImage: process.env.BACKUP_IMAGE || 'ultronx-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/video-editor/ossutil:2.2.1',
     creditsLedgerUrl: process.env.CREDITS_LEDGER_URL || 'http://credits-ledger:8081',
     creditsLedgerToken: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '',
+    llmPushWorkerIntervalMs: Number(process.env.LLM_PUSH_WORKER_INTERVAL_MS ?? 500),
+    llmPushLeaseSeconds: Number(process.env.LLM_PUSH_LEASE_SECONDS ?? 600),
   };
 }
