@@ -151,12 +151,15 @@ function makePushPool(opts: {
       }
       if (sql.includes('COUNT(*) FILTER')) {
         const items = opts.items ?? [];
+        // 模拟 pg 对 bigint（COUNT(*)）的默认解析：返回字符串而非数字。
+        // 这曾导致 finalStatus 用 `=== 0` 严格比较失败，把所有任务误判为
+        // partial。recount() 里的 Number() 归一必须把这些字符串转回数字。
         return {
           rows: [
             {
-              succeeded_count: items.filter((i) => i.status === 'succeeded').length,
-              failed_count: items.filter((i) => i.status === 'failed').length,
-              skipped_count: items.filter((i) => i.status === 'skipped').length,
+              succeeded_count: String(items.filter((i) => i.status === 'succeeded').length),
+              failed_count: String(items.filter((i) => i.status === 'failed').length),
+              skipped_count: String(items.filter((i) => i.status === 'skipped').length),
             },
           ],
           rowCount: 1,

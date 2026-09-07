@@ -249,7 +249,15 @@ async function recount(pool: pg.Pool, taskId: string): Promise<CountRow> {
      FROM llm_push_task_items WHERE task_id = $1`,
     [taskId],
   );
-  return rows[0];
+  // COUNT(*) 返回 bigint，node-postgres 默认把 int8 解析为字符串（"0"/"115"），
+  // 而 finalStatus 用 `=== 0` 严格比较，字符串恒不等于数字 0 → 全部任务被误判
+  // partial。这里显式 Number() 归一，避免类型陷阱。
+  const r = rows[0];
+  return {
+    succeeded_count: Number(r?.succeeded_count ?? 0),
+    failed_count: Number(r?.failed_count ?? 0),
+    skipped_count: Number(r?.skipped_count ?? 0),
+  };
 }
 
 function buildTaskHint(task: LlmPushTaskRecord): string {
