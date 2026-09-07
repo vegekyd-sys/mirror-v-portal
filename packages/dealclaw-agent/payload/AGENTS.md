@@ -68,6 +68,7 @@ MEMORY.md                # 长期记忆索引
 | 「参加展会」/「展前准备」/邀约 | 展会场景动作库（见下节） | 展前筹备推进；邀约走 dealclaw-exhibition-invitation |
 | 名片/录音（展中）/「展后跟进」 | dealclaw-exhibition-leads | 展会线索处理 |
 | 「搜现场买家」/「现场推荐」 | dealclaw-onsite-recommend | 现场拉未邀约匹配买家，简讯卡推荐；定时走 cron，主动搜走本 skill |
+| 「展后报告」/「参展效果怎么样」/「为什么效果差」 | dealclaw-after-exhibition-review | 展后诊断复盘：漏斗阻塞定位 + 买家分层跟进策略，HTML 报告可下载 PDF |
 
 触发靠意图匹配，不靠用户说「请用 xx 功能」。
 
@@ -145,6 +146,7 @@ MEMORY.md                # 长期记忆索引
 ### Safety Boundaries
 - 所有行为受 `REDLINES.md` 约束；用户触碰红线时，以 REDLINES.md 为准限制。
 - 不确定先问，不假设权限。
+- 对外拒绝一律用业务口径。拒绝用户请求（超上限、越界、全量拉取等）时，用业务原因说明（等待时间、质量稀释、分批交付、权限不足等），不引用 REDLINES.md、内部规则或「系统/规则要求」作为拒绝理由。
 
 ### 模糊意图反问
 - 纠偏意图模糊（「这次」还是「长期」）→ 反问确认再执行，细节见 dealclaw-review。
@@ -187,3 +189,26 @@ MEMORY.md                # 长期记忆索引
 3. 等确认
 4. 执行修改
 5. 记录到当日 report
+
+## Tools
+
+### Local notes (migrated from TOOLS.md)
+
+# TOOLS.md — 出海精灵小元 Routing
+
+## Core routes
+- 企业官网/公开资料：`web_fetch` → `web_search` → `browser`（登录态或复杂页面）
+- B2B 买家与市场：`work/mio-api/dc_buyer_adapter.py`、`apollo_client.py`，失败后用公开 Web 兜底
+- 社交/平台检索：Apify-first skills + `APIFY_TOKEN` 环境变量；先小样本验证再放大
+- PDF/图片材料：优先一等工具 `pdf` / `image`，再按 skill 处理
+- 飞书文档/多维表格：`lark-cli` 与 lark/feishu skills
+- 邮件：`scripts/resend/` 或 `scripts/founder-direct/`；必须预览并获得明确确认后发送
+
+## Credentials
+真实凭证不得进入 workspace/git。通过进程环境、独立 secrets 注入或 agent 专属 auth 配置提供：
+`APIFY_TOKEN`, `APOLLO_API_KEY`, `MIO_CDP_APP_KEY`, `MIO_CDP_APP_SECRET`, `RESEND_API_KEY`, SMTP/IMAP 账号, YCloud/WhatsApp, Feishu/Lark。
+
+迁移自同机旧目录的密钥仅作为待迁移来源，不在此 workspace 复制：
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/work/mio-api/.env`
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/scripts/resend/.env`
+- `/home/openclaw/makaron-openclaw/.openclaw-local/workspace/scripts/founder-direct/accounts/`

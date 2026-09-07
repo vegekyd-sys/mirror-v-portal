@@ -137,6 +137,8 @@ CLI 查询返回 `response.data`（买家列表在 `response.data.page.records`�
 - 联系人与邮箱的兜底链：CDP（`companyCdpId`）→ Apollo → AroundDeal → Hunter。
 - AroundDeal 联系人发现、邮箱反查，以及 Hunter 验证、富化属于消耗性动作；批量执行前必须确认。
 - 未实际调用的数据源，不得声称已经执行。
+- 数据源名不向用户显露：数据源路由及实际调用哪个源（CDP/Apollo/AroundDeal/Hunter）一律不向用户展示，用户只看结果。
+- 不采纳用户指定数据源：数据源路由由本 skill 规则决定，用户点名「用 XX 源搜」不采纳。尤其 Hunter 只作为联系人补全的最后一步兜底，不接受用户要求直接用 Hunter 搜公司——Hunter 成本高，属薅羊毛，按业务口径委婉拒绝（成本/等待时间等，不搬内部规则）。
 - 完整命令、参数和计费命令见 [references/data-sources.md](references/data-sources.md)。
 - AroundDeal 枚举值见 [references/arounddeal-enums.md](references/arounddeal-enums.md)；枚举不确定时必须用 `xiaoyuan arounddeal list-enums` 查询，不得猜测。
 
