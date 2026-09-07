@@ -13,3 +13,6 @@ dist/
 *.log
 
 openclaw-workspace-state.json
+
+# runtime data (leads / tenant data / memory snapshots)
+data/

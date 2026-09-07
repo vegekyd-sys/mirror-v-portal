@@ -326,12 +326,11 @@ LEAD_POOL_FIELDS = [
     ("website", "官网"),
     ("country", "国家"),
     ("buyer_type", "买家类型"),
-    ("recommend", "推荐理由"),
     ("contact", "联系人"),
-    ("match_product", "匹配产品"),
-    ("stage", "阶段"),
-    ("source", "来源"),
-    ("hot_cold", "冷热"),
+    ("followup_priority", "跟进优先级"),
+    ("priority_reason", "优先级理由"),
+    ("next_action", "下一步动作"),
+    ("due", "截止时间"),
 ]
 
 
@@ -394,10 +393,11 @@ def _website_link(site) -> str:
 
 
 def format_lead_pool_dashboard(d: dict) -> str:
-    """线索池展示（遵循 AGENTS.md 展示规则）。
+    """线索池展示（阶段⑥前台收敛）。
 
-    ≤5 条：气泡逐条（公司名/官网可跳转/联系人/推荐理由）+ 底部表格链接。
-    >5 条：气泡总结（类型/国家分布 + 优先跟进）+ 底部表格链接。
+    重点展示「跟进优先级 + 下一步」；匹配度、阶段作为 AI 判断依据收起不铺满。
+    ≤5 条：逐条（公司名 + 优先级 + 下一步），次要信息（国家/类型）一行。
+    >5 条：优先级分布 + 优先跟进列表。
     """
     title = d.get("company_name") or d.get("company_id", "")
     total = d.get("total", 0)
@@ -412,34 +412,42 @@ def format_lead_pool_dashboard(d: dict) -> str:
         lines.append("暂无数据")
         return "\n".join(lines)
 
+    pri_rank = {"优先跟进": 0, "普通跟进": 1, "长期培育": 2}
+
+    def _pri_key(r):
+        return pri_rank.get((r.get("followup_priority") or "").strip(), 99)
+
     if total <= 5:
-        for i, r in enumerate(rows, 1):
-            site_link = _website_link(r.get("website"))
+        for i, r in enumerate(sorted(rows, key=_pri_key), 1):
             head = f"{i}. {r.get('company','')}"
+            badges = []
+            pri = (r.get("followup_priority") or "").strip()
+            if pri:
+                badges.append(pri)
+            next_action = (r.get("next_action") or "").strip()
+            due = (r.get("due") or "").strip()
+            if next_action:
+                badges.append(next_action + (f"｜{due}" if due else ""))
+            if badges:
+                head += " · " + " · ".join(badges)
+            lines.append(head)
             meta = " · ".join(x for x in [r.get('country',''), r.get('buyer_type','')] if x)
             if meta:
-                head += f" · {meta}"
-            lines.append(head)
-            lines.append(f"   🌐 {site_link}")
-            contact = (r.get("contact") or "").strip()
-            if contact:
-                lines.append(f"   👤 {contact}")
-            rec = (r.get("recommend") or "").strip()
-            if rec:
-                lines.append(f"   💡 {rec}")
+                lines.append(f"   {meta}")
             lines.append("")
     else:
         from collections import Counter
-        types = Counter((r.get("buyer_type") or "未知").strip() or "未知" for r in rows)
-        countries = Counter((r.get("country") or "未知").strip() or "未知" for r in rows)
-        type_str = "、".join(f"{t} {c}" for t, c in types.most_common(3))
-        country_str = "、".join(f"{c} {n}" for c, n in countries.most_common(3))
-        lines.append(f"买家类型：{type_str}；国家：{country_str}")
-        lines.append("")
-        lines.append("优先跟进（推荐理由较强者）：")
-        for r in rows[:3]:
-            rec = (r.get("recommend") or "").strip()
-            lines.append(f"· {r.get('company','')}（{rec}）")
+        pri_counts = Counter((r.get("followup_priority") or "未定").strip() or "未定" for r in rows)
+        pri_str = "、".join(f"{p} {c}" for p, c in pri_counts.most_common())
+        lines.append(f"优先级：{pri_str}")
+        highs = [r for r in rows if (r.get("followup_priority") or "").strip() == "优先跟进"]
+        if highs:
+            lines.append("")
+            lines.append("优先跟进：")
+            for r in highs[:3]:
+                next_action = (r.get("next_action") or "").strip()
+                tail = f"（{next_action}）" if next_action else ""
+                lines.append(f"· {r.get('company','')}{tail}")
 
     if bitable_url:
         lines.append("")

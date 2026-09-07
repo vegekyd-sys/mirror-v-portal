@@ -21,6 +21,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dc_campaign import (
     get_active_campaign, evaluate_campaign, calculate_metrics, _today,
@@ -40,10 +41,19 @@ SOURCES = ("campaign", "lead", "followup", "daily")
 CALIBRATION_SAMPLE_COUNT = 8
 # confirmed 阶段买家搜索每日安全上限（第一版）
 CONFIRMED_SEARCH_CAP = 20
+BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def is_business_day(now: datetime | None = None) -> bool:
+    """Return whether the scheduled report day is Monday-Friday in Beijing time."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=BUSINESS_TIMEZONE)
+    return current.astimezone(BUSINESS_TIMEZONE).weekday() < 5
 
 
 def _load_long_term_context(company_id: str, user_open_id: str) -> dict:
@@ -1311,12 +1321,12 @@ def _should_send_evening(summary: dict) -> bool:
 
 
 def _refresh_email_followup(company_id: str) -> None:
-    """刷新邮件跟进数据：memory email_followup.json → 飞书「邮件跟进」表。
+    """刷新邮件跟进数据：memory email_followup.json + interactions.json → 飞书「邮件跟进」表 + 「沟通明细」子表。
 
-    只对注册表里配了 followup_table_id 的企业生效；任何异常静默吞掉，不阻断日报。
+    只对注册表里配了 app_token 的企业生效；任何异常静默吞掉，不阻断日报。
     """
     try:
-        from dc_memory_data import sync_email_followup_to_memory
+        from dc_memory_data import sync_email_followup_to_memory, sync_interactions_to_memory
         from dc_company_registry import CompanyRegistry
         from enterprise_ids import slug_for
         slug = slug_for(company_id)
@@ -1324,14 +1334,16 @@ def _refresh_email_followup(company_id: str) -> None:
         if not entry or not entry.get("app_token"):
             return
         sync_email_followup_to_memory(company_id)
+        sync_interactions_to_memory(company_id)
         import dc_feishu_standard as std
         std.sync_email_followup(company_id, entry["app_token"])
+        std.sync_interactions(company_id, entry["app_token"])
     except Exception:
         pass
 
 
 def run_daily_job(company_id: str, slot: str, execute: bool = False,
-                  dispatch: bool = False) -> dict:
+                  dispatch: bool = False, now: datetime | None = None) -> dict:
     """完整每日循环（生成→执行→publish→dispatch）+ slot flock + 作业元数据 + 一次重试。
 
     Morning：读 Campaign → 生成 plan → 执行可自动 Todo → 存 evidence → publish plan_item → dispatch。
@@ -1355,6 +1367,19 @@ def run_daily_job(company_id: str, slot: str, execute: bool = False,
     cron_dir = DATA_DIR / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)
     lock_path = cron_dir / f"{slot}.lock"
+
+    # Keep existing cron registrations intact, but make their weekend runs a
+    # recorded no-op. This protects tenants that still carry an older daily
+    # expression while exhibition_cron now emits weekday-only expressions.
+    if not is_business_day(now):
+        record.update({
+            "status": "skipped_weekend",
+            "completed_at": _now(),
+            "next_action": "resume_next_business_day",
+            "cycle": {},
+        })
+        _append_job_log(slot, record)
+        return record
 
     def _run_once() -> dict:
         # 先刷新邮件跟进表（memory email_followup.json + 飞书「邮件跟进」表），

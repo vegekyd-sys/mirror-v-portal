@@ -230,9 +230,10 @@ def _followup_table_url(company_id: str) -> str:
         entry = CompanyRegistry().get(slug)
         if entry:
             app_token = entry.get("app_token", "")
-            followup_tid = entry.get("followup_table_id", "")
-            if app_token and followup_tid:
-                return f"https://versa-ai.feishu.cn/base/{app_token}?table={followup_tid}"
+            # 优先沟通明细子表（阶段④链接改指）；兑底旧 followup_table_id / bitable_url
+            tid = entry.get("interaction_table_id") or entry.get("followup_table_id", "")
+            if app_token and tid:
+                return f"https://versa-ai.feishu.cn/base/{app_token}?table={tid}"
             if entry.get("bitable_url"):
                 return entry["bitable_url"]
     except Exception:

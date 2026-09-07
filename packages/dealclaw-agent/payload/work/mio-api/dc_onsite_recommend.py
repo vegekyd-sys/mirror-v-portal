@@ -187,6 +187,44 @@ def classify(buyer: dict, keywords: list[str]) -> tuple[str, str]:
 
 # ── 6. 简讯卡推群 ───────────────────────────────────────────────
 
+ONSITE_LIST_LIMIT = 5
+
+
+def format_onsite_card(header: str, main: list[str], follow: list[str], limit: int = ONSITE_LIST_LIMIT) -> str:
+    """现场推荐简讯卡文案（红线五.10：不刷屏）。
+
+    ≤limit 家：主推 + 跟进逐条列出（现状不变）。
+    >limit 家：收敛为「主推 N · 跟进 M（共 X）」总结 + 主推前 3 + 跟进前 2，
+    其余只给数量，不逐条刷屏。现场推荐不落线索池、无表格链接，故收敛靠「重点 + 数量」而非链接。
+    """
+    total = len(main) + len(follow)
+    if total <= limit:
+        body: list[str] = []
+        if main:
+            body.append("【主推】")
+            body.extend(main)
+        if follow:
+            body.append("【跟进】")
+            body.extend(follow)
+        if not body:
+            return header
+        return header + "\n" + "\n".join(body)
+
+    body = [f"主推 {len(main)} 家 · 跟进 {len(follow)} 家（共 {total} 家）"]
+    shown = 0
+    if main:
+        body.append("【主推】")
+        body.extend(main[:3])
+        shown += min(len(main), 3)
+    if follow:
+        body.append("【跟进】")
+        body.extend(follow[:2])
+        shown += min(len(follow), 2)
+    if total > shown:
+        body.append(f"… 其余 {total - shown} 家未逐条列出")
+    return header + "\n" + "\n".join(body)
+
+
 def send_card(chat_id: str, text: str, dry_run: bool = False) -> bool:
     if not chat_id:
         print("[dc_onsite_recommend] 缺 chat_id，跳过推群", file=sys.stderr)
@@ -236,14 +274,7 @@ def run(args) -> dict:
             (main if tier == "主推" else follow).append(line)
         if main or follow:
             header = f"📥 现场未邀约匹配买家（{exh.get('name') or exh['exhibitionId']}）"
-            body = []
-            if main:
-                body.append("【主推】")
-                body.extend(main)
-            if follow:
-                body.append("【跟进】")
-                body.extend(follow)
-            text = header + "\n" + "\n".join(body)
+            text = format_onsite_card(header, main, follow)
             send_card(chat_id, text, dry_run=args.dry_run)
             results.append({"exhibitionId": exh["exhibitionId"], "candidates": len(candidates),
                             "main": len(main), "follow": len(follow)})

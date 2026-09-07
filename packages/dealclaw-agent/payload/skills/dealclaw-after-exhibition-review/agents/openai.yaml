@@ -1,0 +1,4 @@
+interface:
+  display_name: "展后诊断复盘"
+  short_description: "从展会结果、买家机会和使用数据生成证据化复盘与下一步策略"
+  default_prompt: "Use $dealclaw-after-exhibition-review to diagnose this exhibition result and produce an actionable post-show review."

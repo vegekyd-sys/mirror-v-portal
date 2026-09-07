@@ -34,21 +34,37 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "匹配产品", "type": "select", "multiple": True},
     {"name": "推荐理由", "type": "text"},
     {"name": "联系人",   "type": "text"},
+    {"name": "职位",     "type": "text"},
+    {"name": "匹配度",   "type": "select", "multiple": False, "options": [
+        {"name": "A"}, {"name": "B"}, {"name": "C"}, {"name": "待确认"}]},
     {"name": "来源",     "type": "select", "multiple": False, "options": [
         {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
         {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"}]},
-    {"name": "冷热",     "type": "select", "multiple": False, "options": [
-        {"name": "🔥热"}, {"name": "❄️冷"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [
         {"name": "待触达"}, {"name": "已触达"}, {"name": "已回复"},
         {"name": "报价中"}, {"name": "成交"}, {"name": "停止触达"}]},
+    {"name": "跟进优先级", "type": "select", "multiple": False, "options": [
+        {"name": "优先跟进"}, {"name": "普通跟进"}, {"name": "长期培育"}]},
+    {"name": "优先级理由", "type": "text"},
+    {"name": "下一步动作", "type": "text"},
+    {"name": "截止时间", "type": "text"},
+    {"name": "最近联系时间", "type": "text"},
+    {"name": "买家回复数", "type": "number", "style": {"type": "plain", "precision": 0}},
+    {"name": "跟进档案链接", "type": "text"},
+    {"name": "联系策略", "type": "text"},
+    {"name": "商机状态", "type": "text"},
+    {"name": "优先级规则版本", "type": "text"},
+    {"name": "优先级更新时间", "type": "text"},
 ], ensure_ascii=False)
 
 # 期望的字段名集合（用于验证 field_map 完整性）
+# 冷热已退役（阶段④）；联系人=主要联系人（完整联系人存 customer.contacts[]）
 EXPECTED_FIELD_NAMES = {
     "公司名", "官网", "公司简介", "公司CDPID", "国家", "买家类型", "匹配产品",
-    "推荐理由", "联系人", "来源", "冷热", "阶段",
+    "推荐理由", "联系人", "职位", "匹配度", "来源", "阶段",
+    "跟进优先级", "优先级理由", "下一步动作", "截止时间", "最近联系时间",
+    "买家回复数", "跟进档案链接", "联系策略", "商机状态", "优先级规则版本", "优先级更新时间",
 }
 
 # 搜索程序拥有的字段（update 时只允许写这些）；其余为用户手工维护，禁止覆盖。
@@ -677,7 +693,6 @@ def sync_leads_to_pool(
             else:
                 skipped += 1   # 值无变化 → 不做无意义 update
         else:
-            fields.setdefault("冷热", "❄️冷")
             fields.setdefault("阶段", "待触达")
             creates.append(fields)
 

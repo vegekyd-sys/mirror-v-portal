@@ -11,6 +11,7 @@
   - email_followup.json（邮件跟进状态表，agent 权威读取）
   - email_followup.csv （一买家一行的表格快照）
   - email_followup.md  （便于人工查看的表格快照）
+  - interactions.json  （沟通明细：一行一次互动，渠道/方向/时间/主题/摘要，邮件先行）
 
 agent 读这些 memory json 生成看板。飞书 Bitable / email-facts / signals / drafts
 是「中间层」，本层是数据权威。
@@ -26,6 +27,7 @@ agent 读这些 memory json 生成看板。飞书 Bitable / email-facts / signal
 """
 
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -128,15 +130,29 @@ def sync_leads_to_memory(company_id: str) -> dict:
         f = r.get("fields", {}) or {}
         leads.append({
             "company": _fmt(f.get("公司名")) or "",
+            "company_cdp_id": _fmt(f.get("公司CDPID")) or "",
             "website": _fmt(f.get("官网")) or "",
             "contact": _fmt(f.get("联系人")) or "",
+            "position": _fmt(f.get("职位")) or "",
             "country": _fmt(f.get("国家")) or "",
             "buyer_type": _fmt(f.get("买家类型")) or "",
             "stage": _fmt(f.get("阶段")) or "待触达",
+            "match_grade": _fmt(f.get("匹配度")) or "",
             "match_product": _fmt(f.get("匹配产品")) or "",
             "source": _fmt(f.get("来源")) or "",
-            "hot_cold": _fmt(f.get("冷热")) or "❄️冷",
             "recommend": _fmt(f.get("推荐理由")) or "",
+            "next_action": _fmt(f.get("下一步动作")) or "",
+            "due": _fmt(f.get("截止时间")) or "",
+            "last_contact_at": _fmt(f.get("最近联系时间")) or "",
+            "reply_count": _fmt(f.get("买家回复数")) or 0,
+            "dossier_url": _fmt(f.get("跟进档案链接")) or "",
+            # 阶段③新增（双写，冷热已退役）
+            "followup_priority": _fmt(f.get("跟进优先级")) or "",
+            "priority_reason": _fmt(f.get("优先级理由")) or "",
+            "contact_policy": _fmt(f.get("联系策略")) or "active",
+            "opportunity_status": _fmt(f.get("商机状态")) or "active",
+            "priority_rule_version": _fmt(f.get("优先级规则版本")) or "",
+            "priority_updated_at": _fmt(f.get("优先级更新时间")) or "",
         })
 
     path = _write_json(company_id, "leads.json", leads)
@@ -160,15 +176,28 @@ def _feishu_to_board(f: dict) -> dict:
     """飞书线索池字段 → 看板字段（与 sync_leads_to_memory 读飞书时一致）。"""
     return {
         "company": _fmt(f.get("公司名")) or "",
+        "company_cdp_id": _fmt(f.get("公司CDPID")) or "",
         "website": _fmt(f.get("官网")) or "",
         "contact": _fmt(f.get("联系人")) or "",
+        "position": _fmt(f.get("职位")) or "",
         "country": _fmt(f.get("国家")) or "",
         "buyer_type": _fmt(f.get("买家类型")) or "",
         "stage": _fmt(f.get("阶段")) or "待触达",
+        "match_grade": _fmt(f.get("匹配度")) or "",
         "match_product": _fmt(f.get("匹配产品")) or "",
         "source": _fmt(f.get("来源")) or "",
-        "hot_cold": _fmt(f.get("冷热")) or "❄️冷",
         "recommend": _fmt(f.get("推荐理由")) or "",
+        "next_action": _fmt(f.get("下一步动作")) or "",
+        "due": _fmt(f.get("截止时间")) or "",
+        "last_contact_at": _fmt(f.get("最近联系时间")) or "",
+        "reply_count": _fmt(f.get("买家回复数")) or 0,
+        "dossier_url": _fmt(f.get("跟进档案链接")) or "",
+        "followup_priority": _fmt(f.get("跟进优先级")) or "",
+        "priority_reason": _fmt(f.get("优先级理由")) or "",
+        "contact_policy": _fmt(f.get("联系策略")) or "active",
+        "opportunity_status": _fmt(f.get("商机状态")) or "active",
+        "priority_rule_version": _fmt(f.get("优先级规则版本")) or "",
+        "priority_updated_at": _fmt(f.get("优先级更新时间")) or "",
     }
 
 
@@ -176,7 +205,7 @@ def write_leads_to_memory(company_id: str, feishu_fields: list) -> dict:
     """写入方直写 memory leads.json（权威数据，幂等 upsert）。
 
     feishu_fields: 飞书线索池字段格式的 dict 列表（公司名/官网/国家/买家类型/
-    匹配产品/来源/冷热/阶段/推荐理由）。内部映射为看板字段后合并写 memory。
+    匹配产品/来源/阶段/推荐理由/跟进优先级等）。内部映射为看板字段后合并写 memory。
     """
     new_leads = [_feishu_to_board(f) for f in (feishu_fields or [])]
     existing = read_leads(company_id)
@@ -319,6 +348,169 @@ def read_email_followup(company_id: str) -> list:
     return _read_json(company_id, "email_followup.json", [])
 
 
+# ── 沟通明细 interaction（阶段②：邮件先行，一行一次互动）──────────────
+_DIRECTION_MAP = {"out": "outbound", "in": "inbound"}
+
+# 沟通明细 memory 权威结构字段（对齐 customer-dossier-schema.md 的 interaction）
+# 要求 ②.1：一行一次真实互动，正文不进表格，原文靠 raw_record_ref 下钻。
+INTERACTION_KEYS = (
+    "interaction_id", "customer_id", "customer_display", "opportunity_id",
+    "exhibition_id", "channel", "direction", "occurred_at", "subject",
+    "summary", "raw_record_ref", "artifacts", "status", "has_reply",
+    "thread_id", "source_system", "source_record_id",
+)
+
+
+def _stable_id(*parts) -> str:
+    """确定性短 id：字段拼接后 sha1 截 16 位。"""
+    base = "|".join(str(p) for p in parts)
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+
+
+def _interaction_id(source_system, source_record_id, customer_id, channel, direction, occurred_at, subject) -> str:
+    """interaction_id 幂等键。
+
+    含 source_system + source_record_id + customer_id：
+      - 相同 source_record_id、不同 source_system 不冲突（source_system 在键内）
+      - 同名公司不同 customer_id 不合并（customer_id 在键内）
+      - 重复同步不新增行（确定性）
+    不得按主题/时间/客户名称模糊覆盖——本键不依赖展示名。
+    """
+    return "it_" + _stable_id(source_system, source_record_id, customer_id,
+                              channel, direction, occurred_at, subject)
+
+
+def _customer_id(company_cdp_id, company, website) -> str:
+    """customer 主键：优先公司CDPID（线索池幂等键）；无则公司名+官网稳定 hash。
+
+    同名不同 cdp → 不同 customer_id（不合并）；都无 cdp 时同名同官网视为同一客户。
+    """
+    cdp = (company_cdp_id or "").strip()
+    if cdp:
+        return cdp
+    return "c_" + _stable_id((company or "").strip().lower(), (website or "").strip().lower())
+
+
+def _summarize(content, limit=200) -> str:
+    """正文摘要：超长截断。完整正文不进表格，靠 raw_record_ref 下钻。"""
+    body = (content or "").strip()
+    if len(body) > limit:
+        return body[:limit] + "…"
+    return body
+
+
+def new_interaction(**overrides) -> dict:
+    """构造一条完整 interaction（16 字段默认值），渠道无关的通用构建入口。
+
+    email 走 flatten_followup_to_interactions；meeting/scan/wa 后续也用此结构。
+    """
+    it = {
+        "interaction_id": "", "customer_id": "", "customer_display": "",
+        "opportunity_id": "", "exhibition_id": "", "channel": "",
+        "direction": "", "occurred_at": "", "subject": "", "summary": "",
+        "raw_record_ref": "", "artifacts": [], "status": "", "has_reply": False,
+        "thread_id": "", "source_system": "", "source_record_id": "",
+    }
+    it.update(overrides)
+    return it
+
+
+def flatten_followup_to_interactions(followup_rows: list) -> list:
+    """把 email_followup（一行一客户 + emails[]）展平成 interaction 明细（一行一次互动）。
+
+    字段对齐 customer-dossier-schema.md 的 interaction（16 字段）：
+      interaction_id / customer_id / opportunity_id / exhibition_id / channel /
+      direction / occurred_at / subject / summary / raw_record_ref / artifacts /
+      status / has_reply / thread_id / source_system / source_record_id
+
+    - direction out→outbound、in→inbound；channel=source_system=email；
+    - opportunity_id/exhibition_id 邮件场景允许为空；
+    - artifacts 邮件为空数组（meeting 的 transcript/translation 后续挂这里，不拆行）；
+    - summary 是截断摘要，raw_record_ref 指向 source_record_id 定位原文，正文不进表格。
+    """
+    out = []
+    for row in (followup_rows or []):
+        company = (row.get("company") or "").strip()
+        website = (row.get("website") or "").strip()
+        cdp = (row.get("company_cdp_id") or "").strip()
+        customer_id = _customer_id(cdp, company, website)
+        for mail in (row.get("emails") or []):
+            direction = _DIRECTION_MAP.get(mail.get("direction"), "outbound")
+            source_system = mail.get("source_system") or "email"
+            source_record_id = (mail.get("source_record_id") or "").strip()
+            occurred_at = mail.get("sent_at", "") or ""
+            subject = mail.get("subject", "") or ""
+            out.append(new_interaction(
+                interaction_id=_interaction_id(source_system, source_record_id, customer_id,
+                                               "email", direction, occurred_at, subject),
+                customer_id=customer_id,
+                customer_display=company,
+                channel="email",
+                direction=direction,
+                occurred_at=occurred_at,
+                subject=subject,
+                summary=_summarize(mail.get("content", "")),
+                raw_record_ref=source_record_id,
+                status=mail.get("status", "") or "",
+                thread_id=mail.get("thread_id", "") or "",
+                source_system=source_system,
+                source_record_id=source_record_id,
+            ))
+    return out
+
+
+def sync_interactions_to_memory(company_id: str) -> dict:
+    """从 email_followup.json 展平 interaction → interactions.json（权威数据，幂等）。
+
+    email 来源全量重算（interaction_id 确定性 → 重复同步不新增行）；
+    非 email 来源（meeting/scan/wa，后续阶段接入）保留不覆盖。
+    邮件原文仍在 emails.json / email-facts，这里只落结构化明细。
+    """
+    followup = read_email_followup(company_id)
+    email_interactions = flatten_followup_to_interactions(followup)
+    existing = read_interactions(company_id)
+    # 保留非 email 来源的互动；email 来源全量替换
+    other = [it for it in existing if it.get("channel") != "email"]
+    merged = other + email_interactions
+    # interaction_id 幂等去重：同 id 保留后者，不按主题/时间/客户名模糊合并；
+    # 无 interaction_id 的历史记录原样保留。
+    seen, tail = {}, []
+    for it in merged:
+        iid = it.get("interaction_id")
+        if iid:
+            seen[iid] = it
+        else:
+            tail.append(it)
+    deduped = list(seen.values()) + tail
+    path = _write_json(company_id, "interactions.json", deduped)
+    return {"status": "ok", "count": len(deduped), "email": len(email_interactions), "path": str(path)}
+
+
+def read_interactions(company_id: str) -> list:
+    """读 memory 的 interactions.json（沟通明细，一行一次互动，权威数据）。"""
+    return _read_json(company_id, "interactions.json", [])
+
+
+def sync_priorities_to_memory(company_id: str) -> dict:
+    """对 leads 批量算优先级，双写 6 个新字段回 leads.json。
+
+    数据流：read_leads + read_interactions → apply_priorities_to_leads → 写回 leads.json。
+    """
+    from dc_priority import apply_priorities_to_leads
+    leads = read_leads(company_id)
+    interactions = read_interactions(company_id)
+
+    by_customer = {}
+    for it in interactions:
+        cid = (it.get("customer_id") or "").strip()
+        if cid:
+            by_customer.setdefault(cid, []).append(it)
+
+    updated, report = apply_priorities_to_leads(leads, by_customer)
+    path = _write_json(company_id, "leads.json", updated)
+    return {"status": "ok", "count": len(updated), "path": str(path), "report": report}
+
+
 def _load_resend_api_key() -> str:
     key = os.environ.get("RESEND_API_KEY", "").strip()
     if key:
@@ -427,29 +619,18 @@ def _hydrate_resend_content(company_id: str, lead_emails: set[str], sent_records
 
 
 def _write_email_followup_tables(company_id: str, rows: list[dict]) -> tuple[Path, Path]:
-    """写 CSV + Markdown，一买家一行，邮件完整内容集中在最后一列。"""
+    """写 CSV + Markdown，一买家一行，只留状态类字段（不含「邮件全部内容」）。
+
+    邮件正文/往来时间线已拆到 interactions.json + 飞书「沟通明细」子表，
+    本快照不再把 N 封邮件塞进一个单元格。
+    """
     base = _enterprise_dir(company_id)
     csv_path = base / "email_followup.csv"
     md_path = base / "email_followup.md"
     fields = [
         "公司名", "官网", "国家", "买家类型", "联系人名", "联系人信息",
-        "跟进状态", "已发邮件数", "买家回复数", "已跟进轮次", "最近联系时间", "邮件全部内容",
+        "跟进状态", "已发邮件数", "买家回复数", "已跟进轮次", "最近联系时间",
     ]
-
-    def timeline(row: dict) -> str:
-        blocks = []
-        for mail in row.get("emails", []):
-            direction = "发出" if mail.get("direction") == "out" else "收到"
-            round_no = mail.get("round")
-            round_text = "首次触达" if direction == "发出" and round_no == 0 else (
-                f"第{round_no}次跟进" if direction == "发出" and round_no is not None else "买家回复"
-            )
-            body = mail.get("content") or "[历史记录未保存正文]"
-            blocks.append(
-                f"【{round_text}｜{direction}｜{mail.get('sent_at', '')}】\n"
-                f"主题：{mail.get('subject', '')}\n正文：{body}"
-            )
-        return "\n\n".join(blocks)
 
     csv_rows = []
     for row in rows:
@@ -465,7 +646,6 @@ def _write_email_followup_tables(company_id: str, rows: list[dict]) -> tuple[Pat
             "买家回复数": row.get("inbound_count", 0),
             "已跟进轮次": row.get("touch_number", 0),
             "最近联系时间": row.get("latest_at", ""),
-            "邮件全部内容": timeline(row),
         })
 
     with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
@@ -529,6 +709,10 @@ def sync_email_followup_to_memory(company_id: str) -> dict:
                 "content": (o.get("text") or o.get("subject") or "").strip(),
                 "sent_at": o.get("sent_at", "") or o.get("created_at", ""),
                 "status": o.get("provider_status", "") or o.get("status", ""),
+                "source_system": "email",
+                "source_record_id": (o.get("smtp_message_id") or o.get("local_message_id")
+                                      or o.get("resend_id") or "").strip(),
+                "thread_id": o.get("thread_id", "") or "",
             })
 
     for s in sent_records:
@@ -549,9 +733,12 @@ def sync_email_followup_to_memory(company_id: str) -> dict:
                 "content": (hydrated.get("text") or s.get("text") or s.get("body") or "").strip(),
                 "sent_at": hydrated.get("created_at") or s.get("sent_at") or s.get("ts", ""),
                 "status": hydrated.get("status") or s.get("status", ""),
+                "source_system": "email",
+                "source_record_id": rid,
+                "thread_id": "",
             })
 
-    for inbound in resend_cache.get("inbound", {}).values():
+    for inbound_id, inbound in resend_cache.get("inbound", {}).items():
         for sender in set(_normalize_addresses(inbound.get("from"))) & set(lead_by_email):
             emails_by_key.setdefault(sender, []).append({
                 "round": None,
@@ -560,6 +747,9 @@ def sync_email_followup_to_memory(company_id: str) -> dict:
                 "content": (inbound.get("text") or inbound.get("html") or "").strip(),
                 "sent_at": inbound.get("created_at", ""),
                 "status": "received",
+                "source_system": "email",
+                "source_record_id": str(inbound_id or ""),
+                "thread_id": "",
             })
 
     def _dedup_sort(recs):
@@ -592,6 +782,7 @@ def sync_email_followup_to_memory(company_id: str) -> dict:
         inbound_count = sum(1 for r in recs if r.get("direction") == "in")
         followup.append({
             "company": l.get("company", ""),
+            "company_cdp_id": l.get("company_cdp_id", ""),
             "website": l.get("website", ""),
             "country": l.get("country", ""),
             "buyer_type": l.get("buyer_type", ""),
@@ -627,6 +818,8 @@ def sync_all(company_id: str) -> dict:
         ("campaign", sync_campaign_to_memory),
         ("materials", sync_materials_to_memory),
         ("email_followup", sync_email_followup_to_memory),
+        ("interactions", sync_interactions_to_memory),
+        ("priorities", sync_priorities_to_memory),
     ]:
         try:
             out[name] = fn(company_id)
@@ -646,6 +839,8 @@ if __name__ == "__main__":
         "sync-materials": sync_materials_to_memory,
         "sync-leads-internal": sync_leads_internal_to_memory,
         "sync-email-followup": sync_email_followup_to_memory,
+        "sync-interactions": sync_interactions_to_memory,
+        "sync-priorities": sync_priorities_to_memory,
     }
     if len(sys.argv) >= 3 and sys.argv[1] in cmds:
         print(json.dumps(cmds[sys.argv[1]](sys.argv[2]), ensure_ascii=False, indent=2))

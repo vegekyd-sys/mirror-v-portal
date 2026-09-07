@@ -14,7 +14,7 @@
   python3 exhibition_cron.py                  # company-id 自动读 MIO_CDP_SUPPLIER_ID
 
 输出示例（固定北京时区）:
-  {"morning_cron": "30 9 * * *", "evening_cron": "30 17 * * *", "timezone": "Asia/Shanghai", "company_id": "..."}
+  {"morning_cron": "30 9 * * 1-5", "evening_cron": "30 17 * * 1-5", "timezone": "Asia/Shanghai", "company_id": "..."}
 """
 from __future__ import annotations
 
@@ -28,6 +28,9 @@ import pytz
 DEFAULT_TZ = "Asia/Shanghai"
 MORNING_TIME = "09:30"
 EVENING_TIME = "17:30"
+# Cron day-of-week uses 1-5 for Monday through Friday. Existing schedules stay
+# registered, but generated early/evening reports never target weekends.
+WORKDAYS_CRON = "1-5"
 
 # 展会城市 → IANA 时区（用于 --event 时的时区适配；知识库缺失时兜底用）
 CITY_TZ = {
@@ -93,7 +96,7 @@ def hour_minute(t: str) -> tuple[int, int]:
 
 
 def to_beijing_cron(tz_name: str, local_time: str) -> str:
-    """把「某时区 local_time」转成北京时间的 cron 分时。"""
+    """把「某时区 local_time」转成北京时间的工作日 cron 分时。"""
     tz = pytz.timezone(tz_name)
     bj = pytz.timezone(DEFAULT_TZ)
     h, m = hour_minute(local_time)
@@ -102,7 +105,7 @@ def to_beijing_cron(tz_name: str, local_time: str) -> str:
     today = datetime.date.today()
     local_dt = tz.localize(datetime.datetime(today.year, today.month, today.day, h, m))
     bj_dt = local_dt.astimezone(bj)
-    return f"{bj_dt.minute} {bj_dt.hour} * * *"
+    return f"{bj_dt.minute} {bj_dt.hour} * * {WORKDAYS_CRON}"
 
 
 def main(argv: list[str] | None = None) -> int:
