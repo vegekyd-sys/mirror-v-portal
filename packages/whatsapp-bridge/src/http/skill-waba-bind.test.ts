@@ -205,17 +205,20 @@ describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () =
     assert.equal(writes.length, 0);
   });
 
-  it("accepts only supplierId and wabaId", async () => {
+  it("accepts the partnerCustomerId alias but rejects conflicting aliases and authority fields", async () => {
     config.skillBindAllowedSuppliers = ["123456"];
+    const alias = await request({ partnerCustomerId: "123456", wabaId: "12345678901" });
+    assert.equal(alias.statusCode, 200);
+
     for (const payload of [
-      { partnerCustomerId: "123456", wabaId: "12345678901" },
+      { partnerCustomerId: "123456", supplierId: "supplier-other", wabaId: "12345678901" },
       { supplierId: "123456", wabaId: "12345678901", adminToken: "must-not-be-accepted" },
     ]) {
       const response = await request(payload);
       assert.equal(response.statusCode, 400);
       assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_INVALID_INPUT");
     }
-    assert.equal(fetchCount, 0);
-    assert.equal(transactionCount, 0);
+    assert.equal(fetchCount, 1);
+    assert.equal(transactionCount, 1);
   });
 });
