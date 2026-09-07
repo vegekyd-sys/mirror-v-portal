@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
+import { Prisma } from "@prisma/client";
 import { config } from "../config";
 import { prisma } from "../prisma";
 import { buildServer } from "./server";
@@ -8,6 +9,10 @@ type Owner = { partnerCustomerId: string };
 type PhoneConflict = { phoneNumber: string };
 type MockTransaction = {
   $queryRaw: (_query: TemplateStringsArray, ..._values: unknown[]) => Promise<unknown>;
+  tenantMachineAssertionReplay: {
+    deleteMany: (_args: unknown) => Promise<unknown>;
+    create: (args: { data: { supplierId: string; nonceHash: string; expiresAt: Date } }) => Promise<unknown>;
+  };
   wabaOnboarding: {
     findMany: (_args: unknown) => Promise<Owner[]>;
     findFirst: (_args: unknown) => Promise<{ id: string } | null>;
@@ -20,17 +25,33 @@ type MockTransaction = {
   };
 };
 
-describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () => {
+describe("tenant-machine Skill existing-WABA binding", { concurrency: false }, () => {
   const mutablePrisma = prisma as unknown as {
     $transaction: (
       callback: (tx: MockTransaction) => Promise<unknown>,
       options?: { isolationLevel?: string },
     ) => Promise<unknown>;
   };
+  const usedNonces = new Set<string>();
   const tx: MockTransaction = {
     $queryRaw: async () => {
       lockCount += 1;
       return [{ locked: true }];
+    },
+    tenantMachineAssertionReplay: {
+      deleteMany: async () => ({}),
+      create: async ({ data }) => {
+        const key = `${data.supplierId}:${data.nonceHash}`;
+        if (usedNonces.has(key)) {
+          throw new Prisma.PrismaClientKnownRequestError("duplicate assertion", {
+            code: "P2002",
+            clientVersion: "test",
+          });
+        }
+        usedNonces.add(key);
+        replayWrites.push(data);
+        return {};
+      },
     },
     wabaOnboarding: {
       findMany: async () => owners,
@@ -57,27 +78,34 @@ describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () =
     transaction: mutablePrisma.$transaction,
     fetch: globalThis.fetch,
     adminToken: config.adminToken,
-    allowedSuppliers: config.skillBindAllowedSuppliers,
+    provisioningUrl: config.provisioning.baseUrl,
+    provisioningToken: config.provisioning.apiToken,
     apiKey: config.ycloud.apiKey,
   };
 
   let owners: Owner[] = [];
   let phoneConflicts: PhoneConflict[] = [];
-  let fetchCount = 0;
+  let ycloudFetchCount = 0;
+  let verifierFetchCount = 0;
+  let verifierValid = true;
+  let verifierStatus = 200;
+  let verifierBody: Record<string, unknown> | null = null;
   let transactionCount = 0;
   let lockCount = 0;
   let writes: Array<{ operation: string; args: unknown }> = [];
+  let replayWrites: Array<{ supplierId: string; nonceHash: string; expiresAt: Date }> = [];
 
   before(() => {
     config.adminToken = undefined;
+    config.provisioning.baseUrl = "http://provisioning.test";
+    config.provisioning.apiToken = "test-provisioning-token";
     config.ycloud.apiKey = "test-ycloud-api-key";
     mutablePrisma.$transaction = async (callback, options) => {
       transactionCount += 1;
-      assert.equal(options?.isolationLevel, "Serializable");
+      if (options) assert.equal(options.isolationLevel, "Serializable");
       return callback(tx);
     };
-    globalThis.fetch = async (input) => {
-      fetchCount += 1;
+    globalThis.fetch = async (input, init) => {
       const raw =
         typeof input === "string"
           ? input
@@ -85,6 +113,13 @@ describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () =
             ? input.toString()
             : input.url;
       const url = new URL(raw);
+      if (url.hostname === "provisioning.test") {
+        verifierFetchCount += 1;
+        assert.equal(init?.headers && (init.headers as Record<string, string>).Authorization, "Bearer test-provisioning-token");
+        verifierBody = JSON.parse(String(init?.body));
+        return Response.json({ valid: verifierValid }, { status: verifierStatus });
+      }
+      ycloudFetchCount += 1;
       assert.equal(url.pathname.endsWith("/whatsapp/phoneNumbers"), true);
       const requested = url.searchParams.get("filter.wabaId");
       if (requested === "99999999999") {
@@ -101,46 +136,55 @@ describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () =
   });
 
   beforeEach(() => {
-    config.skillBindAllowedSuppliers = [];
     owners = [];
     phoneConflicts = [];
-    fetchCount = 0;
+    ycloudFetchCount = 0;
+    verifierFetchCount = 0;
+    verifierValid = true;
+    verifierStatus = 200;
+    verifierBody = null;
     transactionCount = 0;
     lockCount = 0;
     writes = [];
+    replayWrites = [];
+    usedNonces.clear();
   });
 
   after(() => {
     mutablePrisma.$transaction = originals.transaction;
     globalThis.fetch = originals.fetch;
     config.adminToken = originals.adminToken;
-    config.skillBindAllowedSuppliers = originals.allowedSuppliers;
+    config.provisioning.baseUrl = originals.provisioningUrl;
+    config.provisioning.apiToken = originals.provisioningToken;
     config.ycloud.apiKey = originals.apiKey;
   });
 
-  async function request(
-    payload: Record<string, unknown> = { supplierId: "123456", wabaId: "12345678901" },
-  ) {
+  function payload(overrides: Record<string, unknown> = {}) {
+    return {
+      supplierId: "123456",
+      wabaId: "12345678901",
+      assertion: {
+        version: "v1",
+        issuedAt: Math.floor(Date.now() / 1000),
+        nonce: "nonce_abcdefghijklmnopqrstuvwxyz",
+        signature: "A".repeat(43),
+      },
+      ...overrides,
+    };
+  }
+
+  async function request(body: Record<string, unknown> = payload()) {
     const app = await buildServer();
     const response = await app.inject({
       method: "POST",
       url: `${config.routePrefix}/api/whatsapp/bind-existing-waba`,
-      payload,
+      payload: body,
     });
     await app.close();
     return response;
   }
 
-  it("is disabled when the server allowlist is absent or empty", async () => {
-    const response = await request();
-    assert.equal(response.statusCode, 503);
-    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_DISABLED");
-    assert.equal(fetchCount, 0);
-    assert.equal(transactionCount, 0);
-  });
-
-  it("binds an allowlisted supplier without an admin token and hides the WABA ID", async () => {
-    config.skillBindAllowedSuppliers = ["123456"];
+  it("binds every verified supplier machine without an admin token and hides the WABA ID", async () => {
     const response = await request();
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), {
@@ -151,74 +195,105 @@ describe("allowlisted Skill existing-WABA binding", { concurrency: false }, () =
     });
     assert.equal(response.body.includes("12345678901"), false);
     assert.equal(response.body.includes("wabaId"), false);
-    assert.equal(fetchCount, 1);
-    assert.equal(transactionCount, 1);
+    assert.equal(verifierFetchCount, 1);
+    assert.equal(ycloudFetchCount, 1);
+    assert.equal(transactionCount, 2);
+    assert.equal(replayWrites.length, 1);
     assert.equal(lockCount, 3);
-    assert.equal(writes.filter((write) => write.operation === "create").length, 1);
-    assert.equal(writes.filter((write) => write.operation === "phone-upsert").length, 2);
+    assert.deepEqual(verifierBody, payload({ assertion: (verifierBody as any)?.assertion }));
   });
 
-  it("rejects a supplier outside the allowlist before calling YCloud", async () => {
-    config.skillBindAllowedSuppliers = ["supplier-other"];
+  it("rejects stale/future assertions before server verification or YCloud", async () => {
+    for (const issuedAt of [
+      Math.floor(Date.now() / 1000) - 121,
+      Math.floor(Date.now() / 1000) + 31,
+    ]) {
+      const response = await request(payload({
+        assertion: {
+          version: "v1",
+          issuedAt,
+          nonce: "nonce_abcdefghijklmnopqrstuvwxyz",
+          signature: "A".repeat(43),
+        },
+      }));
+      assert.equal(response.statusCode, 401);
+      assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_ASSERTION_EXPIRED");
+    }
+    assert.equal(verifierFetchCount, 0);
+    assert.equal(ycloudFetchCount, 0);
+  });
+
+  it("rejects an assertion not bound by provisioning to the exact supplier and WABA", async () => {
+    verifierValid = false;
     const response = await request();
-    assert.equal(response.statusCode, 403);
-    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_SUPPLIER_NOT_ALLOWED");
-    assert.equal(fetchCount, 0);
+    assert.equal(response.statusCode, 401);
+    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_INVALID_ASSERTION");
+    assert.equal(ycloudFetchCount, 0);
     assert.equal(transactionCount, 0);
   });
 
-  it("returns safe YCloud verification failures without writing", async () => {
-    config.skillBindAllowedSuppliers = ["123456"];
-    const failed = await request({ supplierId: "123456", wabaId: "99999999999" });
+  it("fails closed when machine verification is unavailable", async () => {
+    verifierStatus = 503;
+    const response = await request();
+    assert.equal(response.statusCode, 503);
+    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE");
+    assert.equal(ycloudFetchCount, 0);
+    assert.equal(transactionCount, 0);
+  });
+
+  it("atomically rejects replay before a second YCloud import", async () => {
+    const body = payload();
+    assert.equal((await request(body)).statusCode, 200);
+    const replay = await request(body);
+    assert.equal(replay.statusCode, 409);
+    assert.equal(replay.json().code, "WHATSAPP_SKILL_BIND_ASSERTION_REPLAYED");
+    assert.equal(verifierFetchCount, 2);
+    assert.equal(ycloudFetchCount, 1);
+  });
+
+  it("rejects aliases, authority fields, and malformed assertions", async () => {
+    for (const body of [
+      { ...payload(), partnerCustomerId: "123456" },
+      { ...payload(), adminToken: "must-not-be-accepted" },
+      { ...payload(), assertion: { ...(payload().assertion as object), role: "admin" } },
+      { ...payload(), assertion: { ...(payload().assertion as object), signature: "short" } },
+    ]) {
+      const response = await request(body);
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_INVALID_INPUT");
+    }
+    assert.equal(verifierFetchCount, 0);
+    assert.equal(ycloudFetchCount, 0);
+  });
+
+  it("returns safe YCloud verification failures without importer writes", async () => {
+    const failed = await request(payload({ wabaId: "99999999999" }));
     assert.equal(failed.statusCode, 502);
     assert.equal(failed.json().code, "WHATSAPP_SKILL_BIND_YCLOUD_FAILED");
     assert.equal(failed.body.includes("upstream-private-detail"), false);
     assert.equal(failed.body.includes("99999999999"), false);
 
-    const empty = await request({ supplierId: "123456", wabaId: "88888888888" });
+    usedNonces.clear();
+    const empty = await request(payload({ wabaId: "88888888888" }));
     assert.equal(empty.statusCode, 404);
     assert.equal(empty.json().code, "WHATSAPP_SKILL_BIND_WABA_NOT_FOUND");
     assert.equal(empty.body.includes("88888888888"), false);
-    assert.equal(transactionCount, 0);
     assert.equal(writes.length, 0);
   });
 
-  it("rejects WABA ownership conflicts atomically", async () => {
-    config.skillBindAllowedSuppliers = ["123456"];
+  it("preserves atomic WABA ownership and phone conflict checks", async () => {
     owners = [{ partnerCustomerId: "supplier-other" }];
-    const response = await request();
-    assert.equal(response.statusCode, 409);
-    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_WABA_OWNED");
-    assert.equal(response.body.includes("12345678901"), false);
-    assert.equal(transactionCount, 1);
+    const owned = await request();
+    assert.equal(owned.statusCode, 409);
+    assert.equal(owned.json().code, "WHATSAPP_SKILL_BIND_WABA_OWNED");
     assert.equal(writes.length, 0);
-  });
 
-  it("rejects phone conflicts atomically", async () => {
-    config.skillBindAllowedSuppliers = ["123456"];
+    usedNonces.clear();
+    owners = [];
     phoneConflicts = [{ phoneNumber: "+85251111111" }];
-    const response = await request();
-    assert.equal(response.statusCode, 409);
-    assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_PHONE_CONFLICT");
-    assert.equal(response.body.includes("12345678901"), false);
-    assert.equal(transactionCount, 1);
+    const phone = await request();
+    assert.equal(phone.statusCode, 409);
+    assert.equal(phone.json().code, "WHATSAPP_SKILL_BIND_PHONE_CONFLICT");
     assert.equal(writes.length, 0);
-  });
-
-  it("accepts the partnerCustomerId alias but rejects conflicting aliases and authority fields", async () => {
-    config.skillBindAllowedSuppliers = ["123456"];
-    const alias = await request({ partnerCustomerId: "123456", wabaId: "12345678901" });
-    assert.equal(alias.statusCode, 200);
-
-    for (const payload of [
-      { partnerCustomerId: "123456", supplierId: "supplier-other", wabaId: "12345678901" },
-      { supplierId: "123456", wabaId: "12345678901", adminToken: "must-not-be-accepted" },
-    ]) {
-      const response = await request(payload);
-      assert.equal(response.statusCode, 400);
-      assert.equal(response.json().code, "WHATSAPP_SKILL_BIND_INVALID_INPUT");
-    }
-    assert.equal(fetchCount, 1);
-    assert.equal(transactionCount, 1);
   });
 });

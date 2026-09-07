@@ -50,6 +50,12 @@ spec:
               name: dealclaw-auth
               key: RUNTIME_CONFIG_KEY
               optional: true
+        - name: PROVISIONING_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dealclaw-auth
+              key: PROVISIONING_API_TOKEN
+              optional: true
         resources:
           requests:
             cpu: 100m

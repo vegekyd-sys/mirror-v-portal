@@ -59,7 +59,7 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 | 查会话窗口 | `GET /api/whatsapp/conversations?partnerCustomerId=&phone=`（可选 `&from=`） |
 | 嵌入式注册（创建 Onboarding Link） | `POST /api/whatsapp/onboarding-links` |
 | 查询 WABA 绑定状态 | `GET /api/whatsapp/wabas?partnerCustomerId=` |
-| 临时绑定已有 WABA（Skill 明确意图 + server allowlist） | `POST /api/whatsapp/bind-existing-waba` |
+| 绑定已有 WABA（Skill 明确意图 + 租户机器短时断言） | `POST /api/whatsapp/bind-existing-waba` |
 
 现有 WABA 导入是独立的运维接口 `POST /api/admin/whatsapp/import-existing-waba`，不属于
 智能体 API，也不得把管理员凭据或 WABA 标识交给租户智能体。它只接受服务端
@@ -67,12 +67,12 @@ pnpm --filter @dealclaw/whatsapp-bridge db:setup
 YCloud 列号接口核实账户及号码，再在 SERIALIZABLE 事务中写入 `CONNECTED`
 `WabaOnboarding` 和 `WabaPhone`。响应只返回 tenant、状态和号码，不返回 WABA 标识。
 
-临时 feature-first Skill 入口 `POST /api/whatsapp/bind-existing-waba` 不使用、也不接受
-管理员 token。它仅在服务端 `WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS` 明确列出当前
-supplier 时开放；变量缺失或为空即关闭，配置示例为测试 supplier `123456`。请求只允许
-`partnerCustomerId` / `supplierId`（二选一或相同值）与 `wabaId`，随后复用上述 importer
-的 YCloud 校验和原子归属锁。该入口只是临时、逐 supplier 的功能开关，不是通用多租户
-管理员授权方案；不得扩大为开放自助接口。
+Skill 入口 `POST /api/whatsapp/bind-existing-waba` 不使用、也不接受管理员 token。请求只允许
+当前 `supplierId`、`wabaId` 和短时租户机器断言。断言以 provisioning 为每个租户随机生成的
+`OPENCLAW_GATEWAY_TOKEN` 做用途隔离 HMAC，固定绑定 action、audience、supplier、WABA、时间戳
+与随机 nonce。Bridge 要求 120 秒内有效，调用 provisioning 的 service-token-only 内部验证器
+完成 supplier→tenant→K8s Secret 精确校验，再以共享数据库唯一约束消费 nonce，防止跨副本重放。
+内部验证器只返回布尔值，不返回机器密钥。验证后复用上述 importer 的 YCloud 校验和原子归属锁。
 
 **归属不变量：一个 WABA 只能属于一个 tenant。** 如果该 WABA 已有其他 tenant 的
 `CONNECTED` 记录，或任一号码已映射到其他 WABA，导入返回 409 且不写入。并发导入与
@@ -82,7 +82,7 @@ YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message
 
 所有租户请求都必须显式携带 `partnerCustomerId`（也接受别名 `supplierId`）。列号、列模板、查会话和发消息不接受也不返回 WABA 路由信息：桥接按 supplier 动态查询 CONNECTED 绑定及 `WabaPhone`，再在内部解析目标 WABA。只有一个可用企业号时自动选择；多个企业号且未传 `from` 时返回 `409 WHATSAPP_FROM_SELECTION_REQUIRED` 和不含 WABA 标识的号码列表，绝不按顺序任取。传入 `from` 时桥接必须证明它属于当前 supplier，否则返回 `403 WHATSAPP_FROM_NOT_OWNED`。无绑定返回 `409 WHATSAPP_BINDING_REQUIRED`；窗外自由文本返回 `409 WHATSAPP_TEMPLATE_REQUIRED`。Onboarding/status 与 webhook 内部仍保留 WABA 数据。
 
-上述临时绑定入口是唯一允许 Skill 输入 WABA ID 的业务路由；phones/templates/
+上述显式绑定入口是唯一允许 Skill 输入 WABA ID 的业务路由；phones/templates/
 conversations/messages 继续忽略 WABA 参数且不能据此选路。
 
 ## 环境变量

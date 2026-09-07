@@ -48,7 +48,7 @@ import { findThreadByFeishuId } from "../platform/feishu/adapter";
 import { requireBridgeAdmin, AdminAuthError } from "./adminAuth";
 import { importExistingWaba, AdminWabaImportError } from "../core/adminWabaImport";
 import {
-  bindExistingWabaForAllowedSupplier,
+  bindExistingWabaForTenantMachine,
   SkillWabaBindError,
 } from "../core/skillWabaBind";
 
@@ -262,12 +262,12 @@ export async function buildServer() {
 
       scope.post("/api/whatsapp/bind-existing-waba", async (request, reply) => {
         try {
-          return await bindExistingWabaForAllowedSupplier(request.body);
+          return await bindExistingWabaForTenantMachine(request.body);
         } catch (error) {
           if (error instanceof SkillWabaBindError) {
             return reply.code(error.statusCode).send({ error: error.message, code: error.code });
           }
-          request.log.error({ err: error }, "allowlisted Skill existing WABA binding failed");
+          request.log.error({ err: error }, "tenant-machine Skill existing WABA binding failed");
           return reply.code(500).send({
             error: "failed to bind WhatsApp business account",
             code: "WHATSAPP_SKILL_BIND_FAILED",

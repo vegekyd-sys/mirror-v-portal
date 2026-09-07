@@ -7,7 +7,7 @@
 | 文件 | 作用 |
 |---|---|
 | `configmap.yaml` | 非敏感配置（端口、路由前缀、DB schema、桥接基址等） |
-| `deployment.yaml` | Deployment + Service；引用了 `whatsapp-bridge-secret` 和 `dealclaw-db` 两个 Secret |
+| `deployment.yaml` | Deployment + Service；引用 `whatsapp-bridge-secret`、`dealclaw-db` 和 `dealclaw-auth` |
 | `ingress.yaml` | ALB 入口，与 email-webhook 共用一个 host |
 | `kustomization.yaml` | base 资源聚合 |
 
@@ -36,11 +36,12 @@
 已有其他 `CONNECTED` owner 或号码映射冲突时事务整体拒绝。该接口及凭据不得进入日常
 agent skill，响应也不返回 WABA 标识。
 
-临时 Skill 绑定已有 WABA 的入口由非敏感服务端配置
-`WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS` 控制（逗号/空白分隔 supplier ID）。不配
-或留空即关闭；测试配置示例为 `123456`。只把明确批准的 supplier 加入部署环境，且不要
-把该变量误当作通用多租户管理员授权。该入口不读取或复用
-`WHATSAPP_BRIDGE_ADMIN_TOKEN`，routine WhatsApp API 仍不接受 WABA ID。
+Skill 绑定已有 WABA 使用 provisioning 已为每个租户随机生成、注入
+`dealclaw-agent-config-<tenant>` 的 `OPENCLAW_GATEWAY_TOKEN` 签发短时用途隔离 HMAC。
+Bridge 通过内部 `PROVISIONING_SERVICE_URL` 和服务端 `PROVISIONING_API_TOKEN` 请求验证；
+provisioning 以 supplier 精确解析唯一 live tenant，并直接读取其 K8s Secret 验签，只返回
+`valid` 布尔值。Bridge 再用 PostgreSQL nonce 唯一约束防重放。两个服务端 token 都不进入
+Skill 请求；`WHATSAPP_BRIDGE_ADMIN_TOKEN` 仍只用于管理员 importer。routine API 不接受 WABA ID。
 
 ## 部署
 

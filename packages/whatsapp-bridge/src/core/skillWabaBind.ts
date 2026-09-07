@@ -1,12 +1,23 @@
+import { createHash } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { config } from "../config";
+import { prisma } from "../prisma";
 import { AdminWabaImportError, importExistingWaba } from "./adminWabaImport";
+
+const ASSERTION_VERSION = "v1";
+const MAX_ASSERTION_AGE_SECONDS = 120;
+const MAX_FUTURE_SKEW_SECONDS = 30;
+const NONCE_PATTERN = /^[A-Za-z0-9_-]{20,86}$/;
+const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export class SkillWabaBindError extends Error {
   readonly statusCode: number;
   readonly code:
-    | "WHATSAPP_SKILL_BIND_DISABLED"
     | "WHATSAPP_SKILL_BIND_INVALID_INPUT"
-    | "WHATSAPP_SKILL_BIND_SUPPLIER_NOT_ALLOWED"
+    | "WHATSAPP_SKILL_BIND_ASSERTION_EXPIRED"
+    | "WHATSAPP_SKILL_BIND_INVALID_ASSERTION"
+    | "WHATSAPP_SKILL_BIND_ASSERTION_REPLAYED"
+    | "WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE"
     | "WHATSAPP_SKILL_BIND_YCLOUD_FAILED"
     | "WHATSAPP_SKILL_BIND_WABA_NOT_FOUND"
     | "WHATSAPP_SKILL_BIND_WABA_OWNED"
@@ -24,47 +35,148 @@ export class SkillWabaBindError extends Error {
   }
 }
 
-function normalizeSupplier(input: unknown): { partnerCustomerId: string; wabaId: unknown } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "request body must be a JSON object",
-      400,
-    );
-  }
-  const body = input as Record<string, unknown>;
-  const allowed = new Set(["partnerCustomerId", "supplierId", "wabaId"]);
-  if (Object.keys(body).some((key) => !allowed.has(key))) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "request body contains unsupported fields",
-      400,
-    );
-  }
+export interface SkillWabaBindInput {
+  supplierId: string;
+  wabaId: string;
+  assertion: {
+    version: typeof ASSERTION_VERSION;
+    issuedAt: number;
+    nonce: string;
+    signature: string;
+  };
+}
 
-  const partnerCustomerId =
-    typeof body.partnerCustomerId === "string" ? body.partnerCustomerId.trim() : "";
+function invalidInput(): never {
+  throw new SkillWabaBindError(
+    "WHATSAPP_SKILL_BIND_INVALID_INPUT",
+    "invalid existing WhatsApp business account binding request",
+    400,
+  );
+}
+
+export function normalizeSkillWabaBindInput(input: unknown): SkillWabaBindInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) invalidInput();
+  const body = input as Record<string, unknown>;
+  if (Object.keys(body).some((key) => !["supplierId", "wabaId", "assertion"].includes(key))) {
+    invalidInput();
+  }
   const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
-  if (partnerCustomerId && supplierId && partnerCustomerId !== supplierId) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "partnerCustomerId and supplierId must identify the same supplier",
-      400,
-    );
+  const wabaId = typeof body.wabaId === "string" ? body.wabaId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(supplierId) || !/^[1-9]\d{4,31}$/.test(wabaId)) {
+    invalidInput();
   }
-  const supplier = partnerCustomerId || supplierId;
+  if (!body.assertion || typeof body.assertion !== "object" || Array.isArray(body.assertion)) {
+    invalidInput();
+  }
+  const assertion = body.assertion as Record<string, unknown>;
+  if (Object.keys(assertion).some((key) => !["version", "issuedAt", "nonce", "signature"].includes(key))) {
+    invalidInput();
+  }
   if (
-    !supplier ||
-    supplier.length > 128 ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(supplier)
+    assertion.version !== ASSERTION_VERSION ||
+    !Number.isSafeInteger(assertion.issuedAt) ||
+    !NONCE_PATTERN.test(typeof assertion.nonce === "string" ? assertion.nonce : "") ||
+    !SIGNATURE_PATTERN.test(typeof assertion.signature === "string" ? assertion.signature : "")
   ) {
+    invalidInput();
+  }
+  return {
+    supplierId,
+    wabaId,
+    assertion: {
+      version: ASSERTION_VERSION,
+      issuedAt: assertion.issuedAt as number,
+      nonce: assertion.nonce as string,
+      signature: assertion.signature as string,
+    },
+  };
+}
+
+function assertFresh(input: SkillWabaBindInput, nowSeconds: number): void {
+  const age = nowSeconds - input.assertion.issuedAt;
+  if (age > MAX_ASSERTION_AGE_SECONDS || age < -MAX_FUTURE_SKEW_SECONDS) {
     throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_INVALID_INPUT",
-      "partnerCustomerId or supplierId is required and must be a valid supplier identifier",
-      400,
+      "WHATSAPP_SKILL_BIND_ASSERTION_EXPIRED",
+      "tenant-machine assertion is outside the allowed time window",
+      401,
     );
   }
-  return { partnerCustomerId: supplier, wabaId: body.wabaId };
+}
+
+async function verifyWithProvisioning(input: SkillWabaBindInput): Promise<void> {
+  if (!config.provisioning.apiToken) {
+    throw new SkillWabaBindError(
+      "WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE",
+      "tenant-machine assertion verification is not configured",
+      503,
+    );
+  }
+  let response: Response;
+  try {
+    response = await fetch(
+      `${config.provisioning.baseUrl.replace(/\/$/, "")}/v1/internal/tenant-machine-assertions/verify-whatsapp-binding`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.provisioning.apiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
+  } catch {
+    throw new SkillWabaBindError(
+      "WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE",
+      "tenant-machine assertion verifier is unavailable",
+      503,
+    );
+  }
+  if (!response.ok) {
+    throw new SkillWabaBindError(
+      "WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE",
+      "tenant-machine assertion verifier is unavailable",
+      503,
+    );
+  }
+  let result: unknown;
+  try {
+    result = await response.json();
+  } catch {
+    result = null;
+  }
+  if (!result || typeof result !== "object" || (result as { valid?: unknown }).valid !== true) {
+    throw new SkillWabaBindError(
+      "WHATSAPP_SKILL_BIND_INVALID_ASSERTION",
+      "tenant-machine assertion is invalid for this supplier",
+      401,
+    );
+  }
+}
+
+async function claimAssertionNonce(input: SkillWabaBindInput, now: Date): Promise<void> {
+  const nonceHash = createHash("sha256").update(input.assertion.nonce).digest("hex");
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.tenantMachineAssertionReplay.deleteMany({ where: { expiresAt: { lt: now } } });
+      await tx.tenantMachineAssertionReplay.create({
+        data: {
+          supplierId: input.supplierId,
+          nonceHash,
+          expiresAt: new Date((input.assertion.issuedAt + MAX_ASSERTION_AGE_SECONDS) * 1000),
+        },
+      });
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new SkillWabaBindError(
+        "WHATSAPP_SKILL_BIND_ASSERTION_REPLAYED",
+        "tenant-machine assertion was already used",
+        409,
+      );
+    }
+    throw error;
+  }
 }
 
 function mapImportError(error: AdminWabaImportError): SkillWabaBindError {
@@ -79,31 +191,17 @@ function mapImportError(error: AdminWabaImportError): SkillWabaBindError {
   return new SkillWabaBindError(codes[error.code], error.message, error.statusCode);
 }
 
-/**
- * Temporary feature-first entry point for explicitly allowlisted suppliers.
- * It deliberately has no caller token and delegates all YCloud verification and ownership writes
- * to the same importer used by the operator-only API.
- */
-export async function bindExistingWabaForAllowedSupplier(input: unknown) {
-  const allowlist = config.skillBindAllowedSuppliers;
-  if (!allowlist.length) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_DISABLED",
-      "existing WhatsApp business account Skill binding is not enabled",
-      503,
-    );
-  }
-  const normalized = normalizeSupplier(input);
-  if (!allowlist.includes(normalized.partnerCustomerId)) {
-    throw new SkillWabaBindError(
-      "WHATSAPP_SKILL_BIND_SUPPLIER_NOT_ALLOWED",
-      "supplier is not enabled for existing WhatsApp business account Skill binding",
-      403,
-    );
-  }
-
+/** Explicit Skill path authenticated by a short-lived, single-use tenant-machine assertion. */
+export async function bindExistingWabaForTenantMachine(input: unknown, now = new Date()) {
+  const normalized = normalizeSkillWabaBindInput(input);
+  assertFresh(normalized, Math.floor(now.getTime() / 1000));
+  await verifyWithProvisioning(normalized);
+  await claimAssertionNonce(normalized, now);
   try {
-    return await importExistingWaba(normalized);
+    return await importExistingWaba({
+      partnerCustomerId: normalized.supplierId,
+      wabaId: normalized.wabaId,
+    });
   } catch (error) {
     if (error instanceof AdminWabaImportError) throw mapImportError(error);
     throw error;

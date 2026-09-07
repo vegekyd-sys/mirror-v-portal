@@ -2,8 +2,8 @@
 name: ycloud-whatsapp
 description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
-  完成嵌入式注册；仅当用户明确说“绑定已有 WABA”时，调用临时 supplier allowlist
-  绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  完成嵌入式注册；仅当用户明确说“绑定已有 WABA”时，使用当前租户机器的短时签名断言
+  调用专用绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
   适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
@@ -171,35 +171,34 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 
 `ok=true` 只表示 YCloud 已接受，不等于送达。投递失败会同步到飞书客服话题。
 
-## 绑定已有 WABA（临时 supplier allowlist）
+## 绑定已有 WABA（租户机器断言）
 
 仅当用户明确要求“绑定已有 WABA”时进入。普通接入/注册、`WHATSAPP_BINDING_REQUIRED`、
 查状态或换业务号都走 Direct Link，不主动索取 WABA ID。
 
 1. 从该次请求取得 WABA ID；缺失时只询问该 ID，不从历史、日志、响应或其它租户复制。
-2. 把当前 `MIO_CDP_SUPPLIER_ID` 原样作为 `$SUPPLIER`；不接受用户或模型改写 supplier。
-3. 调用专用入口，不带 Authorization、管理员 token 或其它权限字段：
+2. `$SUPPLIER` 只能来自当前进程的 `MIO_CDP_SUPPLIER_ID`；不接受用户、模型或请求参数改写。
+3. 使用本 Skill 的 helper。把 WABA ID 通过 stdin 传入，不作为 CLI 参数，不打印输入、请求体、
+   签名或环境变量：
 
-```http
-POST $BRIDGE/api/whatsapp/bind-existing-waba
+```bash
+printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/bind_existing_waba.py
 ```
 
-```json
-{
-  "supplierId": "$SUPPLIER",
-  "wabaId": "用户明确提供的 WABA ID"
-}
-```
+helper 只从当前租户进程读取 `MIO_CDP_SUPPLIER_ID` 与服务器 provisioning 时生成的
+`OPENCLAW_GATEWAY_TOKEN`，以固定 action/audience、当前 supplier、该次 WABA ID、秒级时间戳和
+随机 nonce 生成短时 HMAC 断言，再调用 `POST $BRIDGE/api/whatsapp/bind-existing-waba`。
+不传 Authorization、管理员 token、用户角色或其它权限字段；不读取、打印或持久化机器密钥。
 
-成功响应只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要回显 WABA ID。
-`WHATSAPP_SKILL_BIND_DISABLED` 或 `WHATSAPP_SKILL_BIND_SUPPLIER_NOT_ALLOWED` 表示服务端
-未为当前 supplier 开启，停止并说明需由运维配置
-`WHATSAPP_BRIDGE_SKILL_BIND_ALLOWED_SUPPLIERS`（逗号分隔；缺失或空值即关闭），可改走
-Direct Link。该变量仅由桥接服务端运维管理；不要读取、修改或向用户索取。
-YCloud 校验失败、跨租户归属或手机号冲突时停止，不换 supplier、不改绑、不绕过 Bridge。
+成功输出只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要向用户回显 WABA ID。
+`TENANT_MACHINE_SECRET_MISSING` 或 `WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE` 表示租户机器
+provisioning/验证链路未就绪，停止并报告运维修复，不降级为无签名请求。
+`WHATSAPP_SKILL_BIND_INVALID_ASSERTION` 表示 supplier 与当前机器不匹配，停止且不换 supplier。
+`WHATSAPP_SKILL_BIND_ASSERTION_EXPIRED` / `WHATSAPP_SKILL_BIND_ASSERTION_REPLAYED` 可在同一次明确
+用户请求内重新运行 helper 一次以生成全新的时间戳和 nonce；仍失败则停止。
+YCloud 校验失败、跨租户归属或手机号冲突时停止，不改绑、不绕过 Bridge。
 
-这是临时 server allowlist，不是通用多租户管理员授权。Skill 不读取、复用或索取
-`WHATSAPP_BRIDGE_ADMIN_TOKEN`。
+`WHATSAPP_BRIDGE_ADMIN_TOKEN` 只属于服务端管理员 importer。Skill 不读取、复用、索取或发送它。
 
 ## 嵌入式注册 / 状态
 
@@ -250,7 +249,7 @@ POST $BRIDGE/api/whatsapp/onboarding-links
 ## 验证与停止条件
 
 - 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识；只有用户
-  明确“绑定已有 WABA”的专用请求可携带一次 WABA ID。
+  明确“绑定已有 WABA”的专用 helper 可携带一次 WABA ID 和租户机器短时断言。
 - 多号未指定：必须收到/遵循 `WHATSAPP_FROM_SELECTION_REQUIRED`，不得任取。
 - 指定 `from`：只接受桥接验证通过的当前租户号码。
 - `WHATSAPP_TEMPLATE_REQUIRED`：自行查询模板、补齐变量后发送。

@@ -12,7 +12,9 @@ import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import type { ProvisioningConfig } from './config.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 import { createAuditMiddleware } from './services/audit.js';
+import { createTenantMachineAssertionRoutes } from './routes/tenant-machine-assertions.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   const app = express();
@@ -34,6 +36,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // Accepts the shared service token (internal callers) OR a valid admin
   // JWT (pure-frontend admin SPA calling directly, no proxy in front).
   const auth = createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN');
+  const serviceAuth = createAuthMiddleware('PROVISIONING_API_TOKEN');
 
   // Audit: every non-GET auth-passed request is auto-recorded (actor, path,
   // redacted body, status). Chained AFTER auth so req.adminUser is set; high-
@@ -51,6 +54,11 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig) {
   // External conversation-log pull endpoint (米奥 Agent 对话日志拉取) — same
   // external API-key auth + supplier→tenant isolation as supplier-summary above.
   app.use(createConversationExternalRoutes(pool, config));
+
+  // Internal machine assertion verification is service-token-only. Tenant
+  // machines still need their own per-tenant HMAC; this shared token alone
+  // grants no binding authority and no secret is returned.
+  app.use(createTenantMachineAssertionRoutes(pool, serviceAuth));
 
   app.use(createTenantRoutes(pool, config, authAndAudit));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));

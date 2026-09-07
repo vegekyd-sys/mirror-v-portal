@@ -23,6 +23,7 @@ data:
   # 智能体回调桥接时用的基址（服务自身监听不依赖它）
   # 与 email-webhook 共用 dealclaw.datathink.com，按路径前缀分流。
   WHATSAPP_BRIDGE_BASE_URL: "https://dealclaw.datathink.com/whatsapp"
+  PROVISIONING_SERVICE_URL: "http://provisioning-service:8082"
 
   # 租户标识不进入桥接进程环境：每个租户请求必须显式传 partnerCustomerId / supplierId。
 

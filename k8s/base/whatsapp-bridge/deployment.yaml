@@ -68,6 +68,12 @@ spec:
                   name: dealclaw-db
                   key: DATABASE_URL
                   optional: true
+            - name: PROVISIONING_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dealclaw-auth
+                  key: PROVISIONING_API_TOKEN
+                  optional: true
           envFrom:
             # 顺序有意义：同名键以后者（Secret）为准
             - configMapRef:
