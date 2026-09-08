@@ -38,7 +38,7 @@ company_name, name, title, phone, email, website, address, country。
 | `email` | 邮箱 | — |
 | `website` | 网址 | — |
 | `address` | 地址 | 保留原文 |
-| `country` | 国家 | 名片未直接标注 → 置空，标 `⚠️ 待补充`；可从区号/地址推断但**不落库**，等用户确认 |
+| `country` | 国家 | 名片直接标注 → 原样；未标注但区号/城市/地址能强推断（如 `+84`/`HCMC` → 越南）→ 填推断国家；真无证据才置空标 `⚠️ 待补充` |
 | `uncertain` | 不确定项 | 形近字/拿不准的记这里 |
 
 ## 规则
@@ -67,9 +67,9 @@ company_name, name, title, phone, email, website, address, country。
   "email": "toni@pltp.vn",
   "website": "phulieuthanhphong.vn",
   "address": "82, Dong Hung Thuan 5 Str, Tan Hung Thuan, Dis 12, HCMC",
-  "country": "",
+  "country": "越南",
   "uncertain": ""
 }
 ```
 
-> `country` 置空（名片未直接标注国家）；区号 `+84` 与 `HCMC` 可推断越南，但按规则不落库，等用户确认。
+> `country` = 越南，据区号 `+84` + 城市 `HCMC` 强推断（名片未直接标注国家，但证据充分，按新规则直接填）。
