@@ -189,6 +189,12 @@ model FeishuApp {
   csChatId          String?
   /** 拉进客服群的其它机器人 App ID，逗号分隔（智能体 FEISHU_INVITE_APP_IDS） */
   inviteAppIds      String?
+  /** 拉进客服群的人类客服 open_id，逗号分隔（智能体 FEISHU_INVITE_OPEN_IDS） */
+  inviteOpenIds     String?
+  /** 拉进客服群的人类客服手机号，逗号分隔（智能体 FEISHU_INVITE_MOBILES） */
+  inviteMobiles     String?
+  /** 拉进客服群的人类客服邮箱，逗号分隔（智能体 FEISHU_INVITE_EMAILS） */
+  inviteEmails      String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }

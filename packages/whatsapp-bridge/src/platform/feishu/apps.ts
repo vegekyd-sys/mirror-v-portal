@@ -8,7 +8,16 @@ export type FeishuAppCreds = {
   encryptKey?: string;
   csChatId?: string;
   inviteAppIds: string[];
+  inviteOpenIds: string[];
+  inviteMobiles: string[];
+  inviteEmails: string[];
 };
+
+/** 通用逗号/空白分隔列表（open_id / 手机号 / 邮箱），去重去空。 */
+function parseCsvList(value?: string | string[] | null): string[] {
+  const raw = Array.isArray(value) ? value.join(",") : value || "";
+  return [...new Set(raw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean))];
+}
 
 export function parseCliAppIds(value?: string | string[] | null): string[] {
   const raw = Array.isArray(value) ? value.join(",") : value || "";
@@ -75,6 +84,9 @@ export function envFeishuCreds(): FeishuAppCreds | undefined {
     verificationToken: config.feishu.verificationToken,
     encryptKey: config.feishu.encryptKey,
     inviteAppIds: [...config.feishu.inviteAppIds],
+    inviteOpenIds: [...config.feishu.inviteOpenIds],
+    inviteMobiles: [...config.feishu.inviteMobiles],
+    inviteEmails: [...config.feishu.inviteEmails],
   };
 }
 
@@ -85,8 +97,14 @@ function fromRow(row: {
   encryptKey: string | null;
   csChatId: string | null;
   inviteAppIds?: string | null;
+  inviteOpenIds?: string | null;
+  inviteMobiles?: string | null;
+  inviteEmails?: string | null;
 }): FeishuAppCreds {
   const stored = parseCliAppIds(row.inviteAppIds);
+  const storedOpenIds = parseCsvList(row.inviteOpenIds);
+  const storedMobiles = parseCsvList(row.inviteMobiles);
+  const storedEmails = parseCsvList(row.inviteEmails);
   return {
     appId: row.appId,
     appSecret: row.appSecret,
@@ -94,6 +112,9 @@ function fromRow(row: {
     encryptKey: row.encryptKey || undefined,
     csChatId: row.csChatId || undefined,
     inviteAppIds: stored.length ? stored : [...config.feishu.inviteAppIds],
+    inviteOpenIds: storedOpenIds.length ? storedOpenIds : [...config.feishu.inviteOpenIds],
+    inviteMobiles: storedMobiles.length ? storedMobiles : [...config.feishu.inviteMobiles],
+    inviteEmails: storedEmails.length ? storedEmails : [...config.feishu.inviteEmails],
   };
 }
 
@@ -131,6 +152,9 @@ export async function upsertFeishuApp(input: {
   verificationToken?: string;
   encryptKey?: string;
   inviteAppIds?: string | string[];
+  inviteOpenIds?: string | string[];
+  inviteMobiles?: string | string[];
+  inviteEmails?: string | string[];
 }): Promise<FeishuAppCreds> {
   const appId = trim(input.appId);
   const appSecret = trim(input.appSecret);
@@ -148,21 +172,33 @@ export async function upsertFeishuApp(input: {
     true,
   );
   const inviteAppIds = parseCliAppIds(input.inviteAppIds);
-  const inviteStored = inviteAppIds.length ? inviteAppIds.join(",") : undefined;
+  const inviteAppIdsStored = inviteAppIds.length ? inviteAppIds.join(",") : undefined;
+  const inviteOpenIds = parseCsvList(input.inviteOpenIds);
+  const inviteOpenIdsStored = inviteOpenIds.length ? inviteOpenIds.join(",") : undefined;
+  const inviteMobiles = parseCsvList(input.inviteMobiles);
+  const inviteMobilesStored = inviteMobiles.length ? inviteMobiles.join(",") : undefined;
+  const inviteEmails = parseCsvList(input.inviteEmails);
+  const inviteEmailsStored = inviteEmails.length ? inviteEmails.join(",") : undefined;
   const row = await prisma.feishuApp.upsert({
     where: { appId },
     update: {
       appSecret,
       ...(verificationToken !== undefined ? { verificationToken: verificationToken || null } : {}),
       ...(encryptKey !== undefined ? { encryptKey: encryptKey || null } : {}),
-      ...(inviteStored !== undefined ? { inviteAppIds: inviteStored } : {}),
+      ...(inviteAppIdsStored !== undefined ? { inviteAppIds: inviteAppIdsStored } : {}),
+      ...(inviteOpenIdsStored !== undefined ? { inviteOpenIds: inviteOpenIdsStored } : {}),
+      ...(inviteMobilesStored !== undefined ? { inviteMobiles: inviteMobilesStored } : {}),
+      ...(inviteEmailsStored !== undefined ? { inviteEmails: inviteEmailsStored } : {}),
     },
     create: {
       appId,
       appSecret,
       verificationToken: verificationToken || null,
       encryptKey: encryptKey || null,
-      inviteAppIds: inviteStored || null,
+      inviteAppIds: inviteAppIdsStored || null,
+      inviteOpenIds: inviteOpenIdsStored || null,
+      inviteMobiles: inviteMobilesStored || null,
+      inviteEmails: inviteEmailsStored || null,
     },
   });
   return fromRow(row);
@@ -197,5 +233,8 @@ export function publicFeishuApp(creds: FeishuAppCreds, webhookUrl: string) {
     hasEncryptKey: Boolean(creds.encryptKey),
     hasVerificationToken: Boolean(creds.verificationToken),
     inviteAppIds: creds.inviteAppIds,
+    inviteOpenIds: creds.inviteOpenIds,
+    inviteMobiles: creds.inviteMobiles,
+    inviteEmails: creds.inviteEmails,
   };
 }

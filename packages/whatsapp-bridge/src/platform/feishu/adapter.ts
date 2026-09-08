@@ -70,7 +70,11 @@ export async function ensureCsChatId(extraOpenIds: string[] = [], extraBotAppIds
         chatId = chats.find((chat) => chat.name === CS_GROUP_NAME)?.chatId;
       }
 
-      const invitees = [...(await listInviteOpenIds()), ...extras];
+      const invitees = [...(await listInviteOpenIds({
+        openIds: app?.inviteOpenIds,
+        mobiles: app?.inviteMobiles,
+        emails: app?.inviteEmails,
+      })), ...extras];
       const inviteBots = [...new Set([...(app?.inviteAppIds || config.feishu.inviteAppIds), ...extraBots])];
       console.info(`Feishu CS invitees resolved: ${invitees.length} bots=${inviteBots.length} app=${appId}`);
       if (!chatId) {

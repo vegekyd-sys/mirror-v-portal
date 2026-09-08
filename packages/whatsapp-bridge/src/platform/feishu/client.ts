@@ -347,10 +347,14 @@ export async function listOpenIdsByContacts(input: {
   return [...new Set(ids)];
 }
 
-export async function listInviteOpenIds(): Promise<string[]> {
-  const ids = [...config.feishu.inviteOpenIds];
-  const emails = config.feishu.inviteEmails;
-  const mobiles = config.feishu.inviteMobiles;
+export async function listInviteOpenIds(input?: {
+  openIds?: string[];
+  mobiles?: string[];
+  emails?: string[];
+}): Promise<string[]> {
+  const ids = [...(input?.openIds ?? config.feishu.inviteOpenIds)];
+  const emails = input?.emails ?? config.feishu.inviteEmails;
+  const mobiles = input?.mobiles ?? config.feishu.inviteMobiles;
   if (emails.length || mobiles.length) {
     try {
       ids.push(...(await listOpenIdsByContacts({ emails, mobiles })));

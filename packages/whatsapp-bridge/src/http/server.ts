@@ -287,6 +287,12 @@ export async function buildServer() {
         FEISHU_ENCRYPT_KEY?: string;
         inviteAppIds?: string | string[];
         FEISHU_INVITE_APP_IDS?: string;
+        inviteOpenIds?: string | string[];
+        FEISHU_INVITE_OPEN_IDS?: string;
+        inviteMobiles?: string | string[];
+        FEISHU_INVITE_MOBILES?: string;
+        inviteEmails?: string | string[];
+        FEISHU_INVITE_EMAILS?: string;
       };
       try {
         const creds = await upsertFeishuApp({
@@ -295,6 +301,9 @@ export async function buildServer() {
           verificationToken: body.verificationToken || body.FEISHU_VERIFICATION_TOKEN,
           encryptKey: body.encryptKey || body.FEISHU_ENCRYPT_KEY,
           inviteAppIds: body.inviteAppIds || body.FEISHU_INVITE_APP_IDS,
+          inviteOpenIds: body.inviteOpenIds || body.FEISHU_INVITE_OPEN_IDS,
+          inviteMobiles: body.inviteMobiles || body.FEISHU_INVITE_MOBILES,
+          inviteEmails: body.inviteEmails || body.FEISHU_INVITE_EMAILS,
         });
         const webhookUrl = feishuWebhookUrl(publicBaseUrl(request), creds.appId);
         if (creds.csChatId && creds.inviteAppIds.length) {

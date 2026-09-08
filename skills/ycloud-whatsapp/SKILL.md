@@ -36,6 +36,9 @@ description: >-
 - `FEISHU_VERIFICATION_TOKEN`
 - `FEISHU_ENCRYPT_KEY`
 - `FEISHU_INVITE_APP_IDS`（可选，逗号分隔的 `cli_...`）
+- `FEISHU_INVITE_OPEN_IDS`（可选，逗号分隔的 `ou_...`）
+- `FEISHU_INVITE_MOBILES`（可选，逗号分隔）
+- `FEISHU_INVITE_EMAILS`（可选，逗号分隔）
 
 不要打印 Secret / Encrypt Key，不要从桥接项目的 `.env` 复制。四个凭据缺任一个
 就停止；不要用占位符或编造值。然后调用：
@@ -50,7 +53,10 @@ POST $BRIDGE/api/feishu/apps
   "appSecret": "$FEISHU_APP_SECRET",
   "verificationToken": "$FEISHU_VERIFICATION_TOKEN",
   "encryptKey": "$FEISHU_ENCRYPT_KEY",
-  "inviteAppIds": "$FEISHU_INVITE_APP_IDS"
+  "inviteAppIds": "$FEISHU_INVITE_APP_IDS",
+  "inviteOpenIds": "$FEISHU_INVITE_OPEN_IDS",
+  "inviteMobiles": "$FEISHU_INVITE_MOBILES",
+  "inviteEmails": "$FEISHU_INVITE_EMAILS"
 }
 ```
 
