@@ -336,13 +336,15 @@ def render_html(report: dict) -> str:
     company_name = (report.get("company") or {}).get("name", "")
     exhibition_name = (report.get("exhibition") or {}).get("name", "") or report.get("exhibition_id", "")
 
+    stage_emoji = {"目标买家": "🎯", "已邀约": "📩", "到展/会面": "🏢", "有效商洽": "💬", "商务推进": "💰"}
     max_n = max((f["unique_customers"] for f in funnel), default=1) or 1
     funnel_rows = []
     for f in funnel:
         width = int(f["unique_customers"] / max_n * 100) if max_n else 0
         rate = f"{f['conversion_rate']:.0%}" if f.get("conversion_rate") is not None else "—"
+        emoji = stage_emoji.get(f["stage"], "▫️")
         funnel_rows.append(
-            f'<div class="frow"><div class="flabel">{f["stage"]}<span class="fnum">{f["unique_customers"]}</span></div>'
+            f'<div class="frow"><div class="flabel">{emoji} {f["stage"]}<span class="fnum">{f["unique_customers"]}</span></div>'
             f'<div class="fbar"><div class="fbar-in" style="width:{width}%"></div></div>'
             f'<div class="frate">转化 {rate}</div></div>'
         )
@@ -352,7 +354,7 @@ def render_html(report: dict) -> str:
         interp = f'<div class="diag-i">{d.get("interpretation", "")}</div>' if d.get("interpretation") else ""
         action = f'<div class="diag-a"><b>建议：</b>{d.get("recommended_action", "")}</div>' if d.get("recommended_action") else ""
         diag_rows += (
-            f'<div class="diag"><div class="diag-t">{d["observation"]}</div>'
+            f'<div class="diag"><div class="diag-t">⚠️ {d["observation"]}</div>'
             f'{interp}{action}</div>'
         )
 
@@ -370,16 +372,18 @@ def render_html(report: dict) -> str:
     nurture_rows = _rows(ba["nurture"])
 
     # 重点客户深析（Agent 生成，逐家渲染）
+    badges = ["①", "②", "③", "④", "⑤"]
     deep_dive_rows = ""
-    for b in ba["connected_followups"]:
+    for i, b in enumerate(ba["connected_followups"]):
         if b.get("deep_dive"):
+            badge = badges[i] if i < len(badges) else f"{i + 1}"
             deep_dive_rows += (
-                f'<div class="deepdive"><div class="dd-t">{b["company"]}</div>'
+                f'<div class="deepdive"><div class="dd-t"><span class="dd-badge">{badge}</span> {b["company"]}</div>'
                 f'<div class="dd-body">{b["deep_dive"]}</div></div>'
             )
     deep_dive_section = ""
     if deep_dive_rows:
-        deep_dive_section = f'<h2>重点客户深析</h2>{deep_dive_rows}'
+        deep_dive_section = f'<h2>🔍 重点客户深析</h2>{deep_dive_rows}'
 
     demand_rows = "".join(f'<li>{d["topic"]} · {d["unique_customers"]} 家客户 · {d["mention_count"]} 次提及</li>' for d in demand)
     if not demand_rows:
@@ -388,11 +392,13 @@ def render_html(report: dict) -> str:
     wins_rows = "".join(f'<li>{w}</li>' for w in wins) or '<li class="empty">暂无</li>'
 
     horizon_label = {"72h": "72小时内", "7d": "7天内", "30d": "30天内", "next_exhibition": "下届展会"}
+    horizon_emoji = {"72h": "⏱️", "7d": "📅", "30d": "🗓️", "next_exhibition": "🔁"}
     plan_rows = ""
     for p in action_plan:
         h = horizon_label.get(p.get("horizon", ""), p.get("horizon", ""))
+        emoji = horizon_emoji.get(p.get("horizon", ""), "📋")
         plan_rows += (
-            f'<div class="plan"><div class="plan-t">{h} · {p["action"]}</div>'
+            f'<div class="plan"><div class="plan-t"><span class="plan-ico">{emoji}</span> {h} · {p["action"]}</div>'
             f'<div class="plan-d">{p.get("reason", "")}</div></div>'
         )
     if not plan_rows:
@@ -416,8 +422,12 @@ def render_html(report: dict) -> str:
   h1 {{ font-size:22px; margin:0 0 4px; }}
   .meta {{ color:var(--muted); font-size:13px; margin-bottom:20px; }}
   .kpi {{ display:flex; gap:12px; flex-wrap:wrap; margin:16px 0 24px; }}
-  .kpi .card {{ flex:1; min-width:120px; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
-  .kpi .n {{ font-size:26px; font-weight:700; color:var(--brand); }}
+  .kpi .card {{ flex:1; min-width:130px; background:linear-gradient(180deg,#fff,var(--bg)); border:1px solid var(--line); border-radius:14px; padding:16px 16px 14px; box-shadow:0 2px 8px rgba(17,24,39,.05); border-top:3px solid var(--brand); }}
+  .kpi .card.c-green {{ border-top-color:#059669; }} .kpi .card.c-amber {{ border-top-color:#d97706; }}
+  .kpi .ico {{ display:flex; align-items:center; justify-content:center; width:38px; height:38px; border-radius:50%; font-size:20px; background:#e8f0fe; }}
+  .kpi .card.c-green .ico {{ background:#e6f4ef; }} .kpi .card.c-amber .ico {{ background:#fef3e2; }}
+  .kpi .n {{ font-size:28px; font-weight:700; color:var(--brand); margin-top:8px; }}
+  .kpi .card.c-green .n {{ color:#059669; }} .kpi .card.c-amber .n {{ color:#d97706; }}
   .kpi .l {{ font-size:12px; color:var(--muted); margin-top:2px; }}
   h2 {{ font-size:17px; border-left:4px solid var(--brand); padding-left:8px; margin:28px 0 12px; }}
   .frow {{ display:flex; align-items:center; gap:10px; margin:8px 0; }}
@@ -426,15 +436,17 @@ def render_html(report: dict) -> str:
   .fbar {{ flex:1; height:18px; background:var(--bg); border-radius:4px; overflow:hidden; }}
   .fbar-in {{ height:100%; background:linear-gradient(90deg,#3b82f6,#2563eb); }}
   .frate {{ width:64px; font-size:12px; color:var(--muted); text-align:right; }}
-  .diag {{ border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:10px 0; background:#fefce8; }}
+  .diag {{ border:1px solid var(--line); border-left:4px solid #d97706; border-radius:12px; padding:14px 16px; margin:10px 0; background:#fffbeb; box-shadow:0 2px 8px rgba(17,24,39,.04); }}
   .diag-t {{ font-weight:600; }}
   .diag-i {{ color:var(--muted); font-size:13px; margin:6px 0; }}
   .diag-a {{ font-size:13px; }}
-  .deepdive {{ border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:10px 0; }}
+  .deepdive {{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:10px 0; background:#fff; box-shadow:0 2px 8px rgba(17,24,39,.04); }}
   .dd-t {{ font-weight:700; color:var(--brand); }}
+  .dd-badge {{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; background:#e8f0fe; color:var(--brand); font-size:13px; font-weight:700; margin-right:6px; vertical-align:-4px; }}
   .dd-body {{ font-size:14px; margin-top:6px; line-height:1.7; }}
-  .plan {{ border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin:8px 0; }}
+  .plan {{ border:1px solid var(--line); border-radius:12px; padding:12px 16px; margin:8px 0; background:#fff; box-shadow:0 2px 8px rgba(17,24,39,.04); }}
   .plan-t {{ font-weight:600; }}
+  .plan-ico {{ display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; background:#e8f0fe; font-size:14px; margin-right:6px; vertical-align:-5px; }}
   .plan-d {{ color:var(--muted); font-size:13px; margin-top:4px; }}
   table {{ width:100%; border-collapse:collapse; font-size:13px; }}
   th,td {{ border:1px solid var(--line); padding:8px 10px; text-align:left; }}
@@ -452,38 +464,38 @@ def render_html(report: dict) -> str:
   </div>
 
   <div class="kpi">
-    <div class="card"><div class="n">{report["scope"]["unique_customer_count"]}</div><div class="l">目标买家（家）</div></div>
-    <div class="card"><div class="n">{funnel[0]["unique_customers"] if funnel else 0}</div><div class="l">漏斗起点</div></div>
-    <div class="card"><div class="n">{funnel[-1]["unique_customers"] if funnel else 0}</div><div class="l">商务推进</div></div>
-    <div class="card"><div class="n">{len(ba["connected_followups"])}</div><div class="l">优先跟进</div></div>
+    <div class="card"><div class="ico">🎯</div><div class="n">{report["scope"]["unique_customer_count"]}</div><div class="l">目标买家（家）</div></div>
+    <div class="card"><div class="ico">📩</div><div class="n">{funnel[1]["unique_customers"] if len(funnel) > 1 else 0}</div><div class="l">已邀约</div></div>
+    <div class="card c-green"><div class="ico">💰</div><div class="n">{funnel[-1]["unique_customers"] if funnel else 0}</div><div class="l">商务推进</div></div>
+    <div class="card c-amber"><div class="ico">⭐</div><div class="n">{len(ba["connected_followups"])}</div><div class="l">优先跟进</div></div>
   </div>
 
-  <h2>展后复盘结论</h2>
+  <h2>📊 展后复盘结论</h2>
   <p>{es["conclusion"]}</p>
   <p><b>主阻塞：</b>{es["main_bottleneck"] or "—"}</p>
   <p><b>最优先动作：</b>{es["priority_action"] or "—"}</p>
 
-  <h2>本届收获</h2>
+  <h2>🏆 本届收获</h2>
   <ul>{wins_rows}</ul>
 
-  <h2>漏斗与关键阻塞</h2>
+  <h2>📉 漏斗与关键阻塞</h2>
   <div class="funnel">{''.join(funnel_rows)}</div>
   {diag_rows}
 
   {deep_dive_section}
 
-  <h2>优先跟进买家</h2>
+  <h2>⭐ 优先跟进买家</h2>
   <table><thead><tr><th>公司</th><th>匹配度</th><th>阶段</th><th>优先级理由</th><th>下一步</th></tr></thead>
   <tbody>{priority_rows}</tbody></table>
 
-  <h2>培育买家</h2>
+  <h2>🌱 培育买家</h2>
   <table><thead><tr><th>公司</th><th>匹配度</th><th>阶段</th><th>优先级理由</th><th>下一步</th></tr></thead>
   <tbody>{nurture_rows}</tbody></table>
 
-  <h2>买家需求与现场反馈</h2>
+  <h2>💡 买家需求与现场反馈</h2>
   <ul>{demand_rows}</ul>
 
-  <h2>跟进与复购建议</h2>
+  <h2>🎯 跟进与复购建议</h2>
   {plan_rows}
 
   <div class="foot">本报告由出海精灵小元基于展会买家数据自动生成，不含买家个人联系方式。数据口径见配套分层表。</div>
