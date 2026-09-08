@@ -8,6 +8,6 @@ export async function lockWabaOwnershipKeys(
 ): Promise<void> {
   const keys = [`waba:${wabaId}`, ...phones.map((phone) => `phone:${phone}`)].sort();
   for (const key of keys) {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))::text`;
   }
 }
