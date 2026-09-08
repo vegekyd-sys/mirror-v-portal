@@ -117,9 +117,45 @@ CLI 查询返回 `response.data`（买家列表在 `response.data.page.records`�
 ## 背景执行路由
 
 - 仅当宿主具备受控子会话或后台任务能力时，才将搜索任务下放；否则由当前会话执行同一流程。
-- 父会话负责确认目标、排队、发送 2–3 个进度节点及最终交付。
+- 父会话负责确认目标、排队，用实时进度卡（见「卡片进度」章节）原地更新四个节点及最终交付。
 - 子会话负责搜索、质检、入池，并返回 `records`、`lead_pool`、`calibration.plan`；除非明确委托，不得直接发送用户可见消息。
 - 子会话超时、失败或回传不完整时，父会话只交付已验证的 partial 结果，并说明未完成范围；未入池记录不得计为已入池。
+
+## 卡片进度（实时进度卡）
+
+搜索任务执行时，用一张实时进度卡原地更新，替代文字播报。卡片能力来自共享运行时 `work/mio-api/cards/`（`FindBuyersCard` + `CardAdapter`），Skill 只引用、不拥有公共基础设施。
+
+### 四个节点（用「步骤 1/4」，不用百分比）
+
+| 节点 | 方法 | 状态文案 |
+|------|------|----------|
+| 步骤 1/4 target_confirmed | `card.target_confirmed()` | 已确认国家、产品、买家类型和展会范围 |
+| 步骤 2/4 searching | `card.searching(pages=, candidates=)` | 正在建立候选池（有真实数量时展示翻页数/候选数） |
+| 步骤 3/4 qualifying | `card.qualifying(qualified=)` | 正在按买家画像质检和企业级去重（不得写死「排除所有制造商」） |
+| 步骤 4/4 syncing | `card.syncing(synced=)` | 正在将最终结果同步到企业线索池 |
+
+有真实数量时展示页数/候选数/合格数/入池数；没有真实数量时不得伪造百分比和预计完成时间。
+
+### 状态枚举与终态规则
+
+状态：`queued` / `running` / `waiting_user` / `partial` / `failed` / `cancelled` / `done`。
+
+- 搜索与入池计数一致 → `done`（绿色完成卡）
+- 搜索成功但部分入池失败 → `partial`
+- 缺少关键参数 → `waiting_user`
+- 接口异常 → `failed`
+- 用户取消 → `cancelled`
+
+绿色完成卡只在 `lead_pool.created + lead_pool.updated` 等于最终展示的去重记录数时出现；计数不一致必须走 `partial`，不得显示全部完成。
+
+### 使用约束
+
+- 状态文件 `data/runtime/jobs/find-buyers/<job_id>.json`：不放 memory、不按 sid 共用；每次搜索唯一 `job_id`，绑定 `tenant_id`/`requester_id`/`chat_id`。
+- 更新节流：只在阶段变化或真实数字明显变化时更新，不按每条记录刷新；同一状态重复写入不更新（`CardAdapter` 已内置）。
+- 第一版按钮只做 open_url（打开线索池、查看任务详情），不做 callback。
+- 卡片不显示内部评分、个人联系方式、接口错误栈；线索池链接必须属于当前企业。
+- 名单明细仍走 REDLINES「≤5 逐条 / >5 总结+链接」，不塞进卡片。
+- 任务状态按 TTL 清理（`cleanup_expired`），不进长期 memory。
 
 ## 兄弟 Skill 分工
 
