@@ -142,6 +142,12 @@ def render_card(dsl: dict) -> dict:
       summary         1-3 条关键结论（可选）
       metrics         真实数字列表 [{label, value}]，有值才显示，不伪造
       links           open_url 按钮 [{text, url}]
+      buyers          买家明细列表（可选，终态卡用）：[{name, website, country, need, reason}]，
+                      reason 必须是用户可理解的短解释，不含内部评分/权重（红线）
+      subtitle        顶部灰字（可选，如「出海精灵小元 · 展后线索整理与报告」）
+      progress        进度百分比 0-100（可选，渲染进度条）
+      actions         通用按钮 [{text, type, url | callback}]：url → open_url，callback → callback
+                      （callback 用于「重试」等回推机制，不能丢）
     """
     title = str(dsl.get("title") or "任务")
     status = str(dsl.get("status") or "")
@@ -150,6 +156,14 @@ def render_card(dsl: dict) -> dict:
     emoji = _STATUS_EMOJI.get(state, "")
 
     elements: list = []
+
+    # 顶部灰字（subtitle）
+    subtitle = str(dsl.get("subtitle") or "").strip()
+    if subtitle:
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"<font color='grey'>{subtitle}</font>"},
+        })
 
     # 步骤标识（「步骤 2/4」+ 图标 + 进度圆点，不用百分比）
     step = dsl.get("step")
@@ -173,6 +187,14 @@ def render_card(dsl: dict) -> dict:
             "text": {"tag": "lark_md", "content": f"<font color='{color}'>●</font> {prefix}{status}"},
         })
 
+    # 进度条（百分比，可选）
+    progress = dsl.get("progress")
+    if isinstance(progress, (int, float)):
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": _progress_bar(progress)},
+        })
+
     # 真实数字（有才显示，不伪造），带指标图标
     metrics = [m for m in (dsl.get("metrics") or []) if isinstance(m, dict) and m.get("value")]
     if metrics:
@@ -189,7 +211,30 @@ def render_card(dsl: dict) -> dict:
         lines = "\n".join(f"{marker} {s}" for s in summary[:3])
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": lines}})
 
-    # open_url 按钮（第一版不实现 callback）
+    # 买家明细（仅终态卡用；reason 必须是用户可理解的短解释，不含内部评分/权重）
+    buyers = [b for b in (dsl.get("buyers") or []) if isinstance(b, dict)]
+    if buyers:
+        elements.append({"tag": "hr"})
+        for i, b in enumerate(buyers[:10], 1):
+            name = str(b.get("name") or "").strip()
+            website = str(b.get("website") or "").strip()
+            country = str(b.get("country") or "").strip()
+            need = str(b.get("need") or "").strip()
+            reason = str(b.get("reason") or "").strip()
+            lines = [f"**{i}. {name}**"]
+            meta = "  ".join(x for x in (
+                f"🌐 {website}" if website else "",
+                f"📍 {country}" if country else "",
+            ) if x)
+            if meta:
+                lines.append(meta)
+            if need:
+                lines.append(f"采购需求：{need}")
+            if reason:
+                lines.append(f"🟢 {reason}")
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}})
+
+    # open_url 按钮（links，向后兼容）
     links = [l for l in (dsl.get("links") or []) if isinstance(l, dict) and l.get("url")]
     if links:
         if len(links) == 1:
@@ -202,6 +247,25 @@ def render_card(dsl: dict) -> dict:
                     "width": "weighted",
                     "weight": 1,
                     "elements": [_button(l["text"], l["url"])],
+                })
+            buttons = [{"tag": "column_set", "flex_mode": "bisect",
+                        "background_style": "default", "columns": cols}]
+        elements.append({"tag": "hr"})
+        elements.extend(buttons)
+
+    # 通用动作按钮（actions：open_url 或 callback；callback 用于「重试」等回推机制）
+    actions = [a for a in (dsl.get("actions") or []) if isinstance(a, dict)]
+    if actions:
+        if len(actions) == 1:
+            buttons = [_action_button(actions[0])]
+        else:
+            cols = []
+            for a in actions[:2]:
+                cols.append({
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_action_button(a)],
                 })
             buttons = [{"tag": "column_set", "flex_mode": "bisect",
                         "background_style": "default", "columns": cols}]
@@ -226,6 +290,35 @@ def _button(text: str, url: str) -> dict:
     }
 
 
+def _action_button(action: dict) -> dict:
+    """通用按钮：有 url → open_url；否则 → callback（value 为 action['callback']）。
+
+    用于「重试」等回推机制（OpenClaw 结构化 quick 信封），不能丢。
+    """
+    btn = {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": str(action.get("text") or "按钮")},
+        "type": action.get("type") or "primary",
+        "width": "fill",
+    }
+    if action.get("url"):
+        btn["behaviors"] = [{"type": "open_url", "default_url": str(action["url"])}]
+    else:
+        btn["behaviors"] = [{"type": "callback", "value": action.get("callback") or {}}]
+    return btn
+
+
+def _progress_bar(pct) -> str:
+    """把 0-100 渲染成进度条（▰▱ 12 段 + 百分比）。"""
+    try:
+        p = max(0, min(100, int(round(float(pct)))))
+    except (TypeError, ValueError):
+        return ""
+    n = 12
+    done = round(p / 100 * n)
+    return "▰" * done + f"<font color='grey'>{'▱' * (n - done)}</font>  {p}%"
+
+
 def _throttle_key(dsl: dict) -> str:
     """节流键：只含影响卡片显示的字段。summary 文案同一步内不变，不计入。
 
@@ -237,6 +330,9 @@ def _throttle_key(dsl: dict) -> str:
         "color": dsl.get("color"),
         "metrics": [(m.get("label"), m.get("value")) for m in (dsl.get("metrics") or [])],
         "links": [(l.get("text"), l.get("url")) for l in (dsl.get("links") or [])],
+        "subtitle": dsl.get("subtitle"),
+        "progress": dsl.get("progress"),
+        "actions": [(a.get("text"), a.get("url"), a.get("callback")) for a in (dsl.get("actions") or [])],
     }, ensure_ascii=False, sort_keys=True)
 
 

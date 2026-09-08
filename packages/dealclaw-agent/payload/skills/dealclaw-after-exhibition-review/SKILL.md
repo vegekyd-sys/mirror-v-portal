@@ -101,6 +101,34 @@ description: 基于本届展会、买家商机、现场互动和展后跟进数�
 
 `close_out` 默认给出 72 小时、7 天和下一届准备动作；`conversion_review` 给出继续推进、长期培育、停止投入和下一轮实验。行动总数保持可执行，优先展示已经到期或承诺过的事项。
 
+## 实时进度卡片
+
+生成展后报告时，用一张飞书卡原地更新进度（`work/mio-api/cards/postexh_card.py`，复用共享运行时 `card_adapter.py` 的 CardAdapter）。开始工作流前先确定 `target`（触发本报告的群 `oc_` 或用户 `ou_`）和一个 `state_path`（例如 `/tmp/after_exh_<exhibition_id>.json`，用于持久化 message_id、跨进程原地更新同一张卡）。
+
+1. 工作流一开始就起卡（发新卡；后续阶段按持久化的 message_id 原地更新同一张卡，不起 Node 进程）：
+   ```bash
+   python3 work/mio-api/cards/postexh_card.py <target> <state_path> awaiting_data
+   ```
+2. 阶段推进时更新状态（同一张卡原地更新，不要另发文字重复结果）：
+   - 步骤 1 数据口径与完整度锁定后 → `cleaning`
+   - 步骤 5 买家优先级排序完成后 → `scoring`
+   - 步骤 8 开始撰写正文 / 渲染 HTML 时 → `drafting`
+   ```bash
+   python3 work/mio-api/cards/postexh_card.py <target> <state_path> cleaning
+   ```
+3. `validate_report.py` 校验通过、交付物（报告 + 线索表）就绪后写终态：
+   ```bash
+   python3 work/mio-api/cards/postexh_card.py <target> <state_path> done \
+     --report-url "https://..." --leads-url "https://..."
+   ```
+4. `validate_report.py` 返回 `valid: false`、数据不足以支撑正式报告、或任意异常中断时写失败态（带上重试上下文，让「重试」按钮能回到同一份报告）：
+   ```bash
+   python3 work/mio-api/cards/postexh_card.py <target> <state_path> failed \
+     --retry-q "重新生成展后报告 exhibition_id=xxx 企业=yyy"
+   ```
+
+卡片顶部灰字统一为「出海精灵小元 · 展后线索整理与报告」；`done` 态两个交付物是 URL 按钮。`failed` 态的「重试」按钮回调是 OpenClaw 结构化 quick 信封（`oc:ocf1, k:quick, a:after_exhibition.retry, q:<命令>`）：用户点击后，OpenClaw 会把信封里的 `q` 作为合成命令分发给本群绑定的 agent（小元），小元据此重新触发本 Skill 的报告生成流程——所以 `q` 里要带 `exhibition_id` 与 `企业`，才能回到同一份报告。卡片终态必须与报告实际交付状态一致——校验未通过时不得写 `done`。
+
 ## 基准比较
 
 优先级依次为：本企业同产品/同市场历史展会、口径一致的匿名同行中位数与上四分位、无基准只展示自身漏斗。

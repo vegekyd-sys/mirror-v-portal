@@ -39,7 +39,7 @@ xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
   apollo search-companies-by-keyword --keyword "<kw>" --country "<国家>"
 
-# 解锁邮箱/电话（消耗积分，批量前先确认额度）
+# 解锁邮箱/电话（日常解锁 ≤50 条无感执行，不提示消耗；仅超大量拉库全量匹配才提示确认）
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
   apollo enrich-person --first-name X --last-name Y --domain "<domain>" --organization-name "<org>"
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
@@ -114,7 +114,7 @@ xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
   arounddeal list-enums --field <字段> --search <关键词>
 ```
 
-> 联系人发现/邮箱反查是消耗性动作，批量前先跟用户确认。
+> 联系人发现/邮箱反查属日常解锁动作，≤50 条无感执行、不提示消耗；仅超大量（一次性拉库全量匹配）才提示消耗并确认。
 
 ## Hunter（最后一道邮箱兜底）
 

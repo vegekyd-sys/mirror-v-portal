@@ -1,39 +1,37 @@
 #!/usr/bin/env python3
-"""DealClaw 展后报告实时卡片状态机。
+"""DealClaw 展后报告实时进度卡（CardAdapter 版，迁移自旧 Node runner 机制）。
 
-在 report 生成 worker 里这样用：:
+复用共享运行时 CardAdapter：纯 Python 同步调 lark-cli 发卡/原地更新，不起 Node 进程、无孤儿 WebSocket。
+state_path 只用于持久化 message_id，跨进程恢复同一张卡原地更新。
 
-    from postexh_card import write_card_state, launch
+状态机：awaiting_data → cleaning → scoring → drafting → done / failed
 
-    state_path = "/tmp/after_exh_state.json"
-    launch(target="oc_xxx", state_path=state_path)          # 起后台 runner，先显示「等待数据就绪」
-    write_card_state(state_path, "cleaning")                # 每个阶段更新同一张卡
-    write_card_state(state_path, "scoring")
-    write_card_state(state_path, "drafting")
-    write_card_state(state_path, "done", report_url="https://...", leads_url="https://...")
-    # 或失败： write_card_state(state_path, "failed")
+「重试」按钮（failed 态）callback 是 OpenClaw 结构化 quick 信封（推送机制，必须保留）：
+    {"oc": "ocf1", "k": "quick", "a": "after_exhibition.retry", "q": "<命令>"}
+用户点击后 OpenClaw 把 q 作为合成命令分发给本群绑定的 agent（小元），据此重新触发报告生成。
 
-终端态卡片按钮：done = 「打开展后报告」「查看线索表」两个 URL 按钮（无回调）；
-failed = 「重试」回调按钮，callback 值 `{"a": "after_exhibition.retry"}`。
+CLI（与旧版兼容，路径指向共享运行时）：
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> awaiting_data
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> cleaning
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> scoring
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> drafting
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> done --report-url ... --leads-url ...
+    python3 work/mio-api/cards/postexh_card.py <target> <state_path> failed --retry-q "..."
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-RUNNER = SCRIPT_DIR / "live-card-state-runner.cjs"
-NODE = "node"
+from card_adapter import CardAdapter
 
 SUBTITLE = "出海精灵小元 · 展后线索整理与报告"
 
 _STAGES: dict[str, dict] = {
     "awaiting_data": {
         "title": "展后报告 · 生成中",
-        "subtitle": SUBTITLE,
         "status": "等待数据就绪",
         "color": "purple",
         "progress": 5,
@@ -41,7 +39,6 @@ _STAGES: dict[str, dict] = {
     },
     "cleaning": {
         "title": "展后报告 · 生成中",
-        "subtitle": SUBTITLE,
         "status": "线索清洗",
         "color": "purple",
         "progress": 20,
@@ -49,7 +46,6 @@ _STAGES: dict[str, dict] = {
     },
     "scoring": {
         "title": "展后报告 · 生成中",
-        "subtitle": SUBTITLE,
         "status": "线索优先级排序",
         "color": "purple",
         "progress": 50,
@@ -57,7 +53,6 @@ _STAGES: dict[str, dict] = {
     },
     "drafting": {
         "title": "展后报告 · 生成中",
-        "subtitle": SUBTITLE,
         "status": "生成报告正文",
         "color": "purple",
         "progress": 70,
@@ -65,97 +60,109 @@ _STAGES: dict[str, dict] = {
     },
     "done": {
         "title": "展后报告 · 已完成",
-        "subtitle": SUBTITLE,
         "status": "已交付",
         "color": "green",
         "progress": 100,
         "summary": ["报告已生成", "线索清单已写入飞书表格"],
-        "done": True,
+        "state": "done",
     },
     "failed": {
         "title": "展后报告 · 失败",
-        "subtitle": SUBTITLE,
         "status": "生成失败",
         "color": "red",
         "progress": 100,
         "summary": ["报告生成中断", "可点击重试，或稍后查看日志"],
-        "failed": True,
+        "state": "failed",
     },
 }
 
 
 def _build_dsl(stage: str, report_url: str | None = None, leads_url: str | None = None,
-               timeout_ms: int | None = None, retry_q: str | None = None) -> dict:
+               retry_q: str | None = None) -> dict:
     if stage not in _STAGES:
         raise ValueError(f"unknown stage: {stage!r}; valid: {sorted(_STAGES)}")
-    dsl = dict(_STAGES[stage])
+    spec = _STAGES[stage]
+    dsl = {
+        "title": spec["title"],
+        "subtitle": SUBTITLE,
+        "status": spec["status"],
+        "state": spec.get("state", "running"),
+        "color": spec["color"],
+        "progress": spec["progress"],
+        "summary": spec["summary"],
+    }
     if stage == "done":
-        dsl["sections"] = [
-            {"title": "报告要点", "lines": ["意向线索已清洗入库", "重点跟进线索已排序", "会议与互动记录已整合"]},
-        ]
+        # done 态两个交付物是 URL 按钮（open_url，无回调）
         dsl["actions"] = [
-            {"text": "打开展后报告", "type": "primary_filled", "url": report_url or "https://example.com/report"},
+            {"text": "打开展后报告", "type": "primary", "url": report_url or "https://example.com/report"},
             {"text": "查看线索表", "type": "default", "url": leads_url or "https://example.com/leads"},
         ]
     elif stage == "failed":
-        # 重试按钮回调 = OpenClaw 结构化 quick 信封；用户点击后 OpenClaw 会把 q 作为
-        # 合成命令分发给本群绑定的 agent（小元），从而重新触发报告生成。
+        # 重试按钮 = OpenClaw 结构化 quick 信封（推送机制，必须保留）
         dsl["actions"] = [
-            {"text": "重试", "type": "primary_filled",
+            {"text": "重试", "type": "primary",
              "callback": {"oc": "ocf1", "k": "quick", "a": "after_exhibition.retry",
                           "q": retry_q or "重新生成展后报告"}},
         ]
-    if timeout_ms:
-        dsl["timeoutMs"] = timeout_ms
     return dsl
 
 
-def write_card_state(state_path: str, stage: str, report_url: str | None = None,
-                     leads_url: str | None = None, timeout_ms: int | None = None,
-                     retry_q: str | None = None) -> dict:
-    """把某个阶段的卡片 DSL 原子写入 state.json，供 live-card-state-runner.cjs 原地更新。"""
-    dsl = _build_dsl(stage, report_url, leads_url, timeout_ms, retry_q)
+def _load_message_id(state_path: str) -> str:
+    try:
+        data = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        return str((data or {}).get("message_id") or "").strip()
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+
+def _persist(state_path: str, message_id: str, stage: str) -> None:
     p = Path(state_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(dsl, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(p)  # 原子替换，避免 runner 读到半截 JSON
-    return dsl
+    tmp.write_text(json.dumps({"message_id": message_id, "stage": stage},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
 
 
-def launch(target: str, state_path: str, timeout_ms: int | None = None):
-    """起后台 live-card-state-runner.cjs，watch state.json 原地更新同一张卡。
-
-    target 为 oc_ 群 id 或 ou_ 用户 id。返回 subprocess.Popen。
-    """
+def _run(target: str, state_path: str, stage: str, report_url: str | None = None,
+         leads_url: str | None = None, retry_q: str | None = None,
+         dry_run: bool = False) -> dict:
     if not target:
         raise ValueError("target 不能为空（oc_ 群 id 或 ou_ 用户 id）")
-    write_card_state(state_path, "awaiting_data", timeout_ms=timeout_ms)
-    cmd = [NODE, str(RUNNER), target, str(state_path)]
-    return subprocess.Popen(cmd, cwd=str(SCRIPT_DIR), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    dsl = _build_dsl(stage, report_url=report_url, leads_url=leads_url, retry_q=retry_q)
+    adapter = CardAdapter(chat_id=target, dry_run=dry_run)
+    adapter.message_id = _load_message_id(state_path)
+
+    if stage == "awaiting_data" or not adapter.message_id:
+        # 首次起卡：发新卡；之后原地更新同一张卡
+        result = adapter.send(dsl)
+    else:
+        result = adapter.update(dsl)
+
+    _persist(state_path, adapter.message_id, stage)
+    return {"ok": result.ok, "stage": stage, "message_id": adapter.message_id,
+            "state_path": state_path, "skipped": result.skipped}
 
 
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="DealClaw 展后报告实时卡片 CLI")
-    ap.add_argument("target", nargs="?", default="",
-                    help="oc_ 群 id 或 ou_ 用户 id（仅 awaiting_data 起卡时需要）")
-    ap.add_argument("state_path", help="state.json 路径")
+    ap = argparse.ArgumentParser(description="DealClaw 展后报告实时进度卡（CardAdapter 版）")
+    ap.add_argument("target", help="oc_ 群 id 或 ou_ 用户 id（仅起卡时需要）")
+    ap.add_argument("state_path", help="state.json 路径（持久化 message_id）")
     ap.add_argument("stage", nargs="?", default="awaiting_data", choices=sorted(_STAGES),
                     help="阶段，可选 " + "/".join(sorted(_STAGES)))
     ap.add_argument("--report-url", default=None, help="done 态：报告链接")
     ap.add_argument("--leads-url", default=None, help="done 态：线索表链接")
     ap.add_argument("--retry-q", default=None, help="failed 态：重试按钮分发回 agent 的命令文本")
-    ap.add_argument("--timeout-ms", type=int, default=None, help="runner 超时（毫秒）")
+    ap.add_argument("--dry-run", action="store_true", help="只渲染不实际发卡")
     args = ap.parse_args()
 
-    if args.stage == "awaiting_data" and not args.target:
-        ap.error("awaiting_data 阶段需要 target（oc_ 群 id 或 ou_ 用户 id）")
-
-    write_card_state(args.state_path, args.stage,
-                     report_url=args.report_url, leads_url=args.leads_url,
-                     timeout_ms=args.timeout_ms, retry_q=args.retry_q)
-    if args.stage == "awaiting_data":
-        launch(args.target, args.state_path, timeout_ms=args.timeout_ms)
-    print(json.dumps({"stage": args.stage, "state_path": args.state_path}, ensure_ascii=False))
+    try:
+        out = _run(args.target, args.state_path, args.stage,
+                   report_url=args.report_url, leads_url=args.leads_url,
+                   retry_q=args.retry_q, dry_run=args.dry_run)
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        sys.exit(2)
+    print(json.dumps(out, ensure_ascii=False))

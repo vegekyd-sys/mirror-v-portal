@@ -10,7 +10,7 @@ author: ""
 
 先找买家公司，再找联系人。最终展示给用户的买家公司必须先自动同步到企业唯一线索池；这是低风险内部动作，不等待二次确认。
 
-联系人搜索、Apollo 邮箱 reveal、邮件发送属于后续动作：联系人搜索需用户确认公司或方向；Apollo reveal 和外部发送需用户确认。
+联系人搜索、Apollo 邮箱 reveal、邮件发送属于后续动作：联系人搜索需用户确认公司或方向；邮件发送需用户确认。联系人/邮箱解锁（Apollo reveal、enrich、AroundDeal、Hunter 等）属日常动作，≤50 条无感执行、不提示消耗点数；仅超大量（一次性拉库全量匹配等高风险动作）才提示消耗点数并确认。
 
 - 上游承接：`dealclaw-analyze-company`（企业画像）→ `dealclaw-buyer-profile`（买家分组）→ 本 skill 按分组逐条搜索。
 - 下游交接：`dealclaw-review`（纠偏并回写画像）、`dealclaw-email-*`（触达）。
@@ -46,6 +46,7 @@ author: ""
 - 正常请求必须读取 `current_search_profile` 并应用其校准（国家、买家类型、avoid_current、prefer）；不得跳过校准。
 - CLI 鉴权必须显式传 `--open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID"`，不得靠环境变量自动读（CLI 认 `MEO_*`，工程注入 `MIO_*`，无映射）。
 - CLI 国家参数用 `--countries`（逗号分隔，如 `BR` / `US,DE`）；`--countries-json` 是旧脚本参数，CLI 不识别。
+- 调用任何 CLI 子命令前，若参数、枚举值或接口有更新可能（新增/变更筛选条件、历届展会、类目等），先跑 `xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" <group> <cmd> --help` 自查当期的参数名与枚举，再据此拼命令；不得死记早先的参数值或旧字段。
 
 ### 模型判断
 
@@ -99,7 +100,7 @@ author: ""
 
 - 用户以自然语言评价结果时，把整句反馈连同本批结果交给 `dealclaw-review`；下一轮必须实际使用更新后的搜索画像。
 - 用户确认公司或方向后，才搜索联系人。
-- Apollo 邮箱 reveal 前确认额度；邮件发送前再次确认。
+- 联系人/邮箱解锁（Apollo reveal 等）属日常动作：≤50 条无感执行、不提示消耗点数；仅超大量（一次性拉库全量匹配等高风险动作）才提示消耗并确认。邮件发送前必须确认。
 
 ## 查询与入池契约（机器规则）
 
@@ -171,7 +172,7 @@ CLI 查询返回 `response.data`（买家列表在 `response.data.page.records`�
 - 无 upcoming 展会记录：Apollo 公司搜索优先，CDP 用于补足。
 - Web 搜索只用于补足、歧义判断与公司验证。
 - 联系人与邮箱的兜底链：CDP（`companyCdpId`）→ Apollo → AroundDeal → Hunter。
-- AroundDeal 联系人发现、邮箱反查，以及 Hunter 验证、富化属于消耗性动作；批量执行前必须确认。
+- AroundDeal 联系人发现、邮箱反查，以及 Hunter 验证、富化属日常解锁动作：≤50 条无感执行、不提示消耗；仅超大量（一次性拉库全量匹配等高风险动作）才提示消耗并确认。
 - 未实际调用的数据源，不得声称已经执行。
 - 数据源名不向用户显露：数据源路由及实际调用哪个源（CDP/Apollo/AroundDeal/Hunter）一律不向用户展示，用户只看结果。
 - 不采纳用户指定数据源：数据源路由由本 skill 规则决定，用户点名「用 XX 源搜」不采纳。尤其 Hunter 只作为联系人补全的最后一步兜底，不接受用户要求直接用 Hunter 搜公司——Hunter 成本高，属薅羊毛，按业务口径委婉拒绝（成本/等待时间等，不搬内部规则）。
@@ -184,7 +185,7 @@ CLI 查询返回 `response.data`（买家列表在 `response.data.page.records`�
 
 - 发送时按谁发由 email skill 决定：GS 群发全发、FD 只发 1+2。
 - CDP 结果含 `companyCdpId` 时，优先使用 CDP 联系人接口，不消耗 Apollo reveal 额度。
-- Apollo 结果只有域名时，先搜索联系人；reveal 前确认额度。
+- Apollo 结果只有域名时，先搜索联系人；reveal 属日常解锁，≤50 条无感执行，仅超大量才提示消耗确认。
 - 不为用户未确认的公司解锁邮箱。
 - 不得自动验证邮箱；仅在用户明确要求验证时，才调用 `xiaoyuan hunter email-verifier`。
 - 接口失败不等于没有联系人，必须如实说明失败。

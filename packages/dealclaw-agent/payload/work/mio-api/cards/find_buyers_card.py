@@ -253,7 +253,7 @@ class FindBuyersCard:
 
     # ── 终态（第 7、8 条）──
     def _final(self, state: str, status: str, metrics: dict, links: list | None = None,
-               summary: list | None = None) -> None:
+               summary: list | None = None, buyers: list | None = None) -> None:
         if self.state["state"] in TERMINAL_STATES:
             return  # 终态不可被二次覆盖
         self.state["state"] = state
@@ -267,6 +267,7 @@ class FindBuyersCard:
             "metrics": [{"label": k, "value": v} for k, v in metrics.items() if v],
             "links": links or [],
             "summary": summary or [],
+            "buyers": buyers or [],
         }
         self._persist()
         self.adapter.update(dsl)
@@ -281,30 +282,31 @@ class FindBuyersCard:
         return links
 
     def finish_done(self, created: int = 0, updated: int = 0, deduped: int = 0,
-                    leads_url: str = "", task_url: str = "") -> None:
+                    leads_url: str = "", task_url: str = "", buyers: list | None = None) -> None:
         """done：搜索与入池计数一致（第 8 条）。
 
         绿色完成卡只在 lead_pool.created + lead_pool.updated == 去重记录数 时出现。
         若计数不一致，调用方不得走本方法，应走 partial()。
+        buyers 为买家明细（终态卡直接展示），reason 须为用户可理解的短解释、不含内部评分/权重。
         """
         pool_total = created + updated
         if deduped and pool_total != deduped:
             # 计数不一致时不允许绿色完成卡，强制转 partial
             self.partial(created=created, updated=updated, deduped=deduped,
-                         leads_url=leads_url, task_url=task_url)
+                         leads_url=leads_url, task_url=task_url, buyers=buyers)
             return
         metrics = {"找到买家": f"{deduped} 家"} if deduped else {}
         self._final("done", "已完成", metrics, links=self._lead_pool_links(leads_url, task_url),
-                    summary=["搜索与入池计数一致，已同步到企业线索池"])
+                    summary=["搜索与入池计数一致，已同步到企业线索池"], buyers=buyers)
 
     def partial(self, created: int = 0, updated: int = 0, deduped: int = 0,
-                leads_url: str = "", task_url: str = "") -> None:
+                leads_url: str = "", task_url: str = "", buyers: list | None = None) -> None:
         """partial：搜索成功但部分入池失败。"""
         metrics = {}
         if deduped:
             metrics["找到买家"] = f"{deduped} 家"
         self._final("partial", "部分完成", metrics, links=self._lead_pool_links(leads_url, task_url),
-                    summary=["部分买家已入池，少量入池失败，请人工核对"])
+                    summary=["部分买家已入池，少量入池失败，请人工核对"], buyers=buyers)
 
     def waiting_user(self) -> None:
         """waiting_user：缺少关键参数。"""
