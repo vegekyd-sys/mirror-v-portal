@@ -174,7 +174,11 @@ export default function LlmPushProgressModal({ taskId, onClose }: LlmPushProgres
         </div>
       ) : (
         <div className="hint" style={{ margin: 0 }}>
-          {done ? '没有需要推送的租户' : '正在枚举租户…'}
+          {done
+            ? '没有需要推送的租户'
+            : status === 'pending'
+              ? '排队中，等待前序任务完成…'
+              : '正在枚举租户…'}
         </div>
       )}
 
