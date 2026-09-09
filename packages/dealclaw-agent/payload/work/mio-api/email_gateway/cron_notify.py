@@ -191,11 +191,13 @@ def main(argv: list[str] | None = None) -> int:
         else [args.account_id]
     )
     errors: list[str] = []
-    sent_any = False
+    synced_any = False
+    webhook_failed = False
     syncer = ImapSynchronizer(store)
     for account_id in account_ids:
         try:
             result = syncer.sync_account(account_id).as_dict()
+            synced_any = True
         except Exception as exc:
             errors.append(f"{account_id}:{type(exc).__name__}")
             continue
@@ -220,10 +222,10 @@ def main(argv: list[str] | None = None) -> int:
         for url, secret in targets:
             try:
                 _send_webhook(url, secret, card)
-                sent_any = True
             except Exception as exc:
                 errors.append(f"{account_id}:webhook:{type(exc).__name__}")
-    if errors and not sent_any:
+                webhook_failed = True
+    if (not synced_any) or webhook_failed:
         raise RuntimeError("; ".join(errors))
     if errors:
         print(f"警告：{len(errors)} 个邮箱同步/发送失败", file=sys.stderr)
