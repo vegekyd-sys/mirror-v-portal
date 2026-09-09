@@ -22,7 +22,7 @@ import {
   pushTenantSkillEnv,
 } from '../services/skill-env.js';
 import { getMasterKey } from '../services/crypto.js';
-import { getTenantDirectModeMap } from '../services/llm-providers.js';
+import { getTenantDirectModeMap, getGlobalLlmProviders, applyTenantLlmConfig } from '../services/llm-providers.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import { getOverrideMap, setOverride, clearOverride, listOverrides } from '../services/tenant-image-overrides.js';
 import type { ProvisioningConfig } from '../config.js';
@@ -52,6 +52,38 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
   const auditFor = (req: Request, entry: Omit<AuditEntry, 'actor' | 'actorType'>) => {
     const { actor, actorType } = actorFromRequest(req);
     return writeAuditLog(pool, { ...entry, actor, actorType });
+  };
+
+  /**
+   * 新建租户 provisioning 后立即把 LLM_PROVIDERS 重写为网关态。
+   *
+   * 根因：provisioning 步骤 1b 把全局库的真实上游 baseUrl 原样写进
+   * tenant-config，1d 把 llm-proxy-config 初始化为空 {}，指望后续
+   * pushLlmProviders 补齐。但 push 只在「有人改全局库」时触发，凡
+   * 「创建后没再触发过全局库保存」的新租户都会直连上游、绕过网关的
+   * 余额拦截 + token 计费。这里建租户成功后补一次单租户 scope 重写：
+   * baseUrl → nexus-gateway /v1/llm/<name>，真实地址进 LLM_UPSTREAMS，
+   * 并滚动 agent + gateway 让重写后的 Secret 生效。
+   *
+   * 幂等 + fail-open：applyTenantLlmConfig 内部合并现有 Secret、try-catch
+   * 返回 ok:false 不抛错；此处再包一层，任何失败只打日志，不阻断建租户。
+   */
+  const rewriteTenantLlmToGateway = async (tenantId: string): Promise<void> => {
+    if (config.k8sDryRun) return; // dry-run / test 流程无真实 K8s
+    try {
+      const nowLibrary = await getGlobalLlmProviders(pool);
+      if (!nowLibrary || nowLibrary.providers.length === 0) {
+        console.warn(`[provision] skip LLM gateway rewrite for ${tenantId}: global library empty`);
+        return;
+      }
+      const outcome = await applyTenantLlmConfig(pool, config, tenantId, nowLibrary, null, tenantId);
+      if (!outcome.ok) {
+        console.error(`[provision] LLM gateway rewrite failed for ${tenantId}: ${outcome.error}`);
+      }
+    } catch (err: unknown) {
+      const e = err as Error;
+      console.error(`[provision] LLM gateway rewrite error for ${tenantId}: ${e?.message ?? String(err)}`);
+    }
   };
 
   // POST /v1/tenants — create new tenant
@@ -256,6 +288,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         `UPDATE tenants SET status = 'active', updated_at = NOW() WHERE tenant_id = $1`,
         [tenantId],
       );
+
+      // 方案1 修复：provisioning 后立即把 LLM_PROVIDERS 重写为网关态，
+      // 避免「创建后无全局库改动」时直连上游绕过网关计费（见 helper 注释）。
+      await rewriteTenantLlmToGateway(tenantId);
 
       res.status(201).json({
         ok: true,
@@ -587,6 +623,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
          VALUES ($1, 'pending', 'active', 'Auto-provisioned after Feishu credentials bound (openclaw plane)')`,
         [tenantId],
       );
+
+      // 方案1 修复：延迟 provision（openclaw 开通 Agent）后立即把
+      // LLM_PROVIDERS 重写为网关态，避免直连上游绕过网关计费。
+      await rewriteTenantLlmToGateway(tenantId);
 
       res.json({
         ok: true,
