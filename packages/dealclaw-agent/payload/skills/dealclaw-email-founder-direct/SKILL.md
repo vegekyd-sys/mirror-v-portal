@@ -20,16 +20,16 @@ date: "2026-07-29"
 
 ```
 1. 生成邮件内容 → V 根据买家背景+企业优势自主撰写
-2. 发送前检查买家时区 → `python3 work/mio-api/send_window.py --country <ISO> [--city <city>]`。非工作日或不在 8:00-18:00 则阻断，向用户说明原因（如"买家当地时间周六 21:30，邮件将在下周一 8:00 发送"）。
+2. 发送时区窗口路由 → 统一入口带 `--country` 自动处理：窗口内当场发，窗口外自动落待发队列由 cron 到点自动发（当地下一个工作日 8:00），并向用户说明预计发送时间。
 3. 发送前确认 → 展示收件人、内容、检查项给用户
-4. 用户确认 → SMTP 发送
+4. 用户确认 → 发送（`dc_email_send.py send --channel FD ...`）
 5. 回写线索池 → 立刻更新该买家记录：阶段→已触达、最近触达→发送时间、触达渠道→邮件。不可跳过
-```
 
 ## 收件人选择
 
 - 只发 1+2：采购经理（Purchasing/Procurement/Sourcing/Buyer）+ 总经理（CEO/Owner/Director）。
 - 不发 3（产品经理/R&D/Engineering）、4（其他）。
+```
 
 ## 邮件内容原则
 
@@ -56,19 +56,31 @@ V 自主生成，核心约束：
 4. 用户确认后发送 → 更新阶段→已回复（如走邮件再次触达）
 5. 进入跟进周期（等待下次触达时机）
 
-## 发送脚本
+## 发送脚本（统一入口）
 
 ```bash
-node scripts/founder-direct/send-direct.mjs \
+python3 work/mio-api/dc_email_send.py send \
+  --channel FD \
   --from user@company.com \
   --to buyer@example.com \
   --subject 'Quick question — [主题]' \
-  --text '...'
+  --text '...' \
+  --country BR \
+  --enterprise <企业key> \
+  --receipt-target ou_<当前私聊open_id>
 ```
 
-## 脚本路径锚点（避免执行失败）
+- `--channel FD`：代理邮箱（@mail.dealclaw.io）走 Resend 无需密码；企业邮箱走 SMTP 直发。
+- `--country` 带则自动判窗口：窗口内当场发，窗口外落待发队列由 cron 到点自动发；不带则跳过窗口检查直接发。
+- **`--enterprise` 必带**：填当前企业 key。不传则 `dc_email_send.py` 里 `if enterprise:` 跳过落库，发送日志不落 send_log、早报的「发送/送达/回复/退信」查不到、阶段也不回填。
+- `--receipt-target` 必带，填当前会话 id：私聊用 `ou_` open_id，群聊用 `oc_` chat_id。发送结果以机器人身份推一条回执回这个会话。
+- ⚠️ SMTP 直发（企业邮箱需现场输入密码）无法定时自动发：密码只在发送时刻输入，窗口外落队列后到点无法补密码。这类用 Resend 代理邮箱，或到点后改人工发。
 
-- 从工作区根执行，用相对路径调用：`node scripts/founder-direct/send-direct.mjs ...`。
+## 脚本路径锚点（避免执行失败 + 禁止裸发）
+
+- **发送一律走统一入口 `dc_email_send.py send`，禁止直接 `node scripts/founder-direct/send-direct.mjs` 裸发**。`send-direct.mjs` 是底层发信脚本，只调 SMTP/Resend 发信、不落 send_log、不回填阶段——直接裸发会导致早报查不到发送记录。
+- 统一入口 `dc_email_send.py` 内部会去调 `send-direct.mjs`（FD），并负责落 send_log + 批次回执 + 窗口路由，agent 不要绕过它。
+- 从工作区根执行，用相对路径调用 `python3 work/mio-api/dc_email_send.py ...`。
 - 不要拼 `/data/workspace` 等绝对路径前缀，也不要 `ls`/list 脚本目录来「确认脚本存在」——租户环境挂载根可能与预期不符；且 `accounts/`、`email-registry.json`、`sent-log.jsonl` 等运行时文件不在镜像里（`.gitignore` 排除），列目录必失败。
 - 脚本内部用 `__dirname` 自动定位同目录的 `accounts/`、`email-registry.json`，无需手动指定。
 
@@ -76,6 +88,7 @@ node scripts/founder-direct/send-direct.mjs \
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v2.1 | 2026-09-08 | 发送改走统一入口 dc_email_send.py：窗口路由 + 批次回执（机器人推回发起会话）+ 定时发送闭环。来源：田耕郡@格格 |
 | v2.0 | 2026-07-29 | 吸收 dc-copy 内容生成，删 DC-OS/DC-Copy 死链。邮箱绑定引导移出 skill（V 被问到自然会引导）。来源：田耕郡@格格 |
 | v1.0 | 2026-07-14 | 初始 |
 

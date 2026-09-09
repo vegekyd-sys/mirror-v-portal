@@ -22,9 +22,9 @@ date: "2026-07-30"
 1. 飞书通知检查 → GET /bindings 查已有绑定，有则自动复用，无则提醒绑定
 2. KB 素材检查 → 缺关键素材（认证/手册）则阻断通知
 3. 生成邮件内容 → 公司口吻，含产品+差异化信息
-4. 发送前检查买家时区 → `python3 work/mio-api/send_window.py --country <ISO> [--city <city>]`。不在工作日 8:00-18:00 则阻断，向用户说明原因及预计发送时间。批量发送时，取多数买家的时区判断；若买家跨时区，逐批检查。
+4. 发送时区窗口路由 → 交给统一入口自动处理（带 `--country`）：窗口内当场发，窗口外自动落待发队列，由 cron 到点自动发（当地下一个工作日 8:00）。批量取多数买家时区；跨时区逐批各带 `--country` 分批发。
 5. 发送前校验 → 域名预热 / 收件人格式 / 业务邮箱验证
-6. 发送 → Resend（自动退订+追踪）
+6. 发送 → `python3 work/mio-api/dc_email_send.py send --channel GS ...`（自动退订+追踪+批次回执）
 7. 回写线索池 → 立刻更新每条记录的 阶段→已触达、最近触达→发送时间、触达渠道→邮件/WhatsApp。不可跳过
 8. 自动序列 → 未回复则间隔跟进，回复则转人工
 ```
@@ -42,7 +42,6 @@ date: "2026-07-30"
 ## 收件人选择
 
 - 群发全发，不按优先级筛；有多个联系人时，优先用采购经理/总经理的邮箱，缺则顺延。
----
 
 ## 飞书通知自动绑定（Silent Bind）
 
@@ -137,13 +136,7 @@ V 根据买家背景和企业画像自主生成，不套死模板。核心原则
 
 ### Resend API Key 配置
 
-API Key 存储在 `scripts/resend/.env`，domain-setup.mjs 和 send.mjs 均从此读取。调用 send.mjs 前需 export：
-
-```bash
-export RESEND_API_KEY=$(grep RESEND_API_KEY scripts/resend/.env | cut -d= -f2)
-```
-
-不在 `/home/openclaw/.openclaw/.env` 中读取。
+API Key 存储在 `work/mio-api/.env`。`dc_email_send.py` 发送时自动加载，无需手动 export。`domain-setup.mjs` 等域名管理脚本仍走 `scripts/resend/.env`（需 export）。
 
 ### 域名管理（发送前置条件）
 
@@ -183,7 +176,7 @@ node scripts/resend/domain-setup.mjs dns-detect --domain mail.dealclaw.io
 
 ## 飞书通知绑定 API 参考
 
-Resend 邮件事件通过 `dealclaw.datathink.com` 中间层转发到飞书群。**永远不要直接配 Resend webhook 到飞书 bot URL**。
+Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**永远不要直接配 Resend webhook 到飞书 bot URL**。
 
 ### 概念：agent_email
 
@@ -232,26 +225,38 @@ Resend 邮件事件通过 `dealclaw.datathink.com` 中间层转发到飞书群�
 
 ---
 
-## 发送脚本
+## 发送脚本（统一入口）
 
 ```bash
-node scripts/resend/send.mjs \
+python3 work/mio-api/dc_email_send.py send \
+  --channel GS \
   --from 'Lawaken <V@mail.dealclaw.io>' \
-  --to buyer@x.com \
+  --to buyer1@x.com,buyer2@x.com \
   --subject '...' \
   --html '<p>...</p>' \
-  --text '...'
+  --text '...' \
+  --country BR \
+  --enterprise <企业key> \
+  --receipt-target oc_<当前群chat_id>
 ```
 
-⚠️ `send.mjs` 的 Authorization header 直接传裸 API key，不加 `Bearer` 前缀。`RESEND_API_KEY` 格式为 `re_` 开头。
+- `--channel GS` 走 Resend（自动退订+追踪）。
+- `--country` 带则自动判窗口：窗口内当场发，窗口外落待发队列由 cron 到点自动发；不带则跳过窗口检查直接发。
+- **`--enterprise` 必带**：填当前企业 key（如 `lpskcom`）。不传则 `dc_email_send.py` 里 `if enterprise:` 跳过落库，**发送日志不落 send_log、早报的「发送/送达/回复/退信」查不到、阶段也不回填**——这正是早报显示 0 的根因之一。
+- `--receipt-target` 必带，填当前会话 id：群聊用 `oc_` chat_id，私聊用 `ou_` open_id。发送结果（成功/失败/定时到点）以机器人身份推一条批次回执回这个会话，不逐封。
+- `RESEND_API_KEY` 由 `dc_email_send.py` 自动从 `work/mio-api/.env` 读取，无需手动 export。
 
 ---
 
-## 脚本路径锚点（避免执行失败）
+## 脚本路径锚点（避免执行失败 + 禁止裸发）
 
-- 从工作区根执行，用相对路径调用：`node scripts/resend/send.mjs ...`。
+- **发送一律走统一入口 `dc_email_send.py send`，禁止直接 `node scripts/resend/send.mjs` 裸发**。`send.mjs` 是底层发信脚本，只调 Resend 发信、不落 send_log、不回填阶段——直接裸发会导致早报查不到发送记录。
+- 统一入口 `dc_email_send.py` 内部会去调 `send.mjs`（GS）/ `send-direct.mjs`（FD），并负责落 send_log + 批次回执 + 窗口路由，agent 不要绕过它。
+- 从工作区根执行，用相对路径调用 `python3 work/mio-api/dc_email_send.py ...`。
 - 不要拼 `/data/workspace` 等绝对路径前缀，也不要 `ls`/list 脚本目录来「确认脚本存在」——租户环境挂载根可能与预期不符；且 `.env`、`.reply-checkpoint.json` 等运行时文件不在镜像里（`.gitignore` 排除），列目录必失败。
 - 脚本内部用 `__dirname` 自动定位同目录的 `.env`，无需手动指定。
+
+---
 
 ## 错误处理
 
@@ -269,6 +274,7 @@ node scripts/resend/send.mjs \
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v3.3 | 2026-09-08 | 发送改走统一入口 dc_email_send.py：窗口路由 + 批次回执（机器人推回发起会话）+ 定时发送闭环。来源：田耕郡@格格 |
 | v3.2 | 2026-07-30 | 新增 Silent Bind：发送前自动 GET /bindings 检查已有绑定，/new 后无需重绑。修复 send.mjs Bearer 前缀 bug。来源：田耕郡@格格 |
 | v3.1.1 | 2026-07-30 | 完善飞书通知绑定：补充全部管理接口、错误码表、agent_email概念、通道类型、密钥不回显设计、限流细节 |
 | v3.1 | 2026-07-30 | 新增飞书通知绑定流程 + MFG 发送前预检 |
