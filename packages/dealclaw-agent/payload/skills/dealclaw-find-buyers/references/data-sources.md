@@ -51,9 +51,17 @@ xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
 ## 核心搜索（buyer）
 
 ```bash
-# 常规产品/国家搜索
+# 采购类目树（先定位产品所属 T1~T4 类目 id，再填进 search 的 --supplier-categories）
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
+  buyer all-category
+
+# 常规产品/国家搜索（关键词）
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
   buyer search --tag-keyword "<product_tag>" --countries US,DE --page-size 100
+
+# 结构化类目搜索（比关键词精准；id 来自 all-category 树路径）
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
+  buyer search --supplier-categories '[{"t1TagId":"105","t2TagId":"105038"}]' --countries US,DE --page-size 100
 
 # 展会预注册买家（展会 ID + features 21）
 xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" \
@@ -81,6 +89,7 @@ xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" buyer o
 
 - 翻页扩池：`--page-num` / `--backend-param`，`--page-size 100`；`--backend-param` 传上一轮 `response.data.backendParam`。
 - 搜报名/预注册买家时 `--features` 必须含 `21`。
+- 类目定位优先用结构化 `--supplier-categories`（JSON 数组，`t1TagId`~`t4TagId`，id 来自 `buyer all-category` 树路径），比 `--tag-keyword` 更精准；定位不到类目时用关键词兜底。
 
 ## AroundDeal（补充 Apollo）
 

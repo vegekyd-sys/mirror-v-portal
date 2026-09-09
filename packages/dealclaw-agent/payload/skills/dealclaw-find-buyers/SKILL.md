@@ -39,8 +39,8 @@ author: ""
 
 ### 机器契约（不得变）
 
-- 搜索字段优先级：`--tag-keyword` > `--profile-keyword` > `--company-name`（公司名）。
-- 产品词必须先用 `--tag-keyword`；仅在标签无结果时，才降级 `--profile-keyword`。
+- 搜索字段优先级：结构化类目 `--supplier-categories`（T1~T4 id，来自 `buyer all-category`）> `--tag-keyword` > `--profile-keyword` > `--company-name`（公司名）。
+- 产品词能定位到采购类目时，优先用 `--supplier-categories` 结构化类目；定位不到类目时先用 `--tag-keyword`，仅在标签无结果时才降级 `--profile-keyword`。
 - 公司名、品牌名使用 `--company-name`；产品词不得放入公司名字段。
 - 采购标签只认英文；国家统一使用大写 ISO2；一次只传一个搜索概念或完整短语。
 - 正常请求必须读取 `current_search_profile` 并应用其校准（国家、买家类型、avoid_current、prefer）；不得跳过校准。

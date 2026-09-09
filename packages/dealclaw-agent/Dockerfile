@@ -32,10 +32,10 @@ RUN npm install -g @larksuite/cli@1.0.68
 
 # 小元 CLI — 直连 blade-agent-adapter 的接口命令（替代 find-buyers 零散脚本）。
 # venv 隔离：Debian python3 是 externally-managed（PEP 668），不能直接 pip install。
-COPY blade_agent_cli-0.1.1-py3-none-any.whl /tmp/blade_agent_cli-0.1.1-py3-none-any.whl
+COPY blade_agent_cli-0.1.2-py3-none-any.whl /tmp/blade_agent_cli-0.1.2-py3-none-any.whl
 RUN python3 -m venv /opt/xiaoyuan-venv \
-    && /opt/xiaoyuan-venv/bin/pip install /tmp/blade_agent_cli-0.1.1-py3-none-any.whl \
-    && rm /tmp/blade_agent_cli-0.1.1-py3-none-any.whl
+    && /opt/xiaoyuan-venv/bin/pip install /tmp/blade_agent_cli-0.1.2-py3-none-any.whl \
+    && rm /tmp/blade_agent_cli-0.1.2-py3-none-any.whl
 
 COPY --from=bridge-build /build/dist /opt/dealclaw/bridge/dist
 COPY --from=bridge-build /build/node_modules /opt/dealclaw/bridge/node_modules
