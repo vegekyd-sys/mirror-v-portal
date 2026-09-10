@@ -606,6 +606,7 @@ export default function AgentDetailPage() {
   // ── 对话记录（dealclaw-chatlog 插件上报的 chat_messages） ──
   interface ChatSession {
     session_key: string;
+    day: string;
     message_count: number;
     first_at: string;
     last_at: string;
@@ -628,7 +629,8 @@ export default function AgentDetailPage() {
   const [chatSessions, setChatSessions] = useState<ChatSession[] | null>(null);
   const [chatTotal, setChatTotal] = useState(0);
   const [chatOffset, setChatOffset] = useState(0);
-  const [chatSel, setChatSel] = useState('');
+  const [chatSelKey, setChatSelKey] = useState('');
+  const [chatSelDay, setChatSelDay] = useState('');
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[] | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatHideProactive, setChatHideProactive] = useState(true);
@@ -652,11 +654,11 @@ export default function AgentDetailPage() {
     }
   }, [tenantId]);
 
-  const loadChatMsgs = useCallback(async (sessionKey: string) => {
+  const loadChatMsgs = useCallback(async (sessionKey: string, day: string) => {
     setChatBusy(true);
     try {
       const r = await api<{ messages: ChatMsg[]; total: number }>(
-        `/v1/tenants/${encodeURIComponent(tenantId)}/chat-messages?sessionKey=${encodeURIComponent(sessionKey)}&limit=200`,
+        `/v1/tenants/${encodeURIComponent(tenantId)}/chat-messages?sessionKey=${encodeURIComponent(sessionKey)}&day=${encodeURIComponent(day)}&limit=200`,
       );
       // API 返回最新在前，气泡视图按时间正序渲染
       setChatMsgs([...r.messages].reverse());
@@ -671,16 +673,17 @@ export default function AgentDetailPage() {
     void loadChatSessions(0);
   }, [loadChatSessions]);
 
-  const chatOpenSession = (sessionKey: string) => {
-    setChatSel(sessionKey);
+  const chatOpenSession = (sessionKey: string, day: string) => {
+    setChatSelKey(sessionKey);
+    setChatSelDay(day);
     setChatMsgs(null);
-    void loadChatMsgs(sessionKey);
+    void loadChatMsgs(sessionKey, day);
   };
 
   /** 刷新：重载会话列表；已选中会话时同时重载该会话最新消息。 */
   const chatRefresh = () => {
     void loadChatSessions(chatOffset);
-    if (chatSel) void loadChatMsgs(chatSel);
+    if (chatSelKey) void loadChatMsgs(chatSelKey, chatSelDay);
   };
 
   /** 入站消息的发送者显示名：姓名快照 → 截短 open_id。 */
@@ -1448,13 +1451,13 @@ export default function AgentDetailPage() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flex: 1 }}>
                   {chatSessions.map((s) => (
                     <button
-                      key={s.session_key}
-                      className={s.session_key === chatSel ? 'btn-primary' : 'btn-secondary'}
+                      key={`${s.session_key}|${s.day}`}
+                      className={s.session_key === chatSelKey && s.day === chatSelDay ? 'btn-primary' : 'btn-secondary'}
                       style={{ fontSize: 12, padding: '4px 10px' }}
-                      onClick={() => chatOpenSession(s.session_key)}
-                      title={s.session_key}
+                      onClick={() => chatOpenSession(s.session_key, s.day)}
+                      title={`${s.session_key} · ${s.day}`}
                     >
-                      {s.last_sender_name
+                      {s.day} {s.last_sender_name
                         || (s.last_sender_open_id && s.last_sender_open_id.length > 12
                           ? `${s.last_sender_open_id.slice(0, 8)}…`
                           : s.last_sender_open_id)
@@ -1509,10 +1512,10 @@ export default function AgentDetailPage() {
                   ↻ 刷新
                 </button>
               </div>
-              {chatSel && (
+              {chatSelKey && (
                 <div style={{ border: '1px solid #e5e8f0', borderRadius: 8, padding: 12, background: '#fafbfe' }}>
                   <div className="hint" style={{ marginBottom: 8 }}>
-                    会话 <span className="mono">{chatSel}</span>
+                    会话 <span className="mono">{chatSelKey}</span> · {chatSelDay}
                   </div>
                   {chatBusy && chatMsgs === null ? (
                     <span className="hint" style={{ margin: 0 }}>加载中…</span>
@@ -1713,14 +1716,14 @@ export default function AgentDetailPage() {
           ) : skillEnv.length === 0 ? (
             <div className="empty">暂无配置：在下方添加该 Agent 的专属 Key，或到「运行时配置」页设置全局默认</div>
           ) : (
-            <table>
+            <table style={{ tableLayout: 'fixed', width: '100%' }}>
               <thead>
                 <tr>
-                  <th>Key</th>
-                  <th>来源</th>
-                  <th>当前值</th>
+                  <th style={{ width: '16%' }}>Key</th>
+                  <th style={{ width: 88 }}>来源</th>
+                  <th style={{ width: '28%' }}>当前值</th>
                   <th>说明</th>
-                  <th>更新时间</th>
+                  <th style={{ width: 110 }}>更新时间</th>
                   <th style={{ width: 150 }}>操作</th>
                 </tr>
               </thead>
@@ -1733,8 +1736,8 @@ export default function AgentDetailPage() {
                         {SE_SOURCE_BADGE[entry.source].text}
                       </span>
                     </td>
-                    <td className="mono">{entry.displayValue}</td>
-                    <td style={{ fontSize: 12 }}>{entry.description || '-'}</td>
+                    <td className="mono" style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }} title={entry.displayValue}>{entry.displayValue}</td>
+                    <td style={{ fontSize: 12, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{entry.description || '-'}</td>
                     <td style={{ fontSize: 11, color: '#777' }}>
                       {entry.updatedAt ? fmtTime(entry.updatedAt) : '-'}
                     </td>
