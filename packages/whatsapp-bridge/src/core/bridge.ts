@@ -437,7 +437,8 @@ export async function handleAgentSend(input: {
     };
   }
 
-  let sent;
+  let sent: unknown;
+  let sendError: { code: string; message: string } | undefined;
   try {
     sent = useTemplate
       ? await sendWhatsAppTemplate(conversation.businessPhone, customerPhone, {
@@ -447,15 +448,18 @@ export async function handleAgentSend(input: {
         })
       : await sendWhatsAppText(conversation.businessPhone, customerPhone, text);
   } catch (error) {
-    const info = ycloudSendErrorInfo(error);
-    return { ok: false as const, code: info.code, message: info.message };
+    // 发送失败（如 YCloud 余额不足）不再直接 return：继续把消息落库 + 建出飞书客服话题，
+    // 否则「发不出去 = 连群都没有」，失败也没有落点。
+    sendError = ycloudSendErrorInfo(error);
+    console.error("send WhatsApp failed, continuing to Feishu sync", sendError);
   }
 
+  const sentRecord = (sent || {}) as { id?: unknown; messageId?: unknown };
   const ycloudMessageId =
-    typeof sent.id === "string"
-      ? sent.id
-      : typeof sent.messageId === "string"
-        ? sent.messageId
+    typeof sentRecord.id === "string"
+      ? sentRecord.id
+      : typeof sentRecord.messageId === "string"
+        ? sentRecord.messageId
         : undefined;
 
   const preview = useTemplate
@@ -473,8 +477,8 @@ export async function handleAgentSend(input: {
       direction: "outbound",
       source: "agent",
       messageType: useTemplate ? "template" : "text",
-      status: "accepted",
-      content: preview,
+      status: sendError ? "failed" : "accepted",
+      content: sendError ? `[发送失败] ${preview}` : preview,
       ycloudMessageId,
       supplierId: conversation.supplierId || undefined,
     },
@@ -482,7 +486,7 @@ export async function handleAgentSend(input: {
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      lastOutboundAt: new Date(),
+      ...(sendError ? {} : { lastOutboundAt: new Date() }),
       ...(sourceChatId ? { sourceChatId } : {}),
       ...(sourceOpenId ? { sourceOpenId } : {}),
       ...(input.feishuAppId?.trim() ? { feishuAppId: input.feishuAppId.trim() } : {}),
@@ -516,7 +520,9 @@ export async function handleAgentSend(input: {
           customerPhone,
           businessPhone: conversation.businessPhone,
           customerName: conversation.customer.name || undefined,
-          firstText: "系统：智能体已向该买家发送 WhatsApp",
+          firstText: sendError
+            ? `系统：向买家发送 WhatsApp 失败（${sendError.code}）。${sendError.message}`
+            : "系统：智能体已向该买家发送 WhatsApp",
           memberOpenIds: sourceOpenId ? [sourceOpenId] : undefined,
           botAppIds: bots,
         });
@@ -535,6 +541,18 @@ export async function handleAgentSend(input: {
   } catch (error) {
     feishuSyncError = error instanceof Error ? error.message : String(error);
     console.error("sync outbound to Feishu failed", error);
+  }
+
+  if (sendError) {
+    return {
+      ok: false as const,
+      code: sendError.code,
+      message: sendError.message,
+      conversationId: conversation.id,
+      supplierId,
+      from: businessPhone,
+      ...(feishuSyncError ? { feishuSyncWarning: feishuSyncError } : {}),
+    };
   }
 
   return {
