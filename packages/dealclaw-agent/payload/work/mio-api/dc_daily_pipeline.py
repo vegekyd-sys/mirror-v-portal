@@ -169,7 +169,7 @@ def run_evening_brief(context: BriefContext, base_dir: Path, email_store=None,
            else collect_completion_events(context, plan, email_store, exh_store))
     review = review_plan(plan, evs)
     atomic_write_json(d / "review.json", review)
-    return {"review": review}
+    return {"review": review, "plan": plan}
 
 
 if __name__ == "__main__":

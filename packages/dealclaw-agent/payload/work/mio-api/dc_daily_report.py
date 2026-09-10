@@ -8,11 +8,16 @@ dc_daily_report.py — 早报/晚报内容构建（展会邮件增长闭环）
 
 from __future__ import annotations
 
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import json
+from zoneinfo import ZoneInfo
 
 MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
+# Daily Brief 新管线的 plan/review 落盘根（与 EmailStore 用同一 DC_DATA_DIR 口径）
+DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+BUSINESS_TZ = "Asia/Shanghai"
 
 
 def _now() -> str:
@@ -243,6 +248,54 @@ def _strategy(company_id: str) -> dict:
         return {}
 
 
+def _pipeline_brief(company_id: str, slot: str) -> str:
+    """新 Daily Brief 管线（Email/Opportunity/Exhibition）→ 推送文案片段。失败/无数据返回空串，不影响旧文案。"""
+    try:
+        from dc_daily_brief import BriefContext
+        import dc_daily_pipeline as pipeline
+        now = datetime.now(timezone.utc)
+        local_date = now.astimezone(ZoneInfo(BUSINESS_TZ)).date().isoformat()
+        ctx = BriefContext(tenant=company_id, company=company_id, report_type=slot,
+                           date=local_date, tz=BUSINESS_TZ, as_of=now.isoformat(),
+                           window_start=now.isoformat(), window_end=now.isoformat())
+        base = DATA_DIR / "daily-brief"
+        if slot == "morning":
+            r = pipeline.run_morning_brief(ctx, base)
+            return _fmt_pipeline_morning(r.get("plan") or {})
+        r = pipeline.run_evening_brief(ctx, base)
+        return _fmt_pipeline_evening(r.get("review"), r.get("plan") or {})
+    except Exception:
+        return ""
+
+
+def _fmt_pipeline_morning(plan: dict) -> str:
+    by_key = {a.get("action_key"): a for a in plan.get("actions", [])}
+    top = [by_key[k] for k in plan.get("top_n_action_keys", []) if k in by_key]
+    lines: list[str] = []
+    if top:
+        lines.append("【今日优先】")
+        for a in top:
+            lines.append(f"{len(lines)}. {a['title']}｜{a.get('reason', '')}")
+    batch = [a for a in plan.get("actions", []) if a.get("source") == "email"]
+    for a in batch:
+        lines.append(f"【待分层批量跟进】{a['title']}")
+    for c in plan.get("context", []):
+        if c.get("kind") == "risk":
+            lines.append(f"【风险】{c['title']}")
+    return "\n".join(lines)
+
+
+def _fmt_pipeline_evening(review, plan: dict) -> str:
+    if not review:
+        return ""
+    by_key = {a.get("action_key"): a for a in plan.get("actions", [])}
+    lines = ["【晚报核销】"]
+    for rv in review.get("reviews", []):
+        title = (by_key.get(rv.get("action_key")) or {}).get("title", rv.get("action_key", ""))
+        lines.append(f"- {title}：{rv.get('status')}")
+    return "\n".join(lines)
+
+
 def build_morning_report(company_id: str) -> dict:
     """早报：只展示关键变化（漏斗 + 今日到期跟进 + 待确认草稿 + KB）。"""
     m = collect_metrics(company_id)
@@ -250,6 +303,9 @@ def build_morning_report(company_id: str) -> dict:
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
     text = _format_morning(company_id, m, drafts, followups, funnel)
+    brief = _pipeline_brief(company_id, "morning")
+    if brief:
+        text = (brief + "\n\n" + text) if text else brief
     # 周一早报：体现上周蒸馏的行为偏好（让用户感知「越来越懂」）
     if datetime.now(timezone.utc).weekday() == 0:
         distill = _distill_brief(company_id)
@@ -281,6 +337,9 @@ def build_evening_report(company_id: str) -> dict:
     funnel = _funnel(company_id)
     strategy = _strategy(company_id)
     text = _format_evening(company_id, m, drafts, followups, funnel, strategy)
+    brief = _pipeline_brief(company_id, "evening")
+    if brief:
+        text = (brief + "\n\n" + text) if text else brief
     evolution = _self_evolution_brief(company_id)
     if evolution:
         text += "\n\n" + evolution
