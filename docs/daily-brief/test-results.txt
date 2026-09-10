@@ -1,23 +1,27 @@
-Daily Brief / Providers 测试结果 · 2026-09-10T16:19:54Z
+Daily Brief / Providers / LLM Advisor 测试结果 · 2026-09-10T16:33:15Z
 
+=== test_dc_llm_advisor.py ===
+Ran 22 tests in 0.012s
+
+OK
 === test_dc_exhibition_provider.py ===
-Ran 22 tests in 0.004s
+Ran 22 tests in 0.003s
 
 OK
 === test_dc_opportunity_provider.py ===
-Ran 27 tests in 0.029s
+Ran 27 tests in 0.028s
 
 OK
 === test_dc_daily_brief.py ===
-Ran 48 tests in 0.004s
+Ran 48 tests in 0.005s
 
 OK
 === test_dc_email_provider.py ===
-Ran 14 tests in 0.019s
+Ran 14 tests in 0.020s
 
 OK
 === test_dc_daily_advisor.py ===
-Ran 23 tests in 0.002s
+Ran 23 tests in 0.001s
 
 OK
 === tests/test_opportunity_stage.py ===

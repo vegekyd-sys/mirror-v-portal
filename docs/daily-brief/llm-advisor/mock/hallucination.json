@@ -1,0 +1,88 @@
+{
+  "snapshot_hash": "697522f0a9cc9f2085a3d74b",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.0.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 0,
+  "input_tokens": 1420,
+  "output_tokens": 72,
+  "guard_violations": [
+    {
+      "guard": "grounding",
+      "rule": "fact_mismatch",
+      "detail": "fact_id 'ghost_fact' not in facts"
+    },
+    {
+      "guard": "grounding",
+      "rule": "fact_mismatch",
+      "detail": "claim number '100' not grounded in fact_refs"
+    }
+  ],
+  "template_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_f15875bb00c97492",
+    "adv_10e01c8b2c62f1b5",
+    "adv_0cb025f17f38f933"
+  ],
+  "llm_order": [
+    "llm_1"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "llm_1",
+      "template_pos": null,
+      "llm_pos": 0
+    },
+    {
+      "advice_key": "adv_0cb025f17f38f933",
+      "template_pos": 4,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_62910fb996c5af34",
+      "template_pos": 1,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_10e01c8b2c62f1b5",
+      "template_pos": 3,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_f15875bb00c97492",
+      "template_pos": 2,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_c47f5b2697be01a9",
+      "template_pos": 0,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "llm_1",
+      "claim": "客户承诺下单 100 万",
+      "evidence_refs": [],
+      "confidence": "high",
+      "confidence_reason": "编造",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "催单",
+      "proposed_actions": [],
+      "action_refs": [],
+      "fact_refs": [
+        "ghost_fact"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "note": ""
+}

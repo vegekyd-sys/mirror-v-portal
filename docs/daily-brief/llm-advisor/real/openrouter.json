@@ -1,0 +1,320 @@
+{
+  "snapshot_hash": "697522f0a9cc9f2085a3d74b",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.0.0",
+  "ok": true,
+  "fallback": false,
+  "fallback_reason": "",
+  "parse_status": "ok",
+  "latency_ms": 12679,
+  "input_tokens": 2189,
+  "output_tokens": 1791,
+  "guard_violations": [],
+  "template_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_f15875bb00c97492",
+    "adv_10e01c8b2c62f1b5",
+    "adv_0cb025f17f38f933"
+  ],
+  "llm_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_f15875bb00c97492",
+    "adv_10e01c8b2c62f1b5",
+    "adv_0cb025f17f38f933"
+  ],
+  "order_diff": [],
+  "advices": [
+    {
+      "advice_key": "adv_c47f5b2697be01a9",
+      "claim": "建议跟进：逾期跟进 Overdue Co",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C002",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "opportunity_next_step",
+          "id": "C002:next_step",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_overdue",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "逾期跟进的时间已到，且有明确的后续行动需求。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "Overdue Co 下一步「发送正式报价」已于 2026-09-09T16:33:27.541682+00:00 到期，需立即处理",
+      "proposed_actions": [
+        {
+          "proposal_id": "c47f5b2697be01a9",
+          "action_type": "followup",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer1@x.com"
+            }
+          ],
+          "reason": "逾期跟进需要立即处理",
+          "fact_refs": [
+            "company",
+            "stage",
+            "fit_grade",
+            "next_step_due"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "c47f5b2697be01a9"
+      ],
+      "fact_refs": [
+        "company",
+        "stage",
+        "fit_grade",
+        "next_step_due"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_62910fb996c5af34",
+      "claim": "建议跟进：回复买家 Reply Co",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C001",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_reply",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "买家已回复，需优先响应。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "Reply Co 已回复（证据 it_reply），需优先响应跟进",
+      "proposed_actions": [
+        {
+          "proposal_id": "62910fb996c5af34",
+          "action_type": "followup",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer0@x.com"
+            }
+          ],
+          "reason": "买家已回复，需优先响应",
+          "fact_refs": [
+            "company",
+            "stage",
+            "fit_grade",
+            "buyer_reply"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "62910fb996c5af34"
+      ],
+      "fact_refs": [
+        "company",
+        "stage",
+        "fit_grade",
+        "buyer_reply"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_f15875bb00c97492",
+      "claim": "建议跟进：发送报价 Quote Co",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C003",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "signal",
+          "id": "it_quote:quote_request",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "已有报价承诺信号，需尽快发送报价。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "Quote Co 已有 confirmed 报价承诺信号（quote_request，证据 it_quote），需尽快发送报价",
+      "proposed_actions": [
+        {
+          "proposal_id": "f15875bb00c97492",
+          "action_type": "quote",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer2@x.com"
+            }
+          ],
+          "reason": "已有报价承诺信号，需尽快发送报价",
+          "fact_refs": [
+            "company",
+            "stage",
+            "fit_grade",
+            "commitment"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "f15875bb00c97492"
+      ],
+      "fact_refs": [
+        "company",
+        "stage",
+        "fit_grade",
+        "commitment"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_10e01c8b2c62f1b5",
+      "claim": "建议跟进：锁定第一推荐产品（画像）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "confidence": "medium",
+      "confidence_reason": "当前阶段目标明确，但缺乏具体的行动数据。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "当前阶段「画像」，阶段目标：锁定第一推荐产品（画像）",
+      "proposed_actions": [
+        {
+          "proposal_id": "10e01c8b2c62f1b5",
+          "action_type": "stage_profiling",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "none"
+            }
+          ],
+          "reason": "当前阶段目标明确，需锁定第一推荐产品",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "10e01c8b2c62f1b5"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_0cb025f17f38f933",
+      "claim": "建议跟进：跟进 5 家（待分层批量跟进）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "confidence": "medium",
+      "confidence_reason": "虽然有待分层跟进的需求，但缺乏具体的行动计划。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "5 家送达超过观察期仍无回复、无商机级证据，保留为待分层批量跟进",
+      "proposed_actions": [
+        {
+          "proposal_id": "0cb025f17f38f933",
+          "action_type": "followup",
+          "scope": "batch",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer3@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer4@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer5@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer6@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer7@x.com"
+            }
+          ],
+          "reason": "待分层批量跟进的需求",
+          "fact_refs": [
+            "layered_count",
+            "deducted_count",
+            "wait_state"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "0cb025f17f38f933"
+      ],
+      "fact_refs": [
+        "layered_count",
+        "deducted_count",
+        "wait_state"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "note": ""
+}
