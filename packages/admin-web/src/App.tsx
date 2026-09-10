@@ -16,6 +16,7 @@ import LlmProvidersPage from './pages/LlmProvidersPage';
 import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
+import ChatApiKeysPage from './pages/ChatApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import ChatPage from './pages/ChatPage';
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="external-api-keys" element={<ExternalApiKeysPage />} />
+            <Route path="chat-api-keys" element={<ChatApiKeysPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

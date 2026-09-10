@@ -17,6 +17,14 @@ export interface RuntimeResult {
 export interface RuntimeClient {
   health(): Promise<{ ok: boolean; detail?: string }>;
   execute(text: string, context: AgentExecutionContext): Promise<RuntimeResult>;
+  /**
+   * Streaming execute — returns the raw SSE body stream from OpenClaw
+   * `/v1/responses` (stream=true). Callers MUST pipe the stream to their
+   * HTTP response without buffering. OpenAI Responses API SSE event types
+   * (response.created / response.output_text.delta / response.completed ...)
+   * pass through verbatim.
+   */
+  executeStream(text: string, context: AgentExecutionContext): Promise<{ body: ReadableStream<Uint8Array> }>;
 }
 
 interface OpenResponsesBody {
@@ -100,6 +108,49 @@ export class OpenClawRuntimeClient implements RuntimeClient {
       model: body.model,
       agentId: this.agentId,
     };
+  }
+
+  async executeStream(text: string, context: AgentExecutionContext): Promise<{ body: ReadableStream<Uint8Array> }> {
+    const sessionKey = stableSessionKey(context);
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'accept': 'text/event-stream',
+      'x-openclaw-agent-id': this.agentId,
+      'x-openclaw-session-key': sessionKey,
+      'x-openclaw-message-channel': sanitizeChannel(context.channel),
+    };
+    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    if (gatewayToken) headers['authorization'] = `Bearer ${gatewayToken}`;
+
+    // Stream timeout must outlast a long conversation; aborting the fetch
+    // tears down the upstream SSE so the client sees a broken pipe. Use a
+    // generous ceiling (default 10 min) — real cancellation is driven by
+    // the client closing the downstream connection.
+    const streamTimeoutMs = Number(process.env.OPENCLAW_RUNTIME_STREAM_TIMEOUT_MS ?? 600_000);
+
+    const response = await fetch(`${this.baseUrl}/v1/responses`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(streamTimeoutMs),
+      headers,
+      body: JSON.stringify({
+        model: `openclaw/${this.agentId}`,
+        input: text,
+        user: stableUser(context),
+        stream: true,
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      const raw = await response.text().catch(() => '');
+      let msg = `OpenClaw stream failed (HTTP ${response.status})`;
+      try {
+        const b = JSON.parse(raw) as OpenResponsesBody;
+        if (b.error?.message) msg = b.error.message;
+      } catch { /* not JSON, keep default */ }
+      throw new Error(msg);
+    }
+
+    return { body: response.body };
   }
 }
 

@@ -19,6 +19,7 @@ import type { ProvisioningConfig } from '../config.js';
 import { syncImageReleases } from '../services/registry-sync.js';
 import { actorFromRequest, writeAuditLog } from '../services/audit.js';
 import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from '../services/external-api-keys.js';
+import { createChatApiKey, listChatApiKeys, revokeChatApiKey } from '../services/chat-api-keys.js';
 import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
 import { backfillSenderNames } from '../services/sender-name-backfill.js';
 
@@ -364,6 +365,118 @@ export function createAdminOpsRoutes(
     } catch (err: unknown) {
       const e = err as any;
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'revoke key failed' });
+    }
+  });
+
+  // ── Chat API key management (admin console) ──
+  // These keys authenticate third-party HTTP access to POST /api/external/chat
+  // (write — triggers agent execution + LLM billing via llm-proxy). Scoped per
+  // tenant (one enterprise = one tenant); optionally bound to a single agent.
+  // Plaintext is returned exactly once on create; only the hash is stored.
+
+  // POST /v1/admin/chat-api-keys — create a key.
+  router.post('/v1/admin/chat-api-keys', async (req: Request, res: Response) => {
+    try {
+      const tenantId = typeof req.body?.tenantId === 'string' ? req.body.tenantId.trim() : '';
+      const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+        ? req.body.agentId.trim()
+        : null;
+      const ipAllowlist = Array.isArray(req.body?.ipAllowlist)
+        ? req.body.ipAllowlist.filter((c: unknown) => typeof c === 'string' && c.trim()).map((c: string) => c.trim())
+        : null;
+      const rateLimitRpm = Number.isFinite(Number(req.body?.rateLimitRpm))
+        ? Math.min(Math.max(Number(req.body.rateLimitRpm) || 60, 1), 600)
+        : 60;
+
+      if (!tenantId || !name) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'tenantId and name are required' });
+        return;
+      }
+      // The key must bind to an existing, active tenant.
+      const { rows: tenantRows } = await pool.query(
+        'SELECT tenant_id, status FROM tenants WHERE tenant_id = $1',
+        [tenantId],
+      );
+      if (tenantRows.length === 0) {
+        res.status(404).json({ code: 'TENANT_NOT_FOUND', message: `tenant ${tenantId} not found` });
+        return;
+      }
+      if (tenantRows[0].status !== 'active' && tenantRows[0].status !== 'provisioning') {
+        res.status(400).json({ code: 'TENANT_NOT_ACTIVE', message: `tenant status is ${tenantRows[0].status}` });
+        return;
+      }
+
+      const { key, id } = await createChatApiKey(pool, {
+        tenantId,
+        agentId,
+        name,
+        ipAllowlist: ipAllowlist && ipAllowlist.length ? ipAllowlist : null,
+        rateLimitRpm,
+        createdBy: adminIdentity(req),
+      });
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'chat-api-key.create',
+        method: 'POST',
+        path: '/v1/admin/chat-api-keys',
+        resourceType: 'chat_api_key',
+        resourceId: id,
+        newValue: { tenantId, agentId, name, keyPrefix: key.slice(0, 12), ipAllowlist, rateLimitRpm },
+        statusCode: 200,
+      });
+
+      res.json({ ok: true, id, tenantId, agentId, name, keyPrefix: key.slice(0, 12), rateLimitRpm, key });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'create chat key failed' });
+    }
+  });
+
+  // GET /v1/admin/chat-api-keys — list keys (no plaintext). Optional tenantId filter.
+  router.get('/v1/admin/chat-api-keys', async (req: Request, res: Response) => {
+    try {
+      const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId.trim() : undefined;
+      const keys = await listChatApiKeys(pool, tenantId || undefined);
+      res.json({ ok: true, keys });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'list chat keys failed' });
+    }
+  });
+
+  // DELETE /v1/admin/chat-api-keys/:id — revoke a key.
+  router.delete('/v1/admin/chat-api-keys/:id', async (req: Request, res: Response) => {
+    try {
+      const { rows: keyRows } = await pool.query(
+        'SELECT tenant_id, agent_id, name, key_prefix, rate_limit_rpm FROM chat_api_keys WHERE id = $1 AND status = $2',
+        [req.params.id, 'active'],
+      );
+      const revoked = await revokeChatApiKey(pool, String(req.params.id));
+      if (!revoked) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'key not found or already revoked' });
+        return;
+      }
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'chat-api-key.revoke',
+        method: 'DELETE',
+        path: `/v1/admin/chat-api-keys/${req.params.id}`,
+        resourceType: 'chat_api_key',
+        resourceId: String(req.params.id),
+        oldValue: keyRows.length
+          ? { tenantId: keyRows[0].tenant_id, agentId: keyRows[0].agent_id, name: keyRows[0].name, keyPrefix: keyRows[0].key_prefix, status: 'active' }
+          : { id: req.params.id, status: 'active' },
+        newValue: { status: 'revoked' },
+        statusCode: 200,
+      });
+
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      const e = err as any;
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'revoke chat key failed' });
     }
   });
 

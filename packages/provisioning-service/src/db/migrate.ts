@@ -313,6 +313,35 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_llm_push_items_status ON llm_push_task_items(task_id, status);
     `);
 
+    // External chat API keys (v0.7) — authenticate third-party HTTP access
+    // to the agent conversation endpoint (POST /api/external/chat). Scoped
+    // per tenant (one enterprise = one tenant); optionally bound to a single
+    // agent. Unlike external_api_keys (read-only, supplier-scoped), these
+    // keys authorize WRITE access — triggering agent execution + LLM calls
+    // that bill the tenant's credit account via llm-proxy.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_api_keys (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        agent_id        TEXT,
+        name            TEXT NOT NULL,
+        key_hash        TEXT NOT NULL,
+        key_prefix      TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','revoked')),
+        ip_allowlist    JSONB,
+        rate_limit_rpm  INTEGER NOT NULL DEFAULT 60,
+        created_by      TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        revoked_at      TIMESTAMPTZ,
+        last_used_at    TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_api_keys_hash
+        ON chat_api_keys(key_hash) WHERE status = 'active';
+      CREATE INDEX IF NOT EXISTS idx_chat_api_keys_tenant
+        ON chat_api_keys(tenant_id, created_at DESC);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

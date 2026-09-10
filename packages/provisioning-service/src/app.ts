@@ -8,6 +8,7 @@ import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
 import { createConversationExternalRoutes } from './routes/conversation-external.js';
+import { createChatExternalRoutes } from './routes/chat-external.js';
 import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import { createLlmPushRoutes } from './routes/llm-push.js';
@@ -56,6 +57,11 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // External conversation-log pull endpoint (米奥 Agent 对话日志拉取) — same
   // external API-key auth + supplier→tenant isolation as supplier-summary above.
   app.use(createConversationExternalRoutes(pool, config));
+  // External chat conversation endpoint (dlck_ apikey auth) — third-party
+  // HTTP access to the agent. Mounted before the authAndAudit routers for
+  // the same reason as the external-api routes above (its Bearer key is not
+  // a service/admin token).
+  app.use(createChatExternalRoutes(pool, config));
 
   // Internal machine assertion verification is service-token-only. Tenant
   // machines still need their own per-tenant HMAC; this shared token alone

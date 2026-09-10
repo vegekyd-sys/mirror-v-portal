@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
+import { Readable } from 'node:stream';
 import type { GatewayConfig } from './config.js';
 import { auditMiddleware } from './middleware/audit.js';
 import { identityMiddleware, initIdentityConfig } from './middleware/identity.js';
@@ -252,6 +253,145 @@ export function createApp(config: GatewayConfig) {
       }
     },
   );
+
+  /**
+   * External conversation entry — internal call from provisioning-service
+   * (authenticated with the shared PROVISIONING_API_TOKEN), NOT a Feishu
+   * webhook. provisioning resolves the dlck_ apikey → tenant, then forwards
+   * here. We bypass identityMiddleware (no Feishu open_id) and go straight
+   * to the agent /execute.
+   *
+   * Billing model: chat intent is free at the gateway (CREDIT_COSTS.chat=0,
+   * no pre-debit); the real token accounting happens in llm-proxy on the
+   * LLM egress path, per the established "intercept at LLM call time" rule.
+   *
+   * POST /v1/external/chat
+   *   headers: Authorization: Bearer <PROVISIONING_API_TOKEN>
+   *            X-Chat-Session-Id / X-Chat-External-User-Id / X-Chat-Agent-Id
+   *   body: { message: string }
+   */
+  app.post('/v1/external/chat', async (req: Request, res: Response) => {
+    // ── service-token auth (internal only) ──
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!config.provisioningApiToken || token !== config.provisioningApiToken) {
+      res.status(401).json({ code: 'UNAUTHORIZED', message: 'invalid internal token' });
+      return;
+    }
+
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message) {
+      res.status(400).json({ code: 'BAD_REQUEST', message: 'message is required' });
+      return;
+    }
+
+    // The external caller's user id becomes the agent's session key input
+    // (OpenClaw derives sessionKey from tenantId\0channel\0userId). Same
+    // externalUserId across calls = same conversation thread.
+    const externalUserId =
+      (req.header('X-Chat-External-User-Id') || '').trim() || 'external';
+
+    try {
+      const response = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(120_000),
+        headers: {
+          'content-type': 'application/json',
+          [GATEWAY_HEADERS.TENANT_ID]: config.tenantId,
+          [GATEWAY_HEADERS.USER_ID]: externalUserId,
+          [GATEWAY_HEADERS.KEY_CONFIG_REF]: config.keyConfig.customerKeyRef,
+          [GATEWAY_HEADERS.CREDITS_REMAINING]: '-1',
+          'X-DealClaw-Channel': 'web',
+        },
+        body: JSON.stringify({
+          intent: { kind: 'chat', text: message },
+          tenantId: config.tenantId,
+        }),
+      });
+
+      const body = await response.text();
+      res.status(response.status);
+      res.type(response.headers.get('content-type') ?? 'application/json');
+      res.send(body);
+    } catch (err: any) {
+      console.error('[external-chat] agent forward failed:', err.code || err.message);
+      const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      res.status(timedOut ? 504 : 502).json({
+        code: timedOut ? 'AGENT_TIMEOUT' : 'AGENT_UNREACHABLE',
+        message: timedOut ? 'agent response timed out' : 'agent service unavailable',
+      });
+    }
+  });
+
+  /**
+   * Streaming variant of /v1/external/chat — pipes the agent /execute/stream
+   * SSE straight through to the provisioning caller (and onward to the
+   * external client). Same auth/forward contract; only the response shape
+   * differs (text/event-stream vs JSON).
+   */
+  app.post('/v1/external/chat/stream', async (req: Request, res: Response) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!config.provisioningApiToken || token !== config.provisioningApiToken) {
+      res.status(401).json({ code: 'UNAUTHORIZED', message: 'invalid internal token' });
+      return;
+    }
+
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message) {
+      res.status(400).json({ code: 'BAD_REQUEST', message: 'message is required' });
+      return;
+    }
+    const externalUserId =
+      (req.header('X-Chat-External-User-Id') || '').trim() || 'external';
+
+    try {
+      const upstream = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute/stream`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(600_000),
+        headers: {
+          'content-type': 'application/json',
+          'accept': 'text/event-stream',
+          [GATEWAY_HEADERS.TENANT_ID]: config.tenantId,
+          [GATEWAY_HEADERS.USER_ID]: externalUserId,
+          [GATEWAY_HEADERS.KEY_CONFIG_REF]: config.keyConfig.customerKeyRef,
+          'X-DealClaw-Channel': 'web',
+        },
+        body: JSON.stringify({
+          intent: { kind: 'chat', text: message },
+          tenantId: config.tenantId,
+        }),
+      });
+
+      if (!upstream.ok || !upstream.body) {
+        const errText = await upstream.text().catch(() => '');
+        res.status(upstream.status).type('application/json').send(errText || '{"code":"AGENT_ERROR"}');
+        return;
+      }
+
+      res.setHeader('content-type', upstream.headers.get('content-type') ?? 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('x-accel-buffering', 'no');
+      res.flushHeaders();
+
+      const nodeStream = Readable.fromWeb(upstream.body as any);
+      nodeStream.on('error', (err) => {
+        console.error('[external-chat-stream] pipe error:', err.message);
+        if (!res.writableEnded) res.end();
+      });
+      nodeStream.pipe(res);
+      res.on('close', () => nodeStream.destroy());
+    } catch (err: any) {
+      console.error('[external-chat-stream] agent forward failed:', err.code || err.message);
+      const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      if (!res.headersSent) {
+        res.status(timedOut ? 504 : 502).json({
+          code: timedOut ? 'AGENT_TIMEOUT' : 'AGENT_UNREACHABLE',
+          message: timedOut ? 'agent stream timed out' : 'agent service unavailable',
+        });
+      } else {
+        res.end();
+      }
+    }
+  });
 
   app.use((_req, res) => res.status(404).json({ code: 'NOT_FOUND', message: 'Route not found' }));
 

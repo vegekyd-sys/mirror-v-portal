@@ -1,5 +1,6 @@
 import express, { type Request } from 'express';
 import helmet from 'helmet';
+import { Readable } from 'node:stream';
 import {
   OpenClawRuntimeClient,
   type AgentExecutionContext,
@@ -62,6 +63,52 @@ export function createApp(options: { runtime?: RuntimeClient } = {}) {
         code: 'AGENT_RUNTIME_UNAVAILABLE',
         message: 'DealClaw runtime is temporarily unavailable',
       });
+    }
+  });
+
+  /**
+   * Streaming execute — pipes OpenClaw's `/v1/responses` SSE (stream=true)
+   * straight through to the caller. Same input contract as /execute, but the
+   * response is `text/event-stream` with OpenAI Responses API delta events
+   * (response.output_text.delta / response.completed ...). Callers MUST NOT
+   * buffer; this is a pass-through.
+   */
+  app.post('/execute/stream', async (req, res) => {
+    const body = req.body as any;
+    const text = extractIncomingText(body) || stringValue(body?.message);
+    if (!text) {
+      res.status(400).json({ code: 'EMPTY_MESSAGE', message: 'A non-empty text message is required' });
+      return;
+    }
+
+    const context = executionContext(req);
+    try {
+      const { body: stream } = await runtime.executeStream(text, context);
+      res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('connection', 'keep-alive');
+      res.setHeader('x-accel-buffering', 'no'); // disable proxy buffering (nginx)
+      res.flushHeaders();
+
+      const nodeStream = Readable.fromWeb(stream as any);
+      nodeStream.on('error', (err) => {
+        console.error('[openclaw-runtime] stream error:', err.message);
+        if (!res.writableEnded) res.end();
+      });
+      nodeStream.pipe(res);
+      // Client disconnect → tear down the upstream fetch so OpenClaw stops.
+      res.on('close', () => nodeStream.destroy());
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error('[openclaw-runtime] stream failed:', detail);
+      if (!res.headersSent) {
+        res.status(502).json({
+          code: 'AGENT_RUNTIME_UNAVAILABLE',
+          message: 'DealClaw runtime is temporarily unavailable',
+        });
+      } else {
+        res.end();
+      }
     }
   });
 
