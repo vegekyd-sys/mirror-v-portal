@@ -168,17 +168,6 @@ model WabaPhone {
   @@index([wabaId])
 }
 
-/** 已验证的短时租户机器断言 nonce。共享数据库唯一约束防止多副本重放。 */
-model TenantMachineAssertionReplay {
-  id          String   @id @default(cuid())
-  supplierId  String
-  nonceHash   String
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
-
-  @@unique([supplierId, nonceHash])
-  @@index([expiresAt])
-}
 
 /** 智能体初始化时注册的飞书应用。桥接启动不必带 FEISHU_*。 */
 model FeishuApp {
