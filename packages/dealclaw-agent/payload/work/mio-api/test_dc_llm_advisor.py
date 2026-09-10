@@ -27,8 +27,9 @@ from dc_daily_brief import BriefItem, CompletionRule, EvidenceRef, FactRef, Targ
 from dc_daily_advisor import Advice, ProposedAction, build_snapshot, materialize_proposal  # noqa: E402
 from dc_llm_advisor import (  # noqa: E402
     LLMAdvisor, LLMAdvisorError, MockLLMClient, ShadowRunner, bounded_input, snapshot_hash,
-    parse_advices, ERROR_TIMEOUT, ERROR_RATE_LIMIT, ERROR_SERVER, ERROR_HTML, ERROR_INVALID_JSON,
-    ERROR_MISSING_FIELD, ERROR_TOKEN_LIMIT, ERROR_GUARD, ERROR_STALE, MAX_CANDIDATES, MAX_FACTS,
+    parse_advices, compress_advices, ERROR_TIMEOUT, ERROR_RATE_LIMIT, ERROR_SERVER, ERROR_HTML,
+    ERROR_INVALID_JSON, ERROR_MISSING_FIELD, ERROR_TOKEN_LIMIT, ERROR_GUARD, ERROR_STALE,
+    MAX_CANDIDATES, MAX_FACTS, MAX_ADVICES, MAX_CLAIM_CHARS, MAX_RECOMMENDATION_CHARS,
 )
 
 
@@ -252,6 +253,52 @@ class TestOrderDiffAndMetrics(unittest.TestCase):
             snap, template_advices())
         self.assertEqual(r["parse_status"], ERROR_TIMEOUT)
         self.assertIn("fallback_reason", r)
+
+
+class TestCompression(unittest.TestCase):
+    def _advice(self, key, claim, rec, action_refs=()):
+        return Advice(advice_key=key, claim=claim, evidence_refs=(), confidence="medium",
+                      confidence_reason="r", assumptions=(), counter_evidence=(), limitations=(),
+                      recommendation=rec, proposed_actions=(), action_refs=tuple(action_refs),
+                      fact_refs=())
+
+    def test_empty_array_allowed(self):
+        self.assertEqual(parse_advices('{"advices": []}'), ())
+        self.assertEqual(compress_advices(())[0], ())
+
+    def test_cap_at_three(self):
+        claims = ["优先跟进已回复客户", "发送正式报价", "跟进样品寄送",
+                  "处理退信邮箱", "培育长期客户", "确认会议时间"]
+        advs = tuple(self._advice(f"k{i}", claims[i], f"rec{i}", [f"a{i}"]) for i in range(6))
+        out, stats = compress_advices(advs)
+        self.assertEqual(len(out), MAX_ADVICES)
+        self.assertEqual(stats["dropped_over_cap"], 3)
+
+    def test_truncate_claim_and_recommendation(self):
+        adv = self._advice("k", "x" * 200, "y" * 300, ["a"])
+        out, stats = compress_advices((adv,))
+        self.assertEqual(len(out[0].claim), MAX_CLAIM_CHARS)
+        self.assertEqual(len(out[0].recommendation), MAX_RECOMMENDATION_CHARS)
+        self.assertEqual(stats["truncated"], 1)
+
+    def test_merge_similar_by_action_ref(self):
+        a = self._advice("a", "跟进 A", "跟进", ["ak1"])
+        b = self._advice("b", "跟进 B", "跟进", ["ak1"])
+        out, stats = compress_advices((a, b))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(stats["merged_count"], 1)
+
+    def test_merge_similar_by_claim_jaccard(self):
+        a = self._advice("a", "优先跟进已回复客户", "r", ["ak1"])
+        b = self._advice("b", "优先跟进已回复客户", "r", ["ak2"])
+        out, _ = compress_advices((a, b))
+        self.assertEqual(len(out), 1)
+
+    def test_distinct_kept(self):
+        a = self._advice("a", "跟进 A", "r", ["ak1"])
+        b = self._advice("b", "完全不同的一件事", "r", ["ak2"])
+        out, _ = compress_advices((a, b))
+        self.assertEqual(len(out), 2)
 
 
 if __name__ == "__main__":

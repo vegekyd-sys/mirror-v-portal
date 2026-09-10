@@ -26,7 +26,7 @@ import json
 import os
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from dc_daily_advisor import (
@@ -40,7 +40,12 @@ from dc_daily_brief import EvidenceRef, FactRef, TargetRef
 MAX_CANDIDATES = 10
 MAX_FACTS = 30
 MAX_GOALS = 5
-PROMPT_VERSION = "1.0.0"
+# 压缩约束（需求 1-4）：最多 3 条 Advice，claim≤80，recommendation≤120，输出 token 600-800
+MAX_ADVICES = 3
+MAX_CLAIM_CHARS = 80
+MAX_RECOMMENDATION_CHARS = 120
+DEFAULT_MAX_TOKENS = 800
+PROMPT_VERSION = "1.1.0"
 DEFAULT_MODEL = os.environ.get("LLM_ADVISOR_MODEL", "openai/gpt-4o-mini")
 
 # 异常/降级类别
@@ -144,6 +149,66 @@ def parse_advices(content: str) -> tuple[Advice, ...]:
     return tuple(deserialize_advice(a) for a in advices)
 
 
+def _grams(s) -> set:
+    s = str(s)
+    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else ({s} if s else set())
+
+
+def _similar(a: Advice, b: Advice) -> bool:
+    """相似判定：共享 action_ref，或 claim 字符 bigram Jaccard ≥ 0.6（且都有一定长度）。"""
+    if a.action_refs and b.action_refs and set(a.action_refs) & set(b.action_refs):
+        return True
+    if min(len(str(a.claim)), len(str(b.claim))) < 4:
+        return False
+    ga, gb = _grams(a.claim), _grams(b.claim)
+    if ga and gb:
+        return len(ga & gb) / len(ga | gb) >= 0.6
+    return False
+
+
+def _merge_two(a: Advice, b: Advice) -> Advice:
+    def _uniq_ev(*groups):
+        seen, out = set(), []
+        for g in groups:
+            for e in g:
+                k = (e.type, e.source, e.id)
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(e)
+        return tuple(out)
+    return replace(
+        a,
+        action_refs=tuple(dict.fromkeys(a.action_refs + b.action_refs)),
+        fact_refs=tuple(dict.fromkeys(a.fact_refs + b.fact_refs)),
+        evidence_refs=_uniq_ev(a.evidence_refs, b.evidence_refs),
+        counter_evidence=_uniq_ev(a.counter_evidence, b.counter_evidence),
+        proposed_actions=tuple(dict.fromkeys(a.proposed_actions + b.proposed_actions)),
+    )
+
+
+def compress_advices(advices: tuple) -> tuple[tuple, dict]:
+    """需求 1-3：相似合并 → 最多 3 条 → claim≤80 / recommendation≤120。"""
+    merged: list = []
+    for a in advices:
+        hit = next((i for i, b in enumerate(merged) if _similar(a, b)), None)
+        if hit is None:
+            merged.append(a)
+        else:
+            merged[hit] = _merge_two(merged[hit], a)
+    truncated = 0
+    final: list = []
+    for a in merged[:MAX_ADVICES]:
+        claim = str(a.claim)[:MAX_CLAIM_CHARS]
+        rec = str(a.recommendation)[:MAX_RECOMMENDATION_CHARS]
+        if claim != a.claim or rec != a.recommendation:
+            truncated += 1
+        final.append(replace(a, claim=claim, recommendation=rec))
+    return tuple(final), {"input_count": len(advices), "merged_count": len(merged),
+                          "kept": len(final), "truncated": truncated,
+                          "dropped_over_cap": max(0, len(merged) - MAX_ADVICES)}
+
+
 # ── 限权输入（需求 3/4）──────────────────────────────────────
 def _candidate_view(c: "BriefItem") -> dict:
     return {
@@ -185,6 +250,7 @@ def bounded_input(snapshot, template_advices=()) -> dict:
         "company_goals": list(snapshot.company_goals)[:MAX_GOALS],
         "preferences": dict(snapshot.preferences or {}),  # 只传生效偏好
         "candidates": [_candidate_view(c) for c in cands],
+        "allowed_action_types": sorted({c.category for c in cands}),
         "facts": facts,
         "template_advice": [
             {"advice_key": a.advice_key, "claim": a.claim, "recommendation": a.recommendation,
@@ -216,6 +282,9 @@ def build_prompt(payload: dict) -> str:
     }
     return (
         "你是 DealClaw 的营销决策影子顾问。只能依据给定事实，不得编造 fact_id 或数字。\n"
+        "输出约束：最多 3 条 advice（允许空数组 []）；相似建议必须合并为 1 条，"
+        "不要按候选逐条生成；claim 不超过 80 字；recommendation 不超过 120 字。\n"
+        "proposal.action_type 必须取自 allowed_action_types，不得自创新类型，否则会被 Guard 拦截。\n"
         "只输出严格 JSON（不要 Markdown/解释），形如：\n"
         f"{json.dumps(schema, ensure_ascii=False)}\n"
         "proposal 一律 authorized=false（无需输出该字段）。\n"
@@ -342,6 +411,7 @@ class ShadowRecord:
     advices: list = field(default_factory=list)
     cached: bool = False
     stale_intercepted: bool = False
+    compression: dict = field(default_factory=dict)
     note: str = ""
 
     def to_dict(self) -> dict:
@@ -392,7 +462,7 @@ class LLMAdvisor:
     name = "llm"
 
     def __init__(self, client, model: str | None = None, prompt_version: str = PROMPT_VERSION,
-                 max_tokens: int = 1024):
+                 max_tokens: int = DEFAULT_MAX_TOKENS):
         self.client = client
         self.model = model or DEFAULT_MODEL
         self.prompt_version = prompt_version
@@ -408,9 +478,11 @@ class LLMAdvisor:
         if isinstance(resp, dict) and resp.get("snapshot_hash") and resp["snapshot_hash"] != h:
             raise LLMAdvisorError(ERROR_STALE, f"{resp['snapshot_hash']} != {h}")
         advices = parse_advices(resp.get("content"))
+        advices, cstats = compress_advices(advices)
         meta = {"snapshot_hash": h, "latency_ms": latency_ms,
                 "input_tokens": int(resp.get("input_tokens") or max(1, len(prompt) // 4)),
-                "output_tokens": int(resp.get("output_tokens") or 0)}
+                "output_tokens": int(resp.get("output_tokens") or 0),
+                "compression": cstats}
         return advices, meta
 
 
@@ -468,6 +540,7 @@ class ShadowRunner:
         rec.latency_ms = meta["latency_ms"]
         rec.input_tokens = meta["input_tokens"]
         rec.output_tokens = meta["output_tokens"]
+        rec.compression = meta.get("compression", {})
         rec.parse_status = "ok"
 
         # 需求 6：Guard + 未授权 proposal 强制
