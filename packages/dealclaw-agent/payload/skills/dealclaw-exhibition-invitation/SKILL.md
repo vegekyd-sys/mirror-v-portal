@@ -10,6 +10,28 @@ author: ""
 
 用户说要参加展会 / 做邀约 → 确认展会名称、日期、展位号。
 
+### 任务驱动触发（展自动营销）
+
+当展自动营销有**待发草稿**时，也走本 skill 生成内容并发送（与「用户主动发起邀约」同一套内容口径）：
+
+```bash
+# 拉待发清单
+python3 work/mio-api/dc_marketing_automation_send.py --list --company-id <supplier_id>
+```
+
+- 只处理 `content_route == "dealclaw-exhibition-invitation"` 的（跟进类归 dealclaw-email-growth-send）。
+- 每条含 `draft_id` / 买家 / 公司 / 展会 / `requires_approval`。
+- 按本 skill 的「统一模板填充」口径生成 subject + 正文（展会名/日期/展位号/产品线等按占位字段填），再回传发送：
+
+```python
+from dc_marketing_automation_send import send_one
+send_one(company_id, draft_id, generator=<按本 skill 口径生成正文的函数>)
+```
+
+- `requires_approval=True` 的草稿**不自动发**，保持 `pending_confirmation` 等用户确认。
+- 发送成功后 automation 自动关闭（`execution_ref=resend_id`），并回写展会邀约名单（见下）。
+- 既有前置不跳过：发送前仍检查邮箱绑定 + 时区窗口（`send_window.py`）。
+
 ## 动作
 
 确认参数 → 搜买家（米奥展会优先内部数据）→ 出名单客户确认 → **选邀请函模板（必做，从资产库给用户选）** → 访谈补变量 → 统一模板填充 → 气泡预览 → 检查邮箱绑定（未绑先引导）→ 用户确认后发送 → **发送成功回写展会邀约名单**。

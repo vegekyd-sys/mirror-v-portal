@@ -16,6 +16,28 @@ date: "2026-07-30"
 - 用户说「发给这几个买家」「群发一轮」
 - 触发条件：已有买家列表 + 已确认企业画像
 
+### 任务驱动触发（展自动营销）
+
+当展自动营销有**待发草稿**时，也走本 skill 生成内容并发送（与「用户确认买家后群发」同一套内容口径）：
+
+```bash
+# 拉待发清单
+python3 work/mio-api/dc_marketing_automation_send.py --list --company-id <supplier_id>
+```
+
+- 只处理 `content_route == "dealclaw-email-growth-send"` 的（邀约类归 dealclaw-exhibition-invitation）。
+- 每条含 `draft_id` / 买家 / 公司 / 展会 / `requires_approval`。
+- 按本 skill 的「邮件内容原则」+「反垃圾控制」生成 subject + 正文（**不套死模板**），再回传发送：
+
+```python
+from dc_marketing_automation_send import send_one
+send_one(company_id, draft_id, generator=<按本 skill 内容原则生成正文的函数>)
+```
+
+- `requires_approval=True` 的草稿**不自动发**，保持 `pending_confirmation` 等用户确认。
+- 发送成功后 automation 自动关闭（`execution_ref=resend_id`）；退订 footer 由 send.mjs 自动注入。
+- 既有前置不跳过：MFG 预检（域名预热 / 日限额 / 收件人校验）与窗口路由仍适用。
+
 ## 执行流程
 
 ```

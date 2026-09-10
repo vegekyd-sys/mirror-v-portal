@@ -140,7 +140,7 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
         except Exception:  # noqa: BLE001
             pass
 
-    return {"success": success, "count": n, "error": err}
+    return {"success": success, "count": n, "error": err, "resend_id": resend_id}
 
 
 def _cli() -> int:

@@ -1,7 +1,7 @@
 {
   "name": "dealclaw-base",
   "version": "dealclaw-base.v2",
-  "updated_at": "2026-08-20T18:00:00+08:00",
+  "updated_at": "2026-09-10T23:15:00+08:00",
   "source": "standalone-dealclaw-workspace",
   "features": [
     "standalone-dealclaw-identity",
@@ -9,6 +9,29 @@
     "source-synced-mio-engine-code",
     "tenant-data-and-credentials-externalized",
     "nexus-billing-plugin",
-    "alipay-recharge-skill"
-  ]
+    "alipay-recharge-skill",
+    "knight-reflection-pipeline",
+    "knight-os-scripts",
+    "self-evolution-memory-dirs"
+  ],
+  "reflection": {
+    "enabled": true,
+    "pipeline": [
+      "write-reflection.py",
+      "reflection-analyzer.py",
+      "write-skill-candidate.py",
+      "knight-status.py",
+      "heartbeat.py",
+      "compress-memory.py",
+      "daily-session-review.py",
+      "weekly-evolution-report.py"
+    ],
+    "memory_dirs": [
+      "memory/reflections",
+      "memory/daily-session-review",
+      "memory/skill-candidates.md"
+    ],
+    "autonomous_schedule": "gated — 需在部署侧显式开启 cron",
+    "updated_at": "2026-09-10T23:15:00+08:00"
+  }
 }

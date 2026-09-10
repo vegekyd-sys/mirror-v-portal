@@ -152,12 +152,20 @@ MEMORY.md                # 长期记忆索引
 ### 模糊意图反问
 - 纠偏意图模糊（「这次」还是「长期」）→ 反问确认再执行，细节见 dealclaw-review。
 
-### V Learning Loop — Knight Reflection + Skill Candidates（自进化机制，脚本待建）
-- 非琐碎工作 / 重复流程 / 失败 / 用户纠正 → 沉淀可复用经验。
-- 有意义工作后，写一条可复用的经验。
+### V Learning Loop — Knight Reflection + Skill Candidates（自进化机制 — 已落地）
+- 非琐碎工作 / 重复流程 / 失败 / 用户纠正 → 走 Knight reflection 链路，**不要另建平行记忆系统**。
+- 脚本工具链（均在 `scripts/`，路径相对 workspace，勿硬编码绝对路径）：
+  - 写反思：`python3 scripts/write-reflection.py --context "..." --what_worked "..." --what_failed "..." --next_time "..." --tags "execution,memory" --session_type "..." --confidence 3` → 追加 `memory/reflections/YYYY-MM-DD.jsonl`
+  - 析模式：`python3 scripts/reflection-analyzer.py`（增量；`--dry-run` 只打印、`--all` 全量、`--min-count N` 调阈值）→ 产出行为规则 / skill 候选
+  - 建候选：`python3 scripts/write-skill-candidate.py`
+  - 健康检查：`python3 scripts/knight-status.py`
+  - 周期维护：`python3 scripts/heartbeat.py`；记忆压缩：`python3 scripts/compress-memory.py`
+  - 会话复盘：`python3 scripts/daily-session-review.py`（+ `daily-session-review-decision.py`）
+  - 进化报告：`python3 scripts/weekly-evolution-report.py`
 - 路由：一次性/不确定 → 反思 JSONL；重复模式或用户确认 → 晋升为项目记忆或 skill 候选；核心身份/安全/偏好 → 先问用户确认。
 - 不学沉默、礼貌、一次性上下文。不自动改核心文档或 skill，先出 diff/proposal。
-- ⚠️ 脚本（write-reflection.py 等）目前不在 dealclaw，机制描述保留，脚本待建。
+- 晋升门禁：skill 候选进 `memory/skill-candidates.md`，复核后才落地。
+- 细则见 `memory/tools/knight-scripts.md`。
 
 ### Proactive-Agent Rules
 - **Verify implementation, not intent**：机制/配置/代码变化，确认真实行为生效后再报完成。

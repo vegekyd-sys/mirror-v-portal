@@ -1,0 +1,30 @@
+{
+  "ai_name": "小元",
+  "user_name": "田耕郡",
+  "timezone": "Asia/Shanghai",
+  "storage": {
+    "backend": "local",
+    "local": {
+      "reflections_dir": "memory/reflections",
+      "logs_dir": "memory/logs",
+      "memory_file": "MEMORY.md"
+    }
+  },
+  "notifications": {
+    "backend": "none"
+  },
+  "heartbeat": {
+    "interval_hours": 6,
+    "enabled": false,
+    "tasks": [
+      "reflection_analysis",
+      "memory_scan",
+      "compress_memory"
+    ]
+  },
+  "reflection": {
+    "min_pattern_count": 2,
+    "auto_write": true,
+    "auto_capture_stale_hours": 24
+  }
+}

@@ -36,8 +36,17 @@ def load_config():
 
 
 def resolve_workspace(config):
-    ws = config.get("workspace", "~/.openclaw/workspace")
-    return Path(ws).expanduser()
+    """Resolve the agent workspace root.
+
+    Priority:
+      1. explicit `workspace` in knight.config.json
+      2. self-locating default: parent of this script's `scripts/` directory
+    Never falls back to a shared global path, so runtime and packed payload stay isolated.
+    """
+    ws = config.get("workspace")
+    if ws:
+        return Path(ws).expanduser()
+    return Path(__file__).resolve().parent.parent
 
 
 def scan_logs(logs_dir: Path):
