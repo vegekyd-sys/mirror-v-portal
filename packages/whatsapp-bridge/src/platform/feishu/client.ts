@@ -7,6 +7,11 @@ type TokenCache = { token: string; expireAt: number };
 
 const tokenCache = new Map<string, TokenCache>();
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 飞书 2200 是通用「内部错误」，属瞬时故障，官方建议重试。 */
+const TRANSIENT_FEISHU_CODES = [2200];
+
 async function feishuFetch(path: string, init: RequestInit, token?: string): Promise<Json> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -14,15 +19,42 @@ async function feishuFetch(path: string, init: RequestInit, token?: string): Pro
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${config.feishu.baseUrl}${path}`, {
-    ...init,
-    headers,
-  });
-  const json = (await response.json()) as Json;
-  if (!response.ok || (typeof json.code === "number" && json.code !== 0)) {
-    throw new Error(`Feishu API ${path} failed: ${JSON.stringify(json)}`);
+  // 以前只在失败时直接抛错：一次瞬时的 2200 就会把整条同步丢掉（群/话题永远建不出来）。
+  // 这里对「瞬态错误」做小退避重试：2200、HTTP 5xx、网络异常。
+  const attempts = 3;
+  for (let attempt = 1; ; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(`${config.feishu.baseUrl}${path}`, { ...init, headers });
+    } catch (networkError) {
+      if (attempt >= attempts) throw networkError;
+      console.error(`Feishu API ${path} network error (attempt ${attempt}/${attempts}), retrying`, networkError);
+      await sleep(600 * attempt);
+      continue;
+    }
+
+    let json: Json = {};
+    try {
+      json = (await response.json()) as Json;
+    } catch {
+      json = {};
+    }
+    const code = typeof json.code === "number" ? json.code : 0;
+    const transient = !response.ok
+      ? response.status >= 500
+      : TRANSIENT_FEISHU_CODES.includes(code);
+    if (transient && attempt < attempts) {
+      console.error(
+        `Feishu API ${path} transient error (attempt ${attempt}/${attempts}), retrying: ${JSON.stringify(json)}`,
+      );
+      await sleep(600 * attempt);
+      continue;
+    }
+    if (!response.ok || code !== 0) {
+      throw new Error(`Feishu API ${path} failed: ${JSON.stringify(json)}`);
+    }
+    return json;
   }
-  return json;
 }
 
 async function getTenantToken(): Promise<string> {
@@ -147,23 +179,46 @@ export async function createCsGroup(
     // 99992361 = open_id cross app（invitee 是别的应用的 open_id）。
     // 这种情况也退化成「只拉机器人」建群，否则整条同步会静默失败、群永远建不出来。
     if (
-      !users.length ||
-      !(
-        msg.includes("232033") ||
+      users.length &&
+      (msg.includes("232033") ||
         msg.includes("232043") ||
         msg.includes("232032") ||
-        msg.includes("99992361")
-      )
+        msg.includes("99992361"))
     ) {
-      throw error;
+      console.error("Feishu create CS group with members failed, retrying bot-only group", error);
+      query.delete("set_bot_manager");
+      return await postCreateChat(query, {
+        ...body,
+        owner_id: undefined,
+        user_id_list: undefined,
+      });
     }
-    console.error("Feishu create CS group with members failed, retrying bot-only group", error);
-    query.delete("set_bot_manager");
-    return await postCreateChat(query, {
-      ...body,
-      owner_id: undefined,
-      user_id_list: undefined,
-    });
+    // 2200 = 飞书通用内部错误（瞬态为主）。官方排查建议：先建最小群，再分步拉人/加机器人。
+    // 一次塞满 owner_id + user_id_list + bot_id_list 是 2200 的典型触发组合。
+    if (msg.includes("2200") || msg.includes("Internal Error")) {
+      console.error(
+        "Feishu create CS group failed with internal error, falling back to minimal group + stepwise members",
+        error,
+      );
+      const chatId = await postCreateChat(new URLSearchParams({ user_id_type: "open_id" }), {
+        name: CS_GROUP_NAME,
+        description: "WhatsApp 买家会话会在此群以话题形式同步",
+        chat_mode: "group",
+        chat_type: "private",
+        group_message_type: "chat",
+        add_member_permission: "all_members",
+        share_card_permission: "allowed",
+      });
+      if (users.length) {
+        try {
+          await addChatMembers(chatId, users);
+        } catch (memberError) {
+          console.error("add members to newly created CS group failed", memberError);
+        }
+      }
+      return chatId;
+    }
+    throw error;
   }
 }
 
