@@ -20,7 +20,7 @@ type MockTransaction = {
   };
 };
 
-describe("admin existing-WABA import", { concurrency: false }, () => {
+describe("existing-WABA import", { concurrency: false }, () => {
   const mutablePrisma = prisma as unknown as {
     $transaction: (
       callback: (tx: MockTransaction) => Promise<unknown>,
@@ -57,7 +57,6 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
   const originals = {
     transaction: mutablePrisma.$transaction,
     fetch: globalThis.fetch,
-    adminToken: config.adminToken,
     apiKey: config.ycloud.apiKey,
   };
 
@@ -70,7 +69,6 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
   let writes: Array<{ operation: string; args: unknown }> = [];
 
   before(() => {
-    config.adminToken = "test-bridge-admin-token";
     config.ycloud.apiKey = "test-ycloud-api-key";
     mutablePrisma.$transaction = async (callback, options) => {
       transactionCount += 1;
@@ -110,26 +108,20 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
     transactionCount = 0;
     lockCount = 0;
     writes = [];
-    config.adminToken = "test-bridge-admin-token";
   });
 
   after(() => {
     mutablePrisma.$transaction = originals.transaction;
     globalThis.fetch = originals.fetch;
-    config.adminToken = originals.adminToken;
     config.ycloud.apiKey = originals.apiKey;
   });
 
-  async function request(input: {
-    authorization?: string;
-    payload?: unknown;
-  }) {
+  async function request(payload?: unknown) {
     const app = await buildServer();
     const response = await app.inject({
       method: "POST",
       url: `${config.routePrefix}/api/admin/whatsapp/import-existing-waba`,
-      headers: input.authorization ? { authorization: input.authorization } : undefined,
-      payload: input.payload ?? {
+      payload: payload ?? {
         partnerCustomerId: "tenant-a",
         wabaId: "12345678901",
       },
@@ -138,24 +130,6 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
     return response;
   }
 
-  it("rejects missing and invalid auth before validation or YCloud", async () => {
-    for (const authorization of [undefined, "Bearer wrong", "Basic test-bridge-admin-token"]) {
-      const response = await request({ authorization });
-      assert.equal(response.statusCode, 401);
-      assert.equal(response.json().code, "ADMIN_UNAUTHORIZED");
-    }
-    assert.equal(fetchCount, 0);
-    assert.equal(transactionCount, 0);
-  });
-
-  it("fails closed when the server-side admin token is absent", async () => {
-    config.adminToken = undefined;
-    const response = await request({ authorization: "Bearer test-bridge-admin-token" });
-    assert.equal(response.statusCode, 503);
-    assert.equal(response.json().code, "ADMIN_API_DISABLED");
-    assert.equal(fetchCount, 0);
-  });
-
   it("rejects malformed tenant/WABA input before YCloud", async () => {
     for (const payload of [
       { partnerCustomerId: "tenant a", wabaId: "12345678901" },
@@ -163,10 +137,7 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
       { partnerCustomerId: "tenant-a", wabaId: "01234567890" },
       { partnerCustomerId: "tenant-a", wabaId: "12345678901", shared: true },
     ]) {
-      const response = await request({
-        authorization: "Bearer test-bridge-admin-token",
-        payload,
-      });
+      const response = await request(payload);
       assert.equal(response.statusCode, 400);
     }
     assert.equal(fetchCount, 0);
@@ -174,7 +145,7 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
   });
 
   it("verifies phones in YCloud, then transactionally creates one-tenant ownership", async () => {
-    const response = await request({ authorization: "Bearer test-bridge-admin-token" });
+    const response = await request();
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), {
       ok: true,
@@ -198,7 +169,7 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
   it("upserts an existing row for the same tenant", async () => {
     owners = [{ partnerCustomerId: "tenant-a" }];
     existingId = "existing-onboarding";
-    const response = await request({ authorization: "Bearer test-bridge-admin-token" });
+    const response = await request();
     assert.equal(response.statusCode, 200);
     assert.equal(writes.filter((write) => write.operation === "update").length, 1);
     assert.equal(writes.filter((write) => write.operation === "create").length, 0);
@@ -206,7 +177,7 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
 
   it("rejects a WABA already connected to another tenant without writing", async () => {
     owners = [{ partnerCustomerId: "tenant-other" }];
-    const response = await request({ authorization: "Bearer test-bridge-admin-token" });
+    const response = await request();
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().code, "ADMIN_IMPORT_WABA_OWNED");
     assert.equal(response.body.includes("12345678901"), false);
@@ -215,7 +186,7 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
 
   it("rejects phone mappings owned by another WABA without writing", async () => {
     phoneConflicts = [{ phoneNumber: "+85251111111" }];
-    const response = await request({ authorization: "Bearer test-bridge-admin-token" });
+    const response = await request();
     assert.equal(response.statusCode, 409);
     assert.equal(response.json().code, "ADMIN_IMPORT_PHONE_CONFLICT");
     assert.equal(response.body.includes("12345678901"), false);
@@ -223,19 +194,13 @@ describe("admin existing-WABA import", { concurrency: false }, () => {
   });
 
   it("maps YCloud failures and empty phone verification to safe errors", async () => {
-    const failed = await request({
-      authorization: "Bearer test-bridge-admin-token",
-      payload: { partnerCustomerId: "tenant-a", wabaId: "99999999999" },
-    });
+    const failed = await request({ partnerCustomerId: "tenant-a", wabaId: "99999999999" });
     assert.equal(failed.statusCode, 502);
     assert.equal(failed.json().code, "ADMIN_IMPORT_YCLOUD_FAILED");
     assert.equal(failed.body.includes("upstream-private-detail"), false);
     assert.equal(failed.body.includes("99999999999"), false);
 
-    const empty = await request({
-      authorization: "Bearer test-bridge-admin-token",
-      payload: { partnerCustomerId: "tenant-a", wabaId: "88888888888" },
-    });
+    const empty = await request({ partnerCustomerId: "tenant-a", wabaId: "88888888888" });
     assert.equal(empty.statusCode, 404);
     assert.equal(empty.json().code, "ADMIN_IMPORT_WABA_NOT_FOUND");
     assert.equal(empty.body.includes("88888888888"), false);

@@ -3,8 +3,8 @@ name: ycloud-whatsapp
 description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
   完成嵌入式注册；当用户说“初始化 WhatsApp 配置”“给我 WhatsApp 飞书 webhook”时，先注册
-  飞书应用并返回 webhookUrl；仅当用户明确说“绑定已有 WABA”时，使用统一管理的 Bridge
-  admin token 调用管理员导入入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  飞书应用并返回 webhookUrl；仅当用户明确说“绑定已有 WABA”时，直接向桥接提交供应商与
+  WABA ID 调用已有 WABA 导入入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
   适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
@@ -181,26 +181,25 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 
 `ok=true` 只表示 YCloud 已接受，不等于送达。投递失败会同步到飞书客服话题。
 
-## 绑定已有 WABA（管理员导入）
+## 绑定已有 WABA
 
 仅当用户明确要求“绑定已有 WABA”时进入。普通接入/注册、`WHATSAPP_BINDING_REQUIRED`、
 查状态或换业务号都走 Direct Link，不主动索取 WABA ID。
 
 1. 从该次请求取得 WABA ID；缺失时只询问该 ID，不从历史、日志、响应或其它租户复制。
 2. `$SUPPLIER` 只能来自当前进程的 `MIO_CDP_SUPPLIER_ID`；不接受用户、模型或请求参数改写。
-3. 使用本 Skill 的 helper。把 WABA ID 通过 stdin 传入，不作为 CLI 参数，不打印输入、请求体、
-   签名或环境变量：
+3. 使用本 Skill 的 helper。把 WABA ID 通过 stdin 传入，不作为 CLI 参数，不打印输入、请求体
+   或环境变量：
 
 ```bash
 printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/bind_existing_waba.py
 ```
 
-helper 从当前租户进程读取 `MIO_CDP_SUPPLIER_ID` 与统一管理的
-`WHATSAPP_BRIDGE_ADMIN_TOKEN`，调用 `POST $BRIDGE/api/admin/whatsapp/import-existing-waba`；
-请求仅发送当前 supplier 的 `partnerCustomerId`、本次 WABA ID 和 `Authorization: Bearer`。不打印或持久化 token。
+helper 从当前租户进程读取 `MIO_CDP_SUPPLIER_ID`，调用 `POST $BRIDGE/api/admin/whatsapp/import-existing-waba`；
+请求仅发送当前 supplier 的 `partnerCustomerId` 和本次 WABA ID，不携带任何鉴权。归属由服务端
+YCloud 账号校验 + WABA 归属/手机号冲突检查兜底。
 
 成功输出只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要向用户回显 WABA ID。
-`WHATSAPP_BRIDGE_ADMIN_TOKEN_MISSING` 表示租户 Skill 环境尚未注入统一 token，停止并报告运维修复。
 YCloud 校验失败、跨租户归属或手机号冲突时停止，不改绑、不绕过 Bridge。
 
 ## 嵌入式注册 / 状态
@@ -252,7 +251,7 @@ POST $BRIDGE/api/whatsapp/onboarding-links
 ## 验证与停止条件
 
 - 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识；只有用户
-  明确“绑定已有 WABA”的专用 helper 可携带一次 WABA ID 和管理员 Bearer token。
+  明确“绑定已有 WABA”的专用 helper 可携带一次 WABA ID，不携带鉴权。
 - 多号未指定：必须收到/遵循 `WHATSAPP_FROM_SELECTION_REQUIRED`，不得任取。
 - 指定 `from`：只接受桥接验证通过的当前租户号码。
 - `WHATSAPP_TEMPLATE_REQUIRED`：自行查询模板、补齐变量后发送。

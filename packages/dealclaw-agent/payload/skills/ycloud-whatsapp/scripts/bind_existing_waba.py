@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Submit an explicit existing-WABA import using Bridge admin-token authentication."""
+"""Submit an explicit existing-WABA import.
+
+No client authentication is required: the bridge validates the WABA against the
+server-side YCloud account and enforces WABA ownership / phone conflicts.
+"""
 
 import json
 import os
@@ -19,12 +23,9 @@ def fail(code: str, status: int | None = None) -> int:
 
 def main() -> int:
     supplier_id = os.environ.get("MIO_CDP_SUPPLIER_ID", "").strip()
-    admin_token = os.environ.get("WHATSAPP_BRIDGE_ADMIN_TOKEN", "")
     waba_id = sys.stdin.read().strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", supplier_id):
         return fail("TENANT_MACHINE_SUPPLIER_MISSING")
-    if not admin_token:
-        return fail("WHATSAPP_BRIDGE_ADMIN_TOKEN_MISSING")
     if not re.fullmatch(r"[1-9]\d{4,31}", waba_id):
         return fail("INVALID_WABA_ID")
 
@@ -37,7 +38,6 @@ def main() -> int:
         data=body,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {admin_token}",
         },
         method="POST",
     )
