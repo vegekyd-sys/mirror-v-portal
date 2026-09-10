@@ -1,0 +1,327 @@
+{
+  "actions": [
+    {
+      "item_key": "761316a63c3ce915",
+      "kind": "action",
+      "dedupe_key": "exhibition:stage_profiling:E1:stage:E1:profiling:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "stage_profiling",
+      "priority": "deadline",
+      "title": "锁定第一推荐产品（画像）",
+      "reason_facts": [
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "profiling"
+        }
+      ],
+      "reason": "当前阶段「画像」，阶段目标：锁定第一推荐产品（画像）",
+      "target_refs": [
+        {
+          "type": "exhibition",
+          "id": "E1"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T16:19:49.999343+00:00",
+      "detail": {
+        "stage": "profiling",
+        "stage_goal": true
+      },
+      "completion_rule": {
+        "type": "signal_resolved",
+        "params": {
+          "signal_id": "stage:E1:profiling"
+        },
+        "expected_count": 1
+      },
+      "action_key": "6a87157a26ef3297",
+      "policy_version": null
+    }
+  ],
+  "context": [
+    {
+      "item_key": "05b5f89df0c6c448",
+      "kind": "result",
+      "dedupe_key": "email:metrics:global:metrics:1",
+      "source": "email",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "发送 1 · 送达 1 · 回复 0 · 退信 0",
+      "reason_facts": [
+        {
+          "fact_id": "sent",
+          "kind": "number",
+          "value": 1
+        },
+        {
+          "fact_id": "delivered",
+          "kind": "number",
+          "value": 1
+        },
+        {
+          "fact_id": "bounced",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "replied",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "发送 1 封，送达 1，回复 0，退信 0",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "sent": 1,
+        "delivered": 1,
+        "bounced": 0,
+        "replied": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "6cc678b28e5d98e3",
+      "kind": "insight",
+      "dedupe_key": "email:insight:global:insight:1",
+      "source": "email",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "发送 1 封，送达 1，退信 0",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "发送 1 封，送达 1，退信 0"
+        }
+      ],
+      "reason": "发送 1 封，送达 1，退信 0",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "a18a96060e240a31",
+      "kind": "result",
+      "dedupe_key": "opportunity:metrics:global:metrics:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "商机 0 · 有客户级证据 0 · 已排除 0",
+      "reason_facts": [
+        {
+          "fact_id": "opportunities",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "with_evidence",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "excluded",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "商机 0 家，有客户级证据 0 家，已排除 0 家",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "total": 0,
+        "with_evidence": 0,
+        "excluded": 0,
+        "suggested_only": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "b94d4780b7910583",
+      "kind": "insight",
+      "dedupe_key": "opportunity:insight:global:insight:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "无客户级商机证据，保留批量跟进待分层",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "无客户级商机证据，保留批量跟进待分层"
+        }
+      ],
+      "reason": "无客户级商机证据，保留批量跟进待分层",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "f49e36aa9e5c9e37",
+      "kind": "result",
+      "dedupe_key": "exhibition:metrics:E1:metrics:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "metrics",
+      "priority": "match",
+      "title": "展会阶段：画像",
+      "reason_facts": [
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "profiling"
+        }
+      ],
+      "reason": "展会阶段：画像",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "profiling"
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "e710f9e1e3fad386",
+      "kind": "risk",
+      "dedupe_key": "exhibition:stage_gap:E1:画像未完成:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "stage_gap",
+      "priority": "match",
+      "title": "画像未完成",
+      "reason_facts": [
+        {
+          "fact_id": "understanding_done",
+          "kind": "text",
+          "value": "false"
+        }
+      ],
+      "reason": "第一推荐产品尚未锁定，方案依据不足",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "e560370a97c80e3a",
+      "kind": "insight",
+      "dedupe_key": "exhibition:insight:E1:insight:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "insight",
+      "priority": "match",
+      "title": "本届展会「巴西圣保罗展」当前阶段：画像",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "本届展会「巴西圣保罗展」当前阶段：画像"
+        }
+      ],
+      "reason": "本届展会「巴西圣保罗展」当前阶段：画像",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "profiling"
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    }
+  ],
+  "created_at": "2026-09-10T16:19:49.999577+00:00",
+  "revision": 1,
+  "layering": {
+    "batch_layered": false,
+    "deducted_emails": [],
+    "remaining_count": null
+  },
+  "cross_provider_dropped": [],
+  "top_n": 3,
+  "top_n_action_keys": [
+    "6a87157a26ef3297"
+  ]
+}

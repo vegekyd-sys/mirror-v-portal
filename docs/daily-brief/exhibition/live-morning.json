@@ -1,0 +1,468 @@
+{
+  "actions": [
+    {
+      "item_key": "80d0abb562b0eb60",
+      "kind": "action",
+      "dedupe_key": "exhibition:onsite_followup:E1:ab861dc170dc2e43:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "onsite_followup",
+      "priority": "commitment",
+      "title": "现场跟进 Casa Outdoor",
+      "reason_facts": [
+        {
+          "fact_id": "company",
+          "kind": "entity",
+          "value": "Casa Outdoor"
+        },
+        {
+          "fact_id": "checkin",
+          "kind": "number",
+          "value": 1
+        }
+      ],
+      "reason": "Casa Outdoor 已到场且有会议/商洽证据，匹配会议记录跟进",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "C1@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C1",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "invitation_contact",
+          "id": "C1@x.com",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T16:19:50.005106+00:00",
+      "detail": {
+        "customer_id": "C1",
+        "company": "Casa Outdoor",
+        "buyer_email": "C1@x.com",
+        "invitation": true
+      },
+      "completion_rule": {
+        "type": "followup_sent",
+        "params": {
+          "target_ids": [
+            "C1@x.com"
+          ]
+        },
+        "expected_count": 1
+      },
+      "action_key": "e25f38ebd1887ad9",
+      "policy_version": null
+    },
+    {
+      "item_key": "af00a3995129d4d3",
+      "kind": "action",
+      "dedupe_key": "exhibition:stage_live:E1:stage:E1:live:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "stage_live",
+      "priority": "deadline",
+      "title": "现场跟进：会议纪要与现场承诺",
+      "reason_facts": [
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "live"
+        }
+      ],
+      "reason": "当前阶段「展中对接」，阶段目标：现场跟进：会议纪要与现场承诺",
+      "target_refs": [
+        {
+          "type": "exhibition",
+          "id": "E1"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T16:19:50.004946+00:00",
+      "detail": {
+        "stage": "live",
+        "stage_goal": true
+      },
+      "completion_rule": {
+        "type": "signal_resolved",
+        "params": {
+          "signal_id": "stage:E1:live"
+        },
+        "expected_count": 1
+      },
+      "action_key": "b25d3284df94c321",
+      "policy_version": null
+    },
+    {
+      "item_key": "51509791492aeb62",
+      "kind": "action",
+      "dedupe_key": "exhibition:missed_meeting_reengage:E1:9685eb765661ea3b:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "missed_meeting_reengage",
+      "priority": "deadline",
+      "title": "再触达约见面 Hotel Group BR",
+      "reason_facts": [
+        {
+          "fact_id": "company",
+          "kind": "entity",
+          "value": "Hotel Group BR"
+        },
+        {
+          "fact_id": "checkin",
+          "kind": "number",
+          "value": 1
+        }
+      ],
+      "reason": "Hotel Group BR 已到场但无会议证据，再触达约见面",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "C2@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C2",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "invitation_contact",
+          "id": "C2@x.com",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T16:19:50.005130+00:00",
+      "detail": {
+        "customer_id": "C2",
+        "company": "Hotel Group BR",
+        "buyer_email": "C2@x.com",
+        "invitation": true
+      },
+      "completion_rule": {
+        "type": "followup_sent",
+        "params": {
+          "target_ids": [
+            "C2@x.com"
+          ]
+        },
+        "expected_count": 1
+      },
+      "action_key": "9a0c4e5b53fb5b9d",
+      "policy_version": null
+    }
+  ],
+  "context": [
+    {
+      "item_key": "05b5f89df0c6c448",
+      "kind": "result",
+      "dedupe_key": "email:metrics:global:metrics:1",
+      "source": "email",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "发送 1 · 送达 1 · 回复 0 · 退信 0",
+      "reason_facts": [
+        {
+          "fact_id": "sent",
+          "kind": "number",
+          "value": 1
+        },
+        {
+          "fact_id": "delivered",
+          "kind": "number",
+          "value": 1
+        },
+        {
+          "fact_id": "bounced",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "replied",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "发送 1 封，送达 1，回复 0，退信 0",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "sent": 1,
+        "delivered": 1,
+        "bounced": 0,
+        "replied": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "6cc678b28e5d98e3",
+      "kind": "insight",
+      "dedupe_key": "email:insight:global:insight:1",
+      "source": "email",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "发送 1 封，送达 1，退信 0",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "发送 1 封，送达 1，退信 0"
+        }
+      ],
+      "reason": "发送 1 封，送达 1，退信 0",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "a18a96060e240a31",
+      "kind": "result",
+      "dedupe_key": "opportunity:metrics:global:metrics:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "商机 0 · 有客户级证据 0 · 已排除 0",
+      "reason_facts": [
+        {
+          "fact_id": "opportunities",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "with_evidence",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "excluded",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "商机 0 家，有客户级证据 0 家，已排除 0 家",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "total": 0,
+        "with_evidence": 0,
+        "excluded": 0,
+        "suggested_only": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "b94d4780b7910583",
+      "kind": "insight",
+      "dedupe_key": "opportunity:insight:global:insight:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "无客户级商机证据，保留批量跟进待分层",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "无客户级商机证据，保留批量跟进待分层"
+        }
+      ],
+      "reason": "无客户级商机证据，保留批量跟进待分层",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "f49e36aa9e5c9e37",
+      "kind": "result",
+      "dedupe_key": "exhibition:metrics:E1:metrics:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "metrics",
+      "priority": "match",
+      "title": "到展 2 · 会议 1 · 未到展 2",
+      "reason_facts": [
+        {
+          "fact_id": "arrived",
+          "kind": "number",
+          "value": 2
+        },
+        {
+          "fact_id": "meeting",
+          "kind": "number",
+          "value": 1
+        },
+        {
+          "fact_id": "not_arrived",
+          "kind": "number",
+          "value": 2
+        }
+      ],
+      "reason": "到展 2 · 会议 1 · 未到展 2",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "live",
+        "invited": 4,
+        "arrived": 2,
+        "not_arrived": 2,
+        "meeting": 1,
+        "rejected": 1,
+        "unreachable": 0,
+        "reactivatable": 1
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "5048802cd5169e76",
+      "kind": "risk",
+      "dedupe_key": "exhibition:invitation:E1:邀约已拒绝：No Thanks Ltd:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "invitation",
+      "priority": "match",
+      "title": "邀约已拒绝：No Thanks Ltd",
+      "reason_facts": [
+        {
+          "fact_id": "inviationState",
+          "kind": "number",
+          "value": 3
+        }
+      ],
+      "reason": "No Thanks Ltd 邀约状态「已拒绝」，停止主动触达",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C4",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "e560370a97c80e3a",
+      "kind": "insight",
+      "dedupe_key": "exhibition:insight:E1:insight:1",
+      "source": "exhibition",
+      "scope": "E1",
+      "category": "insight",
+      "priority": "match",
+      "title": "本届展会「巴西圣保罗展」当前阶段：展中对接",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "本届展会「巴西圣保罗展」当前阶段：展中对接"
+        }
+      ],
+      "reason": "本届展会「巴西圣保罗展」当前阶段：展中对接",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "live"
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    }
+  ],
+  "created_at": "2026-09-10T16:19:50.005326+00:00",
+  "revision": 1,
+  "layering": {
+    "batch_layered": false,
+    "deducted_emails": [],
+    "remaining_count": null
+  },
+  "cross_provider_dropped": [],
+  "top_n": 3,
+  "top_n_action_keys": [
+    "e25f38ebd1887ad9",
+    "b25d3284df94c321",
+    "9a0c4e5b53fb5b9d"
+  ]
+}

@@ -1,19 +1,23 @@
-Daily Brief / OpportunityProvider 测试结果 · 2026-09-10T13:59:28Z
+Daily Brief / Providers 测试结果 · 2026-09-10T16:19:54Z
 
+=== test_dc_exhibition_provider.py ===
+Ran 22 tests in 0.004s
+
+OK
 === test_dc_opportunity_provider.py ===
-Ran 27 tests in 0.024s
+Ran 27 tests in 0.029s
 
 OK
 === test_dc_daily_brief.py ===
-Ran 48 tests in 0.007s
+Ran 48 tests in 0.004s
 
 OK
 === test_dc_email_provider.py ===
-Ran 14 tests in 0.020s
+Ran 14 tests in 0.019s
 
 OK
 === test_dc_daily_advisor.py ===
-Ran 23 tests in 0.001s
+Ran 23 tests in 0.002s
 
 OK
 === tests/test_opportunity_stage.py ===
