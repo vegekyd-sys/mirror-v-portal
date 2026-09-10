@@ -1,0 +1,864 @@
+{
+  "actions": [
+    {
+      "item_key": "6068e83f004d5df8",
+      "kind": "action",
+      "dedupe_key": "opportunity:followup:global:e4d3f213238fd7d0:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "followup",
+      "priority": "overdue",
+      "title": "逾期跟进 Overdue Co",
+      "reason_facts": [
+        {
+          "fact_id": "company",
+          "kind": "entity",
+          "value": "Overdue Co"
+        },
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "需求明确"
+        },
+        {
+          "fact_id": "fit_grade",
+          "kind": "text",
+          "value": "B"
+        },
+        {
+          "fact_id": "next_step_due",
+          "kind": "time",
+          "value": "2026-09-09T13:59:24.547552+00:00"
+        }
+      ],
+      "reason": "Overdue Co 下一步「发送正式报价」已于 2026-09-09T13:59:24.547552+00:00 到期，需立即处理",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "buyer1@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C002",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "opportunity_next_step",
+          "id": "C002:next_step",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_overdue",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-09T13:59:24.547552+00:00",
+      "detail": {
+        "customer_id": "C002",
+        "company": "Overdue Co",
+        "trigger": "next_step_overdue",
+        "buyer_email": "buyer1@x.com",
+        "fit_grade": "B",
+        "stage": "需求明确",
+        "evidence_level": "confirmed"
+      },
+      "completion_rule": {
+        "type": "followup_sent",
+        "params": {
+          "target_ids": [
+            "buyer1@x.com"
+          ]
+        },
+        "expected_count": 1
+      },
+      "action_key": "c47f5b2697be01a9",
+      "policy_version": null
+    },
+    {
+      "item_key": "ae034cbbe8ec2612",
+      "kind": "action",
+      "dedupe_key": "opportunity:followup:global:ca64567d8713d05f:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "followup",
+      "priority": "buyer_reply",
+      "title": "回复买家 Reply Co",
+      "reason_facts": [
+        {
+          "fact_id": "company",
+          "kind": "entity",
+          "value": "Reply Co"
+        },
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "已回复"
+        },
+        {
+          "fact_id": "fit_grade",
+          "kind": "text",
+          "value": "B"
+        },
+        {
+          "fact_id": "buyer_reply",
+          "kind": "text",
+          "value": "it_reply"
+        }
+      ],
+      "reason": "Reply Co 已回复（证据 it_reply），需优先响应跟进",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "buyer0@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C001",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_reply",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T13:59:24.548270+00:00",
+      "detail": {
+        "customer_id": "C001",
+        "company": "Reply Co",
+        "trigger": "buyer_reply",
+        "buyer_email": "buyer0@x.com",
+        "fit_grade": "B",
+        "stage": "已回复",
+        "evidence_level": "confirmed"
+      },
+      "completion_rule": {
+        "type": "followup_sent",
+        "params": {
+          "target_ids": [
+            "buyer0@x.com"
+          ]
+        },
+        "expected_count": 1
+      },
+      "action_key": "62910fb996c5af34",
+      "policy_version": null
+    },
+    {
+      "item_key": "347aa4d8f1cd218d",
+      "kind": "action",
+      "dedupe_key": "opportunity:quote:global:8fd3fba9556d68c7:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "quote",
+      "priority": "commitment",
+      "title": "发送报价 Quote Co",
+      "reason_facts": [
+        {
+          "fact_id": "company",
+          "kind": "entity",
+          "value": "Quote Co"
+        },
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "报价中"
+        },
+        {
+          "fact_id": "fit_grade",
+          "kind": "text",
+          "value": "A"
+        },
+        {
+          "fact_id": "commitment",
+          "kind": "text",
+          "value": "quote_request"
+        }
+      ],
+      "reason": "Quote Co 已有 confirmed 报价承诺信号（quote_request，证据 it_quote）",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "buyer2@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C003",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "signal",
+          "id": "it_quote:quote_request",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-10T13:59:24.548342+00:00",
+      "detail": {
+        "customer_id": "C003",
+        "company": "Quote Co",
+        "trigger": "quote_commitment",
+        "buyer_email": "buyer2@x.com",
+        "fit_grade": "A",
+        "stage": "报价中",
+        "evidence_level": "confirmed"
+      },
+      "completion_rule": {
+        "type": "quote_sent",
+        "params": {
+          "target_ids": [
+            "buyer2@x.com"
+          ]
+        },
+        "expected_count": 1
+      },
+      "action_key": "f15875bb00c97492",
+      "policy_version": null
+    },
+    {
+      "item_key": "6b7df7b57e99783a",
+      "kind": "action",
+      "dedupe_key": "email:followup:global:a5e15042bd89fdae:1",
+      "source": "email",
+      "scope": "global",
+      "category": "followup",
+      "priority": "match",
+      "title": "跟进 65 家（待分层批量跟进）",
+      "reason_facts": [
+        {
+          "fact_id": "layered_count",
+          "kind": "number",
+          "value": 65
+        },
+        {
+          "fact_id": "deducted_count",
+          "kind": "number",
+          "value": 3
+        },
+        {
+          "fact_id": "wait_state",
+          "kind": "text",
+          "value": "超过观察期仍无回复，且无商机证据"
+        }
+      ],
+      "reason": "65 家送达超过观察期仍无回复、无商机级证据，保留为待分层批量跟进",
+      "target_refs": [
+        {
+          "type": "buyer",
+          "id": "buyer3@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer4@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer5@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer6@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer7@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer8@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer9@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer10@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer11@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer12@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer13@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer14@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer15@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer16@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer17@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer18@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer19@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer20@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer21@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer22@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer23@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer24@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer25@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer26@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer27@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer28@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer29@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer30@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer31@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer32@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer33@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer34@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer35@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer36@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer37@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer38@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer39@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer40@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer41@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer42@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer43@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer44@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer45@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer46@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer47@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer48@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer49@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer50@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer51@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer52@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer53@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer54@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer55@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer56@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer57@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer58@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer59@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer60@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer61@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer62@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer63@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer64@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer65@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer66@x.com"
+        },
+        {
+          "type": "buyer",
+          "id": "buyer67@x.com"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-09T13:59:24.547211+00:00",
+      "detail": {
+        "overdue_count": 65,
+        "buyer_emails": [
+          "buyer3@x.com",
+          "buyer4@x.com",
+          "buyer5@x.com",
+          "buyer6@x.com",
+          "buyer7@x.com",
+          "buyer8@x.com",
+          "buyer9@x.com",
+          "buyer10@x.com",
+          "buyer11@x.com",
+          "buyer12@x.com",
+          "buyer13@x.com",
+          "buyer14@x.com",
+          "buyer15@x.com",
+          "buyer16@x.com",
+          "buyer17@x.com",
+          "buyer18@x.com",
+          "buyer19@x.com",
+          "buyer20@x.com",
+          "buyer21@x.com",
+          "buyer22@x.com",
+          "buyer23@x.com",
+          "buyer24@x.com",
+          "buyer25@x.com",
+          "buyer26@x.com",
+          "buyer27@x.com",
+          "buyer28@x.com",
+          "buyer29@x.com",
+          "buyer30@x.com",
+          "buyer31@x.com",
+          "buyer32@x.com",
+          "buyer33@x.com",
+          "buyer34@x.com",
+          "buyer35@x.com",
+          "buyer36@x.com",
+          "buyer37@x.com",
+          "buyer38@x.com",
+          "buyer39@x.com",
+          "buyer40@x.com",
+          "buyer41@x.com",
+          "buyer42@x.com",
+          "buyer43@x.com",
+          "buyer44@x.com",
+          "buyer45@x.com",
+          "buyer46@x.com",
+          "buyer47@x.com",
+          "buyer48@x.com",
+          "buyer49@x.com",
+          "buyer50@x.com",
+          "buyer51@x.com",
+          "buyer52@x.com",
+          "buyer53@x.com",
+          "buyer54@x.com",
+          "buyer55@x.com",
+          "buyer56@x.com",
+          "buyer57@x.com",
+          "buyer58@x.com",
+          "buyer59@x.com",
+          "buyer60@x.com",
+          "buyer61@x.com",
+          "buyer62@x.com",
+          "buyer63@x.com",
+          "buyer64@x.com",
+          "buyer65@x.com",
+          "buyer66@x.com",
+          "buyer67@x.com"
+        ],
+        "pending_layering": false,
+        "layered_out": [
+          "buyer0@x.com",
+          "buyer1@x.com",
+          "buyer2@x.com"
+        ]
+      },
+      "completion_rule": {
+        "type": "followup_sent",
+        "params": {
+          "target_ids": [
+            "buyer3@x.com",
+            "buyer4@x.com",
+            "buyer5@x.com",
+            "buyer6@x.com",
+            "buyer7@x.com",
+            "buyer8@x.com",
+            "buyer9@x.com",
+            "buyer10@x.com",
+            "buyer11@x.com",
+            "buyer12@x.com",
+            "buyer13@x.com",
+            "buyer14@x.com",
+            "buyer15@x.com",
+            "buyer16@x.com",
+            "buyer17@x.com",
+            "buyer18@x.com",
+            "buyer19@x.com",
+            "buyer20@x.com",
+            "buyer21@x.com",
+            "buyer22@x.com",
+            "buyer23@x.com",
+            "buyer24@x.com",
+            "buyer25@x.com",
+            "buyer26@x.com",
+            "buyer27@x.com",
+            "buyer28@x.com",
+            "buyer29@x.com",
+            "buyer30@x.com",
+            "buyer31@x.com",
+            "buyer32@x.com",
+            "buyer33@x.com",
+            "buyer34@x.com",
+            "buyer35@x.com",
+            "buyer36@x.com",
+            "buyer37@x.com",
+            "buyer38@x.com",
+            "buyer39@x.com",
+            "buyer40@x.com",
+            "buyer41@x.com",
+            "buyer42@x.com",
+            "buyer43@x.com",
+            "buyer44@x.com",
+            "buyer45@x.com",
+            "buyer46@x.com",
+            "buyer47@x.com",
+            "buyer48@x.com",
+            "buyer49@x.com",
+            "buyer50@x.com",
+            "buyer51@x.com",
+            "buyer52@x.com",
+            "buyer53@x.com",
+            "buyer54@x.com",
+            "buyer55@x.com",
+            "buyer56@x.com",
+            "buyer57@x.com",
+            "buyer58@x.com",
+            "buyer59@x.com",
+            "buyer60@x.com",
+            "buyer61@x.com",
+            "buyer62@x.com",
+            "buyer63@x.com",
+            "buyer64@x.com",
+            "buyer65@x.com",
+            "buyer66@x.com",
+            "buyer67@x.com"
+          ]
+        },
+        "expected_count": 65
+      },
+      "action_key": "e049fbc67c9dcdd2",
+      "policy_version": null
+    }
+  ],
+  "context": [
+    {
+      "item_key": "05b5f89df0c6c448",
+      "kind": "result",
+      "dedupe_key": "email:metrics:global:metrics:1",
+      "source": "email",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "发送 68 · 送达 68 · 回复 0 · 退信 0",
+      "reason_facts": [
+        {
+          "fact_id": "sent",
+          "kind": "number",
+          "value": 68
+        },
+        {
+          "fact_id": "delivered",
+          "kind": "number",
+          "value": 68
+        },
+        {
+          "fact_id": "bounced",
+          "kind": "number",
+          "value": 0
+        },
+        {
+          "fact_id": "replied",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "发送 68 封，送达 68，回复 0，退信 0",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "sent": 68,
+        "delivered": 68,
+        "bounced": 0,
+        "replied": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "6cc678b28e5d98e3",
+      "kind": "insight",
+      "dedupe_key": "email:insight:global:insight:1",
+      "source": "email",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "68 家送达超过观察期仍无回复",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "68 家送达超过观察期仍无回复"
+        }
+      ],
+      "reason": "68 家送达超过观察期仍无回复",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "a18a96060e240a31",
+      "kind": "result",
+      "dedupe_key": "opportunity:metrics:global:metrics:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "metrics",
+      "priority": "match",
+      "title": "商机 3 · 有客户级证据 3 · 已排除 0",
+      "reason_facts": [
+        {
+          "fact_id": "opportunities",
+          "kind": "number",
+          "value": 3
+        },
+        {
+          "fact_id": "with_evidence",
+          "kind": "number",
+          "value": 3
+        },
+        {
+          "fact_id": "excluded",
+          "kind": "number",
+          "value": 0
+        }
+      ],
+      "reason": "商机 3 家，有客户级证据 3 家，已排除 0 家",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "total": 3,
+        "with_evidence": 3,
+        "excluded": 0,
+        "suggested_only": 0
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "b94d4780b7910583",
+      "kind": "insight",
+      "dedupe_key": "opportunity:insight:global:insight:1",
+      "source": "opportunity",
+      "scope": "global",
+      "category": "insight",
+      "priority": "match",
+      "title": "3 家有客户级商机证据（回复/逾期/承诺），进入优先跟进",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "3 家有客户级商机证据（回复/逾期/承诺），进入优先跟进"
+        }
+      ],
+      "reason": "3 家有客户级商机证据（回复/逾期/承诺），进入优先跟进",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "opportunity_memory",
+          "id": "152600996207:opportunities",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    }
+  ],
+  "created_at": "2026-09-10T13:59:24.548728+00:00",
+  "revision": 1,
+  "layering": {
+    "batch_layered": true,
+    "deducted_emails": [
+      "buyer0@x.com",
+      "buyer1@x.com",
+      "buyer2@x.com"
+    ],
+    "remaining_count": 65
+  },
+  "top_n": 3,
+  "top_n_action_keys": [
+    "c47f5b2697be01a9",
+    "62910fb996c5af34",
+    "f15875bb00c97492"
+  ]
+}
