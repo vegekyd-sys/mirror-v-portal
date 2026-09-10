@@ -42,9 +42,9 @@ import {
   upsertFeishuApp,
   type FeishuAppCreds,
 } from "../platform/feishu/apps";
-import { runWithFeishuApp } from "../platform/feishu/context";
+import { runWithFeishuApp, withFeishuApp } from "../platform/feishu/context";
 import { addChatBots } from "../platform/feishu/client";
-import { findThreadByFeishuId } from "../platform/feishu/adapter";
+import { findThreadByFeishuId, diagnoseFeishu } from "../platform/feishu/adapter";
 import { importExistingWaba, AdminWabaImportError } from "../core/adminWabaImport";
 
 declare module "fastify" {
@@ -314,6 +314,17 @@ export async function buildServer() {
         });
       }
       return publicFeishuApp(creds, feishuWebhookUrl(publicBaseUrl(request), creds.appId));
+    });
+
+    // 诊断端点：逐步跑飞书关键调用（换 token → 列群 → 建群），每步返回原始结果。
+    // 用于拿不到 pod 日志时定位「key 是否可用 / 建群卡在哪一步」。
+    scope.get("/api/feishu/diag", async (request, reply) => {
+      const query = request.query as { appId?: string };
+      try {
+        return await withFeishuApp(query.appId, () => diagnoseFeishu());
+      } catch (error) {
+        return reply.code(500).send({ ok: false, error: (error as Error).message });
+      }
     });
 
     scope.get("/api/whatsapp/phones", async (request, reply) => {

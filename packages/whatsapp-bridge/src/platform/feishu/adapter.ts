@@ -138,6 +138,69 @@ export async function ensureCsChatId(extraOpenIds: string[] = [], extraBotAppIds
   }
 }
 
+/**
+ * 诊断：逐步执行飞书关键调用并返回每步原始结果（不抛错）。
+ * 用途：拿不到 pod 日志时定位「key 是否可用 / 建群卡在哪一步」。
+ */
+export async function diagnoseFeishu(): Promise<Record<string, unknown>> {
+  const creds = currentFeishuApp();
+  if (!creds) return { ok: false, error: "飞书应用未注册（currentFeishuApp 为空）" };
+  const out: Record<string, unknown> = {
+    appId: creds.appId,
+    baseUrl: config.feishu.baseUrl,
+    inviteAppIds: creds.inviteAppIds,
+    inviteOpenIds: creds.inviteOpenIds,
+    inviteMobiles: creds.inviteMobiles,
+  };
+
+  out.tenantToken = await (async () => {
+    try {
+      const response = await fetch(
+        `${config.feishu.baseUrl}/open-apis/auth/v3/tenant_access_token/internal`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
+        },
+      );
+      const json = (await response.json()) as Record<string, unknown>;
+      return {
+        ok: response.ok && json.code === 0,
+        http: response.status,
+        code: json.code,
+        msg: json.msg,
+        gotToken: Boolean(json.tenant_access_token),
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  })();
+
+  out.listBotChats = await (async () => {
+    try {
+      const chats = await listBotChats();
+      return {
+        ok: true,
+        count: chats.length,
+        hasCsGroup: chats.some((chat) => chat.name === CS_GROUP_NAME),
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  })();
+
+  out.ensureCsChatId = await (async () => {
+    try {
+      const chatId = await ensureCsChatId([], creds.inviteAppIds);
+      return { ok: true, chatId };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  })();
+
+  return out;
+}
+
 async function resolveNotifyChatIds(csChatId: string, sourceChatId?: string | null): Promise<string[]> {
   const ids = [...config.feishu.notifyChatIds];
   if (sourceChatId?.trim()) ids.push(sourceChatId.trim());
