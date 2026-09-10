@@ -38,6 +38,51 @@ interface OpenResponsesBody {
   error?: { message?: string };
 }
 
+// ── Inbound chat logging ─────────────────────────────────────────────────────
+// The dealclaw-chatlog plugin hooks `message_received` for inbound capture,
+// but that hook only fires on the channel pipeline (Feishu/WhatsApp via
+// dispatch-from-config). The `/v1/responses` ingress path used by the external
+// chat API and admin web-chat bypasses it entirely — only the outbound side
+// (`agent_end`) fires there. So we report the inbound message ourselves,
+// fire-and-forget, with the same sessionKey convention (`agent:dealclaw:<key>`)
+// so in/out rows group into one session in the conversation-history UI.
+// Idempotent server-side on (tenant_id, message_id).
+const PROVISIONING_URL = (process.env.PROVISIONING_SERVICE_URL || '').replace(/\/$/, '');
+const PROVISIONING_TOKEN = process.env.PROVISIONING_API_TOKEN || '';
+
+function reportInboundMessage(text: string, context: AgentExecutionContext, sessionKey: string): void {
+  const content = text.trim();
+  if (!PROVISIONING_URL || !content || !context.tenantId) return;
+  const messageId = `dc-in-${createHash('sha1')
+    .update(`${sessionKey}|${Date.now()}|${content}`)
+    .digest('hex')
+    .slice(0, 16)}`;
+  void fetch(
+    `${PROVISIONING_URL}/v1/tenants/${encodeURIComponent(context.tenantId)}/chat-messages`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(PROVISIONING_TOKEN ? { authorization: `Bearer ${PROVISIONING_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({
+        direction: 'in',
+        channel: sanitizeChannel(context.channel),
+        senderOpenId: context.userId || null,
+        senderName: null,
+        senderUsername: null,
+        content,
+        sessionKey: `agent:dealclaw:${sessionKey}`,
+        messageId,
+        runId: null,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    },
+  ).catch(() => {
+    /* fire-and-forget: chat logging must never break the chat path */
+  });
+}
+
 export class OpenClawRuntimeClient implements RuntimeClient {
   private readonly baseUrl: string;
   private readonly agentId: string;
@@ -62,6 +107,9 @@ export class OpenClawRuntimeClient implements RuntimeClient {
 
   async execute(text: string, context: AgentExecutionContext): Promise<RuntimeResult> {
     const sessionKey = stableSessionKey(context);
+    // Inbound capture: the chatlog plugin's message_received hook never fires
+    // on this ingress path (see reportInboundMessage docblock).
+    reportInboundMessage(text, context, sessionKey);
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-openclaw-agent-id': this.agentId,
@@ -112,6 +160,7 @@ export class OpenClawRuntimeClient implements RuntimeClient {
 
   async executeStream(text: string, context: AgentExecutionContext): Promise<{ body: ReadableStream<Uint8Array> }> {
     const sessionKey = stableSessionKey(context);
+    reportInboundMessage(text, context, sessionKey);
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'accept': 'text/event-stream',
