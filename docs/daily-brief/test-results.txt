@@ -1,23 +1,23 @@
-Daily Brief / Providers / Advisor / 推送接入 测试结果 · 2026-09-10T16:50:44Z
+Daily Brief 测试结果 · 2026-09-10T17:11:07Z
 
 === test_dc_daily_report_pipeline.py ===
-Ran 7 tests in 0.024s
+Ran 11 tests in 0.026s
 
 OK
 === test_dc_shadow_eval.py ===
-Ran 8 tests in 0.030s
+Ran 8 tests in 0.032s
 
 OK
 === test_dc_llm_advisor.py ===
-Ran 28 tests in 0.017s
+Ran 28 tests in 0.015s
 
 OK
 === test_dc_exhibition_provider.py ===
-Ran 22 tests in 0.003s
+Ran 22 tests in 0.009s
 
 OK
 === test_dc_opportunity_provider.py ===
-Ran 27 tests in 0.032s
+Ran 27 tests in 0.036s
 
 OK
 === test_dc_daily_brief.py ===
@@ -25,7 +25,7 @@ Ran 48 tests in 0.005s
 
 OK
 === test_dc_email_provider.py ===
-Ran 14 tests in 0.020s
+Ran 14 tests in 0.025s
 
 OK
 === test_dc_daily_advisor.py ===
@@ -37,6 +37,6 @@ Ran 25 tests in 0.001s
 
 OK
 === tests/test_priority.py ===
-Ran 20 tests in 0.003s
+Ran 20 tests in 0.004s
 
 OK
