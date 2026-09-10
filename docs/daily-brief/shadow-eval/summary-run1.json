@@ -1,0 +1,61 @@
+{
+  "samples": 28,
+  "llm_ok": 8,
+  "fallback": 20,
+  "fallback_ratio": 0.714,
+  "fallback_reasons": {
+    "guard_violation": 18,
+    "token_limit": 2
+  },
+  "guard_interception": 18,
+  "guard_interception_ratio": 0.643,
+  "order_diff_samples": 4,
+  "latency_ms_avg": 3015.5,
+  "input_tokens_avg": 990.2,
+  "output_tokens_avg": 323.4,
+  "llm_advices_avg": 1.5,
+  "max_advices_ok": 3,
+  "by_scenario": {
+    "email": {
+      "n": 4,
+      "ok": 0,
+      "fallback": 4
+    },
+    "reply": {
+      "n": 4,
+      "ok": 2,
+      "fallback": 2
+    },
+    "pre_exhibition": {
+      "n": 4,
+      "ok": 0,
+      "fallback": 4
+    },
+    "during": {
+      "n": 4,
+      "ok": 2,
+      "fallback": 2
+    },
+    "post": {
+      "n": 4,
+      "ok": 0,
+      "fallback": 4
+    },
+    "no_task": {
+      "n": 4,
+      "ok": 4,
+      "fallback": 0
+    },
+    "data_anomaly": {
+      "n": 4,
+      "ok": 0,
+      "fallback": 4
+    }
+  },
+  "human_tally": {
+    "llm_better": null,
+    "equal": null,
+    "llm_worse": null,
+    "note": "见 review.md 人工填写后统计"
+  }
+}

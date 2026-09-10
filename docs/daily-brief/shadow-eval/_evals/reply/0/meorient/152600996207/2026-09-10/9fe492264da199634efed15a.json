@@ -1,0 +1,26 @@
+{
+  "snapshot_hash": "9fe492264da199634efed15a",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "token_limit",
+  "parse_status": "token_limit",
+  "latency_ms": 0,
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "guard_violations": [],
+  "template_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_10e01c8b2c62f1b5",
+    "adv_a0b6d9a825981bbb"
+  ],
+  "llm_order": [],
+  "order_diff": [],
+  "advices": [],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {},
+  "note": "finish_reason=length"
+}

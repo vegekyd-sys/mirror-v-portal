@@ -1,0 +1,170 @@
+{
+  "sample_001": {
+    "scenario": "email",
+    "day": 0,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_002": {
+    "scenario": "reply",
+    "day": 0,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_003": {
+    "scenario": "pre_exhibition",
+    "day": 0,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_004": {
+    "scenario": "during",
+    "day": 0,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_005": {
+    "scenario": "post",
+    "day": 0,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_006": {
+    "scenario": "no_task",
+    "day": 0,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_007": {
+    "scenario": "data_anomaly",
+    "day": 0,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_008": {
+    "scenario": "email",
+    "day": 1,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_009": {
+    "scenario": "reply",
+    "day": 1,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_010": {
+    "scenario": "pre_exhibition",
+    "day": 1,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_011": {
+    "scenario": "during",
+    "day": 1,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_012": {
+    "scenario": "post",
+    "day": 1,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_013": {
+    "scenario": "no_task",
+    "day": 1,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_014": {
+    "scenario": "data_anomaly",
+    "day": 1,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_015": {
+    "scenario": "email",
+    "day": 2,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_016": {
+    "scenario": "reply",
+    "day": 2,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_017": {
+    "scenario": "pre_exhibition",
+    "day": 2,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_018": {
+    "scenario": "during",
+    "day": 2,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_019": {
+    "scenario": "post",
+    "day": 2,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_020": {
+    "scenario": "no_task",
+    "day": 2,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_021": {
+    "scenario": "data_anomaly",
+    "day": 2,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_022": {
+    "scenario": "email",
+    "day": 3,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_023": {
+    "scenario": "reply",
+    "day": 3,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_024": {
+    "scenario": "pre_exhibition",
+    "day": 3,
+    "A": "template",
+    "B": "llm"
+  },
+  "sample_025": {
+    "scenario": "during",
+    "day": 3,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_026": {
+    "scenario": "post",
+    "day": 3,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_027": {
+    "scenario": "no_task",
+    "day": 3,
+    "A": "llm",
+    "B": "template"
+  },
+  "sample_028": {
+    "scenario": "data_anomaly",
+    "day": 3,
+    "A": "template",
+    "B": "llm"
+  }
+}

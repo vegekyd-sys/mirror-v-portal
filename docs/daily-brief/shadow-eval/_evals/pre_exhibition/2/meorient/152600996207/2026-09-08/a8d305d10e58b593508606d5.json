@@ -1,0 +1,81 @@
+{
+  "snapshot_hash": "a8d305d10e58b593508606d5",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": true,
+  "fallback": false,
+  "fallback_reason": "",
+  "parse_status": "ok",
+  "latency_ms": 2169,
+  "input_tokens": 737,
+  "output_tokens": 246,
+  "guard_violations": [],
+  "template_order": [
+    "adv_f8d42bd2913c883b"
+  ],
+  "llm_order": [
+    "adv_f8d42bd2913c883b"
+  ],
+  "order_diff": [],
+  "advices": [
+    {
+      "advice_key": "adv_f8d42bd2913c883b",
+      "claim": "建议跟进：产出获客方案（买家类型+邀约方向+沟通策略）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段明确为规划，目标清晰。",
+      "assumptions": [
+        "买家类型和沟通策略已被识别。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "需确保资源和时间充足以完成方案。"
+      ],
+      "recommendation": "当前阶段「制定获客方案」，阶段目标：产出获客方案（买家类型+邀约方向+沟通策略）。",
+      "proposed_actions": [
+        {
+          "proposal_id": "f8d42bd2913c883b",
+          "action_type": "stage_planning",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "E1"
+            }
+          ],
+          "reason": "当前阶段目标明确，需产出获客方案。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "f8d42bd2913c883b"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 1,
+    "merged_count": 1,
+    "kept": 1,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

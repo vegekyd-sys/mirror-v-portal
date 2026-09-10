@@ -1,0 +1,18 @@
+{
+  "files_scanned": 64,
+  "secret_findings": [],
+  "secret_clean": true,
+  "emails_seen": [
+    "buyer0@x.com",
+    "buyer1@x.com",
+    "buyer2@x.com",
+    "buyer3@x.com",
+    "buyer4@x.com",
+    "buyer5@x.com",
+    "c1@x.com",
+    "c2@x.com",
+    "c3@x.com"
+  ],
+  "unmasked_pii": [],
+  "pii_clean": true
+}

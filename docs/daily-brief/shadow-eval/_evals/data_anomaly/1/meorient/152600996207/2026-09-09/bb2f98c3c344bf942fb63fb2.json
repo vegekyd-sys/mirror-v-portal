@@ -1,0 +1,132 @@
+{
+  "snapshot_hash": "bb2f98c3c344bf942fb63fb2",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": true,
+  "fallback": false,
+  "fallback_reason": "",
+  "parse_status": "ok",
+  "latency_ms": 3880,
+  "input_tokens": 1042,
+  "output_tokens": 454,
+  "guard_violations": [],
+  "template_order": [
+    "adv_b25d3284df94c321",
+    "adv_20812fe50daf64d7"
+  ],
+  "llm_order": [
+    "adv_b25d3284df94c321",
+    "adv_20812fe50daf64d7"
+  ],
+  "order_diff": [],
+  "advices": [
+    {
+      "advice_key": "adv_b25d3284df94c321",
+      "claim": "建议跟进：现场跟进：会议纪要与现场承诺",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段为展中对接，目标明确。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "当前阶段「展中对接」，应及时跟进会议纪要与现场承诺，以确保信息的完整性和后续行动的有效性。",
+      "proposed_actions": [
+        {
+          "proposal_id": "b25d3284df94c321",
+          "action_type": "stage_live",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "E1"
+            }
+          ],
+          "reason": "现场跟进会议纪要与承诺是展会成功的关键。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "b25d3284df94c321"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_20812fe50daf64d7",
+      "claim": "建议跟进：再触达约见面 Casa Outdoor",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C1",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "invitation_contact",
+          "id": "C1@x.com",
+          "missing": null
+        }
+      ],
+      "confidence": "medium",
+      "confidence_reason": "Casa Outdoor已到场但缺乏会议证据，需进一步确认。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "建议尽快再触达Casa Outdoor，安排会议以确认合作意向，避免错失潜在机会。",
+      "proposed_actions": [
+        {
+          "proposal_id": "20812fe50daf64d7",
+          "action_type": "missed_meeting_reengage",
+          "scope": "buyer",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C1@x.com"
+            }
+          ],
+          "reason": "Casa Outdoor已到场但无会议证据，需重新接洽。",
+          "fact_refs": [
+            "company",
+            "checkin"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "20812fe50daf64d7"
+      ],
+      "fact_refs": [
+        "company",
+        "checkin"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 2,
+    "merged_count": 2,
+    "kept": 2,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

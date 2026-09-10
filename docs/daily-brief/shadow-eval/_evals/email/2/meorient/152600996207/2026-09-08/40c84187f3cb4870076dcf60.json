@@ -1,0 +1,151 @@
+{
+  "snapshot_hash": "40c84187f3cb4870076dcf60",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 9141,
+  "input_tokens": 1116,
+  "output_tokens": 502,
+  "guard_violations": [
+    {
+      "guard": "grounding",
+      "rule": "fact_mismatch",
+      "detail": "claim number '6' not grounded in fact_refs"
+    }
+  ],
+  "template_order": [
+    "adv_c6d01290c2cef90f",
+    "adv_10e01c8b2c62f1b5"
+  ],
+  "llm_order": [
+    "adv_c6d01290c2cef90f",
+    "adv_10e01c8b2c62f1b5"
+  ],
+  "order_diff": [],
+  "advices": [
+    {
+      "advice_key": "adv_c6d01290c2cef90f",
+      "claim": "建议跟进：跟进 6 家（待商机分层）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "6 家客户已超过观察期，需及时跟进以提高转化率。",
+      "assumptions": [
+        "客户未回复可能是因为未被优先处理。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "未考虑客户的具体需求和反馈。"
+      ],
+      "recommendation": "建议对这 6 家客户进行跟进，待 OpportunityProvider 分层后确定优先级。",
+      "proposed_actions": [
+        {
+          "proposal_id": "c6d01290c2cef90f",
+          "action_type": "followup",
+          "scope": "buyer",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer0@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer1@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer2@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer3@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer4@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer5@x.com"
+            }
+          ],
+          "reason": "客户已超过观察期未回复，需及时跟进。",
+          "fact_refs": [
+            "overdue_count",
+            "wait_state"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [],
+      "fact_refs": [],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_10e01c8b2c62f1b5",
+      "claim": "建议跟进：锁定第一推荐产品（画像）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段目标明确，需锁定推荐产品以推动后续工作。",
+      "assumptions": [
+        "锁定推荐产品将有助于提升展会效果。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "未考虑市场变化对产品推荐的影响。"
+      ],
+      "recommendation": "建议在当前阶段锁定第一推荐产品，以便于后续的市场推广和客户沟通。",
+      "proposed_actions": [
+        {
+          "proposal_id": "10e01c8b2c62f1b5",
+          "action_type": "stage_profiling",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "none"
+            }
+          ],
+          "reason": "当前阶段目标为锁定第一推荐产品。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [],
+      "fact_refs": [],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 2,
+    "merged_count": 2,
+    "kept": 2,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

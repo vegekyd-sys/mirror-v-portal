@@ -1,0 +1,112 @@
+{
+  "snapshot_hash": "bb892f5c3845f0c721f11b6d",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 2120,
+  "input_tokens": 1299,
+  "output_tokens": 239,
+  "guard_violations": [
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'followup' not allowed"
+    }
+  ],
+  "template_order": [
+    "adv_0d16e7537509b045",
+    "adv_5ad1ec39989e74b2",
+    "adv_39c954d5825cff70"
+  ],
+  "llm_order": [
+    "followup_reactivation"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "adv_5ad1ec39989e74b2",
+      "template_pos": 1,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_0d16e7537509b045",
+      "template_pos": 0,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "followup_reactivation",
+      "template_pos": null,
+      "llm_pos": 0
+    },
+    {
+      "advice_key": "adv_39c954d5825cff70",
+      "template_pos": 2,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "followup_reactivation",
+      "claim": "建议跟进：展后跟进：未会面买家再激活",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段明确为展后跟进，目标清晰。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "当前阶段为展后跟进，建议积极联系未会面的买家以激活潜在商机。",
+      "proposed_actions": [
+        {
+          "proposal_id": "0d16e7537509b045",
+          "action_type": "followup",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C2@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "C3@x.com"
+            }
+          ],
+          "reason": "未会面买家需重新激活以促进交易。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "0d16e7537509b045",
+        "5ad1ec39989e74b2",
+        "39c954d5825cff70"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 1,
+    "merged_count": 1,
+    "kept": 1,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

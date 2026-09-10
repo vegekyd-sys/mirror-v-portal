@@ -1,0 +1,212 @@
+{
+  "snapshot_hash": "8f759d21589263476cf0fae2",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": true,
+  "fallback": false,
+  "fallback_reason": "",
+  "parse_status": "ok",
+  "latency_ms": 7044,
+  "input_tokens": 1925,
+  "output_tokens": 711,
+  "guard_violations": [],
+  "template_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_10e01c8b2c62f1b5",
+    "adv_a0b6d9a825981bbb"
+  ],
+  "llm_order": [
+    "adv_c47f5b2697be01a9",
+    "adv_62910fb996c5af34",
+    "adv_10e01c8b2c62f1b5"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "adv_a0b6d9a825981bbb",
+      "template_pos": 3,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "adv_c47f5b2697be01a9",
+      "claim": "建议跟进：逾期跟进 Overdue Co",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C002",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "opportunity_next_step",
+          "id": "C002:next_step",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_o",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "逾期跟进的时间敏感性高，需立即处理。",
+      "assumptions": [
+        "Overdue Co 对报价有明确需求。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "可能存在其他优先级更高的任务。"
+      ],
+      "recommendation": "Overdue Co 下一步「发送报价」已于 2026-09-09 到期，需立即处理。",
+      "proposed_actions": [
+        {
+          "proposal_id": "c47f5b2697be01a9",
+          "action_type": "followup",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer1@x.com"
+            }
+          ],
+          "reason": "逾期跟进，需立即发送报价。",
+          "fact_refs": [
+            "company",
+            "next_step_due"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "c47f5b2697be01a9"
+      ],
+      "fact_refs": [
+        "company",
+        "next_step_due"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_62910fb996c5af34",
+      "claim": "建议跟进：回复买家 Reply Co",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "opportunity",
+          "id": "C001",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "interaction",
+          "id": "it_r",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "买家已回复，需优先响应。",
+      "assumptions": [
+        "Reply Co 对后续沟通持积极态度。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "可能需要更多时间准备回复内容。"
+      ],
+      "recommendation": "Reply Co 已回复，需优先响应跟进。",
+      "proposed_actions": [
+        {
+          "proposal_id": "62910fb996c5af34",
+          "action_type": "followup",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer0@x.com"
+            }
+          ],
+          "reason": "买家已回复，需及时跟进。",
+          "fact_refs": [
+            "company",
+            "buyer_reply"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "62910fb996c5af34"
+      ],
+      "fact_refs": [
+        "company",
+        "buyer_reply"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "adv_10e01c8b2c62f1b5",
+      "claim": "建议跟进：锁定第一推荐产品（画像）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "confidence": "medium",
+      "confidence_reason": "当前阶段目标明确，但需确认产品适配性。",
+      "assumptions": [
+        "锁定的产品符合市场需求。"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "可能需要更多市场调研。"
+      ],
+      "recommendation": "当前阶段目标为锁定第一推荐产品，需尽快完成。",
+      "proposed_actions": [
+        {
+          "proposal_id": "10e01c8b2c62f1b5",
+          "action_type": "stage_profiling",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "none"
+            }
+          ],
+          "reason": "阶段目标明确，需锁定推荐产品。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "10e01c8b2c62f1b5"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 3,
+    "merged_count": 3,
+    "kept": 3,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

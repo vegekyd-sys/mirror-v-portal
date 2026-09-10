@@ -1,0 +1,187 @@
+{
+  "snapshot_hash": "dd1aa2b9146c27a8e753504a",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 4834,
+  "input_tokens": 1078,
+  "output_tokens": 549,
+  "guard_violations": [
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'follow_up' not allowed"
+    },
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'product_selection' not allowed"
+    }
+  ],
+  "template_order": [
+    "adv_c6d01290c2cef90f",
+    "adv_10e01c8b2c62f1b5"
+  ],
+  "llm_order": [
+    "follow_up_opportunities",
+    "lock_first_recommendation"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "adv_10e01c8b2c62f1b5",
+      "template_pos": 1,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "follow_up_opportunities",
+      "template_pos": null,
+      "llm_pos": 0
+    },
+    {
+      "advice_key": "lock_first_recommendation",
+      "template_pos": null,
+      "llm_pos": 1
+    },
+    {
+      "advice_key": "adv_c6d01290c2cef90f",
+      "template_pos": 0,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "follow_up_opportunities",
+      "claim": "建议跟进：跟进 6 家（待商机分层）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "email_facts",
+          "id": "152600996207:outbound",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "6 家客户已超过观察期，需及时跟进以提高转化率。",
+      "assumptions": [
+        "客户对产品仍有兴趣",
+        "及时跟进能提高回复率"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "可能存在客户已不再需要产品的情况"
+      ],
+      "recommendation": "建议在 OpportunityProvider 分层后，优先跟进这 6 家客户，以提高商机转化率。",
+      "proposed_actions": [
+        {
+          "proposal_id": "c6d01290c2cef90f",
+          "action_type": "follow_up",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "buyer0@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer1@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer2@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer3@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer4@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "buyer5@x.com"
+            }
+          ],
+          "reason": "客户已超过观察期未回复，需重新激活联系。",
+          "fact_refs": [
+            "overdue_count",
+            "wait_state"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "c6d01290c2cef90f"
+      ],
+      "fact_refs": [
+        "overdue_count",
+        "wait_state"
+      ],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "lock_first_recommendation",
+      "claim": "建议跟进：锁定第一推荐产品（画像）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段明确为「画像」，需锁定推荐产品以推动后续工作。",
+      "assumptions": [
+        "锁定产品能提高后续推广效果"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "可能需要更多市场调研以确认产品适配性"
+      ],
+      "recommendation": "在当前阶段，建议尽快锁定第一推荐产品，以便于后续的市场推广和客户沟通。",
+      "proposed_actions": [
+        {
+          "proposal_id": "10e01c8b2c62f1b5",
+          "action_type": "product_selection",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "none"
+            }
+          ],
+          "reason": "当前阶段目标为锁定推荐产品，确保后续工作顺利进行。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "10e01c8b2c62f1b5"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 2,
+    "merged_count": 2,
+    "kept": 2,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

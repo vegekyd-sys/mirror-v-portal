@@ -1,0 +1,87 @@
+{
+  "snapshot_hash": "07f61e272ece498aae5dc536",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 2319,
+  "input_tokens": 704,
+  "output_tokens": 232,
+  "guard_violations": [
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'action' not allowed"
+    }
+  ],
+  "template_order": [
+    "adv_f8d42bd2913c883b"
+  ],
+  "llm_order": [
+    "adv_f8d42bd2913c883b"
+  ],
+  "order_diff": [],
+  "advices": [
+    {
+      "advice_key": "adv_f8d42bd2913c883b",
+      "claim": "建议跟进：产出获客方案（买家类型+邀约方向+沟通策略）",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段明确为规划，目标清晰。",
+      "assumptions": [
+        "团队具备制定获客方案的能力"
+      ],
+      "counter_evidence": [],
+      "limitations": [
+        "时间紧迫，需迅速行动"
+      ],
+      "recommendation": "当前阶段「制定获客方案」，阶段目标：产出获客方案（买家类型+邀约方向+沟通策略）。",
+      "proposed_actions": [
+        {
+          "proposal_id": "f8d42bd2913c883b",
+          "action_type": "action",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "E1"
+            }
+          ],
+          "reason": "确保在规划阶段完成目标",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "f8d42bd2913c883b"
+      ],
+      "fact_refs": [
+        "stage"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 1,
+    "merged_count": 1,
+    "kept": 1,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

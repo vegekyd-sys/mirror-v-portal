@@ -1,0 +1,146 @@
+{
+  "snapshot_hash": "d77c8e35b05b48e7d4ce9fec",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": true,
+  "fallback": false,
+  "fallback_reason": "",
+  "parse_status": "ok",
+  "latency_ms": 3667,
+  "input_tokens": 1339,
+  "output_tokens": 402,
+  "guard_violations": [],
+  "template_order": [
+    "adv_0d16e7537509b045",
+    "adv_5ad1ec39989e74b2",
+    "adv_39c954d5825cff70"
+  ],
+  "llm_order": [
+    "adv_followup_reactivation"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "adv_5ad1ec39989e74b2",
+      "template_pos": 1,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_39c954d5825cff70",
+      "template_pos": 2,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "adv_followup_reactivation",
+      "template_pos": null,
+      "llm_pos": 0
+    },
+    {
+      "advice_key": "adv_0d16e7537509b045",
+      "template_pos": 0,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "adv_followup_reactivation",
+      "claim": "建议跟进：展后跟进及未会面买家再激活",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段明确为展后跟进，且有未会面买家需要激活。",
+      "assumptions": [],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "在当前展后跟进阶段，建议同时激活未会面的买家 Hotel BR 和 Retail SA，以提高潜在成交机会。",
+      "proposed_actions": [
+        {
+          "proposal_id": "0d16e7537509b045",
+          "action_type": "stage_followup",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C2@x.com"
+            },
+            {
+              "type": "buyer",
+              "id": "C3@x.com"
+            }
+          ],
+          "reason": "当前阶段为展后跟进，需激活未会面买家。",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        },
+        {
+          "proposal_id": "5ad1ec39989e74b2",
+          "action_type": "reactivate_no_meeting",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C2@x.com"
+            }
+          ],
+          "reason": "Hotel BR 本届未到场，需进行再激活。",
+          "fact_refs": [
+            "company",
+            "checkin"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        },
+        {
+          "proposal_id": "39c954d5825cff70",
+          "action_type": "reactivate_no_meeting",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C3@x.com"
+            }
+          ],
+          "reason": "Retail SA 本届未到场，需进行再激活。",
+          "fact_refs": [
+            "company",
+            "checkin"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [
+        "0d16e7537509b045",
+        "5ad1ec39989e74b2",
+        "39c954d5825cff70"
+      ],
+      "fact_refs": [
+        "stage",
+        "company",
+        "checkin"
+      ],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 1,
+    "merged_count": 1,
+    "kept": 1,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}

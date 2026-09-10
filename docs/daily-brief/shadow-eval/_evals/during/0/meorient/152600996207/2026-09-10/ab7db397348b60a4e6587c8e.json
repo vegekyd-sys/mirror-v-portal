@@ -1,0 +1,226 @@
+{
+  "snapshot_hash": "ab7db397348b60a4e6587c8e",
+  "model": "openai/gpt-4o-mini",
+  "prompt_version": "1.1.0",
+  "ok": false,
+  "fallback": true,
+  "fallback_reason": "guard_violation",
+  "parse_status": "ok",
+  "latency_ms": 12134,
+  "input_tokens": 1316,
+  "output_tokens": 571,
+  "guard_violations": [
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'follow_up' not allowed"
+    },
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'follow_up' not allowed"
+    },
+    {
+      "guard": "decision",
+      "rule": "permission",
+      "detail": "action_type 'follow_up' not allowed"
+    }
+  ],
+  "template_order": [
+    "adv_e25f38ebd1887ad9",
+    "adv_b25d3284df94c321",
+    "adv_9a0c4e5b53fb5b9d"
+  ],
+  "llm_order": [
+    "follow_up_casa_outdoor",
+    "follow_up_meeting_minutes",
+    "reengage_hotel_br"
+  ],
+  "order_diff": [
+    {
+      "advice_key": "adv_9a0c4e5b53fb5b9d",
+      "template_pos": 2,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "follow_up_casa_outdoor",
+      "template_pos": null,
+      "llm_pos": 0
+    },
+    {
+      "advice_key": "reengage_hotel_br",
+      "template_pos": null,
+      "llm_pos": 2
+    },
+    {
+      "advice_key": "adv_b25d3284df94c321",
+      "template_pos": 1,
+      "llm_pos": null
+    },
+    {
+      "advice_key": "follow_up_meeting_minutes",
+      "template_pos": null,
+      "llm_pos": 1
+    },
+    {
+      "advice_key": "adv_e25f38ebd1887ad9",
+      "template_pos": 0,
+      "llm_pos": null
+    }
+  ],
+  "advices": [
+    {
+      "advice_key": "follow_up_casa_outdoor",
+      "claim": "建议跟进：现场跟进 Casa Outdoor",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C1",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "invitation_contact",
+          "id": "C1@x.com",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "有会议/商洽证据支持",
+      "assumptions": [
+        "Casa Outdoor 对后续跟进持积极态度"
+      ],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "Casa Outdoor 已到场且有会议/商洽证据，建议进行会议记录的跟进。",
+      "proposed_actions": [
+        {
+          "proposal_id": "e25f38ebd1887ad9",
+          "action_type": "follow_up",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C1@x.com"
+            }
+          ],
+          "reason": "有会议证据，需跟进",
+          "fact_refs": [
+            "company",
+            "checkin"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [],
+      "fact_refs": [],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "follow_up_meeting_minutes",
+      "claim": "建议跟进：现场跟进：会议纪要与现场承诺",
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "E1",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "当前阶段目标明确",
+      "assumptions": [
+        "现场承诺需要记录和跟进"
+      ],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "当前阶段「展中对接」，建议跟进会议纪要与现场承诺。",
+      "proposed_actions": [
+        {
+          "proposal_id": "b25d3284df94c321",
+          "action_type": "follow_up",
+          "scope": "exhibition",
+          "target_refs": [
+            {
+              "type": "exhibition",
+              "id": "E1"
+            }
+          ],
+          "reason": "阶段目标明确，需跟进",
+          "fact_refs": [
+            "stage"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [],
+      "fact_refs": [],
+      "reason_adjusted": null
+    },
+    {
+      "advice_key": "reengage_hotel_br",
+      "claim": "建议跟进：再触达约见面 Hotel BR",
+      "evidence_refs": [
+        {
+          "type": "record",
+          "source": "invitation",
+          "id": "C2",
+          "missing": null
+        },
+        {
+          "type": "record",
+          "source": "invitation_contact",
+          "id": "C2@x.com",
+          "missing": null
+        }
+      ],
+      "confidence": "high",
+      "confidence_reason": "已到场但无会议证据",
+      "assumptions": [
+        "Hotel BR 对后续接触持开放态度"
+      ],
+      "counter_evidence": [],
+      "limitations": [],
+      "recommendation": "Hotel BR 已到场但无会议证据，建议再触达约见面。",
+      "proposed_actions": [
+        {
+          "proposal_id": "9a0c4e5b53fb5b9d",
+          "action_type": "follow_up",
+          "scope": "individual",
+          "target_refs": [
+            {
+              "type": "buyer",
+              "id": "C2@x.com"
+            }
+          ],
+          "reason": "无会议证据，需重新接触",
+          "fact_refs": [
+            "company",
+            "checkin"
+          ],
+          "outbound_content": null,
+          "due_at": null,
+          "authorized": false
+        }
+      ],
+      "action_refs": [],
+      "fact_refs": [],
+      "reason_adjusted": null
+    }
+  ],
+  "cached": false,
+  "stale_intercepted": false,
+  "compression": {
+    "input_count": 3,
+    "merged_count": 3,
+    "kept": 3,
+    "truncated": 0,
+    "dropped_over_cap": 0
+  },
+  "note": ""
+}
