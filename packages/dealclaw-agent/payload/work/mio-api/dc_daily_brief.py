@@ -30,7 +30,7 @@ REVIEW_STATUSES = {"done", "partial", "unresolved", "skipped", "failed"}
 EVIDENCE_TYPES = {"record", "snapshot", "query"}
 COMPLETION_RULE_TYPES = {
     "reply_received", "delivery_confirmed", "draft_confirmed",
-    "signal_resolved", "kb_updated",
+    "signal_resolved", "kb_updated", "followup_sent",
 }
 
 # priority 固定排序映射（规则 5：逾期 > 买家回复 > 承诺 > 临近截止 > 高匹配）
@@ -284,12 +284,17 @@ def _eval_kb_updated(rule: dict, event: dict) -> bool:
     return event.get("kind") == "kb" and event.get("doc_token") == rule.get("params", {}).get("doc_token")
 
 
+def _eval_followup_sent(rule: dict, event: dict) -> bool:
+    return event.get("kind") == "followup_sent"
+
+
 EVALUATORS = {
     "reply_received": _eval_reply_received,
     "delivery_confirmed": _eval_delivery_confirmed,
     "draft_confirmed": _eval_draft_confirmed,
     "signal_resolved": _eval_signal_resolved,
     "kb_updated": _eval_kb_updated,
+    "followup_sent": _eval_followup_sent,
 }
 
 

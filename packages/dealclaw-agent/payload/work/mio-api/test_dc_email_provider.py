@@ -136,39 +136,71 @@ class TestOrchestrationEndToEnd(unittest.TestCase):
         out.append(make_outbound("bounced", "re_bounce", "bruno@naturalfitness.com.br", days_ago=3.0))
         self._store = make_store(out)
 
-    def test_morning_top3_plan(self):
+    def test_morning_batch_plan_not_false_top3(self):
         r = run_morning_brief(make_context("morning"), self._tmp, store=self._store)
         plan = r["plan"]
-        self.assertEqual(len(plan["actions"]), 3)  # top3
+        self.assertEqual(len(plan["actions"]), 1)
+        self.assertEqual(plan["actions"][0]["detail"]["overdue_count"], 68)
+        self.assertTrue(plan["actions"][0]["detail"]["pending_layering"])
+        self.assertIn("待商机分层", plan["actions"][0]["title"])
         self.assertEqual(plan["revision"], 1)
         plan_path = self._tmp / "meorient" / TUDA / "2026-09-10" / "plan.json"
         self.assertTrue(plan_path.exists())
 
-    def test_evening_review_unresolved(self):
+    def test_evening_review_unresolved_when_followup_not_sent(self):
         run_morning_brief(make_context("morning"), self._tmp, store=self._store)
         r = run_evening_brief(make_context("evening"), self._tmp, store=self._store)
         review = r["review"]
-        # 无 inbound 回复 → 3 项 action 全部 unresolved
-        self.assertEqual(len(review["reviews"]), 3)
-        self.assertTrue(all(x["status"] == "unresolved" for x in review["reviews"]))
+        self.assertEqual(len(review["reviews"]), 1)
+        self.assertEqual(review["reviews"][0]["status"], "unresolved")
         review_path = self._tmp / "meorient" / TUDA / "2026-09-10" / "review.json"
         self.assertTrue(review_path.exists())
 
-    def test_evening_review_done_on_reply(self):
-        # 先跑早报拿到 top3 action，再模拟其中一个买家回复
-        run_morning_brief(make_context("morning"), self._tmp, store=self._store)
-        plan_path = self._tmp / "meorient" / TUDA / "2026-09-10" / "plan.json"
-        import json
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        first = plan["actions"][0]
-        rid = first["completion_rule"]["params"]["resend_id"]
-        store = make_store(self._store.list_outbound_records.return_value,
-                           [{"direction": "inbound", "resend_id": rid,
-                             "created_at": iso_days_ago(0)}])
-        r = run_evening_brief(make_context("evening"), self._tmp, store=store)
-        statuses = [x["status"] for x in r["review"]["reviews"]]
-        self.assertEqual(statuses.count("done"), 1)
-        self.assertEqual(statuses.count("unresolved"), 2)
+    def test_followup_sent_done_but_reply_result_zero(self):
+        # 早报计划跟进 1 家；晚报看到 touch_number=1 的真实 outbound 即核销 done。
+        original = make_outbound("delivered", "re_1", "a@x.com", days_ago=3.0, touch_number=0)
+        morning_store = make_store([original])
+        run_morning_brief(make_context("morning"), self._tmp, store=morning_store)
+        followup = make_outbound("delivered", "fu_1", "a@x.com", days_ago=0, touch_number=1)
+        evening_store = make_store([original, followup], inbounds=[])
+        r = run_evening_brief(make_context("evening"), self._tmp, store=evening_store)
+        self.assertEqual(r["review"]["reviews"][0]["status"], "done")
+        result = EmailProvider(store=evening_store).collect(make_context())
+        result_item = next(it for it in result.items if it.kind == "result")
+        self.assertEqual(result_item.detail["replied"], 0)
+
+
+class TestBusinessSemantics(unittest.TestCase):
+    def setUp(self):
+        self._tmp = Path(tempfile.mkdtemp(prefix="dc-brief-biz-"))
+
+    def test_plan6_sent4_partial(self):
+        originals = [make_outbound("delivered", f"re_{i}", f"b{i}@x.com", days_ago=3.0)
+                     for i in range(6)]
+        run_morning_brief(make_context("morning"), self._tmp, store=make_store(originals))
+        followups = [make_outbound("delivered", f"fu_{i}", f"b{i}@x.com",
+                                   days_ago=0, touch_number=1) for i in range(4)]
+        r = run_evening_brief(make_context("evening"), self._tmp,
+                              store=make_store(originals + followups))
+        self.assertEqual(r["review"]["reviews"][0]["status"], "partial")
+
+    def test_provider_contains_no_causal_inference(self):
+        out = [make_outbound("delivered", f"re_{i}", f"b{i}@x.com", days_ago=3.0)
+               for i in range(68)]
+        result = EmailProvider(store=make_store(out)).collect(make_context())
+        insight = next(it for it in result.items if it.kind == "insight")
+        self.assertEqual(insight.reason, "68 家送达超过观察期仍无回复")
+        for forbidden in ("优化", "复核", "匹配度", "可能", "假设"):
+            self.assertNotIn(forbidden, insight.reason)
+
+    def test_equal_candidates_aggregate_instead_of_false_top3(self):
+        out = [make_outbound("delivered", f"re_{i}", f"b{i}@x.com", days_ago=3.0)
+               for i in range(68)]
+        result = EmailProvider(store=make_store(out)).collect(make_context())
+        actions = [it for it in result.items if it.kind == "action"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].completion_rule.expected_count, 68)
+        self.assertTrue(actions[0].detail["pending_layering"])
 
 
 class TestTemplateAdvisor(unittest.TestCase):
@@ -186,6 +218,19 @@ class TestTemplateAdvisor(unittest.TestCase):
         self.assertTrue(advices[0].claim)
         self.assertEqual(len(advices[0].proposed_actions), 1)
         self.assertFalse(advices[0].proposed_actions[0].authorized)  # 默认未授权
+
+    def test_low_confidence_hypothesis_lives_in_advisor(self):
+        outbounds = [make_outbound("delivered", "re_1", "a@x.com", days_ago=3.0)]
+        result = EmailProvider(store=make_store(outbounds)).collect(make_context())
+        snap = build_snapshot(tenant="meorient", company=TUDA, report_type="morning",
+                              date="2026-09-10", tz="Asia/Shanghai",
+                              as_of="2026-09-10T08:00:00+08:00", candidates=tuple(result.items))
+        advices = template_advise(snap)
+        hypothesis = next(a for a in advices if a.advice_key == "adv_email_no_reply_hypothesis")
+        self.assertEqual(hypothesis.confidence, "low")
+        self.assertIn("缺少历史基线", hypothesis.confidence_reason)
+        self.assertIn("验证", hypothesis.recommendation)
+        self.assertEqual(hypothesis.proposed_actions, ())
 
 
 if __name__ == "__main__":
