@@ -336,6 +336,71 @@ def _today_metrics(company_id: str, plan: dict) -> str:
         return ""
 
 
+def _exhibition_battle(company_id: str) -> str:
+    """【本届展会战报】漏斗（邀约→到展→有效商洽→商务推进）+ 高匹配 + 新增商机。
+
+    只统计本届展会买家；无本届数据返回空串。金额/上届对比待补数据源后再加。
+    """
+    try:
+        from dc_exhibition_provider import (
+            ExhibitionMemoryStore, resolve_current_exhibition, _exh_id, in_scope, has_meeting, _int,
+        )
+        from dc_opportunity_stage import COMMERCIAL_TYPES
+        store = ExhibitionMemoryStore()
+        meta = store.read_meta(company_id)
+        exh = resolve_current_exhibition(meta)
+        exh_id = _exh_id(exh) if exh else ""
+        if not exh_id:
+            return ""
+        invs = [i for i in (store.list_invitations(company_id, exh_id) or []) if in_scope(i, exh_id)]
+        if not invs:
+            return ""
+        inter = store.list_interactions(company_id) or []
+
+        def _cid(b):
+            return str(b.get("companyCdpId") or b.get("company_cdp_id") or b.get("companyName") or "")
+
+        def _commercial(cid):
+            for it in inter:
+                if str(it.get("customer_id") or "") not in ("", cid):
+                    continue
+                for s in (it.get("signals") or []):
+                    if isinstance(s, dict) and s.get("type") in COMMERCIAL_TYPES and s.get("value"):
+                        return True
+            return False
+
+        invited = len(invs)
+        arrived = engaged = advanced = grade_a = grade_b = new_deals = 0
+        for b in invs:
+            cid = _cid(b)
+            g = str(b.get("match_grade") or b.get("fit_grade") or "").strip()
+            grade_a += 1 if g == "A" else 0
+            grade_b += 1 if g == "B" else 0
+            if _int(b.get("isCheckIn") or b.get("is_checkin")) == 1:
+                arrived += 1
+                engaged += 1 if has_meeting(b, inter, cid) else 0
+            if _commercial(cid) or str(b.get("stage") or "") in ("报价中", "需求明确", "商务跟进"):
+                advanced += 1
+        for it in inter:
+            for s in (it.get("signals") or []):
+                if isinstance(s, dict) and s.get("type") in ("quote_request", "sample_request", "contract") and s.get("value"):
+                    new_deals += 1
+
+        def _rate(n, d):
+            return f"{round(n / d * 100)}%" if d else "—"
+
+        parts = ["【本届展会战报】",
+                 f"邀约 {invited} → 到展 {arrived}（到场率 {_rate(arrived, invited)}）→ "
+                 f"有效商洽 {engaged}（商洽率 {_rate(engaged, arrived)}）→ 商务推进 {advanced}"]
+        if grade_a or grade_b:
+            parts.append(f"高匹配买家：A 级 {grade_a} · B 级 {grade_b}")
+        if new_deals:
+            parts.append(f"新增商机（报价/寄样/合同）：{new_deals} 条")
+        return "\n".join(parts)
+    except Exception:
+        return ""
+
+
 def _pipeline_brief(company_id: str, slot: str) -> str:
     """新 Daily Brief 管线 → 推送文案片段（今日数据 + 今日优先 / 晚报核销）。失败/无数据返回空串。"""
     try:
@@ -350,11 +415,12 @@ def _pipeline_brief(company_id: str, slot: str) -> str:
         if slot == "morning":
             r = pipeline.run_morning_brief(ctx, base)
             plan = r.get("plan") or {}
-            parts = [_today_metrics(company_id, plan), _fmt_pipeline_morning(plan)]
+            parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
+                     _fmt_pipeline_morning(plan)]
         else:
             r = pipeline.run_evening_brief(ctx, base)
             plan = r.get("plan") or {}
-            parts = [_today_metrics(company_id, plan),
+            parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
                      _fmt_pipeline_evening(r.get("review"), plan)]
         return "\n\n".join(p for p in parts if p)
     except Exception:
