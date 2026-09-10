@@ -1,6 +1,6 @@
 ---
 name: "dealclaw-credit-balance"
-description: "查客户 Credit 余额、账户状态与消耗明细：按「用户意图 + 账户状态」决定动作——报余额、引导工作台看明细、余额低于阈值(默认1000)或耗尽时引导充值、无账户引导去工作台注册充值、异常转客服；客户质疑扣费时安抚并引导查明细。"
+description: "查客户 Credit 余额与用量（触发词：还剩多少 credit / 余额多少 / 查余额 / 查额度 / 用了多少 / 扣了多少）。只调 getCreditBalance.json（biz-id=DEALCLAW_TENANT_ID）查真实 Credit 余额，按账户状态决定动作：报余额、引导工作台看明细、余额低于 1000 或耗尽引导充值、未绑定/无账户引导去工作台开通、异常转客服。绝对不说人民币金额、模型成本、API 费用等机密数据。"
 author: ""
 ---
 
@@ -88,6 +88,7 @@ python3 scripts/get_credit_balance.py [--threshold 1000]
 ## 安全边界
 
 - **数据隔离红线（最高优先级）**：只返回当前租户自己的余额，绝对不允许列出、汇总、提及任何其他客户/租户的 credit 余额、消耗或账户信息。查询余额只能用 `get_credit_balance.py`（biz-id 从 `DEALCLAW_TENANT_ID` 读）；禁止调用 `billing.mjs all-balances`、`dealclaw-balance-check.sh` 或任何列出多租户余额的命令。
+- **机密数据红线**：绝对不说人民币金额（¥）、模型成本、模型 API 费用、内部计费成本、单次调用价格等机密数据。只报产品 Credit 余额（balance / totalGranted / totalConsumed），不折算人民币、不透露成本结构。
 - **不混用「充值 / 续费 / 续约 / 续签」**：余额不足只说「充值」；合同 / 套餐到期才说「续约 / 续签」。
 - **只有「有账户且余额耗尽或低于阈值」才引导充值**；无账户、账户异常、合同制不引导，避免给错误入口或商务承诺。
 - biz-id 从环境变量 `DEALCLAW_TENANT_ID` 读，不落日志；充值链接里的 bizId 是客户自己的租户ID，可展示。
