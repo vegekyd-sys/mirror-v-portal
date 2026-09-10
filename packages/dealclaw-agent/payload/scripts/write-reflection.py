@@ -23,6 +23,7 @@ import sys
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 def load_config():
@@ -54,6 +55,19 @@ def resolve_workspace(config):
     return Path(__file__).resolve().parent.parent
 
 
+def _business_tz(config):
+    """Business timezone for the day-file name (config.timezone, default Asia/Shanghai).
+
+    Hard rule: "today" files must be named by the business calendar day, not UTC,
+    otherwise late-UTC activity lands in the previous day's file.
+    """
+    tzname = (config or {}).get("timezone") or "Asia/Shanghai"
+    try:
+        return ZoneInfo(tzname)
+    except Exception:
+        return timezone.utc
+
+
 def write_local(payload, config):
     """Write reflection as a JSON line to local file."""
     workspace = resolve_workspace(config)
@@ -61,7 +75,7 @@ def write_local(payload, config):
     reflections_dir = workspace / local_cfg.get("reflections_dir", "memory/reflections")
     reflections_dir.mkdir(parents=True, exist_ok=True)
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(_business_tz(config)).strftime("%Y-%m-%d")
     filepath = reflections_dir / f"{today}.jsonl"
 
     with open(filepath, "a", encoding="utf-8") as f:
