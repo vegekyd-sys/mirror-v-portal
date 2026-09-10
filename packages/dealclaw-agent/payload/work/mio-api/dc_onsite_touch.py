@@ -63,15 +63,15 @@ def _xiaoyuan(*args: str) -> dict:
 # ── 展位号（win-contracts）────────────────────────────────────
 
 # TODO: 展位号字段名待真实数据确认，先多字段名兼容占位
-BOOTH_KEYS = ("booth", "boothNumber", "boothNo", "standNo", "standNumber", "boothNum", "展位号")
+BOOTH_KEYS = ("booth", "boothNumber", "boothNo", "standNo", "standNumber", "boothNum", "展位号", "pavilionBooth")
 
 
 def fetch_booth(exhibition_id: str) -> str:
     """拉展位号：company win-contracts --exhibition-id <id>。"""
     resp = _xiaoyuan("company", "win-contracts", "--exhibition-id", exhibition_id)
     data = (resp.get("response", {}).get("data") or {})
-    recs = data.get("records") or data.get("list") or (data if isinstance(data, list) else [])
-    if not recs or not isinstance(recs, list):
+    recs = data if isinstance(data, list) else (data.get("records") or data.get("list") or [])
+    if not recs:
         return ""
     r = recs[0]
     for k in BOOTH_KEYS:
@@ -118,7 +118,7 @@ def _email_of(rec: dict) -> str:
 
 
 def _name_of(rec: dict) -> str:
-    for k in ("companyName", "buyerCompanyName", "name", "title"):
+    for k in ("company", "companyName", "buyerCompanyName", "name", "title"):
         v = rec.get(k)
         if v:
             return str(v).strip()

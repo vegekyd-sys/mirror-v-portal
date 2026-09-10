@@ -4,14 +4,14 @@
 
 最终口径（2026-09-03 田耕郡定稿）：对齐邮箱回复监控（monitor_stelang_replies.py）——
 cron 定时跑，轮询 tradechina「买家到场」通知（notice-list --msg-type 3），
-检测到新到场 → lark-cli 发卡片到展商群。
+检测到新到场 → openclaw message 发卡片到展商群。
+
+真实 notice 结构（2026-09-09 小元核实）：公司名在 `company`，邮箱在 `email`，
+联系人/手机/WhatsApp/到场时间埋在 `content` 文本（「键：值」分行），
+手机/WhatsApp 带 #a...#A 包裹标记；公司介绍需另查（fetch_company_intro）。
 
 用法：
   python3 monitor_buyer_onsite.py [--company-id <sid>] [--chat-id <群ID>] [--dry-run]
-
-TODO（等真实数据样例回填）：
-  1. notice-list msgType=3 返回的 records 单条字段结构（通知 id、公司名、到场人、联系方式）
-  2. 展商群 chat_id 绑定方式（对齐 dc_notify routes / 企业绑定）
 """
 
 from __future__ import annotations
@@ -25,7 +25,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-_XIAOYUAN = shutil.which("xiaoyuan") or "/opt/xiaoyuan-venv/bin/xiaoyuan"
+_WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE_DIR") or Path(__file__).resolve().parents[2])
+_LOCAL_XIAOYUAN = _WORKSPACE / ".venv-xiaoyuan" / "bin" / "xiaoyuan"
+_XIAOYUAN = shutil.which("xiaoyuan") or (
+    str(_LOCAL_XIAOYUAN) if _LOCAL_XIAOYUAN.exists() else "/opt/xiaoyuan-venv/bin/xiaoyuan"
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -119,8 +123,66 @@ def fetch_onsite_notices(page_size: int = 50, mock_file: str = "") -> list[dict]
         return []
 
 
+def _run_xiaoyuan(*args) -> dict | None:
+    """跑一次 xiaoyuan CLI，返回解析后的 JSON dict；失败返回 None。"""
+    cmd = [_XIAOYUAN, "--open-id", os.environ.get("MIO_V_OPEN_ID", ""),
+           "--supplier-id", os.environ.get("MIO_CDP_SUPPLIER_ID", ""), *args]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    try:
+        return json.loads(proc.stdout or proc.stderr)
+    except Exception:
+        return None
+
+
+def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str) -> str:
+    """查公司简介（1-2 句）。优先 company_profile，否则用买家特征 + 行业标签。
+
+    失败静默返回空串，不影响主流程。每次新到场多 2 个只读 API 调用。
+    """
+    if not (company_name or purchaser_id or exhibition_id):
+        return ""
+    cdp_id = ""
+    try:
+        d = _run_xiaoyuan("buyer", "onsite", "--exhibition-id", exhibition_id,
+                          "--keywords", company_name, "--page-no", "1", "--page-size", "10")
+        recs = ((d or {}).get("response", {}).get("data", {}) or {}).get("records") or []
+        for r in recs:
+            if r.get("purchaserId") == purchaser_id or (r.get("companyName") or "").upper() == company_name.upper():
+                cdp_id = r.get("companyCdpid") or ""
+                break
+    except Exception:
+        pass
+
+    if not cdp_id:
+        return ""
+
+    try:
+        d2 = _run_xiaoyuan("buyer", "detail", "--company-cdp-id", cdp_id)
+        data = (d2 or {}).get("response", {}).get("data", {})
+        items = data if isinstance(data, list) else [data]
+        for it in items:
+            bi = it.get("buyerInfo") or it or {}
+            profile = (bi.get("company_profile") or bi.get("companyProfile") or "").strip()
+            industry = (bi.get("purchase_big_industry_cns") or "").strip()
+            chars = (bi.get("buyer_characteristics") or "").strip()
+            if profile:
+                return profile[:120]
+            parts = []
+            if chars:
+                parts.append(chars.replace(",", "、"))
+            if industry:
+                tags = [t for t in industry.split(",") if t and t != "其他"]
+                if tags:
+                    parts.append("行业：" + "/".join(tags[:3]))
+            if parts:
+                return "；".join(parts)
+    except Exception:
+        pass
+    return ""
+
+
 def notice_key(n: dict) -> str:
-    """通知唯一键（去重）。TODO：按真实字段回填（如 noticeId / id）。"""
+    """通知唯一键（去重）。用 id 字段。"""
     for k in ("id", "noticeId", "messageId", "msgId"):
         if n.get(k):
             return f"{k}:{n[k]}"
@@ -128,38 +190,62 @@ def notice_key(n: dict) -> str:
 
 
 def format_card_text(n: dict) -> str:
-    """把一条到场通知格式化成卡片文本。TODO：按真实字段回填（公司名 + 到场人 + 联系方式）。"""
-    # 占位：真实字段回填后替换
-    name = n.get("companyName") or n.get("buyerCompanyName") or n.get("title") or "(未知买家)"
-    extra = ""
-    contact = n.get("contactName") or n.get("contact") or ""
-    if contact:
-        extra += f"\n联系人：{contact}"
+    """把一条到场通知格式化成卡片文本（全部信息 + 公司简介）。
+
+    真实 notice 结构：公司名在 `company`，联系人/手机/WhatsApp/到场时间埋在 `content`
+    文本里（「键：值」分行）；手机/WhatsApp 带 #a...#A 包裹标记要剥掉。
+    """
+    content = n.get("content") or ""
+    fields = {}
+    for line in content.splitlines():
+        if "：" in line:
+            k, _, v = line.partition("：")
+            fields[k.strip()] = v.strip()
+
+    company = n.get("company") or fields.get("公司名称") or n.get("title") or "(未知买家)"
+    contact = n.get("contactName") or fields.get("买家姓名") or ""
+    phone = (n.get("phone") or n.get("mobile") or fields.get("手机号码") or fields.get("WhatsApp") or "")
+    phone = phone.replace("#a", "").replace("#A", "").strip()
     email = n.get("email") or ""
+    arrival = fields.get("到场时间（本地）") or fields.get("到场时间") or ""
+    intro = n.get("_intro") or ""
+
+    lines = ["📥 邀约买家已到场", f"公司：{company}"]
+    if contact:
+        lines.append(f"联系人：{contact}")
     if email:
-        extra += f"\n邮箱：{email}"
-    phone = n.get("phone") or n.get("mobile") or ""
+        lines.append(f"邮箱：{email}")
     if phone:
-        extra += f"\n电话：{phone}"
-    return f"📥 邀约买家已到场\n公司：{name}{extra}"
+        lines.append(f"电话/WA：{phone}")
+    if arrival:
+        lines.append(f"到场时间：{arrival}")
+    if intro:
+        lines.append(f"公司介绍：{intro}")
+    return "\n".join(lines)
 
 
 def send_feishu_card(chat_id: str, text: str, dry_run: bool = False) -> bool:
-    """lark-cli 发消息到展商群（对齐邮件回复监控的推群方式）。"""
+    """openclaw message 发消息到展商群（对齐 dc_push_target 的推群方式）。"""
     if not chat_id:
         print("[monitor_buyer_onsite] 缺 chat_id，跳过推群", file=sys.stderr)
         return False
+    openclaw_bin = os.environ.get("OPENCLAW_BIN", "openclaw")
+    node_bin = os.environ.get("OPENCLAW_NODE")
     cmd = [
-        "lark-cli", "im", "+messages-send",
-        "--as", "bot",
-        "--chat-id", chat_id,
-        "--text", text,
+        openclaw_bin, "message", "send",
+        "--channel", "feishu",
+        "--target", chat_id,
+        "--message", text,
+        "--json",
     ]
     if dry_run:
         print("[dry-run] " + " ".join(cmd))
         return True
+    env = os.environ.copy()
+    if node_bin:
+        env["PATH"] = str(Path(node_bin).resolve().parent) + os.pathsep + env.get("PATH", "")
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
         return True
     except Exception as e:
         print(f"[monitor_buyer_onsite] 推群失败: {e}", file=sys.stderr)
@@ -200,9 +286,12 @@ def main() -> None:
         return
 
     for n in new_notices:
+        n["_intro"] = fetch_company_intro(
+            n.get("company") or "", str(n.get("purchaserId") or ""), n.get("exhibitionId") or "",
+        )
         text = format_card_text(n)
         send_feishu_card(chat_id, text, dry_run=args.dry_run)
-        print(f"NOTIFIED: {n.get('companyName') or n.get('title') or notice_key(n)}")
+        print(f"NOTIFIED: {n.get('company') or n.get('title') or notice_key(n)}")
 
 
 if __name__ == "__main__":

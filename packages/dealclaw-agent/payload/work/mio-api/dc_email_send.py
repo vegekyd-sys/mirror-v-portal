@@ -91,6 +91,10 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
         cmd += ["--bcc", ",".join(bcc)]
     if password:
         cmd += ["--password", password]
+    if channel.upper() == "GS" and enterprise:
+        # GS 直发走 send.mjs，把 enterprise 传给 --company-id，
+        # 发送成功后 send.mjs 会落 outbound 事实进 email-facts，dc_followup 才能扫到。
+        cmd += ["--company-id", enterprise]
 
     try:
         r = subprocess.run(cmd, cwd=str(WORKSPACE), capture_output=True, text=True,

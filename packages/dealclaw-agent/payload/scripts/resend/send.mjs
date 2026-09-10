@@ -6,6 +6,13 @@
 //   node scripts/resend/send.mjs ... --unsubscribe-url 'https://example.com/unsub'   # 加退订 header + footer
 
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RECEIPT_SCRIPT = resolve(__dirname, '..', '..', 'work', 'mio-api', 'dc_send_receipt.py');
+const RECORD_SCRIPT = resolve(__dirname, '..', '..', 'work', 'mio-api', 'dc_record_outbound.py');
 
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
@@ -29,7 +36,34 @@ const bccRaw = parseArg('--bcc');
 const htmlFile = parseArg('--html-file');
 const unsubscribeUrl = parseArg('--unsubscribe-url') || 'https://send.mail.dogarm.top/unsub';
 const replyTo = parseArg('--reply-to');
+const receiptTarget = parseArg('--receipt-target');
+const companyId = parseArg('--company-id');
+const accountId = parseArg('--account-id');
+const campaignId = parseArg('--campaign-id');
 const dryRun = args.includes('--dry-run');
+
+// 批次回执：一次发送动作推一条汇总，不逐封。失败静默，绝不阻断发送结果。
+function pushReceipt(target, text) {
+  if (!target || !text) return;
+  try {
+    spawnSync('python3', [RECEIPT_SCRIPT, '--target', target, '--text', text], { stdio: 'ignore', timeout: 30000 });
+  } catch (_) { /* ignore */ }
+}
+
+// 落 outbound 事实进 email-facts：后续 dc_webhook_handler 按 resend_id 更新投递状态，
+// dc_followup 能扫到「已送达未回复」买家。失败静默，不阻断发送结果。
+function recordOutbound(resendId) {
+  if (!companyId || !resendId) return;
+  const argv = [RECORD_SCRIPT, '--company-id', companyId, '--resend-id', resendId,
+    '--from', from, '--to', toRaw, '--subject', subject];
+  if (text) argv.push('--text', text);
+  if (html) argv.push('--html', html);
+  if (accountId) argv.push('--account-id', accountId);
+  if (campaignId) argv.push('--campaign-id', campaignId);
+  try {
+    spawnSync('python3', argv, { stdio: 'ignore', timeout: 30000 });
+  } catch (_) { /* ignore */ }
+}
 
 if (!from || !toRaw || !subject) {
   console.error('Usage: node scripts/resend/send.mjs --from <from> --to <to[,to2]> --subject <subject> [--html <html>] [--html-file <path>] [--text <text>] [--cc <cc>] [--bcc <bcc>] [--unsubscribe-url <url>] [--reply-to <email>] [--dry-run]');
@@ -90,7 +124,10 @@ const data = await res.json();
 
 if (!res.ok) {
   console.error('Resend error:', data);
+  pushReceipt(receiptTarget, `❌ 邮件发送失败：本轮 ${to.length} 封`);
   process.exit(1);
 }
 
 console.log(JSON.stringify(data, null, 2));
+recordOutbound(data && data.id ? data.id : '');
+pushReceipt(receiptTarget, `✅ 邮件已发出：本轮 ${to.length} 封`);

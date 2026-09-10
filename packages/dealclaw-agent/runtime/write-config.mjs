@@ -391,22 +391,28 @@ const config = {
         },
       }
     : {}),
-  // In-flight user messages steer the current run (merged after a 1s
-  // debounce) instead of queueing behind it — mirrors the workstation
-  // config; kills the "second message waits minutes" UX. Set
-  // DEALCLAW_MESSAGE_QUEUE_MODE=off to restore strict FIFO queueing.
-  ...(process.env.DEALCLAW_MESSAGE_QUEUE_MODE !== 'off'
-    ? {
-        messages: {
+  // Group-chat history/visibility (mirrors the V/Makaron workstation): keep
+  // a 50-message window and auto-publish replies in groups.
+  messages: {
+    groupChat: {
+      historyLimit: 50,
+      visibleReplies: 'automatic',
+    },
+    // In-flight user messages steer the current run (merged after a 1s
+    // debounce) instead of queueing behind it — mirrors the workstation
+    // config; kills the "second message waits minutes" UX. Set
+    // DEALCLAW_MESSAGE_QUEUE_MODE=off to restore strict FIFO queueing.
+    ...(process.env.DEALCLAW_MESSAGE_QUEUE_MODE !== 'off'
+      ? {
           queue: {
             mode: process.env.DEALCLAW_MESSAGE_QUEUE_MODE || 'steer',
             debounceMs: 1_000,
             cap: 20,
             drop: 'summarize',
           },
-        },
-      }
-    : {}),
+        }
+      : {}),
+  },
   // One session per channel peer: each Feishu user gets an independent
   // conversation instead of sharing agent:dealclaw:main. Sessions are pruned
   // after 14d to bound PVC growth. DEALCLAW_SESSION_DM_SCOPE=shared restores

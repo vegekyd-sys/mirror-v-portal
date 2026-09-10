@@ -12,7 +12,7 @@ v2: 改用 lark-cli base 替代裸调飞书 API + FEISHU_BOT_TOKEN。同一把�
   python3 dc_company_registry.py list
 """
 
-import json, os, sys, subprocess
+import json, logging, os, sys, subprocess
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -516,7 +516,15 @@ def _record_fields(record: dict, source: str) -> dict:
         or ""
     )
 
-    attrs = record.get("companyAttributes") or record.get("buyer_type") or []
+    # 买家类型：字段名兜底（各数据源命名不同）
+    attrs = (
+        record.get("companyAttributes")
+        or record.get("buyer_type")
+        or record.get("buyerType")
+        or record.get("buyerTag")
+        or record.get("buyer_tags")
+        or []
+    )
     if isinstance(attrs, str):
         attrs = [attrs]
     buyer_type = ""
@@ -531,7 +539,15 @@ def _record_fields(record: dict, source: str) -> dict:
         if any(k in text for k in ("工程", "安装", "project", "installer")):
             buyer_type = "工程商"; break
 
-    tags = record.get("purchaseTags") or record.get("matched_products") or record.get("products") or []
+    # 匹配产品：字段名兜底
+    tags = (
+        record.get("purchaseTags")
+        or record.get("matched_products")
+        or record.get("products")
+        or record.get("productList")
+        or record.get("关注产品")
+        or []
+    )
     if isinstance(tags, str):
         tags = [x.strip() for x in re.split(r"[,，]", tags) if x.strip()]
     products = []
@@ -562,6 +578,16 @@ def _record_fields(record: dict, source: str) -> dict:
         fields["买家类型"] = buyer_type
     if products:
         fields["匹配产品"] = products[:20]
+    # 字段缺失时标空原因，避免静默跳过（全局可观测）
+    _missing = []
+    if not buyer_type:
+        _missing.append("买家类型(需 companyAttributes/buyerType/buyerTag/buyer_tags)")
+    if not products:
+        _missing.append("匹配产品(需 purchaseTags/productList/关注产品)")
+    if _missing:
+        logging.getLogger("dc_company_registry").warning(
+            "线索池落库字段缺失：company=%r source=%s 缺失=[%s]",
+            str(company)[:80], source, ", ".join(_missing))
     # ⭐ 联系人解锁确认后才落库：初始落库时为空，经用户确认（意图识别/反问）解锁后才写入。
     return fields
 

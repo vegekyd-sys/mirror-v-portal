@@ -91,9 +91,17 @@ def current_exhibitions() -> list[dict]:
     if not state3_ids:
         return []
 
-    exh = _xiaoyuan("buyer", "exhibitions")
-    all_records = (exh.get("response", {}).get("data", {}) or {}).get("records") or []
-    by_id = {r.get("id"): r for r in all_records}
+    need = set(state3_ids)
+    by_id = {}
+    for page in range(1, 50):
+        exh = _xiaoyuan("buyer", "exhibitions", "--page", str(page), "--size", "100")
+        all_records = (exh.get("response", {}).get("data", {}) or {}).get("records") or []
+        if not all_records:
+            break
+        for r in all_records:
+            by_id[r.get("id")] = r
+        if need.issubset(by_id):
+            break
 
     today = _today_yyyymmdd()
     out = []
@@ -164,7 +172,7 @@ ATTR_LABEL = {1: "生产商", 2: "分销商", 3: "零售商", 4: "品牌", 5: "�
 def classify(buyer: dict, keywords: list[str]) -> tuple[str, str]:
     """分层：主推 / 跟进；返回 (层级, 理由)。"""
     name = buyer.get("companyName") or "(未知)"
-    country = buyer.get("country") or buyer.get("countryEnName") or ""
+    country = buyer.get("countryCnName") or buyer.get("country") or buyer.get("countryEnName") or ""
     attrs = buyer.get("companyAttributes") or []
     size = buyer.get("newCompanySize") or buyer.get("companySize") or ""
 
@@ -266,7 +274,7 @@ def run(args) -> dict:
     results = []
     for exh in exhs:
         buyers = fetch_onsite(exh["exhibitionId"], keywords)
-        candidates = [b for b in buyers if (b.get("companyCdpId") or "").strip() not in invited]
+        candidates = [b for b in buyers if (b.get("companyCdpid") or b.get("companyCdpId") or "").strip() not in invited]
         lines = []
         main, follow = [], []
         for b in candidates:

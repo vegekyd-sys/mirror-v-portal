@@ -321,9 +321,13 @@ def build_missing_info_signal(missing_fields: list, source_message_id: str = "",
 # ── 传输信号（delivered / bounced）──────────────────────────
 def record_delivery_signal(signal_type: str, resend_id: str, provider_event_id: str,
                            company_id: str = "", campaign_id: str = "", lead_id: str = "",
-                           contact_id: str = "", thread_id: str = "", detail: str = "") -> dict:
+                           contact_id: str = "", thread_id: str = "", detail: str = "",
+                           buyer_email: str = "") -> dict:
     """delivered/bounced 事实信号。无法绑 campaign_id 时保存但标 partial。"""
     signal_id = stable_signal_id(signal_type, resend_id, provider_event_id)
+    evidence = {"detail": (detail or "")[:240]}
+    if buyer_email:
+        evidence["buyer_email"] = buyer_email
     signal = {
         "signal_id": signal_id,
         "signal_type": signal_type,
@@ -336,7 +340,7 @@ def record_delivery_signal(signal_type: str, resend_id: str, provider_event_id: 
         "source_resend_id": resend_id,
         "source_event_id": provider_event_id,
         "binding_status": "partial" if not campaign_id else "bound",
-        "evidence": {"detail": (detail or "")[:240]},
+        "evidence": evidence,
         "occurred_at": _now(),
     }
     record_signal(signal)

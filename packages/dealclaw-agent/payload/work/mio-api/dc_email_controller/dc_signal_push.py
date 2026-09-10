@@ -199,6 +199,8 @@ def format_candidate_message(cand: dict) -> str:
 
     P0-E4：提示回复草稿已准备好 + 缺字段，等用户确认发送。
     """
+    if cand.get("category") == "bounce":
+        return cand.get("title") or "退信提醒"
     title = cand.get("title") or "买家询盘"
     missing = cand.get("missing_fields") or []
     if missing:
@@ -481,6 +483,43 @@ def _build_due(x: dict) -> dict:
     }
 
 
+def _bounce_next_action(detail: str) -> str:
+    """从退信 detail 的 [分类] 前缀给出下一步动作建议。"""
+    d = detail or ""
+    if d.startswith("[hard]"):
+        return "标记无效邮箱，换联系人"
+    if d.startswith("[soft]"):
+        return "稍后重发（邮箱满/临时故障，等恢复）"
+    if d.startswith("[content]"):
+        return "改内容后重发（被反垃圾拦截）"
+    return "人工确认原因"
+
+
+def _build_bounce_action(x: dict) -> dict:
+    """单封退信 → 主动推「原因 + 下一步动作」候选。"""
+    company_id = x.get("company_id", "")
+    mid = x.get("source_resend_id") or x.get("source_event_id") or x.get("signal_id", "")
+    buyer = x.get("evidence", {}).get("buyer_email", "") or "买家"
+    detail = x.get("evidence", {}).get("detail", "") or "退信"
+    action = _bounce_next_action(detail)
+    title = f"📧 退信：{buyer}\n原因：{detail}\n下一步：{action}"
+    return {
+        "candidate_id": _candidate_id(company_id, "bounce:" + mid),
+        "company_id": company_id,
+        "campaign_id": x.get("campaign_id", ""),
+        "source_message_id": mid,
+        "category": "bounce",
+        "priority": "medium",
+        "signals": ["bounced"],
+        "title": title,
+        "evidence": detail,
+        "missing_fields": [],
+        "delivery_mode": "realtime",
+        "decision": "push",
+        "status": "proposed",
+    }
+
+
 def _build_bounce_risk(company_id: str, bounced: list[dict]) -> dict | None:
     if len(bounced) < BOUNCE_RISK_THRESHOLD:
         return None
@@ -524,8 +563,10 @@ def build_candidates(company_id: str, campaign_id: str = None, phase: str = "sca
         if x["signal_type"] == "no_reply_due":
             candidates.append(_build_due(x))
 
-    # bounced → 聚合（单封不推；集中退信才风险候选）
+    # bounced → 每封主动判断下一步动作（单封也推）；集中退信另出风险候选
     bounced = [x for x in active if x["signal_type"] == "bounced"]
+    for x in bounced:
+        candidates.append(_build_bounce_action(x))
     risk = _build_bounce_risk(company_id, bounced)
     if risk:
         candidates.append(risk)

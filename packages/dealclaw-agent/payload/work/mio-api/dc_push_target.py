@@ -109,10 +109,16 @@ def cmd_test(args) -> int:
                          ensure_ascii=False))
         return 2
     msg = args.message or "DealClaw 推送测试：配置成功，后续早晚报/买家提醒将发送到这里。"
-    cmd = ["openclaw", "message", "send",
+    openclaw_bin = os.environ.get("OPENCLAW_BIN", "openclaw")
+    node_bin = os.environ.get("OPENCLAW_NODE")
+    cmd = [openclaw_bin, "message", "send",
            "--channel", "feishu",
            "--target", target, "--message", msg, "--json"]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    env = os.environ.copy()
+    if node_bin:
+        node_dir = str(Path(node_bin).resolve().parent)
+        env["PATH"] = node_dir + os.pathsep + env.get("PATH", "")
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     if p.returncode != 0:
         print(json.dumps({"status": "error", "error": (p.stderr or p.stdout or "send failed")[-200:]},
                          ensure_ascii=False))

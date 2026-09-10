@@ -6,13 +6,14 @@
 //   node scripts/founder-direct/send-direct.mjs --from tian@company.com --to buyer@example.com --subject '...' --html-file draft.html
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const RECEIPT_SCRIPT = resolve(__dirname, '..', '..', 'work', 'mio-api', 'dc_send_receipt.py');
 
 // ── Email registry (authoritative protocol source) ───────────
 const REGISTRY_FILE = resolve(__dirname, 'email-registry.json');
@@ -23,7 +24,7 @@ function loadRegistry() {
 }
 
 // ── Resend proxy domains (fallback only, registry wins) ──────
-const RESEND_PROXY_DOMAINS = ['mail.dealclaw.io'];
+const RESEND_PROXY_DOMAIN_SUFFIX = '.dealclaw.io';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_4BU…Myx1';
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
@@ -33,9 +34,9 @@ function isResendProxy(email) {
   const record = registry[email];
   if (record && record.protocol === 'resend') return true;
   if (record && record.protocol === 'smtp') return false;
-  // 2. Fallback: hardcoded domain list
+  // 2. Fallback: any subdomain under dealclaw.io is treated as Resend proxy
   const domain = email.split('@')[1]?.toLowerCase();
-  return RESEND_PROXY_DOMAINS.includes(domain);
+  return Boolean(domain && domain.endsWith(RESEND_PROXY_DOMAIN_SUFFIX));
 }
 
 async function sendViaResend(from, to, subject, text, html, cc, bcc) {
@@ -80,6 +81,15 @@ const htmlFile = parseArg('--html-file');
 const ccRaw = parseArg('--cc');
 const bccRaw = parseArg('--bcc');
 const dryRun = hasArg('--dry-run');
+const receiptTarget = parseArg('--receipt-target');
+
+// 批次回执：一次发送动作推一条汇总，不逐封。失败静默，绝不阻断发送结果。
+function pushReceipt(target, text) {
+  if (!target || !text) return;
+  try {
+    spawnSync('python3', [RECEIPT_SCRIPT, '--target', target, '--text', text], { stdio: 'ignore', timeout: 30000 });
+  } catch (_) { /* ignore */ }
+}
 
 if (!from || !toRaw || !subject) {
   console.error('Usage: node send-direct.mjs --from tian@company.com --to buyer@x.com --subject <s> [--html <h>] [--html-file <f>] [--text <t>] [--cc <c>] [--bcc <b>] [--dry-run]');
@@ -144,6 +154,7 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
     if (!existsSync(SENT_LOG)) writeFileSync(SENT_LOG, '');
     writeFileSync(SENT_LOG, JSON.stringify({ ...result, from, to, subject }) + '\n', { flag: 'a' });
+    pushReceipt(receiptTarget, `✅ 邮件已发出：本轮 ${to.length} 封`);
     return;
   }
 
@@ -171,6 +182,7 @@ async function main() {
     return;
   }
 
+  const { default: nodemailer } = await import('nodemailer');
   const transport = nodemailer.createTransport({
     host: account.smtp.host,
     port: account.smtp.port,
@@ -212,9 +224,11 @@ const info = await transport.sendMail(mailOpts);
     html: mailOpts.html || '',
   };
   writeFileSync(SENT_LOG, JSON.stringify(logRecord) + '\n', { flag: 'a' });
+  pushReceipt(receiptTarget, `✅ 邮件已发出：本轮 ${to.length} 封`);
 }
 
 main().catch(err => {
   console.error('❌', err.message);
+  pushReceipt(receiptTarget, `❌ 邮件发送失败：${err.message}`);
   process.exit(1);
 });

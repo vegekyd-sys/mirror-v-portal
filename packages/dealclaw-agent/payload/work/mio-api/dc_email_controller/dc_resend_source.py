@@ -95,11 +95,15 @@ def to_ingest_event(received: dict) -> dict:
 
 def to_status_event(sent: dict) -> dict:
     """把 sent 条目转成 status ingest event。"""
+    payload = {"email_id": sent.get("id"), "message_id": sent.get("message_id", "")}
+    # 列表接口不含 bounce 详情，但若调用方已补进 sent（见 poll_status_once）则透传
+    if isinstance(sent.get("bounce"), dict):
+        payload["bounce"] = sent["bounce"]
     return {
         "svix_id": f"resend-poll:status:{sent.get('id')}:{sent.get('last_event')}",
         "event_type": f"email.{sent.get('last_event')}" if sent.get("last_event") else "email.sent",
         "received_at": sent.get("created_at"),
-        "payload": {"email_id": sent.get("id"), "message_id": sent.get("message_id", "")},
+        "payload": payload,
     }
 
 
@@ -258,6 +262,14 @@ def poll_status_once(limit: int = 100, max_pages: int = 3) -> dict:
         processed.add(dedupe_key)
         if last_event not in SIGNAL_EVENTS:
             continue
+        # 退信/失败：列表接口无 bounce 详情，拉单封详情补齐具体原因（type/subType/diagnosticCode）
+        if last_event in ("bounced", "failed") and not isinstance(item.get("bounce"), dict):
+            try:
+                st2, detail = get_sent(sid)
+                if st2 == 200 and isinstance(detail, dict) and isinstance(detail.get("bounce"), dict):
+                    item = {**item, "bounce": detail["bounce"]}
+            except Exception:
+                pass
         ev = to_status_event(item)
         r = ingest_resend_event(ev)
         if r.get("ok") or r.get("duplicate_fact") or r.get("in_progress"):

@@ -201,7 +201,7 @@ def _parse_email_headers(headers, full: dict = None) -> tuple[str, str, list[str
     return message_id, in_reply_to, [r for r in references if r]
 
 
-def _record_delivery_signal(signal_type, resend_id, outbound, detail=""):
+def _record_delivery_signal(signal_type, resend_id, outbound, detail="", buyer_email=""):
     """把 delivered/bounced 事实写入七信号（best-effort，失败不阻断）。"""
     try:
         from .dc_email_signals import record_delivery_signal
@@ -212,7 +212,7 @@ def _record_delivery_signal(signal_type, resend_id, outbound, detail=""):
             lead_id=outbound.get("lead_id", ""),
             contact_id=outbound.get("contact_id", ""),
             thread_id=outbound.get("thread_id", ""),
-            detail=detail)
+            detail=detail, buyer_email=buyer_email)
     except Exception:
         pass
 
@@ -262,9 +262,20 @@ def handle_status_event(event_type: str, data: dict) -> dict:
     buyer_domain = buyer_email.split("@")[-1].lower() if "@" in buyer_email else ""
 
     failure_reason = ""
+    bounce_category = ""
     if status == "bounced":
         bounce = data.get("bounce") or {}
-        failure_reason = (bounce.get("message") or bounce.get("type") or "bounced") if isinstance(bounce, dict) else str(bounce)
+        if isinstance(bounce, dict) and bounce:
+            cls = classify_bounce(bounce)
+            bounce_category = cls["category"]
+            btype = (bounce.get("type") or "").strip()
+            bsub = (bounce.get("subType") or "").strip()
+            bmsg = (bounce.get("message") or "").strip()
+            parts = [p for p in (btype, bsub, bmsg) if p]
+            failure_reason = (f"[{bounce_category}] " + " | ".join(parts)) if parts else f"[{bounce_category}] bounced"
+        else:
+            failure_reason = "bounced"
+            bounce_category = "unknown"
     elif status == "failed":
         failure_reason = (data.get("error") or data.get("reason") or "provider failure")
     failure_reason = (failure_reason or "")[:500]
@@ -286,8 +297,12 @@ def handle_status_event(event_type: str, data: dict) -> dict:
 
     elif status == "bounced":
         if changed:
-            _record_delivery_signal("bounced", resend_id, outbound, failure_reason)
-        result["contact_invalid"] = True
+            _record_delivery_signal("bounced", resend_id, outbound, failure_reason,
+                                   buyer_email=buyer_email)
+        # 硬退才标无效邮箱；软退/内容拒收可重发，不标无效
+        result["bounce_category"] = bounce_category
+        result["retryable"] = bounce_category in ("soft", "content")
+        result["contact_invalid"] = bounce_category == "hard"
 
     elif status == "complained":
         # 投诉/退订由 EmailStore.provider_status="complained" 记录，不再写旧 send_log。
@@ -298,6 +313,38 @@ def handle_status_event(event_type: str, data: dict) -> dict:
 
     result["handled"] = True
     return result
+
+
+def classify_bounce(bounce: dict) -> dict:
+    """退信分类。返回 {category, retryable}。
+
+    category:
+      hard    —— 永久性（邮箱不存在/域名无效/永久拒绝），不重发，标无效邮箱
+      soft    —— 临时性（邮箱满/服务器临时故障/灰名单），可稍后重发
+      content —— 内容触发（反垃圾拦截），改内容后可重发
+      unknown —— 无类型信息，默认不重发、需人工判断
+    """
+    btype = (bounce.get("type") or "").strip().lower()
+    bsub = (bounce.get("subType") or "").strip().lower()
+    msg = (bounce.get("message") or "").lower()
+    diag = " ".join(bounce.get("diagnosticCode") or []).lower()
+    blob = f"{msg} {diag}"
+
+    # 内容拒收（ContentRejected / spam 关键词）→ 改内容可重发
+    if "contentrejected" in bsub or "content rejected" in blob or "spam" in blob:
+        return {"category": "content", "retryable": True}
+    # Resend 明确 Transient → 软退
+    if btype == "transient":
+        return {"category": "soft", "retryable": True}
+    # Resend 明确 Permanent → 硬退
+    if btype == "permanent":
+        return {"category": "hard", "retryable": False}
+    # 无 type 时按关键词兜底
+    if any(k in blob for k in ("full", "quota", "temporar", "try again", "later", "expired", "greylist")):
+        return {"category": "soft", "retryable": True}
+    if any(k in blob for k in ("not exist", "does not exist", "invalid", "unavailable", "access denied", "remove")):
+        return {"category": "hard", "retryable": False}
+    return {"category": "unknown", "retryable": False}
 
 
 def _is_retryable(reason: str) -> bool:
