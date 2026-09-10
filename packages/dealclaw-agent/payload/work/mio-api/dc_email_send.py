@@ -106,6 +106,15 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
     except Exception as e:  # noqa: BLE001
         success, err = False, f"{type(e).__name__}: {e}"
 
+    # 解析底层发送脚本返回的 resend_id（GS send.mjs → data.id；FD send-direct.mjs → resendId）
+    resend_id = ""
+    if success:
+        try:
+            out = json.loads(r.stdout.strip())
+            resend_id = out.get("id") or out.get("resendId") or ""
+        except Exception:  # noqa: BLE001
+            pass
+
     # 批次回执（一次动作一条，不逐封）
     if receipt_target:
         if success:
@@ -126,7 +135,8 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
             for t in to_list:
                 slog.log_send(buyer_domain=t.split("@")[-1], buyer_name="",
                               buyer_email=t, channel=channel.upper(), round_num=1,
-                              user_open_id="", enterprise=enterprise, subject=subject[:200])
+                              user_open_id="", enterprise=enterprise, subject=subject[:200],
+                              resend_id=resend_id)
         except Exception:  # noqa: BLE001
             pass
 
