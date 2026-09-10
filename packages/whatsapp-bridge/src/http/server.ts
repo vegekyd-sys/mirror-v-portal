@@ -279,10 +279,10 @@ export async function buildServer() {
           appSecret: body.appSecret || body.FEISHU_APP_SECRET || "",
           verificationToken: body.verificationToken || body.FEISHU_VERIFICATION_TOKEN,
           encryptKey: body.encryptKey || body.FEISHU_ENCRYPT_KEY,
-          inviteAppIds: body.inviteAppIds || body.FEISHU_INVITE_APP_IDS,
-          inviteOpenIds: body.inviteOpenIds || body.FEISHU_INVITE_OPEN_IDS,
-          inviteMobiles: body.inviteMobiles || body.FEISHU_INVITE_MOBILES,
-          inviteEmails: body.inviteEmails || body.FEISHU_INVITE_EMAILS,
+          inviteAppIds: body.inviteAppIds !== undefined ? body.inviteAppIds : body.FEISHU_INVITE_APP_IDS,
+          inviteOpenIds: body.inviteOpenIds !== undefined ? body.inviteOpenIds : body.FEISHU_INVITE_OPEN_IDS,
+          inviteMobiles: body.inviteMobiles !== undefined ? body.inviteMobiles : body.FEISHU_INVITE_MOBILES,
+          inviteEmails: body.inviteEmails !== undefined ? body.inviteEmails : body.FEISHU_INVITE_EMAILS,
         });
         const webhookUrl = feishuWebhookUrl(publicBaseUrl(request), creds.appId);
         if (creds.csChatId && creds.inviteAppIds.length) {

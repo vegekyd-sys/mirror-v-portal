@@ -144,7 +144,17 @@ export async function createCsGroup(
     return await postCreateChat(query, body);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    if (!users.length || !(msg.includes("232033") || msg.includes("232043") || msg.includes("232032"))) {
+    // 99992361 = open_id cross app（invitee 是别的应用的 open_id）。
+    // 这种情况也退化成「只拉机器人」建群，否则整条同步会静默失败、群永远建不出来。
+    if (
+      !users.length ||
+      !(
+        msg.includes("232033") ||
+        msg.includes("232043") ||
+        msg.includes("232032") ||
+        msg.includes("99992361")
+      )
+    ) {
       throw error;
     }
     console.error("Feishu create CS group with members failed, retrying bot-only group", error);

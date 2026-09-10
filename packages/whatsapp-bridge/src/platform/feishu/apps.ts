@@ -179,16 +179,24 @@ export async function upsertFeishuApp(input: {
   const inviteMobilesStored = inviteMobiles.length ? inviteMobiles.join(",") : undefined;
   const inviteEmails = parseCsvList(input.inviteEmails);
   const inviteEmailsStored = inviteEmails.length ? inviteEmails.join(",") : undefined;
+  // 传了字段（含显式空值 "" / []）→ 写入，空值落 null（可清空）；完全没传 → 跳过，保留旧值。
+  // 之前的写法是「非空才写」，导致这四个 invite* 列一旦有值就再也清不掉。
+  const provided = {
+    inviteAppIds: input.inviteAppIds !== undefined,
+    inviteOpenIds: input.inviteOpenIds !== undefined,
+    inviteMobiles: input.inviteMobiles !== undefined,
+    inviteEmails: input.inviteEmails !== undefined,
+  };
   const row = await prisma.feishuApp.upsert({
     where: { appId },
     update: {
       appSecret,
       ...(verificationToken !== undefined ? { verificationToken: verificationToken || null } : {}),
       ...(encryptKey !== undefined ? { encryptKey: encryptKey || null } : {}),
-      ...(inviteAppIdsStored !== undefined ? { inviteAppIds: inviteAppIdsStored } : {}),
-      ...(inviteOpenIdsStored !== undefined ? { inviteOpenIds: inviteOpenIdsStored } : {}),
-      ...(inviteMobilesStored !== undefined ? { inviteMobiles: inviteMobilesStored } : {}),
-      ...(inviteEmailsStored !== undefined ? { inviteEmails: inviteEmailsStored } : {}),
+      ...(provided.inviteAppIds ? { inviteAppIds: inviteAppIdsStored ?? null } : {}),
+      ...(provided.inviteOpenIds ? { inviteOpenIds: inviteOpenIdsStored ?? null } : {}),
+      ...(provided.inviteMobiles ? { inviteMobiles: inviteMobilesStored ?? null } : {}),
+      ...(provided.inviteEmails ? { inviteEmails: inviteEmailsStored ?? null } : {}),
     },
     create: {
       appId,

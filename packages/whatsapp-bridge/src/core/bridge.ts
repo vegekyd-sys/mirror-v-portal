@@ -489,6 +489,7 @@ export async function handleAgentSend(input: {
     },
   });
 
+  let feishuSyncError: string | undefined;
   try {
     await withFeishuApp(input.feishuAppId || conversation.feishuAppId || undefined, async () => {
       const bots = parseCliAppIds(input.inviteAppIds);
@@ -527,10 +528,12 @@ export async function handleAgentSend(input: {
           });
         }
       } catch (error) {
+        feishuSyncError = error instanceof Error ? error.message : String(error);
         console.error("sync outbound to Feishu failed", error);
       }
     });
   } catch (error) {
+    feishuSyncError = error instanceof Error ? error.message : String(error);
     console.error("sync outbound to Feishu failed", error);
   }
 
@@ -543,5 +546,6 @@ export async function handleAgentSend(input: {
     windowOpen,
     sourceChatId,
     sourceOpenId,
+    ...(feishuSyncError ? { feishuSyncWarning: feishuSyncError } : {}),
   };
 }
