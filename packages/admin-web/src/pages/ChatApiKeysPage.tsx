@@ -34,6 +34,9 @@ export default function ChatApiKeysPage() {
   // 创建表单字段
   const [name, setName] = useState('');
   const [tenantId, setTenantId] = useState('');
+  // 租户搜索 combobox：输入即过滤（公司名 / tenantId 模糊匹配）
+  const [tenantQuery, setTenantQuery] = useState('');
+  const [tenantOpen, setTenantOpen] = useState(false);
   const [agentId, setAgentId] = useState('');
   const [ipAllowlist, setIpAllowlist] = useState('');
   const [rateLimitRpm, setRateLimitRpm] = useState('60');
@@ -72,10 +75,36 @@ export default function ChatApiKeysPage() {
       .catch(() => {});
   }, []);
 
+  // ── 租户搜索 combobox 辅助 ──
+  const tenantLabel = (t: Tenant) =>
+    (t.companyName || t.tenantId) + (t.status !== 'active' ? `（${t.status}）` : '');
+
+  const selectedTenant = tenants.find((t) => t.tenantId === tenantId);
+
+  const filteredTenants = (() => {
+    const q = tenantQuery.trim().toLowerCase();
+    if (!q) return tenants;
+    return tenants.filter(
+      (t) =>
+        (t.companyName || '').toLowerCase().includes(q) ||
+        t.tenantId.toLowerCase().includes(q),
+    );
+  })();
+
+  const pickTenant = (t: Tenant) => {
+    setTenantId(t.tenantId);
+    setTenantQuery(tenantLabel(t));
+    setTenantOpen(false);
+  };
+
   const openCreate = () => {
     setName('');
     // 优先沿用列表过滤框的租户，否则默认选第一个 active 租户
-    setTenantId(filterTenant.trim() || tenants.find((t) => t.status === 'active')?.tenantId || '');
+    const preset = filterTenant.trim() || tenants.find((t) => t.status === 'active')?.tenantId || '';
+    setTenantId(preset);
+    const pt = tenants.find((t) => t.tenantId === preset);
+    setTenantQuery(pt ? tenantLabel(pt) : '');
+    setTenantOpen(false);
     setAgentId('');
     setIpAllowlist('');
     setRateLimitRpm('60');
@@ -89,8 +118,9 @@ export default function ChatApiKeysPage() {
       setCreateErr('名称必填');
       return;
     }
-    if (!tenantId.trim()) {
-      setCreateErr('请选择租户');
+    const sel = tenants.find((t) => t.tenantId === tenantId && t.status === 'active');
+    if (!sel) {
+      setCreateErr('请从下拉中选择一个生效中的租户（不支持手输）');
       return;
     }
     const rpm = Number(rateLimitRpm);
@@ -266,19 +296,93 @@ export default function ChatApiKeysPage() {
             </div>
             <div className="form-row">
               <label className="field-label">租户 *</label>
-              <select
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                style={{ minWidth: 280 }}
-              >
-                <option value="">— 选择租户 —</option>
-                {tenants.map((t) => (
-                  <option key={t.tenantId} value={t.tenantId} disabled={t.status !== 'active'}>
-                    {(t.companyName || t.tenantId) + (t.status !== 'active' ? `（${t.status}）` : '')}
-                  </option>
-                ))}
-              </select>
+              <div style={{ position: 'relative', flex: 1 }}>
+                <input
+                  type="text"
+                  value={tenantQuery}
+                  autoComplete="off"
+                  placeholder="输入公司名或 Tenant ID 模糊搜索（如：奥创 / 06a64aa）"
+                  onFocus={() => setTenantOpen(true)}
+                  onBlur={() => window.setTimeout(() => setTenantOpen(false), 150)}
+                  onChange={(e) => {
+                    // 手动输入 = 放弃当前选中，进入搜索态
+                    setTenantQuery(e.target.value);
+                    setTenantId('');
+                    setTenantOpen(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setTenantOpen(false);
+                    if (e.key === 'Enter' && tenantOpen) {
+                      const first = filteredTenants.find((t) => t.status === 'active');
+                      if (first) {
+                        pickTenant(first);
+                        e.preventDefault();
+                      }
+                    }
+                  }}
+                />
+                {tenantOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      zIndex: 30,
+                      maxHeight: 260,
+                      overflowY: 'auto',
+                      background: '#fff',
+                      border: '1px solid #d0d7e2',
+                      borderRadius: 6,
+                      boxShadow: '0 8px 24px rgba(15,23,42,.12)',
+                      marginTop: 4,
+                    }}
+                  >
+                    {filteredTenants.length === 0 ? (
+                      <div style={{ padding: '10px 12px', fontSize: 12, color: '#999' }}>
+                        无匹配租户（共 {tenants.length} 个）
+                      </div>
+                    ) : (
+                      filteredTenants.slice(0, 100).map((t) => (
+                        <div
+                          key={t.tenantId}
+                          onMouseDown={(e) => {
+                            // onMouseDown 先于 input onBlur，避免下拉先被收起
+                            if (t.status === 'active') {
+                              e.preventDefault();
+                              pickTenant(t);
+                            }
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            cursor: t.status === 'active' ? 'pointer' : 'not-allowed',
+                            opacity: t.status === 'active' ? 1 : 0.45,
+                            background: t.tenantId === tenantId ? '#eef4ff' : undefined,
+                            borderBottom: '1px solid #f1f4f9',
+                            fontSize: 13,
+                          }}
+                        >
+                          <div>{t.companyName || t.tenantId}</div>
+                          <div className="mono" style={{ fontSize: 11, color: '#8494ad' }}>
+                            {t.tenantId}
+                            {t.status !== 'active' ? ` · ${t.status}（不可选）` : t.planTier ? ` · ${t.planTier}` : ''}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
+            {selectedTenant ? (
+              <div style={{ fontSize: 12, color: '#2f7d3a', margin: '-6px 0 10px' }}>
+                已选：{selectedTenant.companyName || selectedTenant.tenantId}（{selectedTenant.tenantId}）
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: '#b8860b', margin: '-6px 0 10px' }}>
+                尚未选择租户 — 输入关键词后从列表点击选择
+              </div>
+            )}
             <div className="form-row">
               <label className="field-label">Agent 范围</label>
               <input type="text" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="留空=该租户全部 agent" />
