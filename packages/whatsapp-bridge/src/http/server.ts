@@ -47,10 +47,6 @@ import { addChatBots } from "../platform/feishu/client";
 import { findThreadByFeishuId } from "../platform/feishu/adapter";
 import { requireBridgeAdmin, AdminAuthError } from "./adminAuth";
 import { importExistingWaba, AdminWabaImportError } from "../core/adminWabaImport";
-import {
-  bindExistingWabaForTenantMachine,
-  SkillWabaBindError,
-} from "../core/skillWabaBind";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -256,21 +252,6 @@ export async function buildServer() {
           return reply.code(500).send({
             error: "failed to import WhatsApp business account",
             code: "ADMIN_IMPORT_FAILED",
-          });
-        }
-      });
-
-      scope.post("/api/whatsapp/bind-existing-waba", async (request, reply) => {
-        try {
-          return await bindExistingWabaForTenantMachine(request.body);
-        } catch (error) {
-          if (error instanceof SkillWabaBindError) {
-            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
-          }
-          request.log.error({ err: error }, "tenant-machine Skill existing WABA binding failed");
-          return reply.code(500).send({
-            error: "failed to bind WhatsApp business account",
-            code: "WHATSAPP_SKILL_BIND_FAILED",
           });
         }
       });

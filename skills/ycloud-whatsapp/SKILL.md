@@ -2,8 +2,9 @@
 name: ycloud-whatsapp
 description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
-  完成嵌入式注册；仅当用户明确说“绑定已有 WABA”时，使用当前租户机器的短时签名断言
-  调用专用绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  完成嵌入式注册；当用户说“初始化 WhatsApp 配置”“给我 WhatsApp 飞书 webhook”时，先注册
+  飞书应用并返回 webhookUrl；仅当用户明确说“绑定已有 WABA”时，使用统一管理的 Bridge
+  admin token 调用管理员导入入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
   适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
@@ -29,7 +30,8 @@ description: >-
 
 ## 初始化飞书应用
 
-需要把 WhatsApp 入站同步到飞书时，读取当前智能体自己的：
+当用户说「初始化 WhatsApp 配置」「给我 WhatsApp 飞书 webhook」「注册飞书应用」等，或需要把
+WhatsApp 入站同步到飞书时，进入此流程：先注册 app，再把 webhookUrl 返回给用户。读取当前智能体自己的：
 
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
@@ -60,7 +62,9 @@ POST $BRIDGE/api/feishu/apps
 }
 ```
 
-保存返回的 `appId` 为 `$FEISHU_APP`，把 `webhookUrl` 配到该飞书应用事件地址。
+保存返回的 `appId` 为 `$FEISHU_APP`，把 `webhookUrl` 直接返回给用户，让用户配到该飞书应用
+「事件订阅」地址。顺序必须是「先注册、再配置」：飞书保存地址时会立即发 url_verification
+校验，只有 app 已注册进 bridge，校验才会返回 challenge 通过；顺序反了会 404。
 `hasEncryptKey=true` 才算成功；否则停止并让用户补正确的加密策略配置。
 
 ## 业务号选择
@@ -177,7 +181,7 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 
 `ok=true` 只表示 YCloud 已接受，不等于送达。投递失败会同步到飞书客服话题。
 
-## 绑定已有 WABA（租户机器断言）
+## 绑定已有 WABA（管理员导入）
 
 仅当用户明确要求“绑定已有 WABA”时进入。普通接入/注册、`WHATSAPP_BINDING_REQUIRED`、
 查状态或换业务号都走 Direct Link，不主动索取 WABA ID。
@@ -248,7 +252,7 @@ POST $BRIDGE/api/whatsapp/onboarding-links
 ## 验证与停止条件
 
 - 所有日常请求均包含当前 `partnerCustomerId`，并且请求与响应中不处理账户标识；只有用户
-  明确“绑定已有 WABA”的专用 helper 可携带一次 WABA ID 和租户机器短时断言。
+  明确“绑定已有 WABA”的专用 helper 可携带一次 WABA ID 和管理员 Bearer token。
 - 多号未指定：必须收到/遵循 `WHATSAPP_FROM_SELECTION_REQUIRED`，不得任取。
 - 指定 `from`：只接受桥接验证通过的当前租户号码。
 - `WHATSAPP_TEMPLATE_REQUIRED`：自行查询模板、补齐变量后发送。

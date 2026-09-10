@@ -49,11 +49,6 @@ export const config = {
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
   /** Server-side operator credential. Never expose this to tenant agents or client responses. */
   adminToken: optional("WHATSAPP_BRIDGE_ADMIN_TOKEN"),
-  provisioning: {
-    baseUrl: optional("PROVISIONING_SERVICE_URL") || "http://provisioning-service:8082",
-    /** Server-to-server credential; never accepted from a Skill request. */
-    apiToken: optional("PROVISIONING_API_TOKEN"),
-  },
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),
