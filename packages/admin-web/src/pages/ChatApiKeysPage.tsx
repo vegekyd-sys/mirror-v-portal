@@ -3,6 +3,7 @@
 // Data: provisioning-service /v1/admin/chat-api-keys (GET/POST/DELETE).
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
+import type { Tenant } from '../lib/types';
 import Modal from '../components/Modal';
 import { IconRefresh, IconPlus, IconTrash, IconCopy } from '../components/icons';
 
@@ -27,6 +28,8 @@ export default function ChatApiKeysPage() {
 
   // 列表可选按 tenant 过滤
   const [filterTenant, setFilterTenant] = useState('');
+  // 租户列表（创建时下拉选择，避免手填 32 位 hex 出错）
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   // 创建表单字段
   const [name, setName] = useState('');
@@ -58,9 +61,21 @@ export default function ChatApiKeysPage() {
     void load();
   }, [load]);
 
+  // 拉取租户列表用于创建 Modal 下拉（非 active 禁选，与 ChatPage 一致）
+  useEffect(() => {
+    api<{ tenants: Tenant[] }>('/v1/tenants')
+      .then((r) => {
+        const list = r.tenants || [];
+        // active 在前，便于默认选中
+        setTenants([...list].sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)));
+      })
+      .catch(() => {});
+  }, []);
+
   const openCreate = () => {
     setName('');
-    setTenantId(filterTenant.trim());
+    // 优先沿用列表过滤框的租户，否则默认选第一个 active 租户
+    setTenantId(filterTenant.trim() || tenants.find((t) => t.status === 'active')?.tenantId || '');
     setAgentId('');
     setIpAllowlist('');
     setRateLimitRpm('60');
@@ -75,7 +90,7 @@ export default function ChatApiKeysPage() {
       return;
     }
     if (!tenantId.trim()) {
-      setCreateErr('Tenant ID 必填（key 绑定到某个企业租户）');
+      setCreateErr('请选择租户');
       return;
     }
     const rpm = Number(rateLimitRpm);
@@ -192,7 +207,9 @@ export default function ChatApiKeysPage() {
                 <tr key={k.id}>
                   <td>{k.name}</td>
                   <td className="mono" style={{ fontSize: 11 }}>{k.keyPrefix}…</td>
-                  <td className="mono" style={{ fontSize: 11 }}>{k.tenantId}</td>
+                  <td style={{ fontSize: 11 }}>
+                    {tenants.find((t) => t.tenantId === k.tenantId)?.companyName || <span className="mono">{k.tenantId}</span>}
+                  </td>
                   <td>{k.agentId ?? <span style={{ color: '#999' }}>全部 agent</span>}</td>
                   <td style={{ fontSize: 11 }}>
                     {k.ipAllowlist && k.ipAllowlist.length
@@ -248,8 +265,19 @@ export default function ChatApiKeysPage() {
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="如：CRM 集成" />
             </div>
             <div className="form-row">
-              <label className="field-label">Tenant ID *</label>
-              <input type="text" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="绑定到哪个企业租户（必填）" />
+              <label className="field-label">租户 *</label>
+              <select
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                style={{ minWidth: 280 }}
+              >
+                <option value="">— 选择租户 —</option>
+                {tenants.map((t) => (
+                  <option key={t.tenantId} value={t.tenantId} disabled={t.status !== 'active'}>
+                    {(t.companyName || t.tenantId) + (t.status !== 'active' ? `（${t.status}）` : '')}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="form-row">
               <label className="field-label">Agent 范围</label>
