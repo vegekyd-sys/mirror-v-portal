@@ -9,7 +9,7 @@
  *   node scripts/apify-search.mjs trends "ai tools" --limit 10
  *   node scripts/apify-search.mjs trends --daily   (daily trending, no query)
  *
- * Env: APIFY_API_KEY (from work/mio-api/.env managed skill-env, then ~/.openclaw/.env)
+ * Env: APIFY_API_KEY (from ~/.openclaw/.env)
  */
 
 import { readFileSync } from "node:fs";
@@ -19,41 +19,19 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Config ──────────────────────────────────────────────────
-// Candidate .env paths: workspace work/mio-api/.env (skill-env symlink,
-// hot-reloaded by the provisioning service) first, then the legacy home file.
-function envCandidates() {
-  const out = [];
-  let d = resolve(__dirname);
-  while (d !== resolve(d, "..")) {
-    out.push(resolve(d, "work", "mio-api", ".env"));
-    out.push(resolve(d, ".env"));
-    d = resolve(d, "..");
-  }
-  out.push(resolve(process.env.HOME || "", ".openclaw", ".env"));
-  return out;
-}
-let API_KEY = process.env.APIFY_API_KEY || process.env.APIFY_TOKEN;
+const ENV_PATH = resolve(process.env.HOME, ".openclaw/.env");
+let API_KEY = process.env.APIFY_API_KEY;
 
 if (!API_KEY) {
-  for (const p of envCandidates()) {
-    let text;
-    try {
-      text = readFileSync(p, "utf-8");
-    } catch {
-      continue;
-    }
-    // Both preset key names are accepted (APIFY_TOKEN is the canonical one
-    // managed by skill-env; APIFY_API_KEY kept for legacy ~/.openclaw/.env).
-    const m = text.match(/APIFY_API_KEY=(\S+)/) || text.match(/APIFY_TOKEN=(\S+)/);
-    if (m) {
-      API_KEY = m[1];
-      break;
-    }
-  }
+  try {
+    const env = readFileSync(ENV_PATH, "utf-8");
+    const m = env.match(/APIFY_API_KEY=(\S+)/);
+    if (m) API_KEY = m[1];
+  } catch {}
 }
 
 if (!API_KEY) {
-  console.error("❌ APIFY_API_KEY/APIFY_TOKEN not found. Set it in work/mio-api/.env (managed skill-env) or ~/.openclaw/.env");
+  console.error("❌ APIFY_API_KEY not found. Set it in ~/.openclaw/.env");
   process.exit(1);
 }
 
@@ -144,7 +122,7 @@ function formatXhs(items, limit) {
       .slice(0, 3)
       .map(t => t?.name || t?.tag_name || t)
       .join(", ");
-
+    
     return {
       "#": i + 1,
       "作者": author,

@@ -37,7 +37,7 @@ LEADS_FILE = os.path.join(MIO_API, "data", "leads.json")
 sys.path.insert(0, MIO_API)
 
 # ── Feishu 通知目标 ───────────────────────────────────────
-NOTIFY_GROUP = "chat:<GROUP_ID>"  # 小元 x 星擎线索
+NOTIFY_GROUP = "chat:oc_f5d14db9efca0bb049d36a0f4e8a9a88"  # 小元 x 星擎线索
 
 # ── 字段映射 ──────────────────────────────────────────────
 def map_xingqing_to_dcls(clue: dict, enterprise: str) -> dict:
@@ -48,7 +48,7 @@ def map_xingqing_to_dcls(clue: dict, enterprise: str) -> dict:
     dial_code = (clue.get("dialingCode") or "").strip()
     # 构造 domain: enterprise+contact 作为去重键 (无买家真实 domain 时)
     domain = f"xq-{enterprise}-{contact_name}" if contact_name else f"xq-{enterprise}-{clue.get('id','')}"
-
+    
     return {
         "enterprise": enterprise,           # 星擎客户企业名 (租户隔离键)
         "company_name": contact_name,        # 买家联系人 (DC-LS 用 company_name 做去重)
@@ -78,7 +78,7 @@ def map_xingqing_to_dcls(clue: dict, enterprise: str) -> dict:
 
 
 # ── 星擎 API 封装 ─────────────────────────────────────────
-def call_clue_agent(cmd: str, open_id: str = "<OPEN_ID>", *args) -> dict:
+def call_clue_agent(cmd: str, open_id: str = "ou_9737509fa952d8427acc05454c47fb99", *args) -> dict:
     """调用 clue-agent.js 返回 JSON"""
     argv = ["node", CLUE_AGENT, cmd, open_id] + list(args)
     try:
@@ -97,7 +97,7 @@ def call_clue_agent(cmd: str, open_id: str = "<OPEN_ID>", *args) -> dict:
 
 def pull_xingqing_leads(page: int = 0, size: int = 50) -> list[dict]:
     """拉取星擎已验证/精品线索"""
-    result = call_clue_agent("list", "<OPEN_ID>", str(page), str(size))
+    result = call_clue_agent("list", "ou_9737509fa952d8427acc05454c47fb99", str(page), str(size))
     if not result.get("ok"):
         print(f"[星擎] 拉取失败: {result.get('error')}", file=sys.stderr)
         return []
@@ -137,9 +137,9 @@ def mark_imported(xq_id: int, state: dict):
 def cbie_buyer_match(clue: dict, enterprise: str) -> dict:
     """
     CBIE 买家画像匹配 (内部评分, 不展示给用户)
-
+    
     返回: {"score": 0-100, "verdict": "pass|fail|insufficient_data", "reason": str}
-
+    
     当前 MVP: 基于已有线索字段做快速判断。
     完整版需 DC-CBIE 引擎运行后接入。
     """
@@ -148,27 +148,27 @@ def cbie_buyer_match(clue: dict, enterprise: str) -> dict:
     phone = (clue.get("phone") or "").strip()
     requirement = (clue.get("requirementDesc") or "").strip()
     interest = (clue.get("interestArea") or "").strip()
-
+    
     # 数据完整性检查
     has_contact = bool(contact_name)
     has_email = bool(email)
     has_phone = bool(phone)
-    has_inquiry = bool(requirement and requirement not in ("test", "") and
+    has_inquiry = bool(requirement and requirement not in ("test", "") and 
                         "来源" not in requirement and "Excel" not in requirement)
-
+    
     # 垃圾检测
     garbage_keywords = ["test", "ggkisg", "nhhjkd", "测试"]
     is_garbage = any(k in str(clue).lower() for k in garbage_keywords)
-
+    
     if is_garbage:
         return {"score": 0, "verdict": "fail", "reason": "垃圾数据, 全字段无效"}
-
+    
     if not has_contact:
         return {"score": 0, "verdict": "fail", "reason": "缺少联系人姓名"}
-
+    
     if not has_email and not has_phone:
         return {"score": 5, "verdict": "fail", "reason": "无邮箱且无电话, 无法联系"}
-
+    
     # 基础评分
     score = 10.0
     if has_contact: score += 15
@@ -176,18 +176,18 @@ def cbie_buyer_match(clue: dict, enterprise: str) -> dict:
     if has_phone: score += 10
     if has_inquiry: score += 30  # 有真实询盘内容 = 高价值
     if interest: score += 10
-
+    
     # 企业邮箱加分 (非 gmail/yahoo/outlook 等)
-    free_domains = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com",
+    free_domains = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", 
                     "163.com", "qq.com", "126.com", "foxmail.com"}
     email_domain = email.split("@")[-1].lower() if "@" in email else ""
     if email_domain and email_domain not in free_domains:
         score += 10  # 企业邮箱 -> 更可能是真实买家
-
+    
     if score >= 45:
         return {"score": min(score, 100), "verdict": "pass", "reason": f"基础数据完整, 评分{score:.0f}"}
     else:
-        return {"score": score, "verdict": "insufficient_data",
+        return {"score": score, "verdict": "insufficient_data", 
                 "reason": f"数据不足, 缺少买家企业信息, 当前仅{score:.0f}分"}
 
 
@@ -195,52 +195,52 @@ def cbie_buyer_match(clue: dict, enterprise: str) -> dict:
 def import_xingqing_to_dcls(pull_all: bool = False):
     """主导入流程"""
     from dc_ls_store import LeadStore
-
+    
     state = load_state()
     store = LeadStore()
-
+    
     results = {"total": 0, "imported": 0, "skipped_duplicate": 0, "skipped_quality": 0}
     notifications = []
-
+    
     # 拉取线索
     all_leads = pull_xingqing_leads(0, 50)
     # 如果数据多, 翻页
     # (当前 53 条中已验证/精品仅 ~9 条, 一页够)
-
+    
     for clue in all_leads:
         xq_id = clue.get("id")
         results["total"] += 1
-
+        
         # 去重检查
         if not pull_all and is_already_imported(xq_id, state):
             results["skipped_duplicate"] += 1
             continue
-
+        
         enterprise = (clue.get("companyName") or "").strip()
         if not enterprise:
             print(f"[跳过] ID={xq_id} 无企业名", file=sys.stderr)
             continue
-
+        
         # CBIE 匹配评分
         match_result = cbie_buyer_match(clue, enterprise)
-
+        
         if match_result["verdict"] == "fail":
             results["skipped_quality"] += 1
             print(f"[CBIE-REJECT] {enterprise} / {clue.get('contactName')} → {match_result['reason']}")
             continue
-
+        
         # 写入 DC-LS
         lead = map_xingqing_to_dcls(clue, enterprise)
         lead["_cbie_score"] = match_result["score"]
         lead["_cbie_reason"] = match_result["reason"]
-
+        
         action = store.save_lead(lead)
         mark_imported(xq_id, state)
         results["imported"] += 1
-
+        
         print(f"[DC-LS] {action.upper()} {enterprise} / {clue.get('contactName')} "
               f"→ score={match_result['score']:.0f}")
-
+        
         notifications.append({
             "enterprise": enterprise,
             "contact": clue.get("contactName"),
@@ -252,15 +252,15 @@ def import_xingqing_to_dcls(pull_all: bool = False):
             "score": match_result["score"],
             "verdict": match_result["verdict"],
         })
-
+    
     save_state(state)
-
+    
     # 汇总
     print(f"\n[汇总] 处理{results['total']}条 | "
           f"导入{results['imported']} | "
           f"跳过(已导入){results['skipped_duplicate']} | "
           f"跳过(质量){results['skipped_quality']}")
-
+    
     return results, notifications
 
 
@@ -270,7 +270,7 @@ def generate_reply_template(clue: dict) -> str:
     channel = "WhatsApp" if clue.get("phone") else "邮件"
     enterprise = clue.get("enterprise", "我们公司")
     inquiry = clue.get("inquiry") or "您的消息"
-
+    
     template = f"""【{channel} 回复模板】
 收件人: {contact} ({clue.get('email') or clue.get('phone')})
 ---
@@ -295,15 +295,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="星擎 → DC-LS 导入管道")
     sub = parser.add_subparsers(dest="cmd")
-
+    
     sub.add_parser("pull", help="拉取新线索并处理").add_argument(
         "--all", action="store_true", help="含已处理")
     sub.add_parser("list", help="查看已导入的星擎线索")
     sub.add_parser("status", help="管道状态")
     sub.add_parser("test", help="干跑测试（不写入 DC-LS）")
-
+    
     args = parser.parse_args()
-
+    
     if args.cmd == "pull":
         results, notifications = import_xingqing_to_dcls(pull_all=getattr(args, 'all', False))
         print(json.dumps({
@@ -312,7 +312,7 @@ if __name__ == "__main__":
             "notifications": notifications,
             "action_required": "请将 notifications 发送到飞书群通知",
         }, ensure_ascii=False, indent=2))
-
+    
     elif args.cmd == "list":
         state = load_state()
         # 从 DC-LS 中列出星擎来源的线索
@@ -323,7 +323,7 @@ if __name__ == "__main__":
         for l in xq_leads[:20]:
             print(f"  {l.get('_xq_contactName','?'):20s} | {l.get('_xq_email','?'):30s} | "
                   f"{l.get('enterprise','?')[:30]} | score={l.get('_cbie_score','?')}")
-
+    
     elif args.cmd == "status":
         state = load_state()
         from dc_ls_store import LeadStore
@@ -334,7 +334,7 @@ if __name__ == "__main__":
         print(f"  已处理ID数: {len(state.get('imported_ids', []))}")
         print(f"  最后拉取: {state.get('last_pull_at', 'N/A')}")
         print(f"  DC-LS 数据文件: {LEADS_FILE}")
-
+    
     elif args.cmd == "test":
         # 干跑: 拉取但不写入
         leads = pull_xingqing_leads(0, 50)
@@ -345,6 +345,6 @@ if __name__ == "__main__":
                   f"| {(clue.get('requirementDesc') or '')[:30]:30s} "
                   f"→ score={match_result['score']:.0f} {match_result['verdict']}")
         print(f"\n干跑完成，处理 {len(leads)} 条")
-
+    
     else:
         parser.print_help()

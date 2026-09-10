@@ -1,0 +1,86 @@
+{
+  "thia@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-07-14",
+    "note": "DealClaw代理邮箱 - Resend已验证"
+  },
+  "wangqiang2@meorient.com": {
+    "protocol": "smtp",
+    "domain": "meorient.com",
+    "bound_at": "2026-07-29",
+    "note": "企业邮箱 - SMTP绑定"
+  },
+  "tiangengjun@meorient.com": {
+    "protocol": "smtp",
+    "domain": "meorient.com",
+    "bound_at": "2026-07-14",
+    "note": "企业邮箱 - SMTP绑定"
+  },
+  "mengyuchuan@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-10",
+    "note": "Boris-上海唯乾纺织"
+  },
+  "xiaowang@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-09",
+    "note": "测试用户小汪"
+  },
+  "v@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-09",
+    "note": "V邮箱"
+  },
+  "test@gmail.com": {
+    "protocol": "smtp",
+    "domain": "gmail.com",
+    "bound_at": "2026-08-11",
+    "note": "personal email → SMTP"
+  },
+  "wangwenhua@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-10",
+    "note": "ReadyStore-王文华 | Resend已验证"
+  },
+  "wangwenhua@meorient.com": {
+    "protocol": "smtp",
+    "domain": "meorient.com",
+    "bound_at": "2026-08-11",
+    "note": "DNS probe: MX found → SMTP"
+  },
+  "wangqiang@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-12T05:13:46.433Z",
+    "note": "王强 - 邮件通知"
+  },
+  "spring@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-20",
+    "note": "spring-邮件通知"
+  },
+  "nuofan@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-20",
+    "note": "诺凡-邮件通知"
+  },
+  "zhaolikun@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-20",
+    "note": "赵立坤-邮件通知-换绑"
+  },
+  "lurong@mail.dealclaw.io": {
+    "protocol": "resend",
+    "domain": "mail.dealclaw.io",
+    "bound_at": "2026-08-20",
+    "note": "光大普特-沙特开发信-发件"
+  }
+}

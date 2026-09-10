@@ -18,15 +18,15 @@ while IFS= read -r line; do
   tenant=$(echo "$line" | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).tenant))")
   balance=$(echo "$line" | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).balance||0))")
   consumed=$(echo "$line" | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).lifetimeConsumed||0))")
-
+  
   if [ "$balance" = "ERR" ]; then
     echo "  ⚠️  $tenant — 无法查询余额"
     continue
   fi
-
+  
   balance_fmt=$(printf "%'d" $balance 2>/dev/null || echo $balance)
   consumed_fmt=$(printf "%'d" $consumed 2>/dev/null || echo $consumed)
-
+  
   if [ "$balance" -lt "$THRESHOLD" ]; then
     echo "  🚨 $tenant — 余额: $balance_fmt ⚠️ BELOW THRESHOLD"
     LOW_BALANCES="$LOW_BALANCES\n  - $tenant: $balance_fmt Credit (已消耗 $consumed_fmt)"

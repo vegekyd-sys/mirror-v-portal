@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Wrapper entrypoint for ZCRM Agent V1.02 CLI.
+# Author/requester: 吴合伟
+# Keep this thin: all behavior lives in xiaoao-zcrm-v1.
+exec /root/makaron-openclaw/.openclaw-local/workspace/skills/xiaoao-zcrm-v1-api/bin/xiaoao-zcrm-v1 "$@"

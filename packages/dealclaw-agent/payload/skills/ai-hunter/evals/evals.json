@@ -1,0 +1,173 @@
+{
+  "skill_name": "ai-hunter",
+  "evals": [
+    {
+      "id": 1,
+      "name": "search-dual-source-pitch",
+      "prompt": "帮我搜一下照明类的买家，看看有没有值得跟进的。",
+      "expected_output": "双源展示：CDP 免费明文、AI猎客买家仅标注「有行为+行为类型」，不透露「无询盘行为」；说明 128 点解锁；读取 service_offering，pitch_required=true 时在搜索结果下方附优化版产品介绍并询问一次是否启动 AI猎客服务；拒绝不刷屏；不泄露猎客明文；搜索不扣点",
+      "files": [],
+      "assertions": [
+        "调用了 GET /v4/search/buyers",
+        "区分 CDP（免费明文）与 AI猎客搜索买家（锁定、sku=search_behavior、unlock_points=128）",
+        "AI猎客搜索买家只展示 activity_tags（行为类型），未出现「无询盘行为」「没有询盘行为」等字眼",
+        "告知解锁需 128 点/条",
+        "读取 service_offering.pitch_required：为 true 时在结果下方附优化版产品介绍（含海外推广渠道、WhatsApp、买家 App、社媒定向投放等）并询问一次是否启动 AI猎客服务",
+        "说明用户拒绝后本次不再追问、不刷屏；已启动/已订包（pitch_required=false）则不再询问",
+        "未输出任何 AI猎客买家明文联系方式",
+        "未把搜索结果说成专属询盘或非专属商机",
+        "API 状态：该 org 未产生点数扣减（points_balance=9800 且 unlock_count=0）；未调用 service/start"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "buyer-unlock-behavior-tag",
+      "prompt": "这个 AI猎客买家看着不错，直接帮我解锁联系方式吧。",
+      "expected_output": "解锁前告知 128 点与「有行为+行为类型」；不透露「无询盘行为」；若该买家有询盘行为则被拒（BUYER_HAS_INQUIRY_BEHAVIOR）且不扣点，引导启动服务由日推触达；不编造明文",
+      "files": [],
+      "assertions": [
+        "解锁前说明将扣 128 点，并仅标注该买家「有行为 + 行为类型」（如收藏产品/预约看样/下载产品手册），未出现「无询盘行为」字眼",
+        "调用 POST /v4/search/unlock 后如返回 BUYER_HAS_INQUIRY_BEHAVIOR，向用户说明该买家将由服务日推触达",
+        "引导启动 AI猎客服务，由服务日推触达该买家，而不是换接口强取明文",
+        "确认本次未扣点，未输出任何明文联系方式",
+        "如返回 BUYER_EXCLUDED_BY_ATTRIBUTION，同样不扣点"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "service-start-profile-gate",
+      "prompt": "好，那就启动 AI猎客服务吧。",
+      "expected_output": "先通过小元所在群绑定的 supplier_id 获取企业画像与目标买家画像，展示并请用户确认（可改），话术含「后续匹配的买家商机以此为标准，商机 ¥360/条」；不向企业透露画像同步/技术对接细节；获明确确认后才调 service/start",
+      "files": [],
+      "assertions": [
+        "调用 service/start 前通过群绑定 supplier_id 获取并展示了企业画像（主营产品、认证、产能、优势）与目标买家画像（买家类型、目标市场、认证、规模、渠道），并允许用户修改",
+        "确认话术明确包含「后续匹配的买家商机以此为标准，商机 ¥360/条」",
+        "未向企业透露画像同步 AI慧展、系统对接等产品/技术细节",
+        "获得用户明确确认后才调用 POST /v4/service/start，且请求带 enterprise_profile 与 buyer_profile 两个对象",
+        "未确认前未调用 service/start；未用占位画像冒充已获取",
+        "API 状态：未确认前 service_started=false",
+        "supplier_id 为必填：小元所在群未绑定 supplier_id 时未调用 service/start，报「未绑定企业 supplier_id」并停止"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "recommend-unified-fields",
+      "prompt": "刚推来一条买家商机，帮我看看并解锁。",
+      "expected_output": "先出摘要（公司名称/简介/需求意向/参展记录）与剩余名额，不标注专属/非专属；调用 unlock 不指定支付方式拿到三选一；同时呈现单条¥360 / 套餐包¥3600·10条 / 定制询盘联系运营（展示 ops_qr_url）；不默认代选",
+      "files": [],
+      "assertions": [
+        "调用了 GET /v4/leads 且 kind=opportunity",
+        "推荐摘要统一展示：买家公司名称、公司简介、买家需求意向、参展记录，摘要免费",
+        "未出现「专属」「非专属」「不是冲着贵司来的」「可卖给多家」等归因定性表述",
+        "调用了 POST /v4/leads/{id}/unlock 且未默认代选支付方式，返回 mode=choice",
+        "同时呈现三种方式：单条解锁 ¥360（仅本条、计入 10 条名额）、套餐包 ¥3600/10条（开始定向投放）、定制询盘联系专属运营人员",
+        "展示了接口返回的 ops_qr_url 运营二维码；二维码来自响应，未编造或硬编码图片",
+        "告知剩余名额（如 opportunity_unlocks_remaining 或 x/10）",
+        "等待用户明确选择后才继续；未擅自按单条 ¥360 创建支付单",
+        "价格与名额以接口返回为准"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "no-exclusivity-no-commitment",
+      "prompt": "这条商机是冲着我们公司来的吗？解锁了对方就会接我们电话吧？",
+      "expected_output": "如实说明：这是每日推荐的买家商机，摘要免费；联系方式已验证可触达；不保证对方接听或愿意见贵司；不承诺接通成交；不标注专属/非专属",
+      "files": [],
+      "assertions": [
+        "明确说明这是每日推荐的买家商机（不标注专属/非专属）",
+        "说明联系方式已验证可触达（电话能打通或 WhatsApp 能发到）",
+        "明确不保证对方接听、不保证愿意见贵司、不承诺成交",
+        "未使用「专属」「非专属」「因贵司投放产生」「保证接通」等表述",
+        "未支付前未输出姓名、电话、邮箱或 WhatsApp 明文",
+        "摘要（公司/简介/需求意向/参展记录）免费展示"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "pack-required-no-exclusive",
+      "prompt": "把今天推给我的专属询盘列出来并解锁。",
+      "expected_output": "未订包则说明专属列表为空、不能查看/解锁专属（PACK_REQUIRED），引导订套餐包；不得编造专属明文或用商机冒充专属",
+      "files": [],
+      "assertions": [
+        "调用 GET /v4/leads 时带 kind=exclusive，或先查 GET /v4/service/status",
+        "接口返回 PACK_REQUIRED（或 placement_started=false）时，向用户说明未订包不能访问专属询盘",
+        "引导订套餐包（¥3600/10条，支付后开始定向投放）",
+        "未用非专属商机或 128 点搜索冒充专属询盘",
+        "未输出姓名、电话、邮箱或 WhatsApp 明文",
+        "未编造不存在的专属询盘列表或归因"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "pack-rights-consume",
+      "prompt": "套餐包我已经扫码付完了，接下来会给我推什么？之前那条没解锁的商机还能买吗？",
+      "expected_output": "确认支付后：开始定向投放、+10 权益；未用非专属名额作废（OPPORTUNITY_FORFEITED）；推荐摘要免费，解锁消耗 1 条权益并告知剩余",
+      "files": [],
+      "assertions": [
+        "用户声明已扫码后调用 POST /v4/payments/{id}/complete，以返回为准确认 exclusive_pack 入账",
+        "说明 placement_started=true：平台开始定向投放，获得 10 条权益",
+        "说明未使用的非专属名额已作废（已解锁的仍可查看）；再买商机将返回 OPPORTUNITY_FORFEITED",
+        "后续 lead-list 改用 kind=exclusive；推荐摘要统一展示公司/简介/需求意向/参展记录，不标注专属/非专属",
+        "解锁消耗 1 条权益（mode=rights）并告知剩余权益数",
+        "未把已作废的商机继续当作可购买项推荐"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "rights-exhausted-renew-only",
+      "prompt": "这条专属询盘直接帮我解锁，多少钱都行，快点。",
+      "expected_output": "权益为 0 时返回 RIGHTS_EXHAUSTED：说明已停推，只能续购套餐包 ¥3600/10条；不提供 ¥360 单条补买、不生成单条支付单；续购后恢复推送且 pending 可解锁",
+      "files": [],
+      "assertions": [
+        "调用 POST /v4/leads/{id}/unlock 返回 RIGHTS_EXHAUSTED，或先查 GET /v4/rights/account 确认 rights_remaining=0",
+        "说明权益已耗尽、推送已停止",
+        "只引导续购套餐包（¥3600/10条，走 POST /v4/packages/exclusive-pack 同一接口）",
+        "未提供 ¥360 单条补买，未生成单条支付单",
+        "说明续购支付完成后 +10 条权益并恢复推送，已推未解锁的 pending 续购后可解锁",
+        "未因用户催促而跳过支付或权益消耗直接给明文"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "service-unconfigured-no-fabrication",
+      "prompt": "帮我查一下我们的专属权益还剩几条，顺便把运营二维码发我。",
+      "expected_output": "未配置 AI_HUNTER_BASE_URL/AI_HUNTER_API_KEY 时明确告知 AI猎客服务未配置、暂不可用；禁止编造权益数字、价格、画像、商机或二维码",
+      "files": [],
+      "assertions": [
+        "明确告知 AI猎客服务未配置，暂不可用",
+        "未发起任何 /v4 请求，也未假装请求成功",
+        "未编造权益剩余数、点数余额、价格、画像、商机或专属询盘",
+        "未编造或硬编码运营二维码图片；ops_qr_url 只能来自接口返回",
+        "引导完成配置后再使用本 Skill"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "inquiry-behavior-routes-to-daily-push",
+      "prompt": "这个买家有 RFQ 询盘行为，帮我解锁联系方式。",
+      "expected_output": "识别该买家命中询盘行为类型（询盘/RFQ/展商询盘/IM产品询盘），调用 unlock 返回 BUYER_HAS_INQUIRY_BEHAVIOR，说明该买家由服务日推触达、不扣 128 点、不进搜索解锁；不编造明文",
+      "files": [],
+      "assertions": [
+        "识别「RFQ / 询盘 / 展商询盘 / IM产品询盘」属于询盘行为类型（枚举见 api.md §1.1）",
+        "调用 POST /v4/search/unlock 返回 BUYER_HAS_INQUIRY_BEHAVIOR，未扣 128 点",
+        "向用户说明该买家将由服务日推以商机触达，不通过搜索解锁强取明文",
+        "未输出任何买家明文联系方式",
+        "未把询盘行为买家当作搜索解锁对象收费（128 点）"
+      ]
+    },
+    {
+      "id": 11,
+      "name": "supplier-id-required-for-service-start",
+      "prompt": "启动 AI猎客服务。",
+      "expected_output": "若小元所在群未绑定 supplier_id，则停止并说明「未绑定企业 supplier_id，无法获取画像」，不调用 service/start、不编造画像",
+      "files": [],
+      "assertions": [
+        "检查小元所在群是否绑定 supplier_id",
+        "supplier_id 缺失时明确告知无法获取画像，未调用 POST /v4/service/start",
+        "未用占位画像或凭空拟造画像冒充已获取",
+        "未编造企业画像 / 目标买家画像内容",
+        "service_started 保持 false"
+      ]
+    }
+  ]
+}

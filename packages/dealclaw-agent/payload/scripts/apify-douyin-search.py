@@ -7,8 +7,7 @@ Examples:
   python3 scripts/apify-douyin-search.py "AI生成视频" --limit 10 --download --out work/douyin-ai
   python3 scripts/apify-douyin-search.py "AI生成视频" "AI视频" AIGC --limit 5 --sort most_liked --publish half_year
 
-Env: APIFY_TOKEN or APIFY_API_KEY. Falls back to work/mio-api/.env
-(managed skill-env, hot-reloaded) then ~/.openclaw/.env.
+Env: APIFY_TOKEN or APIFY_API_KEY. Falls back to ~/.openclaw/.env.
 """
 import argparse
 import csv
@@ -24,29 +23,17 @@ BASE = "https://api.apify.com/v2"
 ACTOR = "zen-studio~douyin-search-scraper"
 
 
-def _env_candidates() -> list[Path]:
-    """.env candidates: workspace work/mio-api/.env (skill-env symlink) first."""
-    candidates = []
-    d = Path(__file__).resolve().parent
-    while d != d.parent:
-        candidates.append(d / "work" / "mio-api" / ".env")
-        candidates.append(d / ".env")
-        d = d.parent
-    candidates.append(Path.home() / ".openclaw" / ".env")
-    return candidates
-
-
 def load_token() -> str:
     for key in ("APIFY_TOKEN", "APIFY_API_KEY"):
         if os.environ.get(key):
             return os.environ[key]
-    for env_path in _env_candidates():
-        if env_path.exists():
-            text = env_path.read_text()
-            for key in ("APIFY_TOKEN", "APIFY_API_KEY"):
-                match = re.search(rf"^{key}=(\S+)", text, re.M)
-                if match:
-                    return match.group(1)
+    env_path = Path.home() / ".openclaw/.env"
+    if env_path.exists():
+        text = env_path.read_text()
+        for key in ("APIFY_TOKEN", "APIFY_API_KEY"):
+            match = re.search(rf"^{key}=(\S+)", text, re.M)
+            if match:
+                return match.group(1)
     raise SystemExit("APIFY_TOKEN/APIFY_API_KEY not found")
 
 

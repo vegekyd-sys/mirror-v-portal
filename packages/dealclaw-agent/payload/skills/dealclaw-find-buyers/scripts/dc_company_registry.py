@@ -12,7 +12,7 @@ v2: 改用 lark-cli base 替代裸调飞书 API + FEISHU_BOT_TOKEN。同一把�
   python3 dc_company_registry.py list
 """
 
-import json, os, sys, subprocess
+import json, logging, os, sys, subprocess
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -380,6 +380,20 @@ def _extract_buyer_tags(record: dict) -> list:
             x = x.strip()
             if x and x not in tags:
                 tags.append(x)
+    # 字段名兜底：purchaseTags / productList / 关注产品（各数据源命名不同）
+    for _alt_key in ("purchaseTags", "productList", "关注产品"):
+        _alt = record.get(_alt_key)
+        if isinstance(_alt, str):
+            _alt = [x.strip() for x in re.split(r"[,，;；]", _alt) if x.strip()]
+        if isinstance(_alt, list):
+            for _item in _alt:
+                if isinstance(_item, dict):
+                    _text = (_item.get("nameCn") or _item.get("nameEn")
+                             or _item.get("name") or _item.get("productName") or "")
+                else:
+                    _text = str(_item)
+                if _text and _text not in tags:
+                    tags.append(_text)
     return tags
 
 
@@ -417,7 +431,15 @@ def _record_fields(record: dict, source: str, enterprise_products=None) -> dict:
         or ""
     )
 
-    attrs = record.get("companyAttributes") or record.get("buyer_type") or []
+    # 买家类型：字段名兜底（各数据源命名不同）
+    attrs = (
+        record.get("companyAttributes")
+        or record.get("buyer_type")
+        or record.get("buyerType")
+        or record.get("buyerTag")
+        or record.get("buyer_tags")
+        or []
+    )
     if isinstance(attrs, str):
         attrs = [attrs]
     buyer_type = ""
@@ -435,6 +457,9 @@ def _record_fields(record: dict, source: str, enterprise_products=None) -> dict:
     # 匹配产品：只写入与企业真实产品对齐的（先看用户有什么产品，再匹配买家采购标签）
     buyer_tags = _extract_buyer_tags(record)
     products = _match_products(buyer_tags, enterprise_products)
+    if not products and not enterprise_products:
+        # 无企业产品可对齐时，用买家采购标签近似（真相源：无评分时用采购标签近似，标「待匹配」）
+        products = [t for t in buyer_tags if t]
 
     reason = (
         record.get("recommendation")
@@ -456,6 +481,16 @@ def _record_fields(record: dict, source: str, enterprise_products=None) -> dict:
         fields["公司简介"] = str(profile)[:500]
     if products:
         fields["匹配产品"] = products[:20]
+    # 字段缺失时标空原因，避免静默跳过（全局可观测）
+    _missing = []
+    if not buyer_type:
+        _missing.append("买家类型(需 companyAttributes/buyerType/buyerTag/buyer_tags)")
+    if not products:
+        _missing.append("匹配产品(需 purchaseTags/productList/关注产品)")
+    if _missing:
+        logging.getLogger("dc_company_registry").warning(
+            "线索池落库字段缺失：company=%r source=%s 缺失=[%s]",
+            str(company)[:80], source, ", ".join(_missing))
     # ⭐ 联系人解锁确认后才落库：初始落库时为空，经用户确认（意图识别/反问）解锁后才写入。
     return fields
 

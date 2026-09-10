@@ -28,7 +28,7 @@ const smtpConfig = {
   port: 465,
   secure: true,
   auth: {
-    user: process.env.SMTP_USER || 'user@example.com',
+    user: process.env.SMTP_USER || 'aarkissu@163.com',
     pass: process.env.SMTP_PASS || '',
   },
 };

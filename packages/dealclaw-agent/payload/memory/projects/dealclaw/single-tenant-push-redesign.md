@@ -1,16 +1,15 @@
 # 单租户部署下的 Push 改造设计
 
 > 状态：设计稿（2026-08-19）
-> 目标：把 agent push / leads push / buyer match 从「运行时 chat_id 绑定」改为「provisioning 租户配置注入」，适配单租户部署。
+> 目标：把 agent push / leads push 从「运行时 chat_id 绑定」改为「provisioning 租户配置注入」，适配单租户部署。
 
 ## 一、背景与问题
 
 当前 DealClaw 是「多租户挤一个部署」：多个企业共享同一套运行环境，所以必须靠 `chat_id`（飞书群）把群和企业绑起来，才能路由消息、隔离数据、确定推送目标。
 
-现状三个 push 都依赖这个绑定：
+现状两个 push 都依赖这个绑定：
 - **agent push**（campaign 倒计时 + 早晚报）：推送到绑定的群
 - **leads push**（buyer-leads-push）：binding 存 chat_id → 企业+知识库+Base+supplier
-- **buyer match**（buyer-match-query）：读绑定里的产品/国家，推送到群
 
 **问题**：真实服务器部署时，每个企业是独立租户（独立 pod/namespace），租户边界就是部署本身，不再需要「chat_id 绑定」这个运行时动作。保留绑定流程是多余且脆弱的。
 
@@ -32,7 +31,7 @@
 | 推送到绑定的群 chat_id | 推送到 tenant config 里的 channel |
 | chat_id 精确匹配 + chat-isolation-v3 权限校验 | pod/namespace 隔离，guard 从 chat_id 校验退化成 tenant_id 校验 |
 
-## 四、三个 push 的具体调整
+## 四、两个 push 的具体调整
 
 ### 1. agent push（campaign / 早晚报）
 - campaign 已 key 在 company_id，基本不动
@@ -45,11 +44,6 @@
 - **砍掉「草稿→正式知识库」的绑定确认双文档流程**（一个企业一个租户，不存在绑错企业）
 - TradeChina 查询和推送都走 tenant 里的 supplier id + channel
 - 画像确认保留，但性质变了：从「确认绑哪家企业」变成「确认画像的产品/市场」
-
-### 3. buyer match（buyer-match-query）
-- 产品/国家从 tenant config 读（supplier → 展会国 + 画像产品）
-- 推送目标 = tenant channel
-- 打分阈值（60）、推送条数（≤5）、轮询逻辑不变
 
 ## 五、保留 / 删除
 
@@ -67,12 +61,10 @@
 
 1. **channel 仍需注入**：单租户下企业仍用飞书、机器人仍往某群/会话推，所以 channel 这个值还在——只是从「运行时绑定」变成「provisioning 时注入」，企业扫码那一刻就知道，不用再让用户给群 ID。
 2. **supplier id 是租户级凭据**：进凭据管理服务，随实例注入（见 credential 清单），非全局单值。
-3. **去重**：leads push（TradeChina）和 buyer match（datathink）两个数据源可能命中同一买家，需全局去重，避免重复推。
 
 ## 七、落地顺序（建议）
 
 1. provisioning 注入 tenant config（supplier id / KB / Base / channel / 展会国 / 画像产品）
 2. 初始化流程改成「读 tenant config → getBasicInfo 建画像」，替代群历史建草稿
-3. 三个 push 的运行时把 chat_id 键替换为 tenant_id
+3. 两个 push 的运行时把 chat_id 键替换为 tenant_id
 4. 砍掉绑定确认流程和 chat_id 隔离 guard 的精确匹配
-5. 加跨数据源买家去重

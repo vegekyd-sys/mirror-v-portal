@@ -29,7 +29,7 @@ const record = registry[email];
 if (record) {
   console.log(`📋 Registry: ${record.protocol.toUpperCase()} | bound: ${record.bound_at}`);
   console.log(`   ${record.note || ''}`);
-
+  
   if (record.protocol === 'resend') {
     // Resend 域名是否已验证
     const verifiedDomains = ['mail.dealclaw.io'];
@@ -42,7 +42,7 @@ if (record) {
       process.exit(2);
     }
   }
-
+  
   if (record.protocol === 'smtp') {
     // 还需检查 accounts/ 绑定文件
     const accountFile = resolve(__dirname, 'accounts', `${email.replace(/[@.]/g, '_')}.json`);
@@ -54,7 +54,7 @@ if (record) {
       process.exit(2);
     }
   }
-
+  
   console.log(`❌ Unknown protocol: ${record.protocol}`);
   process.exit(2);
 }

@@ -207,7 +207,7 @@ async function cmdWrap(tenant, skill, quantity, command) {
   const { spawn } = await import('node:child_process');
   const [cmd, ...rest] = command;
   const child = spawn(cmd, rest, { stdio: 'inherit', shell: true });
-
+  
   const exitCode = await new Promise((resolve) => {
     child.on('close', resolve);
     child.on('error', (err) => {

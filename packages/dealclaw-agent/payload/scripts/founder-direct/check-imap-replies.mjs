@@ -2,7 +2,7 @@
 // scripts/founder-direct/check-imap-replies.mjs
 // 检查指定邮箱的 IMAP 收件箱，返回未读/新回复
 // Usage:
-//   node check-imap-replies.mjs --email agent@example.com --password *** [--all]
+//   node check-imap-replies.mjs --email gengjuntian@meorient.com --password *** [--all]
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';

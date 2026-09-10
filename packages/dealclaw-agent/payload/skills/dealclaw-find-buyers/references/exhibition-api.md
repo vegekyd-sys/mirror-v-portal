@@ -37,30 +37,42 @@
 调用示例：
 
 ```bash
-curl -s -X POST \
-  'https://<host>/blade-agent-adapter/agent/buyer/selectAllExhibition.json' \
-  -H 'Content-Type: application/json' \
-  -d '{"page":1,"size":20,"states":[2]}'
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" buyer exhibitions --page 1 --size 20
 ```
 
-## 2. 搜买家 → `preExhibitionIds` 参数
+## 2. 搜买家 → `--pre-exhibition-ids` 参数
 
-字符串数组，传入展会 ID 限定只查该展会的预注册买家。
+传入展会 ID 限定只查该展会的预注册买家（逗号分隔）。
 
 - 传一个或多个展会 ID，只返回这些展会的预注册买家
 - 不传则不受展会限制
-- 与 `--tag-keyword`、`--countries-json` 等参数可同时使用
+- 与 `--tag-keyword`、`--countries` 等参数可同时使用
 
 ## 3. features 枚举
 
-搜索「报名 / 预注册 / 报名参展」买家时，`--features-json` 参数必须包含 21。
+搜索「报名 / 预注册 / 报名参展」买家时，`--features` 参数必须包含 `21`。
 
 - 5 到展 · 7 提单 · 20 广交会 · **21 报名或预注册（买家有报名参展记录）** · 28 推荐自选
 
+```bash
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" buyer search \
+  --tag-keyword "<product_tag>" --countries MX --features 21 \
+  --pre-exhibition-ids 152996309420 --page-size 100
+```
+
 ## 4. 本届/历届展会识别流程（用户未明确指定展会时）
 
-1. 先调 `python3 work/mio-api/company_info.py --action basic`（用当前 supplier 的 `X-Supplier-Id`）获取企业基础信息，查看 `orderRecords`（线下展订购记录）。
-2. 调 `selectAllExhibition.json` 拉全量展会列表，按 `state` 区分：本届 = `state=2`（展前），历届 = `state=4`（展后）。
+所有命令走 `xiaoyuan` CLI，鉴权必须显式传 `--open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID"`（CLI 认 `MEO_*`，工程注入 `MIO_*`，无映射 shim，不显式传会报「缺少身份」）。
+
+1. 先调企业基础信息，查看 `orderRecords`（线下展订购记录）：
+   ```bash
+   xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" company info
+   ```
+2. 调展会列表拉全量展会，按 `state` 区分：本届 = `state=2`（展前），历届 = `state=4`（展后）：
+   ```bash
+   xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" buyer exhibitions --page 1 --size 50
+   ```
+   > ⚠️ `buyer exhibitions` 当前仅支持 `--page` / `--size`，无 `states` 筛选参数；需在返回的 `records` 里自行按 `state` 字段区分本届/历届。
 3. 若基础信息存在订购记录，用记录中的展会 ID 与展会列表对账，推断用户已订购/可能参与的展会。
 4. 列出「本届/历届可能的展会列表」（展会 ID + 名称 + 日期），让用户选择或确认目标展会，再继续搜买家。
 

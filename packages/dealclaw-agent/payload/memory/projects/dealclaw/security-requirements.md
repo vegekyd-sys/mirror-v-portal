@@ -113,10 +113,10 @@ def require_confirm(action, context=None):
 class AuditLog:
     def user_actions(self, user_open_id, enterprise, days=7):
         """某销售在某企业内的操作记录"""
-
+    
     def enterprise_actions(self, enterprise, days=7):
         """某企业所有成员的操作记录（老板视角）"""
-
+    
     def action_stats(self, enterprise, days=7):
         """操作统计：谁做了什么、做了多少次"""
 ```

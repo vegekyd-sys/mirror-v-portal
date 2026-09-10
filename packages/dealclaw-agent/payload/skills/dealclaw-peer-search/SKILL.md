@@ -2,110 +2,99 @@
 name: dealclaw-peer-search
 description: >-
   搜同行 Skill：查类目、按类目/国家搜同行企业、看各国同行数、查同行买家。
-  运行本目录 scripts/*.py 调用 blade-agent-adapter /agent/colleague/*。
+  统一走 xiaoyuan CLI 的 `colleague` 命令组（对应 blade-agent-adapter /agent/colleague/*）。
   用于「搜同行/找同类展商/同行企业/同行买家/竞品展商」等意图。
 metadata:
   openclaw:
-    requires:
-      anyBins: [python, python3]
     emoji: "🏢"
 ---
 
 # 小元-搜同行（可执行）
 
-对应慧展 `/aiSearch/colleague`。
-**必须用 `exec`/`bash` 跑下方脚本**，以 stdout JSON 为事实再回复；不要只读文档假装已调用。
+对应慧展 `/aiSearch/colleague`。  
+**必须用 `xc`/`bash` 跑 `xiaoyuan colleague` 命令**，以 stdout JSON 为事实再回复；不要只读文档假装已调用。
 
-接口源：`AgentColleagueSearchController` → `/agent/colleague/*`
-默认 Base URL：`https://micro.tradechina.com/blade-agent-adapter`（`--base-url` 或 `MEO_ADAPTER_BASE_URL`）
+接口源：`AgentColleagueSearchController` → `/agent/colleague/*`  
+默认 Base URL：`https://micro.tradechina.com/blade-agent-adapter`
 
-## 安装
+## 鉴权（必须显式传，禁止靠环境变量自动读）
 
-将目录 `dealclaw-peer-search/` 拷到 OpenClaw skills 根目录后重载。`{baseDir}` = 本 Skill 目录。
+`xiaoyuan` CLI 只认 `MEO_OPEN_ID` / `MEO_SUPPLIER_ID` 环境变量，而本工程注入的是 `MIO_V_OPEN_ID` / `MIO_CDP_SUPPLIER_ID`，两者**无映射 shim**。因此每次调用必须显式传：
 
-## 身份（默认从环境变量取）
+```bash
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague <cmd> [选项]
+```
 
-脚本会自动从 `.env` 读取以下环境变量，通常无需手动传：
+缺则先向用户确认，禁止编造。
 
-| 参数 | Header | 环境变量 |
-|------|--------|----------|
-| `--open-id` | `X-Feishu-Open-Id` | `MIO_V_OPEN_ID` |
-| `--supplier-id` | `X-Supplier-Id` | `MIO_CDP_SUPPLIER_ID` |
+## 意图 → 命令
 
-环境变量未配置时才需手动传 `--open-id` / `--supplier-id`；缺则先向用户确认，禁止编造。
+| 用户意图 | xiaoyuan 命令 |
+|----------|---------------|
+| 看本公司（或指定税号）可搜的类目 | `colleague categories` |
+| 按公司名切换展商视角 | `colleague exhibitor-list` |
+| 看各国有多少同行 | `colleague country-num` |
+| 搜同行企业列表 | `colleague search` |
+| 选中同行后看买家交易类目 | `colleague buyer-categories` |
+| 选中同行后看这些同行的买家 | `colleague buyers` |
 
-工作目录：先 `cd {baseDir}/scripts`，再执行 `python ...`。
-
-## 意图 → 脚本
-
-| 用户意图 | 脚本 |
-|----------|------|
-| 看本公司（或指定税号）可搜的类目 | `get_category_list.py` |
-| 按公司名切换展商视角 | `get_supplier_exhibitor_list.py` |
-| 看各国有多少同行 | `get_country_num.py` |
-| 搜同行企业列表 | `search_list.py` |
-| 选中同行后看买家交易类目 | `get_buyer_category_list.py` |
-| 选中同行后看这些同行的买家 | `search_buyer_list.py` |
-
-推荐链路：`get_category_list` → 取 `t4TagId` →（可选 `get_country_num`）→ `search_list` → 取 `records[].id` → `search_buyer_list`。
-看别人家的同行：`get_supplier_exhibitor_list` 取 `taxNumber` → `get_category_list --tax-number`。
+推荐链路：`colleague categories` → 取 `t4TagId` →（可选 `colleague country-num`）→ `colleague search` → 取 `records[].id` → `colleague buyers`。  
+看别人家的同行：`colleague exhibitor-list` 取 `taxNumber` → `colleague categories --tax-number`。
 
 精确匹配（`--search-type 1`）无结果时，再试推测匹配（`--search-type 2`）。
 
-## `*-json` 传参（尤其 Windows）
+## 传参（逗号分隔，不用 JSON 数组）
 
-数组参数名带 `-json`，但**不必**写成带转义引号的 JSON。
+| 场景 | 写法 | 易踩坑 |
+|------|------|--------|
+| T4 / 国家 / 同行 id | `t4_xxx` · `t4_a,t4_b` · `123,456` · `US` | 不要写 `"[\"US\"]"` |
+| 空值 / 不筛 | **省略该参数** | 不必强传空 |
 
-| 场景 | 推荐写法 | 易踩坑 |
-|------|----------|--------|
-| T4 / 国家 / 展会 | `t4_xxx` · `t4_a,t4_b` · `US` | `"[\"US\"]"`（PowerShell 常把引号吃掉） |
-| 同行 id | `123` 或 `123,456` | 不要写成 `"[\"123\"]"` |
-| 空数组 | **省略该参数** | 不必强传 `"[]"` |
-
-**重要**：`search_buyer_list` / `get_buyer_category_list` 的 `--supplier-ids-json` 用的是 `searchList.records[].id`（同行 id），**不是** `supplierId`。
+**重要**：`colleague buyer-categories` / `colleague buyers` 的 `--supplier-ids` 用的是 `colleague search` 返回的 `records[].id`（同行 id），**不是** `supplierId`。
 
 ## 可执行命令
 
-替换 `OPEN_ID` / `SUPPLIER_ID`。
+全局选项 `--open-id` / `--supplier-id` 必须放在子命令前面。
 
 ### 1) 查类目
 
 ```bash
-cd {baseDir}/scripts
-python get_category_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID"
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague categories
 ```
 
-指定税号：`--tax-number "91310000XXXX"`
+指定税号：`--tax-number "91310000XXXX"`  
 只有 1 个类目时可直接用其 `t4TagId`；多个则按用户说的产品名匹配 `t4TagName`，优先 `isMainBusiness=1`。
 
 ### 2) 各国同行数（可选）
 
 ```bash
-python get_country_num.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --t4-tag-ids-json T4_ID
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague country-num --t4-tag-ids T4_ID
 ```
 
 ### 3) 搜同行
 
 ```bash
-python search_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --t4-tag-ids-json T4_ID --country US --page-num 1 --page-size 20
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague search \
+  --t4-tag-ids T4_ID --country US --page-num 1 --page-size 20
 ```
 
-可选：`--export-scale 2` `--staff-size 1` `--search-type 1` `--province 广东 --city 深圳 --district 南山`
+可选：`--export-scale 2` `--staff-size 1` `--search-type 2` `--data-source 2` `--province 广东 --city 深圳 --district 南山`
 
 ### 4) 按公司名找展商
 
 ```bash
-python get_supplier_exhibitor_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --company-name "天晨印务"
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague exhibitor-list --company-name "天晨印务"
 ```
 
 ### 5) 同行买家类目 / 列表
 
 ```bash
-python get_buyer_category_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --supplier-ids-json 123,456 --countries-json US
-python search_buyer_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --supplier-ids-json 123,456 --countries-json US --page-num 1 --page-size 20
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague buyer-categories --supplier-ids 123,456 --countries US
+xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" colleague buyers \
+  --supplier-ids 123,456 --countries US --page-num 1 --page-size 20
 ```
 
-可选：`--is-contact-info 1` `--is-miao 1` `--is-vip 1` `--tag-ids-json T4_ID` `--sort-type 3`
+可选：`--is-contact-info 1` `--is-miao 1` `--is-vip 1` `--tag-ids T4_ID` `--sort-type 3`
 
 ## 筛选枚举
 
@@ -118,13 +107,9 @@ python search_buyer_list.py --open-id "OPEN_ID" --supplier-id "SUPPLIER_ID" --su
 
 ## 输出与回复
 
-- 脚本打印：`tool` + `request` + `response`（`R`：`success`/`data`/`msg`）。
+- 命令打印：`path` + `request` + `response`（`success`/`data`/`msg`）。
 - `success != true` → 转述 `msg`，不要编造列表。
 - 类目读 `t4TagId` / `t4TagName` / `num` / `isMainBusiness`。
 - 同行列表读 `response.data.records` / `total`；摘要公司名、省市、主营类目、出口/人员规模。
-- 买家列表读 `companyName` / `companyCdpId` / `peerCompanyName` / 交易金额次数；需要触达再走买家 Skill 的 `get_cdp_contact.py`。
+- 买家列表读 `companyName` / `companyCdpId` / `peerCompanyName` / 交易金额次数；需要触达再走买家 Skill 的 `buyer contacts`（xiaoyuan CLI）。
 - **禁止**伪造 id/税号；勿在回复中泄露无关密钥。
-
-## 依赖
-
-Python 3 标准库即可，无需 pip。

@@ -47,6 +47,7 @@ author: ""
 - CLI 鉴权必须显式传 `--open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID"`，不得靠环境变量自动读（CLI 认 `MEO_*`，工程注入 `MIO_*`，无映射）。
 - CLI 国家参数用 `--countries`（逗号分隔，如 `BR` / `US,DE`）；`--countries-json` 是旧脚本参数，CLI 不识别。
 - 调用任何 CLI 子命令前，若参数、枚举值或接口有更新可能（新增/变更筛选条件、历届展会、类目等），先跑 `xiaoyuan --open-id "$MIO_V_OPEN_ID" --supplier-id "$MIO_CDP_SUPPLIER_ID" <group> <cmd> --help` 自查当期的参数名与枚举，再据此拼命令；不得死记早先的参数值或旧字段。
+- 需要精确获知参数的类型、是否必填、枚举值时，优先用 `--schema`（`xiaoyuan ... <group> <cmd> --schema`）取代 `--help`——`--schema` 输出结构化 JSON（name/type/required/enum），agent 读结构填参更稳，且它比 `--help` 快（0.3s vs 0.6s）、无对齐表格噪声。接口新增能力（如类目筛选）时以当期 `--help`/`--schema` 为准，不得沿用旧记忆里的「不支持」结论。
 
 ### 模型判断
 

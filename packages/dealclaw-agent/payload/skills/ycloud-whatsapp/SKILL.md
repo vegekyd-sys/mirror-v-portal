@@ -2,8 +2,9 @@
 name: ycloud-whatsapp
 description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
-  完成嵌入式注册；仅当用户明确说“绑定已有 WABA”时，使用当前租户机器的短时签名断言
-  调用专用绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  完成嵌入式注册；当用户说“初始化 WhatsApp 配置”“给我 WhatsApp 飞书 webhook”时，先注册
+  飞书应用并返回 webhookUrl；仅当用户明确说“绑定已有 WABA”时，使用当前租户机器的短时
+  签名断言调用专用绑定入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
   适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
@@ -29,7 +30,8 @@ description: >-
 
 ## 初始化飞书应用
 
-需要把 WhatsApp 入站同步到飞书时，读取当前智能体自己的：
+当用户说「初始化 WhatsApp 配置」「给我 WhatsApp 飞书 webhook」「注册飞书应用」等，或需要把
+WhatsApp 入站同步到飞书时，进入此流程：先注册 app，再把 webhookUrl 返回给用户。读取当前智能体自己的：
 
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
@@ -60,7 +62,9 @@ POST $BRIDGE/api/feishu/apps
 }
 ```
 
-保存返回的 `appId` 为 `$FEISHU_APP`，把 `webhookUrl` 配到该飞书应用事件地址。
+保存返回的 `appId` 为 `$FEISHU_APP`，把 `webhookUrl` 直接返回给用户，让用户配到该飞书应用
+「事件订阅」地址。顺序必须是「先注册、再配置」：飞书保存地址时会立即发 url_verification
+校验，只有 app 已注册进 bridge，校验才会返回 challenge 通过；顺序反了会 404。
 `hasEncryptKey=true` 才算成功；否则停止并让用户补正确的加密策略配置。
 
 ## 业务号选择
@@ -191,13 +195,20 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/bind_existing_waba.py
 ```
 
-helper 从当前租户进程读取 `MIO_CDP_SUPPLIER_ID` 与统一管理的
-`WHATSAPP_BRIDGE_ADMIN_TOKEN`，调用 `POST $BRIDGE/api/admin/whatsapp/import-existing-waba`；
-请求仅发送当前 supplier 的 `partnerCustomerId`、本次 WABA ID 和 `Authorization: Bearer`。不打印或持久化 token。
+helper 只从当前租户进程读取 `MIO_CDP_SUPPLIER_ID` 与服务器 provisioning 时生成的
+`OPENCLAW_GATEWAY_TOKEN`，以固定 action/audience、当前 supplier、该次 WABA ID、秒级时间戳和
+随机 nonce 生成短时 HMAC 断言，再调用 `POST $BRIDGE/api/whatsapp/bind-existing-waba`。
+不传 Authorization、管理员 token、用户角色或其它权限字段；不读取、打印或持久化机器密钥。
 
 成功输出只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要向用户回显 WABA ID。
-`WHATSAPP_BRIDGE_ADMIN_TOKEN_MISSING` 表示租户 Skill 环境尚未注入统一 token，停止并报告运维修复。
+`TENANT_MACHINE_SECRET_MISSING` 或 `WHATSAPP_SKILL_BIND_ASSERTION_UNAVAILABLE` 表示租户机器
+provisioning/验证链路未就绪，停止并报告运维修复，不降级为无签名请求。
+`WHATSAPP_SKILL_BIND_INVALID_ASSERTION` 表示 supplier 与当前机器不匹配，停止且不换 supplier。
+`WHATSAPP_SKILL_BIND_ASSERTION_EXPIRED` / `WHATSAPP_SKILL_BIND_ASSERTION_REPLAYED` 可在同一次明确
+用户请求内重新运行 helper 一次以生成全新的时间戳和 nonce；仍失败则停止。
 YCloud 校验失败、跨租户归属或手机号冲突时停止，不改绑、不绕过 Bridge。
+
+`WHATSAPP_BRIDGE_ADMIN_TOKEN` 只属于服务端管理员 importer。Skill 不读取、复用、索取或发送它。
 
 ## 嵌入式注册 / 状态
 

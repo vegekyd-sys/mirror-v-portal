@@ -1,0 +1,8 @@
+{
+  "_comment": "DC Email → Owner 绑定表。key=邮箱地址, value=owner信息。支持通配: 未匹配到的 @mail.dealclaw.io 地址默认归第一个管理员。",
+  "thia@mail.dealclaw.io": {
+    "open_id": "ou_48fd0d8dea2bb1ad6a8c111d6d1a01da",
+    "name": "田耕郡",
+    "enterprise": "meorient.com"
+  }
+}

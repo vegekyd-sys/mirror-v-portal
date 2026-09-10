@@ -63,7 +63,7 @@ imap.once('ready', () => {
             if (m) h[m[1].toLowerCase()] = m[2].trim();
           });
           out.push({
-            source: 'imap', account: 'agent@example.com',
+            source: 'imap', account: 'tiangengjun@meorient.com',
             from: decode(h.from||''), subject: decode(h.subject||''), date: h.date||'',
           });
           if (pending <= 0) imap.end();

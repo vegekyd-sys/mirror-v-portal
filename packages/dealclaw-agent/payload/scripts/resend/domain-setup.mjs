@@ -536,7 +536,7 @@ try {
       const domain = parseArg('--domain');
       const name = parseArg('--name');
       const emailAddr = parseArg('--email') || `noreply@send.${domain}`;
-      if (!domain || !name) throw new Error('用法: sender --domain company.com --name "新名字" [--email agent@example.company.com]');
+      if (!domain || !name) throw new Error('用法: sender --domain company.com --name "新名字" [--email thia@send.company.com]');
       const fromAddress = `${name} <${emailAddr}>`;
       saveState(domain, { display_name: name, from_address: fromAddress });
       console.log(`✅ 发件人已更新: ${fromAddress}`);

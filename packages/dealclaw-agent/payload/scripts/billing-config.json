@@ -1,10 +1,78 @@
 {
-  "comment": "Base-image default. Tenant mapping is injected at runtime; do not add customer identities here.",
-  "version": "3",
-  "groups": {},
-  "users": {},
-  "tenants": {},
+  "comment": "DealClaw billing tenant mapping — maps Feishu open_id (per-person) and group chat_id (per-group) to credits-ledger tenant IDs. Resolution order: users (open_id) > groups (chat_id) > shadow fallback.",
+  "version": "2",
+  "lastUpdated": "2026-08-17",
+  "groups": {
+    "oc_6b2e1c1227010dee8557db2b6be71f87": "dealclaw-sanlian",
+    "oc_e2324866666a680c335d83961511cf6e": "dealclaw-sanlian",
+    "oc_2f3baba6a6787efecb23a41a31caa241": "xiaoyuan-mengyuchuan",
+    "oc_ebcf88ed083c8e632e0a93913f1e5c49": "xiaoyuan-yangjingxuan",
+    "oc_b48e3fad0d750e272798d3e7d5a6ddb1": "xiaoyuan-wenhua",
+    "oc_1d5d5e9f8deae458aef67ad9328c1cee": "xiaoyuan-xiaodong",
+    "oc_e15af31367d012ded5450f6625d1d347": "xiaoyuan-likun",
+    "oc_875378492c224d7265da689b4c902b38": "xiaoyuan-xu",
+    "oc_746125317cb1dc79c12ca8ede49bc90f": "xiaoyuan-jielurongqi",
+    "oc_90abc4a437858d5aa2a2ea64faae8820": "xiaoyuan-wangnuofan",
+    "oc_d8e4deccd1a9c93cdd773182ad261d86": "xiaoyuan-xueliang",
+    "oc_a7f38e244a1fecb7458530c11913a522": "xiaoyuan-hongchun"
+  },
+  "users": {
+    "_comment": "开发者 DM 不映射到客户租户；空映射 → resolve 返回 null → shadow（只计费不扣费）。"
+  },
+  "tenants": {
+    "dealclaw-sanlian": {
+      "name": "三联传动",
+      "group": "三联传动群",
+      "kind": "group"
+    },
+    "xiaoyuan-wenhua": {
+      "name": "文华",
+      "group": "小元内测 03"
+    },
+    "xiaoyuan-mengyuchuan": {
+      "name": "孟雨川",
+      "group": "小元内测 01"
+    },
+    "xiaoyuan-wangnuofan": {
+      "name": "王诺凡",
+      "group": "小元内测 08"
+    },
+    "xiaoyuan-xu": {
+      "name": "徐",
+      "group": "小元内测 06"
+    },
+    "xiaoyuan-xueliang": {
+      "name": "学良",
+      "group": "小元内测 09"
+    },
+    "xiaoyuan-xiaodong": {
+      "name": "晓东",
+      "group": "小元内测 04"
+    },
+    "xiaoyuan-likun": {
+      "name": "李坤",
+      "group": "小元内测 05"
+    },
+    "xiaoyuan-hongchun": {
+      "name": "洪春",
+      "group": "小元内测 10"
+    },
+    "xiaoyuan-yangjingxuan": {
+      "name": "杨景轩",
+      "group": "小元内测 02"
+    },
+    "xiaoyuan-xingqing": {
+      "name": "星擎线索",
+      "group": "无群(服务线)"
+    },
+    "xiaoyuan-jielurongqi": {
+      "name": "解璐榕奇",
+      "group": "小元内测 07",
+      "kind": "group"
+    }
+  },
   "defaultBehavior": {
-    "unknownTenant": "shadow"
+    "unknownTenant": "shadow",
+    "comments": "shadow = record billing event without deducting credits; live = actual deduction"
   }
 }

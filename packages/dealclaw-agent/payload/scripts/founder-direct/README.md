@@ -14,7 +14,7 @@
 2. **把邮箱地址和专用密码发给 V**
 
 ```
-@V 绑定邮箱 buyer@example.com 密码 xxxxxxxxxxxx
+@V 绑定邮箱 tian@hainel-metal.com 密码 xxxxxxxxxxxx
 ```
 
 3. **V 返回确认** — 30 秒内出结果
@@ -22,15 +22,15 @@
 ## V 收到后的操作
 
 ```bash
-node scripts/founder-direct/bind-email.mjs --email buyer@example.com --password 'xxxx'
+node scripts/founder-direct/bind-email.mjs --email tian@hainel-metal.com --password 'xxxx'
 ```
 
 ## 发送邮件
 
 ```bash
 node scripts/founder-direct/send-direct.mjs \
-  --from buyer@example.com \
-  --to buyer@example.com \
+  --from tian@hainel-metal.com \
+  --to buyer@oscualti.com \
   --subject 'Trefoil anchors — quick question' \
   --html '<p>Hi...</p>'
 ```

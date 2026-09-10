@@ -1,0 +1,1805 @@
+米奥兰特接口文档
+第三方对接用 - API 接口说明
+目录
+TOC \o "1-3" \h \z \u  HYPERLINK \l _Toc29868 目录 PAGEREF _Toc29868 \h 1
+HYPERLINK \l _Toc11288 操作指引 PAGEREF _Toc11288 \h 3
+HYPERLINK \l _Toc9597 展商高级搜索 PAGEREF _Toc9597 \h 5
+HYPERLINK \l _Toc24644 基本信息 PAGEREF _Toc24644 \h 5
+HYPERLINK \l _Toc26940 请求参数 PAGEREF _Toc26940 \h 5
+HYPERLINK \l _Toc22488 返回数据 PAGEREF _Toc22488 \h 10
+HYPERLINK \l _Toc3882 工商详情-工商信息 PAGEREF _Toc3882 \h 12
+HYPERLINK \l _Toc16569 基本信息 PAGEREF _Toc16569 \h 12
+HYPERLINK \l _Toc17067 请求参数 PAGEREF _Toc17067 \h 12
+HYPERLINK \l _Toc24934 返回数据 PAGEREF _Toc24934 \h 12
+HYPERLINK \l _Toc7727 贸易数据-贸易记录 PAGEREF _Toc7727 \h 14
+HYPERLINK \l _Toc18646 基本信息 PAGEREF _Toc18646 \h 14
+HYPERLINK \l _Toc25102 请求参数 PAGEREF _Toc25102 \h 14
+HYPERLINK \l _Toc22098 返回数据 PAGEREF _Toc22098 \h 14
+HYPERLINK \l _Toc22386 工商详情-基本信息 PAGEREF _Toc22386 \h 16
+HYPERLINK \l _Toc8506 基本信息 PAGEREF _Toc8506 \h 16
+HYPERLINK \l _Toc26518 请求参数 PAGEREF _Toc26518 \h 16
+HYPERLINK \l _Toc18388 返回数据 PAGEREF _Toc18388 \h 16
+HYPERLINK \l _Toc29143 参展信息-会刊参展信息 PAGEREF _Toc29143 \h 18
+HYPERLINK \l _Toc9611 基本信息 PAGEREF _Toc9611 \h 18
+HYPERLINK \l _Toc32616 请求参数 PAGEREF _Toc32616 \h 18
+HYPERLINK \l _Toc13397 返回数据 PAGEREF _Toc13397 \h 18
+HYPERLINK \l _Toc10675 贸易数据-贸易图谱 PAGEREF _Toc10675 \h 20
+HYPERLINK \l _Toc14870 基本信息 PAGEREF _Toc14870 \h 20
+HYPERLINK \l _Toc28840 请求参数 PAGEREF _Toc28840 \h 20
+HYPERLINK \l _Toc10801 返回数据 PAGEREF _Toc10801 \h 20
+HYPERLINK \l _Toc26756 贸易数据-出口趋势 PAGEREF _Toc26756 \h 22
+HYPERLINK \l _Toc9397 基本信息 PAGEREF _Toc9397 \h 22
+HYPERLINK \l _Toc8919 请求参数 PAGEREF _Toc8919 \h 22
+HYPERLINK \l _Toc1980 返回数据 PAGEREF _Toc1980 \h 22
+HYPERLINK \l _Toc5343 高级搜索-会刊列表 PAGEREF _Toc5343 \h 24
+HYPERLINK \l _Toc27894 基本信息 PAGEREF _Toc27894 \h 24
+HYPERLINK \l _Toc3424 请求参数 PAGEREF _Toc3424 \h 24
+HYPERLINK \l _Toc31875 返回数据 PAGEREF _Toc31875 \h 24
+HYPERLINK \l _Toc7849 展商详情-互联网平台网址查询 PAGEREF _Toc7849 \h 26
+HYPERLINK \l _Toc1913 基本信息 PAGEREF _Toc1913 \h 26
+HYPERLINK \l _Toc17773 请求参数 PAGEREF _Toc17773 \h 26
+HYPERLINK \l _Toc12244 返回数据 PAGEREF _Toc12244 \h 26
+HYPERLINK \l _Toc7050 电商平台产品信息查询 PAGEREF _Toc7050 \h 28
+HYPERLINK \l _Toc20634 基本信息 PAGEREF _Toc20634 \h 28
+HYPERLINK \l _Toc7679 请求参数 PAGEREF _Toc7679 \h 28
+HYPERLINK \l _Toc12416 返回数据 PAGEREF _Toc12416 \h 28
+HYPERLINK \l _Toc1951 参展信息 PAGEREF _Toc1951 \h 30
+HYPERLINK \l _Toc6736 基本信息 PAGEREF _Toc6736 \h 30
+HYPERLINK \l _Toc3646 请求参数 PAGEREF _Toc3646 \h 30
+HYPERLINK \l _Toc4575 返回数据 PAGEREF _Toc4575 \h 30
+HYPERLINK \l _Toc32367 展会历史 PAGEREF _Toc32367 \h 32
+HYPERLINK \l _Toc20821 基本信息 PAGEREF _Toc20821 \h 32
+HYPERLINK \l _Toc21006 请求参数 PAGEREF _Toc21006 \h 32
+HYPERLINK \l _Toc23061 返回数据 PAGEREF _Toc23061 \h 32
+HYPERLINK \l _Toc33 产品信息-产品标签列表 PAGEREF _Toc33 \h 34
+HYPERLINK \l _Toc32136 基本信息 PAGEREF _Toc32136 \h 34
+HYPERLINK \l _Toc30946 请求参数 PAGEREF _Toc30946 \h 34
+HYPERLINK \l _Toc9620 返回数据 PAGEREF _Toc9620 \h 34
+操作指引
+以下为供应商高级搜索接口的 Python 调用示例，可直接运行或根据业务需求修改筛选条件。
+import requestsimport json# ===================== 接口配置（来自文档） =====================API_URL = "https://supplier.datathink.com/ds/authApi/dcZohoSupplierBusinessSearch"# token由米奥数据中心提供TOKEN = "XXXd8csd32dcaqwb87dc198ewd89d291f95a749mad96###8888XXX7"# 请求头HEADERS = {    "token": TOKEN,    "Content-Type": "application/json; charset=utf-8"}# 高级搜索请求体（文档原样，可按需修改筛选条件）SEARCH_BODY = {    "company_name": "江苏海狮汽车部件有限公司"}# =================================================================def search_supplier():    """供应商高级搜索接口调用函数"""    try:        # 发送POST请求        response = requests.post(            url=API_URL,            headers=HEADERS,            data=json.dumps(SEARCH_BODY, ensure_ascii=False).encode("utf-8"),            timeout=30        )        print(f"【接口返回状态码】{response.status_code}")        print("=" * 80)        # 解析返回JSON        res_data = response.json()        # 格式化打印结果        print(json.dumps(res_data, indent=2, ensure_ascii=False))        return res_data    except requests.exceptions.Timeout:        print("❌ 请求超时：接口响应过慢，请检查网络或重试")    except requests.exceptions.ConnectionError:        print("❌ 连接失败：无法访问接口地址，确认域名是否可通")    except Exception as err:        print(f"❌ 请求异常：{str(err)}")if __name__ == "__main__":    # 执行搜索    result = search_supplier()    # 示例：解析返回数据（如需分页/遍历数据可扩展这里）    if result and result.get("errCode") == 0:        total = result.get("total", 0)        data_list = result.get("data", [])        print(f"\n【查询结果统计】总条数：{total}，当前页数据量：{len(data_list)}")
+展商高级搜索
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcZohoSupplierBusinessSearch
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+示例
+company_name
+string
+非必须
+企业名称
+江苏海狮汽车部件有限公司
+feature_label
+string []
+非必须
+资料来源，主页搜索叫标签
+├─
+非必须
+data_type
+string
+非必须
+数据类型
+1-0-0:2026年自办展定展客户
+tag_id
+string
+非必须
+产品标签id(见产品标签下拉接口)
+province
+string
+非必须
+省
+江苏省
+city
+string
+非必须
+市
+company_products
+string
+非必须
+主营产品
+灌装机
+reg_location
+string
+非必须
+注册地址
+浙江省宁波市江北区慧谷中心12号
+has_mobile
+string
+非必须
+有手机 (1和0，1代表true)
+has_phone
+string
+非必须
+有电话 (1和0，1代表true)
+has_email
+string
+非必须
+有邮箱 (1和0，1代表true)
+recent_months_times
+object []
+非必须
+近三个月触碰次数
+├─ upper
+integer
+非必须
+├─ lower
+integer
+非必须
+recent_touch_time
+object
+非必须
+最近触碰时间 2021-01-01
+├─ lower
+string
+必须
+开始时间
+├─ upper
+string
+必须
+结束时间
+last_visit_time
+object
+非必须
+最近拜访时间
+├─ lower
+string
+非必须
+开始时间
+├─ upper
+string
+非必须
+结束时间
+last_call_time
+object
+非必须
+最近拨打时间
+├─ lower
+string
+非必须
+开始时间
+├─ upper
+string
+非必须
+结束时间
+is_exportenterprise
+string
+非必须
+是否进出口企业 (1和0，1代表true)
+is_laolai
+string
+非必须
+是否老赖 (1和0，1代表true)
+is_listed
+string
+非必须
+是否上市 (1和0，1代表true)
+hscode
+string
+非必须
+供应商提单hscode
+exhibition_cnt
+object
+非必须
+参展次数
+├─ lower
+integer
+必须
+最小值
+├─ upper
+integer
+必须
+最大值
+main_market
+string []
+非必须
+主营市场
+├─
+非必须
+US，AR（{country:'美国',cnt:'1次'}）
+page_size
+number
+必须
+每页记录数   最多50页
+page_num
+number
+必须
+页码    最多一页20条
+exhibition_name
+string []
+非必须
+展会名
+├─
+非必须
+exhibition_time
+object
+非必须
+开展时间
+├─ upper
+string
+非必须
+最大值
+├─ lower
+string
+非必须
+最小值
+exhibition_country
+string []
+非必须
+展会国
+├─
+非必须
+US ,AR
+cl_year
+object []
+非必须
+成立年限
+├─ upper
+string
+必须
+├─ lower
+string
+必须
+reg_capital
+object []
+非必须
+注册资本
+├─ upper
+string
+必须
+├─ lower
+string
+必须
+export_amount
+object []
+非必须
+出口规模
+├─ upper
+number
+非必须
+├─ lower
+number
+非必须
+prod_desc
+string
+非必须
+海关产品关键字
+tax_number
+string
+非必须
+统一社会信用代码
+91321181663286492K
+district
+string
+非必须
+注册地区县
+reg_status
+string []
+非必须
+经营状态
+在业
+├─
+非必须
+recruitment_positions
+string
+非必须
+招聘职位
+is_recived
+string
+非必须
+过滤已领数据(0:不过滤,1:过滤)
+other_exhibitions
+string
+非必须
+会刊展会名(会刊搜索)
+customer_value
+string []
+非必须
+展商转化潜力指数
+├─
+非必须
+展商转化潜力指数: 高转化、中高转化，中转化-高、中转化-中、中转化-低、低转化
+trade_cnt_recent
+object []
+非必须
+贸易次数列表
+├─ lower
+integer
+非必须
+├─ upper
+integer
+非必须
+owner_id
+string
+必须
+所有者id
+is_contact
+string
+非必须
+是否需要联系人:1=需要，0=可以不需要
+dim_dict
+object []
+非必须
+级联查询
+├─ id
+string
+非必须
+级联查询id
+├─ dictTypeId
+string
+非必须
+字典类型id
+├─ isLast
+string
+非必须
+是否最后一级:1=是，0=否
+├─ dictCode
+string
+非必须
+字典编号
+├─ dictValue
+string
+非必须
+字典值
+staff_size_list
+string []
+非必须
+人员规模
+├─
+非必须
+found_time
+object
+非必须
+注册时间（成立日期）
+├─ lower
+string
+非必须
+├─ upper
+string
+非必须
+is_my_data
+string
+非必须
+是否过滤本人数据
+is_team_data
+string
+非必须
+是否过滤团队数据
+vip_type_list
+string []
+非必须
+vip类型
+├─
+非必须
+tag_id_ali
+string
+非必须
+阿里类目查询
+trade_area_list
+string []
+非必须
+外贸区域
+├─
+非必须
+recruitment_date
+object
+非必须
+招聘日期
+├─ upper
+string
+非必须
+├─ lower
+string
+非必须
+recruitment_positions_list
+string []
+非必须
+招聘岗位
+├─
+非必须
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ company_name
+string
+必须
+企业名称
+├─ feature_label
+string []
+必须
+资料来源，主页搜索叫标签
+├─
+非必须
+├─ data_type
+string []
+必须
+数据类型
+├─
+非必须
+├─ province
+string
+必须
+省
+├─ city
+string
+必须
+市
+├─ district
+string
+必须
+区
+├─ reg_location
+string
+必须
+注册地址
+├─ exhibition_cnt
+number
+必须
+参展次数
+├─ offficial_website
+string
+必须
+官网
+├─ last_exhibition_name
+string
+必须
+最近参展
+├─ indus_name_t0
+string
+必须
+行业分类,（T1行业标签）用-分隔
+├─ tax_number
+string
+必须
+社会统一信用编码
+├─ legal_epresentative
+string
+必须
+法人
+├─ foundtime
+string
+必须
+成立时间
+├─ reg_capital
+string
+必须
+注册资本
+├─ company_profile
+string
+必须
+公司简介
+├─ company_english_name
+string
+必须
+企业英文名称
+├─ data_source
+string
+必须
+阶段
+├─ account_id
+string
+必须
+客户id(跳转用到)
+├─ owner_name
+string
+必须
+数据所有者名称
+├─ e_platforms
+string
+必须
+电商平台
+├─ owner_id
+string
+必须
+所有者id
+├─ trade_cnt_recent
+string
+必须
+近一年贸易次数
+├─ historynames
+string
+必须
+曾用名(分号分隔)
+├─ customer_value
+string
+必须
+客户价值: 高、较高、中等、较低、低
+├─ update_time
+string
+必须
+更新时间
+├─ scode
+string
+必须
+供应商的code
+├─ product_platform
+string []
+必须
+拥有产品的平台:alibaba，made_in_china
+├─
+非必须
+工商详情-工商信息
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcDimBussinessInfo
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+data
+object []
+非必须
+├─ legal_epresentative
+string
+必须
+法定代表人
+├─ reg_capital
+string
+必须
+注册资本
+├─ tax_number
+string
+必须
+统一社会信用代码
+├─ reg_number
+string
+必须
+工商注册号
+├─ company_english_name
+string
+必须
+英文名称
+├─ industry
+string
+必须
+行业
+├─ company_org_type
+string
+必须
+企业类型
+├─ reg_location
+string
+必须
+注册地址
+├─ reg_status
+string
+必须
+经营状态
+├─ actualcapital
+string
+必须
+实缴资本
+├─ taxpayer_code
+string
+必须
+纳税人识别号
+├─ staff_size
+string
+必须
+人员规模
+├─ foundtime
+string
+必须
+成立日期
+├─ business_term
+string
+必须
+营业期限
+├─ historynames
+string
+必须
+曾用名
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+number
+非必须
+错误信息
+apiLog
+string
+非必须
+废弃
+贸易数据-贸易记录
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcTradeRecord
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+start_date
+string
+非必须
+开始时间(yyyymm)
+end_date
+string
+非必须
+结束时间(yyyymm)
+trade_country
+string
+非必须
+贸易国家
+page_num
+integer
+必须
+page_size
+integer
+必须
+import_country
+string
+非必须
+出口国家或地区(与贸易国家是同一个)
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ exporter
+string
+必须
+供应商/出口商
+├─ importer
+string
+必须
+采购商/进口商
+├─ exporter_country
+string
+必须
+供应商国家
+├─ importer_country
+string
+必须
+采购商国家/出口国家或地区
+├─ hscode
+string
+必须
+hscode
+├─ prod_desc
+string
+必须
+商品描述
+├─ product_quantity
+number
+必须
+商品数量
+├─ product_quantity2
+number
+必须
+商品数量2
+├─ net_weight_other
+number
+必须
+净重(其他单位)
+├─ unit_of_product_quantity
+string
+必须
+商品数量单位
+├─ unit_of_product_quantity2
+string
+必须
+商品数量单位2
+├─ by_date
+string
+必须
+交易日期
+├─ trade_vl
+number
+必须
+采购金额
+工商详情-基本信息
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcDimZohoSupplierBusinessInfo
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+data
+object []
+非必须
+├─ is_exportenterprise
+string
+必须
+是否进出口
+├─ trade_product
+string
+必须
+外贸产品
+├─ product_introduction
+string
+必须
+产品介绍
+├─ is_microenterprise
+string
+必须
+是否小微企业
+├─ is_listed
+string
+必须
+是否上市
+├─ is_laolai
+string
+必须
+是否老赖
+├─ inds_tag
+string
+必须
+行业标签
+├─ company_products
+string
+必须
+主营产品
+├─ data_type
+string
+必须
+数据类型
+├─ recent_touch_time
+string
+必须
+最近触碰时间
+├─ export_amount
+number
+必须
+出口规模
+├─ annual_export_turnover
+string
+必须
+年出口额
+├─ customer_value
+string
+必须
+展商转化潜力指数
+├─ exhibition_product
+string
+必须
+参展商品
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+number
+非必须
+错误信息
+apiLog
+string
+非必须
+废弃
+参展信息-会刊参展信息
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcJournalHisExhibition
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+exhibition_type
+string
+必须
+会刊类型(0:国际会刊,1:国内会刊)
+page_num
+integer
+必须
+page_size
+integer
+必须
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ exhibition_name
+string
+必须
+展会名称
+├─ exhibition_date
+string
+必须
+参展日期
+├─ exhibition_area
+string
+必须
+展区
+├─ exhibition_country
+string
+必须
+展会国
+├─ exhibition_logo
+string
+必须
+展会logo
+贸易数据-贸易图谱
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcTradeMap
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+start_date
+string
+非必须
+开始时间(yyyymm)
+end_date
+string
+非必须
+结束时间(yyyymm)
+trade_country
+string
+非必须
+贸易国家
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ companys
+string []
+必须
+公司集合
+├─
+非必须
+├─ relation
+object []
+必须
+├─ exporter
+string
+必须
+供应商
+├─ importer
+string
+必须
+采购商
+├─ trade_cnt
+number
+必须
+交易次数
+贸易数据-出口趋势
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcExportTrend
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+start_date
+string
+非必须
+开始时间(yyyymm)
+end_date
+string
+非必须
+结束时间(yyyymm)
+trade_country
+string
+非必须
+贸易国家
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ month
+string
+必须
+年月(yyyymm)
+├─ trade_cnt
+string
+必须
+交易次数
+├─ buyer_cnt
+string
+必须
+提单买家数
+高级搜索-会刊列表
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcExhibitionSearch
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+page_num
+number
+必须
+page_size
+number
+必须
+exhibition_name
+string
+非必须
+exhibition_country
+string
+非必须
+exhibition_industry
+string
+非必须
+exhibition_date
+string
+非必须
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+必须
+结果数量
+errCode
+number
+必须
+错误码
+requestId
+string
+必须
+废弃
+errMsg
+string
+必须
+错误信息
+apiLog
+string
+非必须
+废弃
+data
+object []
+必须
+├─ exhibition_name
+string
+必须
+├─ exhibitior_cnt
+string
+必须
+├─ exhibition_city
+string
+必须
+├─ exhibition_date
+string
+必须
+├─ exhibition_website
+string
+必须
+├─ exhibition_profile
+string
+必须
+展商详情-互联网平台网址查询
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcPlatformWebsite
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Query
+参数名称
+是否必须
+示例
+备注
+taxNumber
+是
+税号
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+taxNumber
+string
+必须
+税号
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+必须
+结果数量
+errCode
+number
+必须
+错误码
+requestId
+string
+必须
+废弃
+errMsg
+string
+必须
+错误信息
+apiLog
+string
+非必须
+废弃
+data
+object []
+必须
+├─ taxNumber
+string
+必须
+统一社会信用代码
+├─ companyName
+string
+必须
+公司名
+├─ companyEnglishName
+string
+必须
+公司英文名
+├─ platformType
+string
+必须
+平台类型：1=阿里巴巴，2=中国制造网，3=环球资源网
+├─ platformWebsite
+string
+必须
+平台网址
+├─ extendField1
+string
+必须
+扩展信息1：是否本年
+├─ extendField2
+string
+必须
+扩展信息2：是否金品诚企
+├─ extendField3
+string
+必须
+扩展信息3：阿里年份
+├─ extendField4
+string
+必须
+扩展信息4
+├─ extendField5
+string
+必须
+扩展信息5
+电商平台产品信息查询
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcProduct
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+pageNum
+number
+非必须
+当前页，默认为1
+pageSize
+number
+非必须
+分页条数，默认为10
+taxNumber
+string
+必须
+税号
+dataSource
+string
+必须
+数据来源: alibaba、made_in_china、cantonfair、amazon
+productName
+string
+非必须
+产品名称（模糊匹配）
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+必须
+结果数量
+errCode
+number
+必须
+错误码
+requestId
+string
+必须
+废弃
+errMsg
+string
+必须
+错误信息
+apiLog
+string
+非必须
+废弃
+data
+object []
+必须
+├─ productId
+string
+非必须
+标签ID
+├─ taxNumber
+string
+非必须
+统一社会信用代码
+├─ companyName
+string
+非必须
+公司中文名
+├─ companyEnglishName
+string
+非必须
+公司英文名
+├─ categoryT1
+string
+非必须
+一级类目
+├─ categoryT2
+string
+非必须
+二级类目
+├─ categoryT3
+string
+非必须
+三级类目
+├─ productName
+string
+非必须
+产品中文名称
+├─ productNameEn
+string
+非必须
+产品英文名称
+├─ image
+string
+非必须
+图片地址
+├─ price
+string
+非必须
+价格
+├─ createTime
+string
+非必须
+记录创建时间
+├─ updateTime
+string
+非必须
+记录更新时间
+参展信息
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcHisExhibition
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+exhibition_type
+string
+必须
+会刊类型(0:国际会刊,1:国内会刊)
+page_num
+integer
+必须
+page_size
+integer
+必须
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ exhibition_name
+string
+必须
+展会名称
+├─ exhibition_date
+string
+必须
+参展日期
+├─ exhibition_area
+string
+必须
+展区
+├─ exhibition_country
+string
+必须
+展会国
+├─ exhibition_logo
+string
+必须
+展会logo
+├─ attence_report
+string
+必须
+参展报告url
+展会历史
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcExhibitionHistory
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+exhibition_name
+string
+必须
+展会名
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ exhibition_brand
+string
+必须
+展会品牌
+├─ exhibition_name
+string
+必须
+展会名
+├─ exhibition_date
+string
+必须
+开展时间
+├─ exhibition_city
+string
+必须
+展会城市
+├─ exhibition_areas
+string
+必须
+展出面积
+├─ exhibitior_cnt
+string
+必须
+参展商数量
+├─ visitor_cnt
+string
+必须
+观众数量
+产品信息-产品标签列表
+基本信息
+Base URL：https://supplier.datathink.com
+Path： /ds/authApi/dcProductTagList
+Method： POST
+请求参数
+Headers
+参数名称
+参数值
+是否必须
+示例
+备注
+token
+string
+是
+身份校验token
+Content-Type
+application/json
+是
+application/json
+Body
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+tax_number
+string
+必须
+统一社会信用代码
+page_num
+integer
+必须
+page_size
+integer
+必须
+返回数据
+名称
+类型
+是否必须
+默认值
+备注
+其他信息
+total
+number
+非必须
+结果数量
+errCode
+number
+非必须
+错误码
+requestId
+string
+非必须
+废弃
+errMsg
+string
+非必须
+错误信息
+apiLog
+null
+非必须
+废弃
+data
+object []
+非必须
+├─ tag
+string
+必须
+产品标签
+├─ indus_name_t1
+string
+必须
+一级产品标签
+├─ indus_name_t2
+string
+必须
+二级产品标签
+├─ indus_name_t3
+string
+必须
+三级产品标签
+├─ indus_name_t0
+string
+必须
+行业标签
+├─ tag_source
+string
+必须
+标签来源
