@@ -16,3 +16,25 @@ openclaw-workspace-state.json
 
 # runtime data (leads / tenant data / memory snapshots)
 data/
+
+# 私人/客户数据 —— 不进镜像
+**/email-registry.json
+**/*email_bindings*.json
+**/*email_registry*.json
+memory/projects/dealclaw/promotion-log.md
+scripts/dealclaw-group-tenant-map.md
+
+# 一次性 campaign 脚本（硬编码客户联系人，不进镜像）
+scripts/resend/send_*.py
+scripts/resend/send-*.mjs
+scripts/resend/reply_*.py
+scripts/resend/followup*.py
+scripts/resend/hook_*.py
+scripts/resend/*_batch*.py
+scripts/resend/confirm_*.py
+scripts/resend/internal_*.py
+scripts/resend/monitor_*_replies.py
+scripts/resend/texstead_*.py
+scripts/resend/za_*.py
+scripts/resend/warmup-*.sh
+scripts/founder-direct/send_resend.py
