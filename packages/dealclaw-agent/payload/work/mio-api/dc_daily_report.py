@@ -248,8 +248,96 @@ def _strategy(company_id: str) -> dict:
         return {}
 
 
+def _local_date_of(ts) -> str:
+    """把带时区 ISO 时间转成业务时区（Asia/Shanghai）的日期，解决 UTC/本地跨日错配。"""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo(BUSINESS_TZ)).date().isoformat()
+    except (ValueError, TypeError):
+        return str(ts)[:10]
+
+
+def _follow_count(plan: dict) -> int:
+    """待跟进客户数：plan 中 buyer 目标去重计数（客户级动作 + 批量跟进）。"""
+    targets = set()
+    for a in plan.get("actions", []):
+        for t in a.get("target_refs", []):
+            if t.get("type") == "buyer" and t.get("id"):
+                targets.add(t["id"])
+    return len(targets)
+
+
+def _exh_metrics_from_plan(plan: dict) -> str:
+    """展会数据行：从 ExhibitionProvider result item 取到展/会议/未到场。"""
+    for c in plan.get("context", []):
+        if c.get("source") == "exhibition" and c.get("kind") == "result":
+            d = c.get("detail") or {}
+            if "arrived" in d:
+                return (f"本届展会：到展 {d.get('arrived', 0)} · 会议 {d.get('meeting', 0)} · "
+                        f"未到场 {d.get('not_arrived', 0)}")
+    return ""
+
+
+def _today_metrics(company_id: str, plan: dict) -> str:
+    """【今日数据】客户关心的量化指标：会谈 / 待跟进 / 回复 / 邮件 / 商机 / 展会。"""
+    try:
+        now = datetime.now(timezone.utc)
+        today = now.astimezone(ZoneInfo(BUSINESS_TZ)).date().isoformat()
+        lines: list[str] = []
+        # 互动：今日会谈 / 收到回复（按客户计数）
+        meetings = replies = 0
+        try:
+            from dc_memory_data import read_interactions
+            seen_m, seen_r = set(), set()
+            for it in (read_interactions(company_id) or []):
+                if _local_date_of(it.get("occurred_at")) != today:
+                    continue
+                cid = it.get("customer_id") or it.get("interaction_id") or it.get("raw_record_ref")
+                if str(it.get("channel") or "").lower() == "meeting":
+                    seen_m.add(cid)
+                if str(it.get("direction") or "").lower() == "inbound":
+                    seen_r.add(cid)
+            meetings, replies = len(seen_m), len(seen_r)
+        except Exception:
+            pass
+        lines.append(f"今日会谈 {meetings} 家 · 收到回复 {replies} 家 · 待跟进 {_follow_count(plan)} 家")
+        # 邮件
+        try:
+            m = collect_metrics(company_id)
+            lines.append(f"邮件：发送 {m['sent']} · 送达 {m['delivered']} · "
+                         f"回复 {m['replied']} · 退信 {m['bounced']}")
+        except Exception:
+            pass
+        # 新增商机（今日信号）
+        try:
+            from dc_email_controller.dc_email_signals import list_signals
+            q = s = mi = 0
+            for sig in (list_signals(company_id) or []):
+                ts = sig.get("created_at") or sig.get("occurred_at")
+                if _local_date_of(ts) != today:
+                    continue
+                st = sig.get("signal_type")
+                q += 1 if st == "quote_request" else 0
+                s += 1 if st == "sample_request" else 0
+                mi += 1 if st == "meeting_interest" else 0
+            if q or s or mi:
+                lines.append(f"新增商机：报价 {q} · 样品 {s} · 会议意向 {mi}")
+        except Exception:
+            pass
+        exh = _exh_metrics_from_plan(plan)
+        if exh:
+            lines.append(exh)
+        return "【今日数据】\n" + "\n".join(f"- {l}" for l in lines) if lines else ""
+    except Exception:
+        return ""
+
+
 def _pipeline_brief(company_id: str, slot: str) -> str:
-    """新 Daily Brief 管线（Email/Opportunity/Exhibition）→ 推送文案片段。失败/无数据返回空串，不影响旧文案。"""
+    """新 Daily Brief 管线 → 推送文案片段（今日数据 + 今日优先 / 晚报核销）。失败/无数据返回空串。"""
     try:
         from dc_daily_brief import BriefContext
         import dc_daily_pipeline as pipeline
@@ -261,9 +349,14 @@ def _pipeline_brief(company_id: str, slot: str) -> str:
         base = DATA_DIR / "daily-brief"
         if slot == "morning":
             r = pipeline.run_morning_brief(ctx, base)
-            return _fmt_pipeline_morning(r.get("plan") or {})
-        r = pipeline.run_evening_brief(ctx, base)
-        return _fmt_pipeline_evening(r.get("review"), r.get("plan") or {})
+            plan = r.get("plan") or {}
+            parts = [_today_metrics(company_id, plan), _fmt_pipeline_morning(plan)]
+        else:
+            r = pipeline.run_evening_brief(ctx, base)
+            plan = r.get("plan") or {}
+            parts = [_today_metrics(company_id, plan),
+                     _fmt_pipeline_evening(r.get("review"), plan)]
+        return "\n\n".join(p for p in parts if p)
     except Exception:
         return ""
 

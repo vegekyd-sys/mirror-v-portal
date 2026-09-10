@@ -12,6 +12,7 @@
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -87,6 +88,64 @@ class TestWiredIntoReport(unittest.TestCase):
             self.assertIn("【晚报核销】", rep["text"])
         finally:
             dr._pipeline_brief = orig
+
+
+class TestTodayMetrics(unittest.TestCase):
+    def test_local_date_of_cross_day(self):
+        # UTC 09-10 17:10 = 上海 09-11 01:10（解决 UTC/本地跨日错配）
+        self.assertEqual(dr._local_date_of("2026-09-10T17:10:00+00:00"), "2026-09-11")
+        self.assertEqual(dr._local_date_of("2026-09-10T02:00:00+00:00"), "2026-09-10")
+        self.assertEqual(dr._local_date_of(None), "")
+
+    def test_follow_count_distinct_buyers(self):
+        plan = {"actions": [
+            {"target_refs": [{"type": "buyer", "id": "a@x.com"}]},
+            {"target_refs": [{"type": "buyer", "id": "a@x.com"},
+                             {"type": "buyer", "id": "b@x.com"},
+                             {"type": "exhibition", "id": "E1"}]},
+        ]}
+        self.assertEqual(dr._follow_count(plan), 2)
+
+    def test_today_metrics_counts(self):
+        import dc_memory_data
+        import dc_email_controller.dc_email_signals as sigmod
+        now = datetime.now(timezone.utc).isoformat()
+        om, osm, osl = dc_memory_data.read_interactions, dr.collect_metrics, sigmod.list_signals
+        dc_memory_data.read_interactions = lambda cid: (
+            [{"interaction_id": "m1", "customer_id": "M1", "channel": "meeting",
+              "occurred_at": now}]
+            + [{"interaction_id": "r1", "customer_id": "R1", "channel": "email",
+                "direction": "inbound", "occurred_at": now}])
+        dr.collect_metrics = lambda *a, **k: {"sent": 3, "delivered": 3, "bounced": 0, "replied": 1}
+        sigmod.list_signals = lambda *a, **k: [{"signal_type": "quote_request", "created_at": now}]
+        try:
+            out = dr._today_metrics("C1", {"actions": [
+                {"target_refs": [{"type": "buyer", "id": "a@x.com"},
+                                 {"type": "buyer", "id": "b@x.com"}]}]})
+            self.assertIn("【今日数据】", out)
+            self.assertIn("今日会谈 1 家", out)
+            self.assertIn("收到回复 1 家", out)
+            self.assertIn("待跟进 2 家", out)
+            self.assertIn("报价 1", out)
+        finally:
+            dc_memory_data.read_interactions = om
+            dr.collect_metrics = osm
+            sigmod.list_signals = osl
+
+    def test_today_metrics_error_isolated(self):
+        import dc_memory_data
+        om = dc_memory_data.read_interactions
+
+        def boom(cid):
+            raise RuntimeError("boom")
+
+        dc_memory_data.read_interactions = boom
+        try:
+            # 不抛异常，仍返回可用的块（至少含今日汇总行）
+            out = dr._today_metrics("C1", {"actions": []})
+            self.assertIn("【今日数据】", out)
+        finally:
+            dc_memory_data.read_interactions = om
 
 
 if __name__ == "__main__":
