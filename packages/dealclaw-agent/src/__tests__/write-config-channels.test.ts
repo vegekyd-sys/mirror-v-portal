@@ -128,7 +128,11 @@ describe('write-config runtime tuning (queue / pruning / compaction / session)',
       DEALCLAW_MESSAGE_QUEUE_MODE: 'off',
       DEALCLAW_SESSION_DM_SCOPE: 'shared',
     });
-    expect(config.messages).toBeUndefined();
+    // groupChat (history/visibility) is independent of the message queue:
+    // DEALCLAW_MESSAGE_QUEUE_MODE=off only disables queue steer → strict FIFO,
+    // it must not strip groupChat visibility config.
+    expect(config.messages?.queue).toBeUndefined();
+    expect(config.messages?.groupChat).toEqual({ historyLimit: 50, visibleReplies: 'automatic' });
     expect(config.session?.dmScope).toBe('shared');
   });
 });
