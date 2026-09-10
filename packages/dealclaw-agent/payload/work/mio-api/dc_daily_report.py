@@ -166,23 +166,9 @@ def _kb_brief(company_id: str) -> str:
         return "（KB 未接入）"
 
 
-# supplier_id → 真实企业名 + registry slug。
-# 注意：不能用 CDP getBasicInfo 的 companyName——它对 151897148668 返回「米奥兰特2026」
-# （平台测试号名），真实企业是中亿丰罗普斯金（LPSK，slug=lpskcom）。
-_COMPANY_INFO = {
-    "151897148668": {"name": "中亿丰罗普斯金材料科技股份有限公司", "slug": "lpskcom"},
-    "152598718575": {"name": "杭州奕歌跨境电商有限公司", "slug": "ingiatradecom"},
-    "100000834234": {"name": "杭州卓立家具有限公司", "slug": ""},
-}
-
-
 def company_display_name(company_id: str) -> str:
-    """supplier_id → 企业展示名。优先级：显式映射 > 绑定信息 > 画像 kb.json > registry > company_id。"""
-    # 1. 显式映射（人工校正，最可靠，覆盖 CDP/kb.json 因 supplier id 复用产生的混乱）
-    info = _COMPANY_INFO.get(company_id)
-    if info and info.get("name"):
-        return info["name"]
-    # 2. 企业绑定信息（buyer-leads-v10 binding.company_name，动态权威来源）
+    """supplier_id → 企业展示名。只读动态租户数据，不维护企业硬编码。"""
+    # 1. 企业绑定信息（buyer-leads-v10 binding.company_name，动态权威来源）
     try:
         v10_dir = Path(__file__).resolve().parents[2] / "data" / "buyer-leads-v10"
         if v10_dir.exists():
@@ -200,7 +186,7 @@ def company_display_name(company_id: str) -> str:
                     continue
     except Exception:
         pass
-    # 3. 画像 kb.json profile.name（动态；supplier id 复用可能混乱，故排在映射/绑定之后）
+    # 2. 画像 kb.json profile.name（动态）
     try:
         kb_path = Path(__file__).resolve().parents[2] / "data" / "memory" / str(company_id) / "kb.json"
         if kb_path.exists():
@@ -210,7 +196,7 @@ def company_display_name(company_id: str) -> str:
                 return name
     except Exception:
         pass
-    # 4. registry 兜底
+    # 3. registry 兜底
     try:
         from dc_company_registry import CompanyRegistry
         entry = CompanyRegistry().get(company_id)
@@ -223,8 +209,8 @@ def company_display_name(company_id: str) -> str:
 
 def _followup_table_url(company_id: str) -> str:
     """飞书跟进明细表跳转链接（优先「邮件跟进」表，兜底线索池 bitable_url）。无则返回空串。"""
-    info = _COMPANY_INFO.get(company_id, {})
-    slug = info.get("slug") or company_id
+    from enterprise_ids import slug_for
+    slug = slug_for(company_id)
     try:
         from dc_company_registry import CompanyRegistry
         entry = CompanyRegistry().get(slug)
