@@ -339,7 +339,7 @@ def _today_metrics(company_id: str, plan: dict) -> str:
 def _exhibition_battle(company_id: str) -> str:
     """【本届展会战报】漏斗（邀约→到展→有效商洽→商务推进）+ 高匹配 + 新增商机。
 
-    只统计本届展会买家；无本届数据返回空串。金额/上届对比待补数据源后再加。
+    只统计本届展会买家；无本届数据返回空串。**不含上届对比（已定稿不做）**。
     """
     try:
         from dc_exhibition_provider import (
