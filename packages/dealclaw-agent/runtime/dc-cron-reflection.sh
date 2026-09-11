@@ -1,0 +1,92 @@
+#!/bin/bash
+# dc-cron-reflection.sh — 幂等注入 DealClaw reflection heartbeat cron（6h，command 类型）
+#
+# 设计（结合两处）：
+#   - 对齐 V 的「Knight Heartbeat」：reflection 由 cron 控频（6h），不靠 agent heartbeat。
+#   - 沿用 payload runtime 的 dc-cron-*.sh 风格：openclaw cron add + --declaration-key
+#     （同名键自动 converge：无差异 no-op / 有差异原地更新 / 缺失新建）。
+#
+# 幂等：靠 --declaration-key，无需先查存在性。
+# 开关：仅当 knight.config.json 的 heartbeat.enabled=true 才注入；
+#       可用 DEALCLAW_REFLECTION_ENABLED=true|false 强制覆盖。
+#
+# 用法:
+#   dc-cron-reflection.sh                       # 默认 6h @ Asia/Shanghai
+#   dc-cron-reflection.sh --tz Europe/Berlin
+#   dc-cron-reflection.sh --cron "0 */6 * * *"  # 用 cron 表达式替代 --every
+#
+# 环境变量:
+#   DEALCLAW_CRON_TZ            默认时区（低于 --tz）
+#   DEALCLAW_WORKSPACE          agent 工作区（默认 /data/workspace）
+#   DEALCLAW_AGENT              agent id（默认 dealclaw）
+#   DEALCLAW_REFLECTION_ENABLED 强制开关 true|false（覆盖 knight.config）
+
+set -euo pipefail
+
+TZ="${DEALCLAW_CRON_TZ:-Asia/Shanghai}"
+WS="${DEALCLAW_WORKSPACE:-/data/workspace}"
+AGENT="${DEALCLAW_AGENT:-dealclaw}"
+DECL_KEY="dealclaw-reflection-heartbeat"
+EVERY="6h"
+CRON_EXPR=""
+
+# ── 参数解析 ──
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tz) TZ="${2:-Asia/Shanghai}"; shift 2 ;;
+    --tz=*) TZ="${1#--tz=}"; shift ;;
+    --every) EVERY="${2:-6h}"; shift 2 ;;
+    --every=*) EVERY="${1#--every=}"; shift ;;
+    --cron) CRON_EXPR="${2:-}"; shift 2 ;;
+    --cron=*) CRON_EXPR="${1#--cron=}"; shift ;;
+    *) echo "[dc-cron-reflection] 未知参数: $1" >&2; exit 1 ;;
+  esac
+done
+
+# ── 校验时区合法（IANA）──
+python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
+  || { echo "[dc-cron-reflection] 非法时区: $TZ" >&2; exit 1; }
+
+# ── 读取开关（knight.config.heartbeat.enabled）──
+enabled="$(python3 - "$WS" <<'PY'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1]) / "knight.config.json"
+try:
+    c = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    c = {}
+print("1" if (c.get("heartbeat") or {}).get("enabled") else "0")
+PY
+)"
+case "${DEALCLAW_REFLECTION_ENABLED:-}" in
+  true)  enabled="1" ;;
+  false) enabled="0" ;;
+esac
+
+if [[ "$enabled" != "1" ]]; then
+  echo "[dc-cron-reflection] heartbeat.enabled 非 true，跳过注入（可 DEALCLAW_REFLECTION_ENABLED=true 强制）"
+  exit 0
+fi
+
+# ── schedule 参数（--every 6h 或 --cron 表达式）──
+if [[ -n "$CRON_EXPR" ]]; then
+  SCHED_ARGS=(--cron "$CRON_EXPR" --tz "$TZ")
+  SCHED_DESC="${CRON_EXPR} @ ${TZ}"
+else
+  SCHED_ARGS=(--every "$EVERY")
+  SCHED_DESC="${EVERY}"
+fi
+
+# ── 注入（add 自带 converge，幂等）──
+openclaw cron add \
+  "${SCHED_ARGS[@]}" \
+  --agent "$AGENT" \
+  --name "dealclaw-reflection-heartbeat" \
+  --command "python3 scripts/heartbeat.py" \
+  --command-cwd "$WS" \
+  --command-env "DEALCLAW_WORKSPACE=$WS" \
+  --no-deliver \
+  --declaration-key "$DECL_KEY" \
+  --description "DealClaw reflection heartbeat（${SCHED_DESC}）"
+
+echo "[dc-cron-reflection] 已同步：dealclaw-reflection-heartbeat（${SCHED_DESC}）"
