@@ -20,6 +20,7 @@ import {
   addChatBots,
   listInviteOpenIds,
   listUserIdsByContacts,
+  probeBotInvite,
   forwardThreadToChat,
   ensureBotInChat,
   updateMessageText,
@@ -208,6 +209,17 @@ export async function diagnoseFeishu(): Promise<Record<string, unknown>> {
     try {
       const chatId = await ensureCsChatId([], creds.inviteAppIds);
       return { ok: true, chatId };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  })();
+
+  // 机器人邀请单独探测：一次调用就能看到「拉没拉进去 / 飞书回什么码」，不用翻 pod 日志。
+  out.botInvite = await (async () => {
+    try {
+      const chatId = String(((out.ensureCsChatId as Record<string, unknown> | undefined)?.chatId) || "");
+      if (!chatId) return { ok: false, error: "没有 chatId，跳过机器人邀请探测" };
+      return await probeBotInvite(chatId, creds.inviteAppIds || []);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }

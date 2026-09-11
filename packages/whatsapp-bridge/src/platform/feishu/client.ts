@@ -310,6 +310,39 @@ export async function addChatBots(chatId: string, appIds: string[]): Promise<voi
   }
 }
 
+/**
+ * 诊断用：尝试把机器人拉进群，把飞书原始结果原样交回（不抛错）。
+ * 用途：不翻 pod 日志，只调一次接口就能看到「机器人到底拉没拉进去 / 飞书回什么码」。
+ */
+export async function probeBotInvite(chatId: string, appIds: string[]): Promise<Record<string, unknown>> {
+  const selfAppId = requireFeishuApp().appId;
+  const ids = [...new Set(appIds.map((id) => id.trim()).filter((id) => id.startsWith("cli")))];
+  const chunk = ids.filter((id) => id !== selfAppId);
+  if (!chunk.length) return { ok: true, skipped: "inviteAppIds 为空（或只有本应用自己），无需邀请" };
+  const token = await getTenantToken();
+  try {
+    const json = await feishuFetch(
+      `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=app_id&succeed_type=1`,
+      { method: "POST", body: JSON.stringify({ id_list: chunk }) },
+      token,
+      1,
+    );
+    const data = (json.data || {}) as Json;
+    const notExisted = Array.isArray(data.not_existed_id_list) ? data.not_existed_id_list : [];
+    const invalid = Array.isArray(data.invalid_id_list) ? data.invalid_id_list : [];
+    return {
+      ok: notExisted.length === 0 && invalid.length === 0,
+      appIds: chunk,
+      invalidIdList: invalid,
+      notExistedIdList: notExisted,
+      pendingApprovalIdList: Array.isArray(data.pending_approval_id_list) ? data.pending_approval_id_list : [],
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { ok: false, appIds: chunk, error: msg, logId: extractFeishuLogId(msg) };
+  }
+}
+
 export async function addChatMembersWithType(
   chatId: string,
   ids: string[],
