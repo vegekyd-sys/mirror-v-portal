@@ -36,8 +36,8 @@ BOUNDARY = json.loads((REPO / "packages" / "dealclaw-agent" / "payload-boundary.
 # 需求 1：人工选定候选（来自 review-reflections 候选）
 CHOSEN = {
     "bug": "reflection 脚本曾 fallback 全局路径写错目录 → resolve_workspace 自定位 + 回归测试",
-    "skill_improvement": "「今日/当日」口径时间戳先转业务时区再取日 → 规则 + dc_timeutil + 测试",
-    "industry_knowledge": "客户要数字/ROI（脱敏 + 限定行业/市场/场景）→ industry-knowledge.md",
+    "skill_improvement": "客户价值口径（数字/ROI）从 industry-knowledge 迁出 → reporting-playbook.md（Agent 怎么表达/排序）",
+    "industry_knowledge": "买家行为：优先有采购记录的制造商（非询盘多的贸易商）→ industry-knowledge.md（脱敏+限定）",
 }
 # 需求 8：读取优先级（高 → 低）
 PRECEDENCE = ["本次指令", "租户纠正", "企业事实", "租户偏好", "payload通用知识", "模型知识"]
@@ -168,10 +168,13 @@ def main() -> int:
     # 2/3 bug + skill 回归测试
     check("2/3. bug+skill 回归测试通过", run_tests())
 
-    # 4 industry_knowledge 落库（脱敏 + 限定范围）
+    # 4 industry_knowledge 落库（脱敏 + 限定范围）+ ROI 已迁出 industry-knowledge
     kb = (PAYLOAD / "memory" / "projects" / "dealclaw" / "industry-knowledge.md").read_text(encoding="utf-8")
-    check("4. industry_knowledge 已落库（脱敏+限定行业/市场/场景）",
-          "客户价值口径" in kb and "已脱敏" in kb and "适用范围" in kb)
+    playbook = (PAYLOAD / "memory" / "projects" / "dealclaw" / "reporting-playbook.md").read_text(encoding="utf-8")
+    check("4. industry_knowledge 已落库（买家行为·脱敏·限定范围）",
+          "买家行为" in kb and "已脱敏" in kb and "适用范围" in kb)
+    check("4. 客户价值口径已从 industry-knowledge 迁出到 reporting-playbook",
+          "客户价值口径" not in kb and "客户价值口径" in playbook)
 
     # 5 构建 payload（两次，校验可复现）
     b1 = build_payload(tmp / "build1")
@@ -187,8 +190,9 @@ def main() -> int:
     inher = (
         (A / "scripts" / "write-reflection.py").exists()
         and (A / "memory" / "projects" / "dealclaw" / "rules.md").exists()
+        and (A / "memory" / "projects" / "dealclaw" / "reporting-playbook.md").exists()
         and (A / "work" / "mio-api" / "dc_timeutil.py").exists()
-        and "客户价值口径" in (A / "memory" / "projects" / "dealclaw" / "industry-knowledge.md").read_text(encoding="utf-8")
+        and "买家行为" in (A / "memory" / "projects" / "dealclaw" / "industry-knowledge.md").read_text(encoding="utf-8")
         and (B / "scripts" / "write-reflection.py").exists()
     )
     check("6. A/B 均继承三项改进（bug/skill/industry）", inher)

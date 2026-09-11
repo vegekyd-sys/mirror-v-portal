@@ -17,9 +17,11 @@ import unittest
 from pathlib import Path
 
 AGENT = Path(__file__).resolve().parents[1]
+REPO_ROOT = AGENT.parents[1]
 PAYLOAD = AGENT / "payload"
 BOUNDARY = json.loads((AGENT / "payload-boundary.json").read_text(encoding="utf-8"))
-REVIEW_SCRIPT = PAYLOAD / "scripts" / "review-reflections.py"
+# review-reflections 是「分发前测试母体工具」，已在 tools/reflection-review（不进 payload）
+REVIEW_SCRIPT = REPO_ROOT / "tools" / "reflection-review" / "review-reflections.py"
 
 
 def _load_review():
@@ -59,6 +61,11 @@ class TestPayloadExcludes(unittest.TestCase):
                     break
         self.assertEqual(violations, [], f"payload 跟踪文件含被排除项（越界）: {violations}")
 
+    def test_review_reflections_not_in_payload(self):
+        self.assertFalse((PAYLOAD / "scripts" / "review-reflections.py").exists(),
+                         "review-reflections 属于测试母体工具，不应在 payload")
+        self.assertTrue(REVIEW_SCRIPT.exists(), f"缺少 {REVIEW_SCRIPT}")
+
     def test_dockerignore_covers_runtime_data(self):
         di = (AGENT / ".dockerignore").read_text(encoding="utf-8")
         for pat in ("payload/memory/reflections/*.jsonl", "reflections.jsonl",
@@ -97,6 +104,19 @@ class TestReviewClassification(unittest.TestCase):
                                            "how": "找买家按认证筛"})
         self.assertEqual(cls, "industry_knowledge")
 
+    def test_business_reporting_is_skill(self):
+        """Agent 如何表达/分析/排序/执行 → skill_improvement（不是领域知识）。"""
+        cls, _ = self.m.classify_business(
+            {"type": "pattern", "what": "客户要的是数字和 ROI，不是叙事性文案",
+             "how": "早晚报按此排序/展示，Top-N 只放有证据客户"})
+        self.assertEqual(cls, "skill_improvement")
+
+    def test_buyer_behavior_is_industry(self):
+        cls, _ = self.m.classify_business(
+            {"type": "pattern", "what": "优先有采购记录的制造商，而非询盘多的贸易商",
+             "how": "找买家时按买家行为筛"})
+        self.assertEqual(cls, "industry_knowledge")
+
     def test_business_tenant_preference(self):
         cls, _ = self.m.classify_business({"type": "preference", "what": "只做印尼越南不碰泰国",
                                            "how": "过滤泰国"})
@@ -108,7 +128,7 @@ class TestReviewClassification(unittest.TestCase):
         self.assertEqual(cls, "ignore")
 
     def test_desensitize(self):
-        out = self.m.desensitize("联系 a@b.com 或 ou_1234567890abcdef 电话 +86 138-0000-0000")
+        out = self.m.mask_pii("联系 a@b.com 或 ou_1234567890abcdef 电话 +86 138-0000-0000")
         self.assertNotIn("a@b.com", out)
         self.assertNotIn("ou_1234567890abcdef", out)
 
