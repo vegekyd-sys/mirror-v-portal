@@ -276,7 +276,11 @@ const config = {
       timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 900),
       // reasoning off (skip reasoning tokens — faster first-token + streaming)
       reasoningDefault: 'off',
-      thinkingDefault: 'high',
+      // Reasoning model + high thinking caused "思考过载" (b4083949 / 158a70e):
+      // every tool step re-reasoned, final turn spent 6281 thinking chars to
+      // emit 8 chars of answer, hitting the 15min run ceiling. Drop one notch
+      // (high → medium) to bound thinking without disabling it.
+      thinkingDefault: 'medium',
       contextTokens: 1_000_000,
       typingMode: 'instant',
       // Multi-user tenants: each Feishu peer gets its own concurrent budget
