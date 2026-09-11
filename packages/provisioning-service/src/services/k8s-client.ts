@@ -572,6 +572,83 @@ export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
   console.log(`[k8s] deployment scaled: ${spec.namespace}/${spec.name} -> ${spec.replicas}`);
 }
 
+// ── Deployment Image Update (recreate) ──
+
+/**
+ * Update a Deployment's container image using a recreate (scale 0 → scale N)
+ * strategy instead of the default RollingUpdate.
+ *
+ * Rationale: dealclaw-agent is single-replica and shares its PVC (SQLite)
+ * with the pod that replaces it. A RollingUpdate spawns the new pod *before*
+ * the old one terminates — the two concurrent agents contend for the same
+ * SQLite file and neither passes startupProbe (and, on RWO volumes, the
+ * second pod can't even attach the volume). Scaling to 0 first fully
+ * terminates the old pod and releases the volume, then the image is patched
+ * (no-op while at 0 replicas) and the pod is brought back up cleanly.
+ *
+ * Steps: GET (replicas + selector) → scale 0 → patch image → poll for pod
+ * termination (≤30s) → scale back to the original replicas.
+ * Returns false when the Deployment does not exist (404) or is unavailable
+ * (out-of-cluster dry-run); throws on other API errors.
+ */
+export async function updateDeploymentImageRecreate(
+  namespace: string,
+  name: string,
+  image: string,
+): Promise<boolean> {
+  // 1. Read the current deployment to get replica count + pod selector.
+  const getRes = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
+  if (getRes.status === 404 || getRes.status === 0) return false;
+  if (!getRes.ok) throw new Error(`updateDeploymentImageRecreate ${name} GET failed: ${getRes.status}`);
+  const deploy = getRes.body as Record<string, any>;
+  const replicas: number = deploy?.spec?.replicas ?? 1;
+  const matchLabels: Record<string, string> = deploy?.spec?.selector?.matchLabels ?? { app: name };
+
+  // 2. Scale to 0 first — terminates the old pod and releases its PVC before
+  //    the new image lands, so there is never a dual-pod overlap.
+  await scaleDeployment({ namespace, name, replicas: 0 });
+
+  // 3-5. Patch the image, poll for pod termination, then scale back up. Any
+  //     failure after the scale-to-0 rolls the replica count back so the
+  //     tenant never stays stranded at 0 (the old pod returns on the
+  //     unchanged image).
+  try {
+    // 3. Patch the image while at 0 replicas (no rolling churn).
+    await patchDeploymentImage({ namespace, name, image });
+
+    // 4. Poll for pod termination (≤30s, 5s intervals) before scaling up.
+    const labelStr = Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(',');
+    const labelSelector = encodeURIComponent(labelStr);
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      const podRes = await k8sRequest(
+        'GET',
+        `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`,
+      );
+      if (!podRes.ok) break; // best-effort — proceed to scale back regardless
+      const items = (podRes.body as Record<string, any>)?.items ?? [];
+      const active = items.filter(
+        (p: Record<string, any>) =>
+          p.metadata?.deletionTimestamp === undefined &&
+          p.status?.phase !== 'Succeeded' &&
+          p.status?.phase !== 'Failed',
+      );
+      if (active.length === 0) break;
+    }
+
+    // 5. Scale back to the original replicas (new image).
+    await scaleDeployment({ namespace, name, replicas });
+  } catch (err) {
+    // Best-effort rollback: restore the replica count so the deployment is
+    // never left at 0.
+    await scaleDeployment({ namespace, name, replicas }).catch(() => {});
+    throw err;
+  }
+
+  console.log(`[k8s] deployment image updated (recreate 0→${replicas}): ${namespace}/${name} -> ${image}`);
+  return true;
+}
+
 // ── Deployment Restart (rollout) ──
 
 /**

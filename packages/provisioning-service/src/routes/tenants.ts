@@ -866,8 +866,16 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const deploymentName = `${service}-${tenantId}`;
       const fullImage = normalizeImage(service, image);
 
-      const { patchDeploymentImage } = await import('../services/k8s-client.js');
-      await patchDeploymentImage({ namespace, name: deploymentName, image: fullImage });
+      // Recreate (scale 0 → patch image → scale 1), NOT rolling update: a
+      // single-replica agent shares its SQLite PVC with the replacement pod,
+      // so a rolling update would briefly run two pods that deadlock on the
+      // same DB file and neither passes startupProbe.
+      const { updateDeploymentImageRecreate } = await import('../services/k8s-client.js');
+      const updated = await updateDeploymentImageRecreate(namespace, deploymentName, fullImage);
+      if (!updated) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Deployment not found' });
+        return;
+      }
 
       // Persist (or clear) the pin so the rollout cron respects this override.
       const { actor } = actorFromRequest(req);
@@ -900,7 +908,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         deployment: deploymentName,
         image: fullImage,
         pinned: shouldPin,
-        action: 'rolling_update',
+        action: 'recreate',
       });
     } catch (err: unknown) {
       const e = err as any;
@@ -1067,7 +1075,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
-  // POST /v1/tenants/batch/deployment — rolling update all active tenants
+  // POST /v1/tenants/batch/deployment — recreate (scale 0 → scale 1) all active tenants
   router.post('/v1/tenants/batch/deployment', async (req: Request, res: Response) => {
     try {
       const { service, image } = req.body;
@@ -1092,7 +1100,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
 
-      const { patchDeploymentImage, getDeployment } = await import('../services/k8s-client.js');
+      const { updateDeploymentImageRecreate, getDeployment } = await import('../services/k8s-client.js');
       // Pinned tenants are exempt from fleet rollout: load all overrides for
       // this service in one query, then skip any tenant with a matching row.
       const overrides = await getOverrideMap(pool, service);
@@ -1106,20 +1114,30 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           continue;
         }
         try {
-          // Skip no-op patches: read the current image first and only patch
-          // when it actually differs from the desired tag. This keeps the
-          // periodic rollout cron from churning every Deployment (and, for
-          // single-replica tenants, from triggering a rolling restart that
-          // briefly spawns a second pod contending for the SQLite PVC lock).
+          // Skip no-op updates: read the current image first and only
+          // recreate when it actually differs from the desired tag. This
+          // keeps the periodic rollout cron from churning every Deployment.
           const current = await getDeployment(row.k8s_namespace, deploymentName);
-          const container = (current?.spec?.template?.spec?.containers ?? []).find(
+          if (!current) {
+            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped: true, error: 'deployment not found' });
+            continue;
+          }
+          const container = (current.spec?.template?.spec?.containers ?? []).find(
             (c: any) => c.name === deploymentName,
           );
-          if (current && container?.image === fullImage) {
+          if (container?.image === fullImage) {
             results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true, alreadyCurrent: true });
             continue;
           }
-          await patchDeploymentImage({ namespace: row.k8s_namespace, name: deploymentName, image: fullImage });
+          // Recreate (scale 0 → patch image → scale 1), NOT rolling update:
+          // a single-replica agent shares its SQLite PVC with the replacement
+          // pod, so a rolling update would briefly run two pods that deadlock
+          // on the same DB file and neither passes startupProbe.
+          const updated = await updateDeploymentImageRecreate(row.k8s_namespace, deploymentName, fullImage);
+          if (!updated) {
+            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped: true, error: 'deployment not found' });
+            continue;
+          }
           results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
         } catch (err: unknown) {
           const e = err as any;
