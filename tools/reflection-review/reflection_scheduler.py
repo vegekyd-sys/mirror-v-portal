@@ -64,6 +64,18 @@ def _merge_same_class(cands: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def _score(item: dict) -> int:
+    rank = {"bug": 100, "skill_improvement": 70, "industry_knowledge": 60, "tenant_only": 20, "ignore": 0}
+    conf = {"high": 5, "medium": 3, "low": 1}
+    return rank.get(item.get("classification"), 0) + conf.get(item.get("confidence"), 0)
+
+
+def _top(items: list[dict], lo: int = 3, hi: int = 5) -> list[dict]:
+    """每天只选最值得处理的 3-5 条（需求 4）。"""
+    items = sorted(items, key=_score, reverse=True)
+    return items[:hi] if len(items) >= lo else items
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="仅测试母体的每日候选调度（只出候选）")
     ap.add_argument("--workspace", required=True)
@@ -123,31 +135,36 @@ def main() -> int:
             return 0
 
         today = now.strftime("%Y-%m-%d")
+        top = _top(merged)
         body = {"generated_at": datetime.now(timezone.utc).isoformat(),
                 "environment": rr.get("environment", ""), "timezone": tzname,
                 "scanned": len(all_c), "fresh": len(fresh), "counts": counts,
-                "candidates": merged}
+                "picked": len(top),
+                "candidates": [{**it, "handled": None, "commit_id": None} for it in top]}
         if args.dry_run:
-            print(f"[scheduler][dry-run] 扫描 {len(all_c)} / 新增 {len(fresh)} / 分类 {counts}")
+            print(f"[scheduler][dry-run] 扫描 {len(all_c)} / 新增 {len(fresh)} / 分类 {counts} / 今日选 {len(top)}")
             return 0
         # 10. 只写 data/reflection-review
         (out_dir / "candidates").mkdir(parents=True, exist_ok=True)
         (out_dir / "candidates" / f"candidates-{today}.json").write_text(
             json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
         lines = [f"# Reflection 每日候选（pending）· {today}", "",
-                 f"> env={rr.get('environment')} · 扫描 {len(all_c)} · 新增 {len(fresh)} · 分类 {counts}",
-                 "> **只生成 pending 候选，不自动修改任何系统内容。**", ""]
-        for k in CLASSES:
-            g = [x for x in merged if x["classification"] == k]
-            lines.append(f"## {k}（{len(g)}）")
-            for x in g:
-                lines.append(f"- {x['summary']}｜refs={x.get('source_refs', [])}")
-            lines.append("")
+                 f"> env={rr.get('environment')} · 扫描 {len(all_c)} · 新增 {len(fresh)} · 分类 {counts} · 今日选 {len(top)}",
+                 "> **只生成 pending 候选；人确认后自行修改+测试并记录 handled + commit_id。**", ""]
+        for i, x in enumerate(top, 1):
+            lines += [f"## {i}. {x['summary']}",
+                      f"- 建议分类：{x['classification']}（仅建议，可重分类/拆分）",
+                      f"- agent_judgment：{x['agent_judgment']}",
+                      f"- suggested_destination：{x['suggested_destination']}",
+                      f"- suggested_change：{x['suggested_change']}",
+                      f"- evidence_refs：{x['evidence_refs']}",
+                      f"- confidence：{x['confidence']}",
+                      "- handled：____  commit_id：____", ""]
         (out_dir / "candidates" / f"candidates-{today}.md").write_text("\n".join(lines) + "\n",
                                                                       encoding="utf-8")
         cursor_path.write_text(json.dumps(cursor, ensure_ascii=False, indent=2), encoding="utf-8")
         nxt = f"{target} {tzname}"
-        print(f"[scheduler] 完成：扫描 {len(all_c)} / 新增 {len(fresh)} / 分类 {counts} / 下次 {nxt}")
+        print(f"[scheduler] 完成：扫描 {len(all_c)} / 新增 {len(fresh)} / 分类 {counts} / 今日选 {len(top)} / 下次 {nxt}")
         return 0
     except Exception as e:  # noqa: BLE001 — 8. 失败不影响主流程
         print(f"[scheduler] 失败但不影响主流程：{type(e).__name__}: {e}")

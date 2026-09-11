@@ -148,32 +148,39 @@ def _iter_business(workspace: Path, since: str = "") -> list[dict]:
     return out
 
 
+def _confidence(cls: str) -> str:
+    return {"bug": "high", "skill_improvement": "medium", "industry_knowledge": "medium"}.get(cls, "low")
+
+
+def _review_item(*, cls: str, reason: str, summary: str, change: str, ref: str) -> dict:
+    """统一输出（需求 4）：summary / agent_judgment / suggested_destination / suggested_change /\n    evidence_refs / confidence。classification 仅作**建议**，Agent 可重分类或拆分。"""
+    return {
+        "summary": summary,
+        "agent_judgment": f"建议 {cls}（{reason}）；可结合上下文重分类或拆分",
+        "classification": cls,  # 仅建议，不强制
+        "suggested_destination": TARGETS[cls],
+        "suggested_change": change,
+        "evidence_refs": [ref] if ref else [],
+        "confidence": _confidence(cls),
+    }
+
+
 def build_candidates(workspace: Path, since: str = "") -> list[dict]:
     cands: list[dict] = []
     for e in _iter_agent(workspace, since):
         cls, reason = classify_agent(e)
-        cands.append({
-            "source": "agent", "classification": cls, "reason": reason,
-            "source_ref": e.get("_source_ref", ""),
-            "summary": mask_pii(e.get("context") or ""),
-            "detail": mask_pii(e.get("next_time") or e.get("what_failed") or ""),
-            "proposed_target": TARGETS[cls],
-            "proposed_payload": mask_pii(str(e.get("next_time") or "")) if cls == "industry_knowledge" else "",
-        })
+        cands.append(_review_item(
+            cls=cls, reason=reason, summary=mask_pii(e.get("context") or ""),
+            change=mask_pii(str(e.get("next_time") or e.get("what_failed") or "")),
+            ref=e.get("_source_ref", "")))
     for e in _iter_business(workspace, since):
         cls, reason = classify_business(e)
         if cls == "tenant_only":
-            summary, detail, payload = _tenant_summary(e), "", ""
+            summary, change = _tenant_summary(e), ""
         else:
-            summary = mask_pii(e.get("what") or "")
-            detail = mask_pii(e.get("how") or "")
-            payload = mask_pii(str(e.get("what") or "")) if cls == "industry_knowledge" else ""
-        cands.append({
-            "source": "business", "classification": cls, "reason": reason,
-            "source_ref": e.get("_source_ref", ""),
-            "summary": summary, "detail": detail,
-            "proposed_target": TARGETS[cls], "proposed_payload": payload,
-        })
+            summary, change = mask_pii(e.get("what") or ""), mask_pii(str(e.get("how") or ""))
+        cands.append(_review_item(cls=cls, reason=reason, summary=summary, change=change,
+                                  ref=e.get("_source_ref", "")))
     return cands
 
 
