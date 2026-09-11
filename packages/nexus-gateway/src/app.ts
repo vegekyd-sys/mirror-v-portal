@@ -293,7 +293,7 @@ export function createApp(config: GatewayConfig) {
     try {
       const response = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute`, {
         method: 'POST',
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(config.externalChatTimeoutMs),
         headers: {
           'content-type': 'application/json',
           [GATEWAY_HEADERS.TENANT_ID]: config.tenantId,
@@ -346,7 +346,7 @@ export function createApp(config: GatewayConfig) {
     try {
       const upstream = await fetch(`${config.agentUrl.replace(/\/$/, '')}/execute/stream`, {
         method: 'POST',
-        signal: AbortSignal.timeout(600_000),
+        signal: AbortSignal.timeout(config.externalChatStreamTimeoutMs),
         headers: {
           'content-type': 'application/json',
           'accept': 'text/event-stream',

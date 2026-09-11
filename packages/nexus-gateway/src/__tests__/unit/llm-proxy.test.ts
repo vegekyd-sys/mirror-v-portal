@@ -22,6 +22,8 @@ function makeConfig(over: Partial<GatewayConfig> = {}): GatewayConfig {
       configVersion: '1',
     },
     initialCredits: 10000,
+    externalChatTimeoutMs: 300_000,
+    externalChatStreamTimeoutMs: 600_000,
     llmUpstreams: { qwen: UPSTREAM },
     ...over,
   };

@@ -38,6 +38,19 @@ const GATEWAY_FORWARD_HEADERS = {
 
 const MAX_MESSAGE_LEN = 8_000;
 
+/**
+ * Forward timeouts (ms). Agent runs are open-ended (long LLM chains, tool
+ * loops, session-lane queueing behind compaction), so the non-stream forward
+ * must outlive the gateway's own forward timeout — otherwise provisioning
+ * aborts first and masks the gateway's AGENT_TIMEOUT error with a generic
+ * GATEWAY_TIMEOUT. Defaults: gateway 300s / stream 600s, provisioning +30s
+ * headroom so downstream error bodies can pass through.
+ */
+const CHAT_FORWARD_TIMEOUT_MS = Number(process.env.DEALCLAW_EXTERNAL_CHAT_TIMEOUT_MS ?? 330_000);
+const CHAT_STREAM_FORWARD_TIMEOUT_MS = Number(
+  process.env.DEALCLAW_EXTERNAL_CHAT_STREAM_TIMEOUT_MS ?? 630_000,
+);
+
 // ── in-memory per-key rate limiter ──
 
 interface RateBucket {
@@ -211,7 +224,7 @@ export function createChatExternalRoutes(
           ...forwardHeaders(body),
         },
         body: JSON.stringify({ message: body.message }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(CHAT_FORWARD_TIMEOUT_MS),
       });
 
       const gwBody = await gwRes.text();
@@ -260,7 +273,7 @@ export function createChatExternalRoutes(
       const internalToken = process.env.PROVISIONING_API_TOKEN;
       const upstream = await fetch(gatewayUrl, {
         method: 'POST',
-        signal: AbortSignal.timeout(600_000),
+        signal: AbortSignal.timeout(CHAT_STREAM_FORWARD_TIMEOUT_MS),
         headers: {
           'Content-Type': 'application/json',
           'accept': 'text/event-stream',

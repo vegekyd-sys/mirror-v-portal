@@ -24,6 +24,15 @@ export interface GatewayConfig {
   provisioningServiceUrl?: string;
   provisioningApiToken?: string;
   /**
+   * External chat forward timeouts (ms). Non-stream /v1/external/chat waits
+   * for the full agent run; stream /v1/external/chat/stream covers the whole
+   * SSE lifetime. Both env-tunable because agent runs (long LLM chains,
+   * tool loops, session-lane queueing behind compaction) routinely exceed
+   * the old hardcoded 120s and surfaced as spurious 504s.
+   */
+  externalChatTimeoutMs: number;
+  externalChatStreamTimeoutMs: number;
+  /**
    * LLM egress proxy — provider name → real upstream base URL. Injected via
    * the `llm-proxy-config` Secret (env LLM_UPSTREAMS, JSON) written by
    * provisioning-service at provider-library push time. Empty when the tenant
@@ -82,6 +91,8 @@ export function loadConfig(): GatewayConfig {
     appSecret: process.env.DEALCLAW_APP_SECRET,
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL,
     provisioningApiToken: process.env.PROVISIONING_API_TOKEN,
+    externalChatTimeoutMs: Number(process.env.DEALCLAW_EXTERNAL_CHAT_TIMEOUT_MS ?? 300_000),
+    externalChatStreamTimeoutMs: Number(process.env.DEALCLAW_EXTERNAL_CHAT_STREAM_TIMEOUT_MS ?? 600_000),
     llmUpstreams,
     keyConfig: {
       customerKeyRef: required('DEALCLAW_CUSTOMER_KEY_REF'),
