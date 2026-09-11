@@ -420,16 +420,18 @@ export async function listTasks(
   const offset = Math.max(opts.offset ?? 0, 0);
   const params: unknown[] = [limit, offset];
   let where = '';
+  let countWhere = '';
   if (opts.status) {
     params.push(opts.status);
     where = 'WHERE status = $3';
+    countWhere = 'WHERE status = $1';
   }
   const { rows } = await pool.query<LlmPushTaskRecord>(
     `SELECT * FROM llm_push_tasks ${where} ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
     params,
   );
   const { rows: countRows } = await pool.query<{ n: number }>(
-    `SELECT COUNT(*)::int AS n FROM llm_push_tasks ${where}`,
+    `SELECT COUNT(*)::int AS n FROM llm_push_tasks ${countWhere}`,
     opts.status ? [opts.status] : [],
   );
   return { tasks: rows.map(toTaskView), total: countRows[0]?.n ?? 0 };
