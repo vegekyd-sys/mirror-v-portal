@@ -1,0 +1,29 @@
+# .dockerignore — 打包时排除运行时数据（reflection / 企业数据 / 每日流水）
+# 目标：Dockerfile `COPY payload` 只带「出厂内容」，不带任何运行时学习/企业数据。
+# 相对构建上下文（packages/dealclaw-agent）。
+
+# reflection 数据（保留空目录 .gitkeep）
+payload/memory/reflections/*.jsonl
+payload/memory/reflection-review
+payload/memory/projects/dealclaw/reflections.jsonl
+
+# 每日流水 / 日志 / 队列
+payload/memory/2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
+payload/memory/logs
+payload/memory/sends
+payload/memory/daily-session-review
+
+# 企业数据（线索 / 偏好 / 画像 / 洞察 / 外联 / 案例）
+payload/memory/projects/dealclaw/preferences
+payload/memory/projects/dealclaw/leads
+payload/memory/projects/dealclaw/profiles
+payload/memory/projects/dealclaw/insights
+payload/memory/projects/dealclaw/outreach
+payload/memory/projects/dealclaw/case-studies
+
+# 凭证 / 运行时数据目录
+payload/.env
+payload/.env.*
+payload/data
+payload/work/mio-api/data
+payload/work/mio-api/.env*

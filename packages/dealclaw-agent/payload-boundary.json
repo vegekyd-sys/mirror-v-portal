@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "model": "分发前测试母体学习；分发后独立分身本地学习（不是多租户学习平台）",
+  "payload_root": "payload",
+  "exclude": [
+    "memory/reflections/**",
+    "memory/reflection-review/**",
+    "memory/projects/dealclaw/reflections.jsonl",
+    "memory/projects/dealclaw/preferences/**",
+    "memory/projects/dealclaw/leads/**",
+    "memory/projects/dealclaw/profiles/**",
+    "memory/projects/dealclaw/insights/**",
+    "memory/projects/dealclaw/outreach/**",
+    "memory/projects/dealclaw/case-studies/**",
+    "memory/logs/**",
+    "memory/sends/**",
+    "memory/daily-session-review/**",
+    "memory/2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md",
+    ".env",
+    ".env.*",
+    "data/**",
+    "work/mio-api/data/**",
+    "work/mio-api/.env*"
+  ],
+  "allow_placeholders": [
+    "memory/reflections/.gitkeep",
+    "memory/logs/.gitkeep"
+  ],
+  "notes": [
+    "exclude 为 glob 通配（fnmatch），逐文件对 payload 树匹配；命中且不在 allow_placeholders 即视为越界。",
+    "通用知识文档（industry-knowledge.md / promoted-facts.md / schema 等 .md）保留在 payload。",
+    "reflection 数据、每日流水、企业数据（线索/邮件/画像/偏好）、.env 一律不进 payload。"
+  ]
+}

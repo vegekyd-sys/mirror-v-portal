@@ -23,3 +23,19 @@ __pycache__/
 # local scratch dirs (误产生日志/弃用存档，不入库)
 /memory/
 /trash/
+
+# payload 运行时数据（不进制品/仓库）
+packages/dealclaw-agent/payload/memory/reflections/*.jsonl
+packages/dealclaw-agent/payload/memory/reflection-review/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/reflections.jsonl
+packages/dealclaw-agent/payload/memory/2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
+packages/dealclaw-agent/payload/memory/logs/
+packages/dealclaw-agent/payload/memory/sends/
+packages/dealclaw-agent/payload/memory/daily-session-review/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/preferences/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/leads/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/profiles/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/insights/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/outreach/
+packages/dealclaw-agent/payload/memory/projects/dealclaw/case-studies/
+packages/dealclaw-agent/payload/work/mio-api/data/
