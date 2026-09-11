@@ -152,14 +152,16 @@ export async function listBotChats(): Promise<Array<{ chatId: string; name: stri
 export async function createCsGroup(
   userOpenIds: string[] = [],
   botAppIds: string[] = [],
+  userFallbackIds: string[] = [],
 ): Promise<string> {
   const users = [...new Set(userOpenIds.map((id) => id.trim()).filter(Boolean))].slice(0, 50);
+  const fallback = [...new Set(userFallbackIds.map((id) => id.trim()).filter(Boolean))].slice(0, 50);
   const bots = [...new Set(botAppIds.map((id) => id.trim()).filter(Boolean))].slice(0, 5);
-  const owner = users[0];
-  const query = new URLSearchParams({ user_id_type: "open_id" });
-  if (owner) query.set("set_bot_manager", "true");
 
-  const body = {
+  // 先建「最小群」，再分步拉人/加机器人。
+  // 一次塞满 owner_id + user_id_list + bot_id_list 是飞书 2200 的典型触发组合，
+  // 且成员里任何一个 id 有问题都会让「群」整体建不出来——建群必须与拉人解耦，群先建出来。
+  const chatId = await postCreateChat(new URLSearchParams({ user_id_type: "open_id" }), {
     name: CS_GROUP_NAME,
     description: "WhatsApp 买家会话会在此群以话题形式同步",
     chat_mode: "group",
@@ -167,59 +169,35 @@ export async function createCsGroup(
     group_message_type: "chat",
     add_member_permission: "all_members",
     share_card_permission: "allowed",
-    ...(owner ? { owner_id: owner } : {}),
-    ...(users.length ? { user_id_list: users } : {}),
-    ...(bots.length ? { bot_id_list: bots } : {}),
-  };
+  });
 
-  try {
-    return await postCreateChat(query, body);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    // 99992361 = open_id cross app（invitee 是别的应用的 open_id）。
-    // 这种情况也退化成「只拉机器人」建群，否则整条同步会静默失败、群永远建不出来。
-    if (
-      users.length &&
-      (msg.includes("232033") ||
-        msg.includes("232043") ||
-        msg.includes("232032") ||
-        msg.includes("99992361"))
-    ) {
-      console.error("Feishu create CS group with members failed, retrying bot-only group", error);
-      query.delete("set_bot_manager");
-      return await postCreateChat(query, {
-        ...body,
-        owner_id: undefined,
-        user_id_list: undefined,
-      });
-    }
-    // 2200 = 飞书通用内部错误（瞬态为主）。官方排查建议：先建最小群，再分步拉人/加机器人。
-    // 一次塞满 owner_id + user_id_list + bot_id_list 是 2200 的典型触发组合。
-    if (msg.includes("2200") || msg.includes("Internal Error")) {
-      console.error(
-        "Feishu create CS group failed with internal error, falling back to minimal group + stepwise members",
-        error,
-      );
-      const chatId = await postCreateChat(new URLSearchParams({ user_id_type: "open_id" }), {
-        name: CS_GROUP_NAME,
-        description: "WhatsApp 买家会话会在此群以话题形式同步",
-        chat_mode: "group",
-        chat_type: "private",
-        group_message_type: "chat",
-        add_member_permission: "all_members",
-        share_card_permission: "allowed",
-      });
-      if (users.length) {
+  if (users.length) {
+    try {
+      await addChatMembers(chatId, users);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("invite members to new CS group failed", error);
+      // 99992361 = open_id cross app：解析出来的 open_id 不属于当前应用坐标系
+      // （租户配错了应用，或成员是外部联系人）。改用租户级 user_id 再试一次，跨应用无歧义。
+      if (msg.includes("99992361") && fallback.length) {
         try {
-          await addChatMembers(chatId, users);
-        } catch (memberError) {
-          console.error("add members to newly created CS group failed", memberError);
+          await addChatMembersWithType(chatId, fallback, "user_id");
+        } catch (fallbackError) {
+          console.error("invite members by user_id also failed", fallbackError);
         }
       }
-      return chatId;
     }
-    throw error;
   }
+
+  if (bots.length) {
+    try {
+      await addChatBots(chatId, bots);
+    } catch (error) {
+      console.error("invite bots to new CS group failed", error);
+    }
+  }
+
+  return chatId;
 }
 
 async function postCreateChat(query: URLSearchParams, body: Record<string, unknown>): Promise<string> {
@@ -314,29 +292,37 @@ export async function addChatBots(chatId: string, appIds: string[]): Promise<voi
   }
 }
 
-export async function addChatMembers(chatId: string, openIds: string[]): Promise<void> {
-  const ids = [...new Set(openIds.filter(Boolean))];
-  if (!ids.length) return;
+export async function addChatMembersWithType(
+  chatId: string,
+  ids: string[],
+  memberIdType: "open_id" | "user_id" = "open_id",
+): Promise<void> {
+  const list = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (!list.length) return;
   const token = await getTenantToken();
-  for (let i = 0; i < ids.length; i += 50) {
-    const chunk = ids.slice(i, i + 50);
+  for (let i = 0; i < list.length; i += 50) {
+    const chunk = list.slice(i, i + 50);
     const json = await feishuFetch(
-      `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=open_id&succeed_type=1`,
+      `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=${memberIdType}&succeed_type=1`,
       {
         method: "POST",
         body: JSON.stringify({ id_list: chunk }),
       },
       token,
     );
-    console.info(`Feishu add members: ${JSON.stringify(json.data || json)}`);
+    console.info(`Feishu add members (${memberIdType}): ${JSON.stringify(json.data || json)}`);
     const data = (json.data || {}) as Json;
     const invalid = Array.isArray(data.invalid_id_list) ? data.invalid_id_list : [];
     if (invalid.length) {
       console.error(
-        `Feishu could not add ${invalid.length} user(s): they are outside the app availability range. 开发者后台 → 版本管理与发布 → 可用范围，把这些客服加进去（或选全部员工）并发布。`,
+        `Feishu could not add ${invalid.length} user(s) by ${memberIdType}: they are outside the app availability range. 开发者后台 → 版本管理与发布 → 可用范围，把这些客服加进去（或选全部员工）并发布。`,
       );
     }
   }
+}
+
+export async function addChatMembers(chatId: string, openIds: string[]): Promise<void> {
+  return addChatMembersWithType(chatId, openIds, "open_id");
 }
 
 export async function listContactScopeOpenIds(): Promise<string[]> {
@@ -366,10 +352,10 @@ function normalizeMobile(raw: string): string[] {
   return [compact];
 }
 
-export async function listOpenIdsByContacts(input: {
-  emails?: string[];
-  mobiles?: string[];
-}): Promise<string[]> {
+async function batchGetContactIds(
+  input: { emails?: string[]; mobiles?: string[] },
+  idType: "open_id" | "user_id",
+): Promise<string[]> {
   const emails = [...new Set((input.emails || []).map((item) => item.trim().toLowerCase()).filter(Boolean))];
   const mobiles = [...new Set((input.mobiles || []).flatMap(normalizeMobile))];
   if (!emails.length && !mobiles.length) return [];
@@ -381,7 +367,7 @@ export async function listOpenIdsByContacts(input: {
     const emailChunk = emails.slice(i, i + max);
     const mobileChunk = mobiles.slice(i, i + max);
     const json = await feishuFetch(
-      "/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id",
+      `/open-apis/contact/v3/users/batch_get_id?user_id_type=${idType}`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -399,17 +385,36 @@ export async function listOpenIdsByContacts(input: {
       if (userId) ids.push(userId);
     }
     console.info(
-      `Feishu contact lookup emails=${emailChunk.length} mobiles=${mobileChunk.length} returned=${users.length} fields=${JSON.stringify(
+      `Feishu contact lookup (${idType}) emails=${emailChunk.length} mobiles=${mobileChunk.length} returned=${users.length} fields=${JSON.stringify(
         users.map((item) => Object.keys(item as Json)),
       )} mobiles=${JSON.stringify(users.map((item) => str((item as Json).mobile) || null))}`,
     );
     if (users.length && users.every((item) => !str((item as Json).user_id))) {
       console.error(
-        "Feishu contact lookup returned users without open_id. Open 获取用户 user ID (contact:user.employee_id:readonly) as app identity and republish.",
+        "Feishu contact lookup returned users without id. Open 获取用户 user ID (contact:user.employee_id:readonly) as app identity and republish.",
       );
     }
   }
   return [...new Set(ids)];
+}
+
+export async function listOpenIdsByContacts(input: {
+  emails?: string[];
+  mobiles?: string[];
+}): Promise<string[]> {
+  return batchGetContactIds(input, "open_id");
+}
+
+/**
+ * 同一批手机号/邮箱再解析一次「租户级 user_id」。
+ * open_id 是应用坐标系的 ID：配错应用时会被飞书判 99992361 open_id cross app；
+ * user_id 在同一租户内跨应用通用，因此作为拉人兜底。
+ */
+export async function listUserIdsByContacts(input: {
+  emails?: string[];
+  mobiles?: string[];
+}): Promise<string[]> {
+  return batchGetContactIds(input, "user_id");
 }
 
 export async function listInviteOpenIds(input?: {

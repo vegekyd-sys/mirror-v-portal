@@ -19,6 +19,7 @@ import {
   addChatMembers,
   addChatBots,
   listInviteOpenIds,
+  listUserIdsByContacts,
   forwardThreadToChat,
   ensureBotInChat,
   updateMessageText,
@@ -75,10 +76,24 @@ export async function ensureCsChatId(extraOpenIds: string[] = [], extraBotAppIds
         mobiles: app?.inviteMobiles,
         emails: app?.inviteEmails,
       })), ...extras];
+      // 兜底：同一批手机号/邮箱再解析一次「租户级 user_id」。
+      // open_id 是应用坐标系的 ID，配错应用时会被飞书判 99992361 open_id cross app；
+      // user_id 在同一租户内跨应用通用，拉人失败时可用它重试。
+      let inviteFallbackIds: string[] = [];
+      if (app?.inviteMobiles?.length || app?.inviteEmails?.length) {
+        try {
+          inviteFallbackIds = await listUserIdsByContacts({
+            mobiles: app?.inviteMobiles,
+            emails: app?.inviteEmails,
+          });
+        } catch (error) {
+          console.error("resolve Feishu invite user_ids failed", error);
+        }
+      }
       const inviteBots = [...new Set([...(app?.inviteAppIds || config.feishu.inviteAppIds), ...extraBots])];
       console.info(`Feishu CS invitees resolved: ${invitees.length} bots=${inviteBots.length} app=${appId}`);
       if (!chatId) {
-        chatId = await createCsGroup(invitees, inviteBots);
+        chatId = await createCsGroup(invitees, inviteBots, inviteFallbackIds);
         if (!invitees.length) {
           console.info(
             "Feishu CS group created without human members. 个人账号不会自动看到该群：请在请求里带 sourceOpenId，或在桥接配置 FEISHU_INVITE_MOBILES / FEISHU_INVITE_OPEN_IDS。",
