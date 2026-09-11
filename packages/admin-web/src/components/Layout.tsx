@@ -29,6 +29,7 @@ const SYSTEM: NavItem[] = [
   { to: '/users', icon: '户', label: '用户管理' },
   { to: '/external-api-keys', icon: '钥', label: '外部 API Key' },
   { to: '/chat-api-keys', icon: '匙', label: '对话 API Key' },
+  { to: '/llm-push-tasks', icon: '任', label: '异步任务' },
 ];
 
 function SideNav({ items }: { items: NavItem[] }) {
