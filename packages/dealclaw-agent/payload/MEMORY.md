@@ -15,6 +15,7 @@
 | 客户偏好 | `memory/projects/dealclaw/preferences/` | 按客户口径做事时 |
 | 线索与触达 | `memory/projects/dealclaw/leads/`、`outreach/` | 查线索/写外联时 |
 | 邮件模板 | `memory/projects/dealclaw/email-templates/` | 写外联邮件前 |
+| 邮件打法（开发信/回信/内部说明） | `memory/projects/dealclaw/email-playbook.md` | 写任何外联/回复邮件前 |
 | 客户案例 | `memory/projects/dealclaw/case-studies/` | 需要参照先例时 |
 | 外贸行业知识 | `memory/projects/dealclaw/industry-knowledge.md` | 出方案/写开发信前 |
 | 展会相关资料 | `memory/projects/dealclaw/exhibitions/` | 处理展会场景时 |

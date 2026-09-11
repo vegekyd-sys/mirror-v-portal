@@ -18,6 +18,7 @@
   - 决策历史：`decision-history.md`
   - 耐久事实：`promoted-facts.md`
   - 行业知识：`industry-knowledge.md`
+  - 邮件打法：`email-playbook.md`
   - PRD：`PRD-v2.md`
   - 安全要求：`security-requirements.md`
   - 线索池字段：`lead-pool-fields.md`
