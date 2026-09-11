@@ -12,7 +12,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 飞书 2200 是通用「内部错误」，属瞬时故障，官方建议重试。 */
 const TRANSIENT_FEISHU_CODES = [2200];
 
-async function feishuFetch(path: string, init: RequestInit, token?: string): Promise<Json> {
+async function feishuFetch(path: string, init: RequestInit, token?: string, attempts = 3): Promise<Json> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(init.headers as Record<string, string> | undefined),
@@ -21,7 +21,7 @@ async function feishuFetch(path: string, init: RequestInit, token?: string): Pro
 
   // 以前只在失败时直接抛错：一次瞬时的 2200 就会把整条同步丢掉（群/话题永远建不出来）。
   // 这里对「瞬态错误」做小退避重试：2200、HTTP 5xx、网络异常。
-  const attempts = 3;
+  // attempts 可被调用方覆盖：机器人邀请这类「2200 是确定性失败」的场景传 1，避免白等 + 刷日志。
   for (let attempt = 1; ; attempt += 1) {
     let response: Response;
     try {
@@ -251,6 +251,31 @@ export async function listChatMembers(chatId: string): Promise<Array<{ memberId:
 }
 
 /** 把其他飞书应用机器人拉进群。id 必须是 App ID（cli_ 开头），不是 open_id。 */
+/** 从飞书错误文本里抠出 log_id —— 这是飞书排查内部原因的唯一抓手。 */
+function extractFeishuLogId(text: string): string | undefined {
+  const m = text.match(/"log_id"\s*:\s*"([^"]+)"/);
+  return m ? m[1] : undefined;
+}
+
+/** 机器人邀请失败的统一排查指引（含 log_id），可直接转发给被拉应用的 owner。 */
+function logBotInviteFailure(appIds: string[], detail: string, logId?: string): void {
+  console.error(
+    [
+      `飞书机器人邀请失败：${appIds.join(", ")}`,
+      `  原始返回：${detail}`,
+      `  log_id：${logId || "(飞书未返回，可按时间 + 接口名在开发者后台日志查询里找)"}`,
+      "  排查清单（在被拉应用自己的开发者后台，缺一不可）：",
+      "  1) 与本群所属应用属于同一租户（tenantKey 一致）；",
+      "  2) 「应用能力 → 机器人」已开启；",
+      "  3) 机器人设置里「允许被邀请进群」已打开；",
+      "  4) 「版本管理与发布」已创建版本并发布（只改开关不发布不生效）。",
+      "  备注：230003 / 2200 / not_existed_id_list 都是这一类——被拉应用尚未开放「被邀请进群」。",
+      "  若它属于别的租户或根本无法发布，API 拉不进来，只能让群成员在飞书客户端手动添加该机器人。",
+      "  修好后无需重启或重建群：下一次消息同步会自动重试。",
+    ].join("\n"),
+  );
+}
+
 export async function addChatBots(chatId: string, appIds: string[]): Promise<void> {
   const ids = [...new Set(appIds.map((id) => id.trim()).filter(Boolean))];
   if (!ids.length) return;
@@ -260,6 +285,7 @@ export async function addChatBots(chatId: string, appIds: string[]): Promise<voi
     const chunk = ids.slice(i, i + 5).filter((id) => id !== selfAppId);
     if (!chunk.length) continue;
     try {
+      // 机器人邀请的 2200 是确定性失败（对方应用没开「允许被邀请进群」），重试无意义：只请求一次。
       const json = await feishuFetch(
         `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=app_id&succeed_type=1`,
         {
@@ -267,27 +293,19 @@ export async function addChatBots(chatId: string, appIds: string[]): Promise<voi
           body: JSON.stringify({ id_list: chunk }),
         },
         token,
+        1,
       );
       console.info(`Feishu add bots: ${JSON.stringify(json.data || json)}`);
       const data = (json.data || {}) as Json;
       const invalid = Array.isArray(data.invalid_id_list) ? data.invalid_id_list : [];
-      if (invalid.length) {
-        console.error(
-          `Feishu could not add bot app_id(s): ${invalid.join(", ")}. 确认已开启机器人能力，且该应用对当前企业可见。`,
-        );
+      const notExisted = Array.isArray(data.not_existed_id_list) ? data.not_existed_id_list : [];
+      if (invalid.length) logBotInviteFailure(invalid, "invalid_id_list");
+      if (notExisted.length) {
+        logBotInviteFailure(notExisted, "not_existed_id_list（飞书认为该机器人当前不可被邀请进群）");
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes("230003")) {
-        console.error(
-          `无法把机器人 ${chunk.join(",")} 拉进客服群（230003）。` +
-            `操作者是 ${selfAppId}，被拉的是另一个应用，飞书算「被其它应用邀请」。` +
-            `请打开被邀请应用（${chunk.join(",")}）开发者后台 → 应用能力 → 机器人，开启「允许被邀请进群」，然后【创建版本并发布】；只改开关不发布不会生效。` +
-            `同一人开发的两个应用也算其它应用。飞书智能体/Aily 往往不允许被 API 拉群：请在客户端打开「WhatsApp 客服」群，手动添加该机器人。`,
-        );
-        continue;
-      }
-      throw error;
+      logBotInviteFailure(chunk, msg, extractFeishuLogId(msg));
     }
   }
 }
