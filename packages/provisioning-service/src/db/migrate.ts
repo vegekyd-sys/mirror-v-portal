@@ -366,9 +366,15 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         unbound_at      TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (tenant_id),
-        UNIQUE (account_id) WHERE account_id IS NOT NULL AND status IN ('validating','bound','active')
+        UNIQUE (tenant_id)
       );
+      -- Partial unique index: prevents the same WeChat account from being
+      -- bound to two tenants simultaneously. PostgreSQL table-level UNIQUE
+      -- constraints do NOT support WHERE clauses — partial indexes must be
+      -- CREATE UNIQUE INDEX. NULL account_id is excluded (unbound rows).
+      CREATE UNIQUE INDEX IF NOT EXISTS wechat_bindings_account_uq
+        ON wechat_bindings(account_id)
+        WHERE account_id IS NOT NULL AND status IN ('validating','bound','active');
       CREATE INDEX IF NOT EXISTS idx_wechat_bindings_tenant
         ON wechat_bindings(tenant_id, status);
     `);
