@@ -300,8 +300,7 @@ export async function addChatMembersWithType(
   const list = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
   if (!list.length) return;
   const token = await getTenantToken();
-  for (let i = 0; i < list.length; i += 50) {
-    const chunk = list.slice(i, i + 50);
+  const addChunk = async (chunk: string[]) => {
     const json = await feishuFetch(
       `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=${memberIdType}&succeed_type=1`,
       {
@@ -318,7 +317,33 @@ export async function addChatMembersWithType(
         `Feishu could not add ${invalid.length} user(s) by ${memberIdType}: they are outside the app availability range. 开发者后台 → 版本管理与发布 → 可用范围，把这些客服加进去（或选全部员工）并发布。`,
       );
     }
+  };
+
+  let added = 0;
+  let batchError: unknown;
+  for (let i = 0; i < list.length; i += 50) {
+    const chunk = list.slice(i, i + 50);
+    try {
+      await addChunk(chunk);
+      added += chunk.length;
+      continue;
+    } catch (error) {
+      // 整批被拒时逐个重试：飞书对「跨应用 open_id」（99992361）这类硬错误会整批拒绝，
+      // 一个外来 ID 会把同一批里正常的人也拖下水。逐个加能让能加的人先进群。
+      batchError = error;
+      console.error(`Feishu add members (${memberIdType}) batch failed, retrying one by one`, error);
+      for (const id of chunk) {
+        try {
+          await addChunk([id]);
+          added += 1;
+        } catch (oneError) {
+          console.error(`Feishu could not add member by ${memberIdType}`, oneError);
+        }
+      }
+    }
   }
+  // 一个都没加进去时把整批错误抛回去，调用方还能走 user_id 兜底。
+  if (added === 0 && batchError) throw batchError;
 }
 
 export async function addChatMembers(chatId: string, openIds: string[]): Promise<void> {
