@@ -151,6 +151,41 @@ if feishu_bot_ready && ensure_feishu_trusted; then
   fi
 fi
 
+# ── weixin 插件 trusted 安装（幂等）──────────────────────────────────
+# 与 feishu 同模式：openclaw plugins install 写入 PVC state 目录，获得
+# trusted 身份（openKeyedStore）；失败回退镜像内 /opt sideload 副本。
+WECHAT_PLUGIN_VERSION="2.4.8"
+export DEALCLAW_WECHAT_TRUSTED=0
+wechat_bound() {
+  [[ "${DEALCLAW_WECHAT_BOUND:-0}" == "1" \
+     && "${DEALCLAW_MESSAGE_PLANE:-gateway}" == "openclaw" ]]
+}
+ensure_wechat_trusted() {
+  local marker="${OPENCLAW_STATE_DIR}/npm/.dealclaw-weixin-version"
+  if [[ -f "$marker" && "$(cat "$marker" 2>/dev/null || true)" == "$WECHAT_PLUGIN_VERSION" ]]; then
+    return 0
+  fi
+  local force=""
+  if compgen -G "${OPENCLAW_STATE_DIR}/npm/projects/openclaw-weixin-*" >/dev/null; then
+    force="--force"
+  fi
+  if openclaw plugins install "npm:@tencent-weixin/openclaw-weixin@${WECHAT_PLUGIN_VERSION}" --accept-capabilities $force >/dev/null 2>&1; then
+    mkdir -p "${OPENCLAW_STATE_DIR}/npm"
+    printf '%s' "$WECHAT_PLUGIN_VERSION" > "$marker"
+    echo "[dealclaw-runtime] weixin 插件 trusted 安装完成（v${WECHAT_PLUGIN_VERSION}）"
+    return 0
+  fi
+  if [[ -n "$force" ]]; then
+    echo "[dealclaw-runtime] weixin 插件升级失败，保留旧 trusted 安装" >&2
+    return 0
+  fi
+  echo "[dealclaw-runtime] weixin 插件 trusted 安装失败（无出网？），回退镜像内 sideload 副本" >&2
+  return 1
+}
+if wechat_bound && ensure_wechat_trusted; then
+  export DEALCLAW_WECHAT_TRUSTED=1
+fi
+
 node /opt/dealclaw/runtime/write-config.mjs
 
 # ── lark-cli 初始化（bot 身份，非交互、幂等）─────────────────────────

@@ -342,6 +342,37 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON chat_api_keys(tenant_id, created_at DESC);
     `);
 
+    // ── WeChat bindings (v0.8) — personal WeChat QR-login direct connection ─
+    // One tenant ↔ one WeChat account. The account token itself is stored by
+    // the OpenClaw plugin in the tenant's PVC state directory
+    // (/data/state/openclaw-weixin/accounts/{id}.json) — this table only
+    // tracks the binding status, not the token. UNIQUE(tenant_id) enforces
+    // single-binding; UNIQUE(account_id) prevents the same WeChat account
+    // from being bound to two tenants (would cause monitor competition).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wechat_bindings (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        tenant_id       TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        account_id      TEXT,
+        weixin_user_id  TEXT,
+        status          TEXT NOT NULL DEFAULT 'unbound'
+                        CHECK (status IN (
+                          'unbound','validating','bound','active',
+                          'disabling','disabled','failed','expired'
+                        )),
+        session_id      TEXT,
+        last_error      TEXT,
+        bound_at        TIMESTAMPTZ,
+        unbound_at      TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (tenant_id),
+        UNIQUE (account_id) WHERE account_id IS NOT NULL AND status IN ('validating','bound','active')
+      );
+      CREATE INDEX IF NOT EXISTS idx_wechat_bindings_tenant
+        ON wechat_bindings(tenant_id, status);
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

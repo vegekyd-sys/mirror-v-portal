@@ -7,6 +7,7 @@ import { api, errMsg } from '../lib/api';
 import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
+import WeChatScanModal from '../components/WeChatScanModal';
 import PodLogsModal from '../components/PodLogsModal';
 import PodTerminalModal from '../components/PodTerminalModal';
 
@@ -1698,6 +1699,9 @@ export default function AgentDetailPage() {
         }}
       />
 
+      {/* ── 微信绑定 ── */}
+      <WeChatBindingSection tenantId={tenantId} onFlash={flash} />
+
       {/* ── Skill 环境变量 ── */}
       <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
         Skill 环境变量（.env）
@@ -1892,6 +1896,111 @@ export default function AgentDetailPage() {
           onClose={() => setConsoleTarget(null)}
         />
       )}
+    </>
+  );
+}
+
+// ── 微信绑定区块（独立组件，自管理状态） ─────────────────────────────
+interface WeChatBindingInfo {
+  ok: true;
+  bound: boolean;
+  accountId: string | null;
+  weixinUserId: string | null;
+  status: string;
+  boundAt: string | null;
+  lastError: string | null;
+}
+
+function WeChatBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash: (msg: string) => void }) {
+  const [binding, setBinding] = useState<WeChatBindingInfo | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const loadBinding = useCallback(async () => {
+    try {
+      const r = await api<WeChatBindingInfo>(`/v1/admin/tenants/${tenantId}/wechat-binding`);
+      setBinding(r);
+    } catch {
+      setBinding(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { void loadBinding(); }, [loadBinding]);
+
+  const unbind = useCallback(async () => {
+    if (!confirm('确定解绑微信？解绑后微信消息将不可达，网页对话不受影响。')) return;
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenantId}/wechat-binding/unbind`, { method: 'POST' });
+      onFlash('微信已解绑');
+      await loadBinding();
+    } catch (e) {
+      onFlash(`解绑失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [tenantId, loadBinding, onFlash]);
+
+  const isBound = binding?.bound;
+  const isProcessing = binding?.status === 'validating';
+
+  return (
+    <>
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        微信绑定（个人微信）
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="form-row" style={{ marginBottom: 10 }}>
+            <label className="field-label">当前状态</label>
+            {binding === null ? (
+              <span className="hint" style={{ margin: 0 }}>加载中…</span>
+            ) : isBound ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-active">已绑定</span>
+                <span className="mono" style={{ fontSize: 12 }}>{binding.accountId?.slice(0, 20)}…</span>
+                {binding.weixinUserId && (
+                  <span className="hint" style={{ margin: 0 }}>
+                    微信用户：{binding.weixinUserId.slice(0, 12)}…
+                  </span>
+                )}
+                <button className="btn-danger" disabled={busy} onClick={() => void unbind()}>
+                  解绑
+                </button>
+              </span>
+            ) : isProcessing ? (
+              <span className="badge badge-pending">扫码中…</span>
+            ) : (
+              <span className="badge badge-pending">未绑定</span>
+            )}
+          </div>
+          <div className="form-row">
+            <label className="field-label" />
+            <button
+              className="btn-primary"
+              disabled={busy || isBound || isProcessing}
+              onClick={() => setScanOpen(true)}
+            >
+              <IconChat /> {isProcessing ? '扫码中…' : '扫码绑定微信'}
+            </button>
+          </div>
+          <div className="hint">
+            管理员扫码后，个人微信账号 token 由 Agent 内 OpenClaw 插件保存到租户 PVC。
+            绑定后该 Agent 持有微信长连接，私聊消息自动回复。同一微信账号只能绑定一个租户。
+            解绑后 Agent 重启并清理账号文件，网关保留为 LLM 出口代理。
+          </div>
+        </div>
+      </div>
+
+      <WeChatScanModal
+        tenantId={tenantId}
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onBound={async () => {
+          onFlash('微信绑定成功');
+          await loadBinding();
+        }}
+      />
     </>
   );
 }

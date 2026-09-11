@@ -6,6 +6,7 @@ import {
   type AgentExecutionContext,
   type RuntimeClient,
 } from './openclaw-runtime.js';
+import { createWeChatLoginBridge } from './wechat-login-bridge.js';
 
 const PAYLOAD_VERSION = process.env.DEALCLAW_PAYLOAD_VERSION ?? 'dealclaw-base.v1';
 
@@ -111,6 +112,11 @@ export function createApp(options: { runtime?: RuntimeClient } = {}) {
       }
     }
   });
+
+  // WeChat login bridge — internal endpoints for provisioning-service to
+  // trigger QR-code login and poll status. Runs in-agent because the plugin's
+  // auth.login lives in the gateway process context (loopback 18790).
+  app.use(createWeChatLoginBridge());
 
   return app;
 }

@@ -6,6 +6,7 @@ import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
+import { createWeChatBindingRoutes } from './routes/wechat-binding.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
 import { createConversationExternalRoutes } from './routes/conversation-external.js';
 import { createChatExternalRoutes } from './routes/chat-external.js';
@@ -85,6 +86,8 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(authAndAudit));
+  // WeChat (personal WeChat) binding — QR-login direct connection.
+  app.use(createWeChatBindingRoutes(pool, config, authAndAudit));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

@@ -193,6 +193,7 @@ if (llmDoc && llmDoc.providers.length > 0) {
 // from the tenant's bot Secret (envFrom); the appSecret is referenced by
 // env id, never inlined into the config file.
 const FEISHU_PLUGIN_DIR = '/opt/dealclaw/plugins/feishu/node_modules/@openclaw/feishu';
+const WECHAT_PLUGIN_DIR = '/opt/dealclaw/plugins/weixin/node_modules/@tencent-weixin/openclaw-weixin';
 const messagePlane = process.env.DEALCLAW_MESSAGE_PLANE || 'gateway';
 const feishuAppId = (process.env.DEALCLAW_APP_ID || '').trim();
 const feishuAppSecret = (process.env.DEALCLAW_APP_SECRET || '').trim();
@@ -202,8 +203,16 @@ const feishuDirect =
   feishuAppSecret &&
   !feishuAppId.startsWith('placeholder-');
 
-if (messagePlane === 'openclaw' && !feishuDirect) {
-  console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but bot credentials missing/placeholder — feishu channel NOT enabled');
+// ── WeChat (personal WeChat direct connection) ────────────────────────
+// DEALCLAW_WECHAT_BOUND=1 + openclaw plane → enable channels["openclaw-weixin"].
+// Unlike Feishu, WeChat account credentials are obtained via QR login (not
+// appId/appSecret) and stored by the plugin in the PVC state directory.
+// write-config only needs to declare the channel enabled; the plugin reads
+// account files from $OPENCLAW_STATE_DIR/openclaw-weixin/accounts.json.
+const wechatBound = process.env.DEALCLAW_WECHAT_BOUND === '1' && messagePlane === 'openclaw';
+
+if (messagePlane === 'openclaw' && !feishuDirect && !wechatBound) {
+  console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but no channel credentials — feishu/weixin channels NOT enabled');
 }
 
 const pluginLoadPaths = [
@@ -212,6 +221,7 @@ const pluginLoadPaths = [
   path.join(workspace, 'plugins', 'dealclaw-chatlog'),
 ];
 if (feishuDirect && process.env.DEALCLAW_FEISHU_TRUSTED !== '1') pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
+if (wechatBound && process.env.DEALCLAW_WECHAT_TRUSTED !== '1') pluginLoadPaths.push(WECHAT_PLUGIN_DIR);
 
 const deniedTools = [
   'message',
@@ -346,9 +356,9 @@ const config = {
     elevated: { enabled: false },
   },
   plugins: {
-    // 只放行 feishu 非内置插件自动加载（PVC trusted 副本），
+    // 放行 feishu 和 openclaw-weixin 非内置插件自动加载（PVC trusted 副本），
     // 其余 npm projects 里发现的可插拔组件一律不自动加载。
-    allow: ['feishu'],
+    allow: ['feishu', 'openclaw-weixin'],
     load: {
       paths: pluginLoadPaths,
     },
@@ -367,31 +377,41 @@ const config = {
         hooks: { allowConversationAccess: true },
       },
       ...(feishuDirect ? { feishu: { enabled: true } } : {}),
+      ...(wechatBound ? { 'openclaw-weixin': { enabled: true } } : {}),
     },
   },
-  ...(feishuDirect
+  ...(feishuDirect || wechatBound
     ? {
         channels: {
-          feishu: {
-            enabled: true,
-            appId: feishuAppId,
-            appSecret: { source: 'env', provider: 'default', id: 'DEALCLAW_APP_SECRET' },
-            // D1: per-tenant isolated Feishu app — open DMs, zero onboarding.
-            dmPolicy: 'open',
-            allowFrom: ['*'],
-            // Group policy: 'open' (respond in all groups) by default; set
-            // DEALCLAW_FEISHU_GROUP_POLICY=allowlist to restrict to whitelist.
-            groupPolicy: process.env.DEALCLAW_FEISHU_GROUP_POLICY || 'open',
-            // Respond in groups without an explicit @mention by default;
-            // set DEALCLAW_FEISHU_REQUIRE_MENTION=true to restore mention-gating.
-            requireMention: process.env.DEALCLAW_FEISHU_REQUIRE_MENTION === 'true',
-            streaming: true,
-            // Show "typing…" indicator while the agent run is in flight.
-            // Set DEALCLAW_FEISHU_TYPING_INDICATOR=false to disable (quota optimisation).
-            typingIndicator: process.env.DEALCLAW_FEISHU_TYPING_INDICATOR !== 'false',
-            // D2: full workplace tool suite (requires app scopes).
-            tools: { doc: true, chat: true, wiki: true, drive: true, perm: true, bitable: true },
-          },
+          ...(feishuDirect ? {
+            feishu: {
+              enabled: true,
+              appId: feishuAppId,
+              appSecret: { source: 'env', provider: 'default', id: 'DEALCLAW_APP_SECRET' },
+              // D1: per-tenant isolated Feishu app — open DMs, zero onboarding.
+              dmPolicy: 'open',
+              allowFrom: ['*'],
+              // Group policy: 'open' (respond in all groups) by default; set
+              // DEALCLAW_FEISHU_GROUP_POLICY=allowlist to restrict to whitelist.
+              groupPolicy: process.env.DEALCLAW_FEISHU_GROUP_POLICY || 'open',
+              // Respond in groups without an explicit @mention by default;
+              // set DEALCLAW_FEISHU_REQUIRE_MENTION=true to restore mention-gating.
+              requireMention: process.env.DEALCLAW_FEISHU_REQUIRE_MENTION === 'true',
+              streaming: true,
+              // Show "typing…" indicator while the agent run is in flight.
+              // Set DEALCLAW_FEISHU_TYPING_INDICATOR=false to disable (quota optimisation).
+              typingIndicator: process.env.DEALCLAW_FEISHU_TYPING_INDICATOR !== 'false',
+              // D2: full workplace tool suite (requires app scopes).
+              tools: { doc: true, chat: true, wiki: true, drive: true, perm: true, bitable: true },
+            },
+          } : {}),
+          ...(wechatBound ? {
+            'openclaw-weixin': {
+              enabled: true,
+              // Account list comes from PVC state dir (accounts.json);
+              // no appId/appSecret here — plugin manages credentials via QR login.
+            },
+          } : {}),
         },
       }
     : {}),
@@ -421,8 +441,12 @@ const config = {
   // conversation instead of sharing agent:dealclaw:main. Sessions are pruned
   // after 14d to bound PVC growth. DEALCLAW_SESSION_DM_SCOPE=shared restores
   // the legacy single-session behaviour.
+  // WeChat multi-account: per-account-channel-peer isolates DM sessions by
+  // account + channel + peer (plugin official recommendation).
   session: {
-    dmScope: process.env.DEALCLAW_SESSION_DM_SCOPE || 'per-channel-peer',
+    dmScope: wechatBound
+      ? 'per-account-channel-peer'
+      : (process.env.DEALCLAW_SESSION_DM_SCOPE || 'per-channel-peer'),
     maintenance: {
       mode: 'enforce',
       pruneAfter: '14d',
