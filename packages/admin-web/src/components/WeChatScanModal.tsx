@@ -46,10 +46,12 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
   const [message, setMessage] = useState('正在生成二维码…');
   const [error, setError] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
+  const [remainingSec, setRemainingSec] = useState(0);
 
   const sessionIdRef = useRef('');
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
+  const expiresAtRef = useRef<number>(0);
 
   const stopPoll = useCallback(() => {
     if (pollTimerRef.current) {
@@ -130,6 +132,8 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
     setQrcodeUrl('');
     setError('');
     setVerifyCode('');
+    setRemainingSec(0);
+    expiresAtRef.current = 0;
     setMessage('正在生成二维码…');
     sessionIdRef.current = '';
     try {
@@ -139,6 +143,9 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
       if (cancelledRef.current) return;
       sessionIdRef.current = r.sessionId;
       setQrcodeUrl(r.qrcodeUrl);
+      const ts = new Date(r.expiresAt).getTime();
+      expiresAtRef.current = ts;
+      setRemainingSec(Math.max(0, Math.floor((ts - Date.now()) / 1000)));
       setPhase('scanning');
       setMessage('请用手机微信扫描二维码');
       pollTimerRef.current = setTimeout(() => void poll(), POLL_INTERVAL_MS);
@@ -148,6 +155,24 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
       setError(errMsg(e));
     }
   }, [poll, stopPoll, tenantId]);
+
+  // Countdown ticker — updates remaining seconds every second while QR is active
+  useEffect(() => {
+    if (phase !== 'scanning' && phase !== 'need_code') return;
+    if (!expiresAtRef.current) return;
+    const tick = () => {
+      const left = Math.max(0, Math.floor((expiresAtRef.current - Date.now()) / 1000));
+      setRemainingSec(left);
+      if (left <= 0) {
+        stopPoll();
+        setPhase('error');
+        setError('二维码已过期，请重新生成');
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [phase, stopPoll]);
 
   const submitVerifyCode = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -216,6 +241,16 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
             <span>{message}</span>
           )}
         </div>
+        {(phase === 'scanning' || phase === 'need_code') && remainingSec > 0 && (
+          <div style={{
+            marginTop: 6,
+            fontSize: 12,
+            color: remainingSec <= 60 ? '#e5484d' : '#8a8f98',
+            fontWeight: remainingSec <= 60 ? 600 : 400,
+          }}>
+            ⏱ 二维码 {Math.floor(remainingSec / 60)}:{String(remainingSec % 60).padStart(2, '0')} 后过期
+          </div>
+        )}
       </div>
       {phase === 'need_code' && (
         <div className="form-row" style={{ marginTop: 8, gap: 8 }}>
