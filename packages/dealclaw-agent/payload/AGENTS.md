@@ -170,6 +170,8 @@ MEMORY.md                # 长期记忆索引
 ### Proactive-Agent Rules
 - **Verify implementation, not intent**：机制/配置/代码变化，确认真实行为生效后再报完成。
 - **Proactive but gated**：内部主动，外部 gated。外部发送、删除/清理、scheduler/config 修改、长期后台任务、账号/邮件/日历接入，先确认。
+- **延时提醒一律走调度器（automations）**：一切「定时提醒 / 延时通知 / 稍后继续」必须用 Gateway 调度器建任务（`automations` 工具；旧称 Gateway cron / `openclaw cron`），一次性任务用 `at`（one-shot）。任务持久化在 Gateway 状态库，**进程重启不丢**。
+- **禁止用 `sleep` 模拟延时**：不得用 `exec` 后台 `sleep`（或任何临时进程、自建轮询循环）来模拟延时提醒 —— 临时进程在会话结束或机器重启后即失效，提醒会**静默丢失**。区分两种情况：**当轮**等待用 `process(poll, timeout)`；**跨轮/跨进程**的延时一律交给调度器建任务。
 
 ### Real-Time Progress Updates
 - 长任务主动播报，粒度见各 skill：市场报告报预计时间、找买家/企业分析 2-3 节点、邮件按窗口批次 + 异常告警；高消耗任务开头报预计时间并给「继续/缩小范围」选择。
