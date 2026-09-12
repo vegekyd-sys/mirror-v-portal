@@ -12,13 +12,25 @@
 v1 异常 / 数据不完整时的硬规则（对齐 v1 文档第 3、4 条）：
   - **不得返回假 0**：读不到数据源 → `status="unavailable"`，数字为 `None`（不是 0）；
   - 数据有已知缺口（未同步 / 缺 accepted / 无法确认的旧记录）→ `status="partial"`，
-    数字照给但必须带 `reasons` 与可下钻 `evidence`（未归属 / 待确认清单）。
+    数字仍在结构化返回里，但必须带 `reasons` 与可下钻 `evidence`（未归属 / 待确认清单）。
+
+消费方降级（阶段 D2 第 2 条）：`partial` / `unavailable` 时，EmailProvider 与早晚报
+渲染**隐藏邮件数字**（不得显示 0，显示「邮件数据暂不可用（原因）」），其余可信板块
+（展会战报 / 今日会谈 / 其他 Provider）照常展示；同时在 context/plan 里带一个结构化
+`data_quality_alert` 对象供运营侧消费——**只产出对象，不发送任何消息**。
+
+D5 验收口径（仅口径声明，见 `docs/email-metrics-v1.md`）：
+  - **未解释差异 = 0**；不要求新旧数字完全相同（差异只要能被 `reasons` 解释即可）；
+  - 第一周指标用「已知异常发现率 / 问题可复现率 / 已确认代码 Bug 回归覆盖率」，
+    不用「系统先发现 > 50%」这种无法证伪的说法。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +51,12 @@ STATUS_UNAVAILABLE = "unavailable"
 
 _METRIC_KEYS = ("sent", "delivered", "bounced", "replied")
 
+# 邮件数字不可信时展示的固定口径文案（隐藏数字，不隐藏原因）
+HIDDEN_METRICS_HINT = "邮件数据暂不可用"
+
+# 结构化告警对象名（运营侧按 object 字段路由，不依赖中文文案）
+DATA_QUALITY_ALERT_OBJECT = "data_quality_alert"
+
 _DIFF_REASONS = {
     "sent": "新口径 = Provider accepted（拿不到 provider 受理 id 的不计入）；旧口径 = outbound 记录条数",
     "delivered": "新口径 = 终态投影 delivered_final（延迟退信会翻）；旧口径 = provider_status 快照",
@@ -57,9 +75,68 @@ def _data_dir() -> Path:
         "DC_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data")))
 
 
-def _shadow_dir() -> Path:
+# ── shadow 落盘路径（按租户/企业隔离）────────────────────
+_UNSAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
+_GLOBAL_SEGMENT = "_global"
+
+
+def safe_path_segment(value: str | None) -> str:
+    """把 tenant/company 归一成**文件名安全**的一段，缺失/全非法 → `_global`。
+
+    中文租户名、带 `/` 或空格的 id 都不能原样进路径（会跨目录或建出怪目录）。
+    """
+    s = _UNSAFE_SEGMENT.sub("_", str(value or "").strip()).strip("._-")
+    return s[:64] or _GLOBAL_SEGMENT
+
+
+def _shadow_dir(tenant: str | None = None, company_id: str | None = None) -> Path:
+    """`<root>/<tenant>/<company>`；root 默认 `DC_DATA_DIR/email-metrics-shadow`。
+
+    租户/企业分目录，避免多租户影子差异混在同一个文件里串数据。
+    """
     env = (os.environ.get(SHADOW_DIR_ENV) or "").strip()
-    return Path(env) if env else _data_dir() / "email-metrics-shadow"
+    root = Path(env) if env else _data_dir() / "email-metrics-shadow"
+    return root / safe_path_segment(tenant) / safe_path_segment(company_id)
+
+
+def _record_event_time(rec) -> str:
+    """记录里可用的事件时间（用于算 source watermark 的最大事件时间）。"""
+    for key in ("occurred_at_utc", "occurred_at", "sent_at", "received_at",
+                "created_at", "timestamp"):
+        v = (rec or {}).get(key)
+        if v:
+            return str(v)
+    return ""
+
+
+def stream_watermark(records: list | None) -> dict:
+    """单流（outbound / inbound）水位：条数 + 最大事件时间 + 无时间记录数。"""
+    recs = list(records or [])
+    times = [t for t in (_record_event_time(r) for r in recs) if t]
+    return {
+        "count": len(recs),
+        "max_event_time": max(times) if times else "",
+        "without_time": len(recs) - len(times),
+    }
+
+
+def snapshot_hash(*, company_id: str, outbound_records: list | None,
+                  inbound_records: list | None) -> str:
+    """对「这一轮参与计算的输入快照」算 sha256（`sha256:<hex>`）。
+
+    同一批输入 → 同一 hash（记录先规范化排序，与读表顺序无关），
+    便于事后回答「这条差异是对着哪份输入算出来的」。
+    """
+    def _canon(recs) -> list:
+        return sorted(json.dumps(r, sort_keys=True, ensure_ascii=False, default=str)
+                      for r in (recs or []))
+
+    blob = json.dumps({
+        "company_id": company_id,
+        "outbound": _canon(outbound_records),
+        "inbound": _canon(inbound_records),
+    }, sort_keys=True, ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 # ── 数据源 ──────────────────────────────────────────────
@@ -165,14 +242,18 @@ def build_shadow_diff(legacy_view: dict, v1_view: dict, *, v1_status: str,
     return diff
 
 
-def record_shadow(payload: dict, *, tz: str) -> dict:
-    """shadow 差异落盘（JSONL，按业务日切分）。失败绝不影响调用方。"""
+def record_shadow(payload: dict, *, tz: str, tenant: str | None = None,
+                  company_id: str | None = None) -> dict:
+    """shadow 差异落盘（JSONL，按业务日切分）。失败绝不影响调用方。
+
+    路径：`DC_DATA_DIR/email-metrics-shadow/<tenant>/<company>/<YYYY-MM-DD>.jsonl`。
+    """
     try:
         from .legacy import business_date
         day = business_date(datetime.now(timezone.utc).isoformat(), tz) or "unknown"
-        d = _shadow_dir()
+        d = _shadow_dir(tenant, company_id)
         d.mkdir(parents=True, exist_ok=True)
-        path = d / f"shadow-{day}.jsonl"
+        path = d / f"{safe_path_segment(day)}.jsonl"
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         mismatched = [x["metric"] for x in payload.get("diff", [])
@@ -237,6 +318,7 @@ def read_email_metrics(*, company_id: str, tenant: str | None = None,
             "unassigned_inbound": None,
             "auto_replies": None,
         })
+        base["data_quality_alert"] = build_data_quality_alert(base, consumer=consumer)
         return base
 
     legacy = legacy_metrics(out_records, in_records, company_id=company_id,
@@ -366,31 +448,96 @@ def read_email_metrics(*, company_id: str, tenant: str | None = None,
             "ts": datetime.now(timezone.utc).isoformat(),
             "consumer": consumer,
             "company_id": company_id,
+            "tenant": tenant or "",
             "campaign_id": campaign_id or "",
             "report_timezone": tz,
             "range": {"start": start, "end": end},
             "mode": mode,
             "v1_status": v1_status,
             "v1_reasons": v1_reasons,
+            "reasons": list(v1_reasons),
+            # 输入快照指纹 + 数据水位：事后可回答「这条差异对着哪份输入算的」
+            "snapshot_hash": snapshot_hash(company_id=company_id,
+                                           outbound_records=out_records,
+                                           inbound_records=in_records),
+            "watermark": {
+                "outbound": stream_watermark(out_records),
+                "inbound": stream_watermark(in_records),
+            },
             "legacy": legacy_view,
             "v1": v1_view,
             "completeness": base.get("v1_completeness", {}),
             "diff": build_shadow_diff(legacy_view, v1_view, v1_status=v1_status or STATUS_OK,
                                       reasons=v1_reasons),
         }
-        base["shadow"] = record_shadow(payload, tz=tz)
+        base["shadow"] = record_shadow(payload, tz=tz, tenant=tenant, company_id=company_id)
         base["shadow"]["diff"] = payload["diff"]
+        base["shadow"]["snapshot_hash"] = payload["snapshot_hash"]
+    # 结构化数据质量告警（partial/unavailable 才有；只产出对象，不发送）
+    base["data_quality_alert"] = build_data_quality_alert(base, consumer=consumer)
     return base
 
 
+def metrics_hidden_hint(reasons: list[str] | None = None) -> str:
+    """隐藏数字时的统文案：「邮件数据暂不可用（原因）」。"""
+    text = "，".join(str(r) for r in (reasons or []) if str(r).strip()) or "数据不完整"
+    return f"{HIDDEN_METRICS_HINT}（{text}）"
+
+
+def build_data_quality_alert(metrics: dict, *, consumer: str = "") -> dict | None:
+    """构造结构化数据质量告警对象（仅当邮件数字为 partial / unavailable 时）。
+
+    返回 None = 数字可信，无需告警。
+
+    **只产出对象，不发送任何消息**：本函数无 IO、无网络、无飞书写接口；
+    调用方把它放进 context/plan，由运营侧自行消费（`auto_send=True` 永远是 False）。
+    """
+    status = metrics.get("status")
+    if status not in (STATUS_PARTIAL, STATUS_UNAVAILABLE):
+        return None
+    reasons = [str(r) for r in (metrics.get("reasons") or [])]
+    availability = dict(metrics.get("availability") or {})
+    rng = dict(metrics.get("range") or {})
+    return {
+        "object": DATA_QUALITY_ALERT_OBJECT,
+        "id": "email_metrics:%s:%s:%s" % (status, metrics.get("company_id", ""),
+                                           rng.get("start") or ""),
+        "scope": "email_metrics",
+        "severity": "error" if status == STATUS_UNAVAILABLE else "warning",
+        "status": status,
+        "reason_code": ("email_metrics_unavailable" if status == STATUS_UNAVAILABLE
+                        else "email_metrics_partial"),
+        "reasons": reasons,
+        "message": metrics_hidden_hint(reasons),
+        "numbers_hidden": True,
+        "hidden_fields": list(_METRIC_KEYS),
+        "affected_renders": ["email_provider", "daily_brief", "daily_report"],
+        "unaffected": ["opportunity", "exhibition"],
+        "mode": metrics.get("mode"),
+        "report_timezone": metrics.get("report_timezone"),
+        "range": {"start": rng.get("start", ""), "end": rng.get("end", "")},
+        "consumer": consumer or metrics.get("consumer", ""),
+        "drilldown": {
+            "source_error": availability.get("error", ""),
+            "evidence": (availability.get("evidence") or {}),
+            "v1_evidence": (metrics.get("v1_evidence") or {}),
+        },
+        "emitted_at": datetime.now(timezone.utc).isoformat(),
+        "auto_send": False,
+        "read_only": True,
+    }
+
+
 def format_metrics_line(m: dict, *, prefix: str = "") -> str:
-    """把指标渲染成一行；数字不可用时**不显示 0**，显示原因。"""
+    """把指标渲染成一行；邮件数字不可信时**既不显示 0，也不显示任何邮件数字**。
+
+    partial / unavailable 一律隐藏数字并给原因：不可信的数字比没有数字更危险
+    （运营会拿它去决策）。数字仍在结构化返回 `metrics` 里，只是不进人读渲染。
+    """
     metrics = m.get("metrics") or {}
-    if m.get("status") == STATUS_UNAVAILABLE or metrics.get("sent") is None:
-        reasons = "，".join(m.get("reasons") or []) or "数据源不可用"
-        return f"{prefix}邮件数据不可用（{reasons}）"
+    status = m.get("status")
+    if status in (STATUS_PARTIAL, STATUS_UNAVAILABLE) or metrics.get("sent") is None:
+        return f"{prefix}{metrics_hidden_hint(list(m.get('reasons') or []))}"
     line = (f"{prefix}发送 {metrics.get('sent')} · 送达 {metrics.get('delivered')} · "
             f"回复 {metrics.get('replied')} · 退信 {metrics.get('bounced')}")
-    if m.get("status") == STATUS_PARTIAL:
-        line += f"（数据不完整：{'，'.join(m.get('reasons') or [])}）"
     return line

@@ -138,12 +138,16 @@ def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
         "reasons": list(m.get("reasons") or []),
         "campaign_id": campaign_id or "",
         "range": m.get("range"),
+        # 早晚报渲染降级：partial/unavailable 时隐藏数字（不显示 0），
+        # 并带上结构化告警对象（只产出对象，不发送任何消息）。
+        "numbers_hidden": m["status"] in ("partial", "unavailable"),
+        "data_quality_alert": m.get("data_quality_alert"),
     })
     return out
 
 
 def _metrics_line(m: dict, prefix: str = "") -> str:
-    """指标行：数字不可用时显式说不可用，绝不显示 0。"""
+    """指标行：partial / unavailable 一律**隐藏数字**（不显示 0），改为给原因。"""
     from email_metrics.service import format_metrics_line
     return format_metrics_line({"status": m.get("status"), "metrics": m,
                                 "reasons": m.get("reasons")}, prefix=prefix)

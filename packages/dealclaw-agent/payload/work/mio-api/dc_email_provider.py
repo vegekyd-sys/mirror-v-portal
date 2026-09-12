@@ -31,7 +31,8 @@ from dc_daily_advisor import AdvisorSnapshot, ProposedAction, Advice, build_snap
 
 # 统一读入口（口径由 email_metrics.config 决定，默认 legacy = 线上行为不变）
 from email_metrics import legacy as legacy_adapter
-from email_metrics.service import STATUS_UNAVAILABLE, read_email_metrics
+from email_metrics.service import (STATUS_PARTIAL, STATUS_UNAVAILABLE, build_data_quality_alert,
+                                   metrics_hidden_hint, read_email_metrics)
 
 
 def _now_iso() -> str:
@@ -123,9 +124,12 @@ class EmailProvider:
         sent, delivered = metrics.get("sent"), metrics.get("delivered")
         bounced, replied = metrics.get("bounced"), metrics.get("replied")
         status = m.get("status")
-        if status == STATUS_UNAVAILABLE or sent is None:
-            # 数据源不可用：绝不显示 0，显式标注原因（可下钻 evidence）
-            reasons = "，".join(m.get("reasons") or []) or "数据源不可用"
+        if status in (STATUS_PARTIAL, STATUS_UNAVAILABLE) or sent is None:
+            # 邮件数字不可信（partial / unavailable）：**隐藏数字**，显式给原因 + 结构化告警。
+            # 其余 Provider（展会战报 / 今日会谈）不读这里，照常展示。
+            reasons_list = list(m.get("reasons") or [])
+            hidden_text = metrics_hidden_hint(reasons_list)
+            alert = build_data_quality_alert(m, consumer="email_provider")
             return BriefItem(
                 item_key=make_item_key(tenant=context.tenant, company=context.company,
                                        scope="global", kind="result", source="email",
@@ -134,19 +138,21 @@ class EmailProvider:
                 dedupe_key=make_dedupe_key(source="email", category="metrics", scope="global",
                                            business_id="metrics", occurrence="1"),
                 source="email", scope="global", category="metrics", priority="match",
-                title=f"邮件数据不可用（{reasons}）",
+                title=hidden_text,
                 reason_facts=[FactRef(fact_id="data_status", kind="text",
                                       value=str(status))],
-                reason=f"邮件数据不可用：{reasons}",
+                reason=hidden_text,
                 target_refs=[],
-                evidence_refs=[EvidenceRef(type="query", source="email_metrics", id="unavailable",
-                                           missing=reasons)],
+                evidence_refs=[EvidenceRef(type="query", source="email_metrics", id=status or "hidden",
+                                           missing=reasons_list)],
                 due_at=None,
                 detail={"sent": None, "delivered": None, "bounced": None, "replied": None,
-                        "data_status": status, "data_reasons": list(m.get("reasons") or [])},
+                        "numbers_hidden": True,
+                        "data_status": status, "data_reasons": reasons_list,
+                        "mode": m.get("mode"),
+                        "data_quality_alert": alert},
                 completion_rule=None, action_key=None, policy_version=None,
             )
-        suffix = "（数据不完整）" if status == "partial" else ""
         facts = [
             FactRef(fact_id="sent", kind="number", value=sent),
             FactRef(fact_id="delivered", kind="number", value=delivered),
@@ -160,15 +166,17 @@ class EmailProvider:
             kind="result", dedupe_key=make_dedupe_key(source="email", category="metrics",
                                                       scope="global", business_id="metrics", occurrence="1"),
             source="email", scope="global", category="metrics", priority="match",
-            title=f"发送 {sent} · 送达 {delivered} · 回复 {replied} · 退信 {bounced}{suffix}",
+            title=f"发送 {sent} · 送达 {delivered} · 回复 {replied} · 退信 {bounced}",
             reason_facts=facts,
             reason=f"发送 {sent} 封，送达 {delivered}，回复 {replied}，退信 {bounced}",
             target_refs=[], evidence_refs=[EvidenceRef(type="snapshot", source="email_facts",
                                                        id=f"{context.company}:outbound")],
             due_at=None, detail={"sent": sent, "delivered": delivered, "bounced": bounced,
-                                 "replied": replied, "data_status": status,
+                                 "replied": replied, "numbers_hidden": False,
+                                 "data_status": status,
                                  "data_reasons": list(m.get("reasons") or []),
-                                 "mode": m.get("mode")},
+                                 "mode": m.get("mode"),
+                                 "data_quality_alert": None},
             completion_rule=None, action_key=None, policy_version=None,
         )
 
@@ -269,16 +277,21 @@ class EmailProvider:
         return items
 
     def _make_insight(self, context, outbounds, inbounds) -> BriefItem:
-        """只输出事实，不含原因推断（推断在 Template Advisor 层，标低置信度假设）。"""
+        """只输出事实，不含原因推断（推断在 Template Advisor 层，标低置信度假设）。
+
+        partial / unavailable 时**隐藏邮件数字**：insight 也是渲染面，
+        在数字不可信时给「今日 N 家回复」等于拿不准的数据下结论。
+        """
         m = self._metrics or {}
         metrics = m.get("metrics") or {}
         sent, delivered = metrics.get("sent"), metrics.get("delivered")
         bounced, replied = metrics.get("bounced"), metrics.get("replied")
-        if m.get("status") == STATUS_UNAVAILABLE or sent is None:
-            reasons = "，".join(m.get("reasons") or []) or "数据源不可用"
-            return self._insight(context, f"邮件数据不可用（{reasons}）",
+        if m.get("status") in (STATUS_PARTIAL, STATUS_UNAVAILABLE) or sent is None:
+            reasons = list(m.get("reasons") or [])
+            return self._insight(context, metrics_hidden_hint(reasons),
                                  evidence=EvidenceRef(type="query", source="email_metrics",
-                                                      id="unavailable", missing=reasons))
+                                                      id=str(m.get("status") or "hidden"),
+                                                      missing=reasons))
         overdue_count = len(self._collect_overdue(outbounds, inbounds))
         if sent == 0:
             return self._insight(context, "暂无发送记录",

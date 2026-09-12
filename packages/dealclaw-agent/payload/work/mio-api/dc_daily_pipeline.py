@@ -156,9 +156,16 @@ def run_morning_brief(context: BriefContext, base_dir: Path, email_store=None,
         "v1_status": metrics.get("v1_status"),
         "reasons": list(metrics.get("reasons") or []),
         "metrics": dict(metrics.get("metrics") or {}),
+        "numbers_hidden": metrics.get("status") in ("partial", "unavailable"),
         "report_timezone": metrics.get("report_timezone"),
         "range": metrics.get("range"),
+        # 结构化数据质量告警（partial/unavailable 时非 None）——供运营侧消费，
+        # **只产出对象，不发送任何消息**（auto_send 恒为 False）。
+        "data_quality_alert": metrics.get("data_quality_alert"),
     }
+    # 顶层告警列表：运营/下游按 object 路由，不靠中文文案；无告警时为空列表。
+    alert = metrics.get("data_quality_alert")
+    plan["data_quality_alerts"] = [alert] if alert else []
     plan["cross_provider_dropped"] = [
         {"title": a.title, "source": a.source, "category": a.category} for a in dropped]
     plan["top_n"] = top_n
@@ -170,6 +177,7 @@ def run_morning_brief(context: BriefContext, base_dir: Path, email_store=None,
         "plan": plan,
         "layering": layer_info,
         "email_metrics": plan["email_metrics"],
+        "data_quality_alerts": plan["data_quality_alerts"],
         "cross_provider_dropped": plan["cross_provider_dropped"],
         "provider_errors": (list(email_result.errors) + list(opp_result.errors)
                             + list(exh_result.errors)),

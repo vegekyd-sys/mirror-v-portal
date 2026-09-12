@@ -234,8 +234,12 @@ class TestThreeConsumersAgree(ModeEnvMixin, unittest.TestCase):
             self.assertEqual(m["metrics"], {"sent": 5, "delivered": 4, "bounced": 1, "replied": 2})
             self.assertIsNotNone(m["v1"], "shadow 必须同时算 v1")
             self.assertTrue(m["shadow"]["recorded"], "shadow 差异必须落盘")
-            files = list(Path(shadow_dir).glob("shadow-*.jsonl"))
+            files = list(Path(shadow_dir).glob("*/*/*.jsonl"))
             self.assertEqual(len(files), 1, "差异按业务日切成 JSONL")
+            rel = files[0].relative_to(shadow_dir)
+            self.assertEqual(rel.parent.parts, ("_global", COMPANY),
+                             "shadow 落盘必须按 <tenant>/<company> 隔离（tenant 缺省用 _global）")
+            self.assertRegex(files[0].name, r"^\d{4}-\d{2}-\d{2}\.jsonl$")
             payload = json.loads(files[0].read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(payload["consumer"], "shadow-test")
             diff = {d["metric"]: d for d in payload["diff"]}

@@ -7,12 +7,15 @@
 口径开关的失败模式只能是「不变」，绝不能是「换口径」——所以非法值一律回退 legacy
 并记一条告警，不抛异常。
 
-按租户覆盖（从具体到全局，先命中先用）：
+按覆盖范围（从具体到全局，先命中先用）——**企业级最具体，优先于租户级**：
 
-  1. `DC_EMAIL_METRICS_MODE_<TENANT>`    租户 slug，如 `DC_EMAIL_METRICS_MODE_MEORIENT`
-  2. `DC_EMAIL_METRICS_MODE_<COMPANY>`   企业 id，如 `DC_EMAIL_METRICS_MODE_152600996207`
+  1. `DC_EMAIL_METRICS_MODE_<COMPANY>`   企业 id，如 `DC_EMAIL_METRICS_MODE_152600996207`
+  2. `DC_EMAIL_METRICS_MODE_<TENANT>`    租户 slug，如 `DC_EMAIL_METRICS_MODE_MEORIENT`
   3. `DC_EMAIL_METRICS_MODE`             全局默认
   4. 缺省 → `legacy`
+
+优先级理由：企业级键是**最具体的部署意图**（单企业试切/回滚），租户级是**批量默认**。
+两者同时配置时，具体者胜——否则给单个企业开的试点开关会被租户默认静默吃掉。
 
 `tenant-env.json`（见 `_tenant_env.load_tenant_env`）的键会被塞进 `os.environ`，
 所以「按租户」既可以走部署环境变量，也可以写进租户可写配置，二者等价。
@@ -65,8 +68,11 @@ def normalize_mode(value: str | None, *, source: str = "") -> str:
 
 
 def mode_env_names(tenant: str | None = None, company_id: str | None = None) -> tuple[str, ...]:
-    """按优先级返回候选环境变量名（可能含空串位置，已过滤）。"""
-    names = [env_key(MODE_ENV, tenant), env_key(MODE_ENV, company_id), MODE_ENV]
+    """按优先级返回候选环境变量名（可能含空串位置，已过滤）。
+
+    优先级：`COMPANY > TENANT > GLOBAL`。
+    """
+    names = [env_key(MODE_ENV, company_id), env_key(MODE_ENV, tenant), MODE_ENV]
     return tuple(n for n in names if n)
 
 
