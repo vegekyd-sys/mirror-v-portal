@@ -332,7 +332,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       const { rows } = await pool.query(
         `SELECT tenant_id, company_name, contact_email, contact_phone, plan_tier, status,
                 k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly,
-                mio_cdp_supplier_id, app_id, message_plane, created_at, updated_at
+                mio_cdp_supplier_id, app_id, message_plane, shared_dm_session, created_at, updated_at
          FROM tenants WHERE tenant_id = $1`,
         [req.params.id],
       );
@@ -367,6 +367,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
           mioCdpSupplierId: t.mio_cdp_supplier_id ?? null,
           feishuAppId: t.app_id ?? null,
           messagePlane: t.message_plane ?? 'gateway',
+          sharedDmSession: Boolean(t.shared_dm_session),
           createdAt: t.created_at,
           updatedAt: t.updated_at,
         },

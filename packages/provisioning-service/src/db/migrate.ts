@@ -438,6 +438,18 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON wechat_bindings(tenant_id, status);
     `);
 
+    // ── Shared DM session (v0.9) — per-tenant toggle that merges Feishu and
+    // WeChat DM conversations into a single session (agent:dealclaw:main),
+    // enabling cross-channel conversation continuity. Suitable for single-user
+    // tenants where the same person talks to the agent on both Feishu and
+    // WeChat. Multi-user tenants should NOT enable this (sessions would cross-
+    // contaminate). The toggle is materialised as the
+    // DEALCLAW_SHARED_DM_SESSION env var on the agent Deployment; write-config
+    // .mjs checks it with priority over DEALCLAW_SESSION_DM_SCOPE.
+    await client.query(`
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

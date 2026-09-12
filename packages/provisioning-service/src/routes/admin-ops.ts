@@ -22,6 +22,7 @@ import { createExternalApiKey, listExternalApiKeys, revokeExternalApiKey } from 
 import { createChatApiKey, listChatApiKeys, revokeChatApiKey } from '../services/chat-api-keys.js';
 import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
 import { backfillSenderNames } from '../services/sender-name-backfill.js';
+import { patchDeploymentEnvVar, restartDeployment } from '../services/k8s-client.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -605,6 +606,96 @@ export function createAdminOpsRoutes(
       const e = err as any;
       console.error('sender name backfill failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'backfill failed' });
+    }
+  });
+
+  // PUT /v1/admin/tenants/:id/shared-session — toggle per-tenant cross-
+  // channel session sharing (Feishu + WeChat DM history merged into a single
+  // session). Patches the DEALCLAW_SHARED_DM_SESSION env var on the agent
+  // Deployment and restarts it so write-config.mjs regenerates openclaw.json
+  // with dmScope='main' (enabled) or the per-channel defaults (disabled).
+  router.put('/v1/admin/tenants/:id/shared-session', async (req: Request, res: Response) => {
+    try {
+      const enabled = req.body?.enabled === true;
+      const tenantId = req.params.id;
+
+      const { rows } = await pool.query(
+        'SELECT tenant_id, status, k8s_namespace, agent_endpoint, shared_dm_session FROM tenants WHERE tenant_id = $1',
+        [tenantId],
+      );
+      if (!rows.length) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
+        return;
+      }
+      const tenant = rows[0];
+      if (tenant.status === 'destroyed') {
+        res.status(400).json({ code: 'TENANT_DESTROYED', message: '租户已销毁' });
+        return;
+      }
+      if (tenant.agent_endpoint) {
+        res.status(400).json({
+          code: 'EXTERNAL_AGENT',
+          message: '该租户使用外部（中央）Agent，环境变量由 ArgoCD/GitOps 管理，不能在此修改',
+        });
+        return;
+      }
+
+      const prevValue = Boolean(tenant.shared_dm_session);
+      if (prevValue === enabled) {
+        res.json({ ok: true, enabled, action: 'noop' });
+        return;
+      }
+
+      // Persist the toggle BEFORE patching the Deployment so a DB failure is
+      // never masked by a successful K8s patch. The reverse order (patch K8s
+      // first) would leave the env set but the DB stale if the UPDATE throws.
+      await pool.query(
+        'UPDATE tenants SET shared_dm_session = $1, updated_at = NOW() WHERE tenant_id = $2',
+        [enabled, tenantId],
+      );
+
+      // Patch the agent Deployment env so write-config.mjs picks up the
+      // change on next boot, then restart (scale 0 → 1) so the new config
+      // takes effect immediately. patchDeploymentEnvVar returns false when
+      // the env is already at the target value (no-op) — in that case a
+      // restart is unnecessary.
+      const namespace = tenant.k8s_namespace || config.runtimeNamespace;
+      const agentName = `dealclaw-agent-${tenantId}`;
+      let restarted = false;
+      if (!config.k8sDryRun) {
+        const patched = await patchDeploymentEnvVar(
+          namespace,
+          agentName,
+          'DEALCLAW_SHARED_DM_SESSION',
+          enabled ? '1' : '0',
+        );
+        if (patched) {
+          restarted = await restartDeployment(namespace, agentName);
+        }
+      }
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'tenant.shared-session',
+        method: 'PUT',
+        path: `/v1/admin/tenants/${tenantId}/shared-session`,
+        resourceType: 'tenant',
+        resourceId: tenantId,
+        tenantId,
+        oldValue: { sharedDmSession: prevValue },
+        newValue: { sharedDmSession: enabled, restarted },
+        statusCode: 200,
+      });
+
+      res.json({
+        ok: true,
+        enabled,
+        action: enabled ? 'enabled' : 'disabled',
+      });
+    } catch (err: unknown) {
+      const e = err as any;
+      console.error('Toggle shared session failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Toggle failed' });
     }
   });
 

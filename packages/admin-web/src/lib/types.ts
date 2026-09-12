@@ -20,6 +20,9 @@ export interface Tenant {
   /** Message plane: 'gateway' = nexus-gateway WS bridge; 'openclaw' = in-agent
    *  @openclaw/feishu plugin owns the Feishu long connection. */
   messagePlane?: 'gateway' | 'openclaw';
+  /** True → Feishu and WeChat DM conversations share a single session
+   *  (agent:dealclaw:main) for cross-channel continuity. Per-tenant toggle. */
+  sharedDmSession?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

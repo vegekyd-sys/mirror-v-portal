@@ -187,6 +187,39 @@ export default function AgentDetailPage() {
     }
   };
 
+  // ── 飞书/微信 session 共享开关 ──
+  const [sharedSessionBusy, setSharedSessionBusy] = useState(false);
+  const toggleSharedSession = async () => {
+    const current = Boolean(tenant?.sharedDmSession);
+    const next = !current;
+    const verb = next ? '开启' : '关闭';
+    if (
+      !window.confirm(
+        `确认${verb}飞书/微信 session 共享？\n${next
+          ? '开启后，该租户的飞书和微信对话历史将合并到同一个 session，实现跨渠道对话连续性。适合单用户租户（同一人在飞书和微信上与 agent 对话）。多用户租户慎用。'
+          : '关闭后，飞书和微信将恢复各自独立的 session（per-channel-peer / per-account-channel-peer）。'}\n将 patch agent 环境变量并滚动重启 Agent 生效。`,
+      )
+    )
+      return;
+    setSharedSessionBusy(true);
+    try {
+      const r = await api<{ enabled: boolean; action: string }>(
+        `/v1/admin/tenants/${encodeURIComponent(tenantId)}/shared-session`,
+        { method: 'PUT', body: { enabled: next } },
+      );
+      flash(
+        r.action === 'noop'
+          ? `session 共享已是${next ? '开启' : '关闭'}状态，无需变更`
+          : `session 共享已${verb}（${r.enabled ? '已开启' : '已关闭'}），Agent 正在滚动重启`,
+      );
+      await loadTenant();
+    } catch (e) {
+      flash(`session 共享${verb}失败：${errMsg(e)}`);
+    } finally {
+      setSharedSessionBusy(false);
+    }
+  };
+
   // ── 运行状态（K8s） ──
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [rtBusy, setRtBusy] = useState(false);
@@ -940,6 +973,33 @@ export default function AgentDetailPage() {
                   {tenant.messagePlane === 'openclaw'
                     ? '飞书消息由 agent 内 @openclaw/feishu 插件直连，网关仅作 LLM 出口代理（体验更佳，支持流式卡片）。'
                     : '飞书消息经 nexus-gateway WS 桥接（存量旧平面）。迁移后由 agent 直连飞书，消息链路更稳定。'}
+                </div>
+              </div>
+              <div className="detail-item">
+                <div className="k">飞书/微信 session 共享</div>
+                <div className="v" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {tenant.sharedDmSession ? (
+                    <span className="badge badge-active" title="飞书和微信 DM 对话合并到同一个 session（agent:dealclaw:main）">
+                      已开启 · 跨渠道共享
+                    </span>
+                  ) : (
+                    <span className="badge badge-pending" title="飞书和微信各自独立 session">
+                      已关闭 · 独立 session
+                    </span>
+                  )}
+                  {tenant.status === 'active' && (
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: 12, padding: '2px 10px' }}
+                      disabled={sharedSessionBusy}
+                      onClick={() => void toggleSharedSession()}
+                    >
+                      {sharedSessionBusy ? '处理中…' : tenant.sharedDmSession ? '关闭共享' : '开启共享'}
+                    </button>
+                  )}
+                </div>
+                <div className="hint" style={{ margin: '4px 0 0' }}>
+                  开启后，该租户的飞书和微信对话历史将合并到同一个 session，实现跨渠道对话连续性。适合单用户租户（同一人在飞书和微信上与 agent 对话）。多用户租户慎用。
                 </div>
               </div>
               <div className="detail-item">

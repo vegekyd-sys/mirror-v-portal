@@ -211,6 +211,14 @@ const feishuDirect =
 // account files from $OPENCLAW_STATE_DIR/openclaw-weixin/accounts.json.
 const wechatBound = process.env.DEALCLAW_WECHAT_BOUND === '1' && messagePlane === 'openclaw';
 
+// ── Shared DM session (Feishu + WeChat cross-channel merge) ──────────
+// DEALCLAW_SHARED_DM_SESSION=1 merges all DM conversations (Feishu + WeChat)
+// into a single session (agent:dealclaw:main), so the same user can continue a
+// conversation across channels. Set per-tenant by the admin console toggle
+// (tenants.shared_dm_session → env patch + restart). This takes priority over
+// the DEALCLAW_SESSION_DM_SCOPE escape-hatch and the wechatBound default.
+const sharedDmSession = process.env.DEALCLAW_SHARED_DM_SESSION === '1';
+
 if (messagePlane === 'openclaw' && !feishuDirect && !wechatBound) {
   console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but no channel credentials — feishu/weixin channels NOT enabled');
 }
@@ -437,16 +445,23 @@ const config = {
         }
       : {}),
   },
-  // One session per channel peer: each Feishu user gets an independent
-  // conversation instead of sharing agent:dealclaw:main. Sessions are pruned
-  // after 14d to bound PVC growth. DEALCLAW_SESSION_DM_SCOPE=shared restores
-  // the legacy single-session behaviour.
-  // WeChat multi-account: per-account-channel-peer isolates DM sessions by
-  // account + channel + peer (plugin official recommendation).
+  // DM session scope:
+  //   1. sharedDmSession (DEALCLAW_SHARED_DM_SESSION=1) → 'main': all Feishu
+  //      and WeChat DMs share one session (cross-channel continuity for
+  //      single-user tenants). Highest priority.
+  //   2. wechatBound → 'per-account-channel-peer': WeChat multi-account
+  //      isolates DM sessions by account + channel + peer.
+  //   3. DEALCLAW_SESSION_DM_SCOPE escape-hatch → overrides the Feishu-only
+  //      default (e.g. 'main' for legacy single-session behaviour).
+  //   4. Default → 'per-channel-peer': each Feishu user gets an independent
+  //      conversation.
+  // Sessions are pruned after 14d to bound PVC growth.
   session: {
-    dmScope: wechatBound
-      ? 'per-account-channel-peer'
-      : (process.env.DEALCLAW_SESSION_DM_SCOPE || 'per-channel-peer'),
+    dmScope: sharedDmSession
+      ? 'main'
+      : wechatBound
+        ? 'per-account-channel-peer'
+        : (process.env.DEALCLAW_SESSION_DM_SCOPE || 'per-channel-peer'),
     maintenance: {
       mode: 'enforce',
       pruneAfter: '14d',

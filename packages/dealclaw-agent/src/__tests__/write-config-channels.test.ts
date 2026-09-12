@@ -122,18 +122,79 @@ describe('write-config runtime tuning (queue / pruning / compaction / session)',
     expect(d.maxConcurrent).toBeGreaterThan(0);
   });
 
-  it('honours escape-hatch envs (queue off, shared dmScope)', () => {
+  it('honours escape-hatch envs (queue off, main dmScope)', () => {
     const { config } = runWriteConfig({
       LLM_PROVIDERS: PROVIDERS,
       DEALCLAW_MESSAGE_QUEUE_MODE: 'off',
-      DEALCLAW_SESSION_DM_SCOPE: 'shared',
+      DEALCLAW_SESSION_DM_SCOPE: 'main',
     });
     // groupChat (history/visibility) is independent of the message queue:
     // DEALCLAW_MESSAGE_QUEUE_MODE=off only disables queue steer → strict FIFO,
     // it must not strip groupChat visibility config.
     expect(config.messages?.queue).toBeUndefined();
     expect(config.messages?.groupChat).toEqual({ historyLimit: 50, visibleReplies: 'automatic' });
-    expect(config.session?.dmScope).toBe('shared');
+    expect(config.session?.dmScope).toBe('main');
+  });
+});
+
+// ── Shared DM session (Feishu + WeChat cross-channel merge) ───────────
+// DEALCLAW_SHARED_DM_SESSION=1 takes the highest priority in the three-level
+// dmScope resolution: sharedDmSession > wechatBound > DEALCLAW_SESSION_DM_SCOPE.
+describe('write-config shared DM session (DEALCLAW_SHARED_DM_SESSION)', () => {
+  it('sets dmScope=main when DEALCLAW_SHARED_DM_SESSION=1', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_SHARED_DM_SESSION: '1',
+    });
+    expect(config.session?.dmScope).toBe('main');
+  });
+
+  it('falls back to per-channel-peer when DEALCLAW_SHARED_DM_SESSION=0', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_SHARED_DM_SESSION: '0',
+    });
+    expect(config.session?.dmScope).toBe('per-channel-peer');
+  });
+
+  it('shared session wins over DEALCLAW_SESSION_DM_SCOPE escape-hatch', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_SHARED_DM_SESSION: '1',
+      DEALCLAW_SESSION_DM_SCOPE: 'per-peer',
+    });
+    // shared=1 takes priority over the escape-hatch → main
+    expect(config.session?.dmScope).toBe('main');
+  });
+
+  it('shared session wins over wechatBound default', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_MESSAGE_PLANE: 'openclaw',
+      DEALCLAW_WECHAT_BOUND: '1',
+      DEALCLAW_SHARED_DM_SESSION: '1',
+    });
+    // shared=1 takes priority over wechatBound → main
+    expect(config.session?.dmScope).toBe('main');
+  });
+
+  it('wechatBound default applies when shared session is not enabled', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_MESSAGE_PLANE: 'openclaw',
+      DEALCLAW_WECHAT_BOUND: '1',
+    });
+    expect(config.session?.dmScope).toBe('per-account-channel-peer');
+  });
+
+  it('escape-hatch DEALCLAW_SESSION_DM_SCOPE still works when shared=0', () => {
+    const { config } = runWriteConfig({
+      LLM_PROVIDERS: PROVIDERS,
+      DEALCLAW_SHARED_DM_SESSION: '0',
+      DEALCLAW_SESSION_DM_SCOPE: 'main',
+    });
+    // shared=0 is falsy → escape-hatch kicks in
+    expect(config.session?.dmScope).toBe('main');
   });
 });
 
