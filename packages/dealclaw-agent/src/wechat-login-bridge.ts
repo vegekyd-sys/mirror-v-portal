@@ -25,10 +25,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-// Normalize accountId: raw IDs like "hex@im.bot" → "hex-im-bot" (filesystem-safe).
-// Mirrors openclaw/plugin-sdk/account-id normalizeAccountId().
+// Normalize accountId to match OpenClaw's canonicalizeAccountId behaviour:
+//   1. lowercase + trim
+//   2. replace every non [a-z0-9_-] character (incl. @ and .) with '-'
+//   3. strip leading/trailing dashes
+//   4. truncate to 64 chars
+//   5. empty/whitespace-only → "default"
+// This guarantees the same canonical id the gateway uses when it later calls
+// its own normalizeAccountId on the raw ilink_bot_id (e.g. "hex@im.bot" →
+// "hex-im-bot"), so the account file written here is discoverable on reload.
+// NOTE: OpenClaw additionally checks a blocked-key list (normalizeCanonicalAccountId);
+// the bridge has no blocked keys, so that step is intentionally omitted.
 function normalizeAccountId(rawId: string): string {
-  return rawId.replace(/@/g, '-');
+  const normalized = (rawId ?? '').trim().toLowerCase();
+  if (!normalized) return 'default';
+  const canonical = normalized
+    .replace(/[^a-z0-9_-]+/g, '-') // all invalid chars (incl. @, .) → '-'
+    .replace(/^-+/g, '')           // strip leading dashes
+    .replace(/-+$/g, '')           // strip trailing dashes
+    .slice(0, 64);                 // max 64 chars
+  return canonical || 'default';
 }
 
 // ── iLink API constants (mirrors plugin src/auth/login-qr.ts) ──────────────

@@ -186,6 +186,93 @@ if wechat_bound && ensure_wechat_trusted; then
   export DEALCLAW_WECHAT_TRUSTED=1
 fi
 
+# ── weixin 账户ID normalize 迁移（幂等）──────────────────────────────
+# 历史 bug：wechat-login-bridge 的 normalizeAccountId 只替换 @ 不替换 .，
+# 导致 ilink_bot_id "1670eb1f7d67@im.bot" 被存成 "1670eb1f7d67-im.bot"
+# （保留了 .）。但 gateway 加载时对 ID 再次 normalize 会把 . 也变成 -，
+# 于是 loadWeixinAccount("1670eb1f7d67-im-bot") 找不到 "1670eb1f7d67-im.bot.json"
+# → token 读不到 → isConfigured=false → 渠道不启动 → 消息不回复。
+# 本段在启动时把存量账户文件名 + accounts.json 索引修正为与 OpenClaw
+# canonicalizeAccountId 一致的形式（@ 和 . 都 → -）。幂等：对文件名已是规范
+# 形式的（new_id == old_id）直接跳过，可安全重复执行，放在 write-config.mjs
+# 之前，确保后续网关按规范 ID 加载到正确的账户文件。
+migrate_weixin_account_ids() {
+  local accounts_dir="${OPENCLAW_STATE_DIR}/openclaw-weixin/accounts"
+  local index_path="${OPENCLAW_STATE_DIR}/openclaw-weixin/accounts.json"
+  [[ -d "$accounts_dir" ]] || return 0
+
+  local mapfile_tmp; mapfile_tmp="$(mktemp)"
+  local changed=0
+
+  for f in "$accounts_dir"/*.json; do
+    [[ -e "$f" ]] || continue  # glob 无匹配 → 跳过（不依赖 nullglob）
+    local base; base="$(basename "$f")"
+    # 排除非账户文件：备份、同步游标、上下文 token（它们的 ID 前缀与主账户一致，
+    # 但不应作为独立账户参与 normalize 计算；配套重命名在主文件变更后统一处理）
+    case "$base" in
+      *.bak|*.bak.json) continue ;;
+      *.sync.json) continue ;;
+      *.context-tokens.json) continue ;;
+    esac
+    local old_id="${base%.json}"
+    # OpenClaw canonicalizeAccountId: lowercase + 非法字符→- + 去首尾- + 截64 + 空→default
+    local new_id; new_id="$(node -e '
+      const v = (process.argv[1] ?? "").trim().toLowerCase();
+      if (!v) { console.log("default"); process.exit(0); }
+      let c = v.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, 64);
+      console.log(c || "default");
+    ' "$old_id")"
+    if [[ "$new_id" == "$old_id" ]]; then
+      continue  # 已是规范形式，不动（幂等）
+    fi
+    # 重命名主账户文件（若目标已存在则覆盖——同一账户不会产生两个文件）
+    mv -f "$f" "${accounts_dir}/${new_id}.json"
+    # 同步重命名配套的 sync / context-tokens 文件（若存在，best-effort）
+    local suf
+    for suf in sync context-tokens; do
+      local comp="${accounts_dir}/${old_id}.${suf}.json"
+      [[ -f "$comp" ]] && mv -f "$comp" "${accounts_dir}/${new_id}.${suf}.json"
+    done
+    printf '%s\t%s\n' "$old_id" "$new_id" >> "$mapfile_tmp"
+    changed=1
+    echo "[dealclaw-runtime] weixin 账户ID迁移: ${old_id} → ${new_id}"
+  done
+
+  if [[ $changed -eq 0 ]]; then
+    rm -f "$mapfile_tmp"
+    return 0
+  fi
+
+  # 更新 accounts.json 索引：把旧 ID 替换为 normalize 后的新 ID，去重
+  if [[ -f "$index_path" ]]; then
+    node -e '
+      const fs = require("fs");
+      const idxPath = process.argv[1];
+      const mapPath = process.argv[2];
+      const map = {};
+      for (const line of fs.readFileSync(mapPath, "utf-8").split("\n")) {
+        const m = line.trim();
+        if (!m) continue;
+        const parts = m.split("\t");
+        if (parts.length >= 2 && parts[0] && parts[1]) map[parts[0]] = parts[1];
+      }
+      let ids;
+      try { ids = JSON.parse(fs.readFileSync(idxPath, "utf-8")); } catch { ids = []; }
+      if (!Array.isArray(ids)) ids = [];
+      const out = [];
+      const seen = new Set();
+      for (const id of ids) {
+        const nid = map[id] || id;  // 旧ID→新ID；未在map里的保留原值
+        if (!seen.has(nid)) { seen.add(nid); out.push(nid); }
+      }
+      fs.writeFileSync(idxPath, JSON.stringify(out, null, 2) + "\n", "utf-8");
+    ' "$index_path" "$mapfile_tmp"
+    echo "[dealclaw-runtime] weixin accounts.json 索引已更新（normalize 账户ID）"
+  fi
+  rm -f "$mapfile_tmp"
+}
+migrate_weixin_account_ids
+
 node /opt/dealclaw/runtime/write-config.mjs
 
 # ── lark-cli 初始化（bot 身份，非交互、幂等）─────────────────────────
