@@ -670,6 +670,9 @@ def sync_leads_to_pool(
     幂等键优先级：公司CDPID > normalized_domain；公司名仅辅助，不单独覆盖。
     created > 0 但解析不到 record_id 时，先按稳定唯一键只读回查恢复；
     仍无法恢复则抛 BitableResponseParseError（不重新创建）。
+
+    关键字段（公司CDPID / 官网 / 公司名）全缺的记录**报错不静默丢**：
+    静默 skip 会让「抓到了但没落库」变成不可观测的数据丢失，必须先修上游。
     """
     pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
     app_token = pool["app_token"]
@@ -698,7 +701,7 @@ def sync_leads_to_pool(
     updates = []   # (record_id, 仅变化字段) — 最小字段更新
     skipped = 0
     unique_keys = []
-    for record in records or []:
+    for idx, record in enumerate(records or []):
         fields = _record_fields(record, source)
         cdp_key = _normalize_key(fields.get("公司CDPID", ""))
         website_key = _normalize_key(fields.get("官网", ""))
@@ -707,8 +710,11 @@ def sync_leads_to_pool(
             "cdp": cdp_key, "website": website_key, "company": company_key,
         })
         if not cdp_key and not website_key and not company_key:
-            skipped += 1
-            continue
+            # 缺失全部关键字段 → 报错（绝不静默丢）：静默 skip 会把数据丢失变成不可观测。
+            # 在任何写操作之前抛出，避免只写一半留下残记录。
+            raise ValueError(
+                "线索记录缺少全部关键字段（公司CDPID / 官网 / 公司名），拒绝静默丢弃："
+                f"records[{idx}] 可用字段={sorted(k for k in (record or {}))}")
         # 仅用 cdp / domain 判断是否 upsert；公司名不作为覆盖依据
         record_id = (index.get(f"cdp:{cdp_key}")
                      or index.get(f"website:{website_key}"))
@@ -732,7 +738,12 @@ def sync_leads_to_pool(
             "--as", "bot",
             timeout=60,
         )
-        created_ids = parse_created_record_ids(result)
+        try:
+            created_ids = parse_created_record_ids(result)
+        except BitableResponseParseError:
+            # 响应结构不可解析也是「解析不到 record_id」：先走只读回查恢复，
+            # 恢复不了再按既有行为报错（下面统一 raise），仍不重新创建。
+            created_ids = []
 
         # created > 0 但无 record_id：先按稳定唯一键只读回查恢复
         if len(created_ids) != len(creates):
