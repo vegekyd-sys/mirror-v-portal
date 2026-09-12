@@ -490,12 +490,22 @@ class MarkdownEmailStore:
                 self._write_index("idempotency-key", idem, rel)
         return True
 
-    def count_sent_today(self, account_id: str) -> int:
-        day = utc_now()[:10]
+    def count_sent_today(self, account_id: str, tz: str | None = None) -> int:
+        """今日已发送数（**按企业业务时区取日**，默认 Asia/Shanghai）。
+
+        历史实现用 `utc_now()[:10]` 当本地日期，在 00:00–08:00 CST 会错位一天
+        （v1 文档 §0「今日用 UTC 日」）。时区转换统一走 `email_metrics.facts.to_local_date`，
+        不在本模块重写一套。
+        """
+        from email_metrics.config import resolve_report_timezone
+        from email_metrics.facts import to_local_date
+        zone = tz or resolve_report_timezone()
+        day = to_local_date(utc_now(), zone)
         n = 0
         for rec in _list_snapshots(self._outbound):
-            if rec.get("account_id") == account_id and rec.get("status") == "sent" \
-                    and (rec.get("created_at") or "")[:10] == day:
+            if rec.get("account_id") != account_id or rec.get("status") != "sent":
+                continue
+            if to_local_date(rec.get("created_at") or rec.get("sent_at"), zone) == day:
                 n += 1
         return n
 

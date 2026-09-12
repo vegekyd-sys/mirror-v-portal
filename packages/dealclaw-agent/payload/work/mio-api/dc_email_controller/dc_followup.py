@@ -58,7 +58,15 @@ def _parse_ts(ts) -> float | None:
         return None
 
 
-def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str) -> bool:
+def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str,
+               outbound: dict | None = None, outbound_records: list | None = None) -> bool:
+    """是否已收到人工回复（**停止跟进**的判据之一）。
+
+    旧路径（binding_status=bound + thread/contact 匹配）保留；
+    额外叠加 Adapter 引用匹配（In-Reply-To / References / thread +
+    `resend_received_id`/`resend_id` 两种字段名都认），避免入站 id 存在
+    `resend_received_id` 而这里只读 `resend_id` → 已回复买家被算进待跟进。
+    """
     for ib in inbounds:
         if ib.get("binding_status") != "bound":
             continue
@@ -67,6 +75,13 @@ def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: s
         if contact_id and ib.get("contact_id") == contact_id \
                 and (ib.get("received_at") or "") >= (sent_at or ""):
             return True
+    if outbound is not None:
+        try:
+            from email_metrics import legacy as _legacy
+            records = outbound_records if outbound_records is not None else [outbound]
+            return _legacy.has_reply(outbound, records, inbounds)
+        except Exception:  # noqa: BLE001 — 归属判定失败不阻断跟进扫描
+            return False
     return False
 
 
@@ -94,7 +109,8 @@ def list_strategy_review_candidates(company_id: str) -> list[dict]:
             continue
         thread_id = ob.get("thread_id") or ob.get("local_message_id", "")
         if _has_reply(inbounds, thread_id, ob.get("contact_id", ""),
-                      ob.get("sent_at") or ob.get("created_at", "")):
+                      ob.get("sent_at") or ob.get("created_at", ""),
+                      outbound=ob, outbound_records=outbounds):
             continue
         result.append({"resend_id": ob.get("resend_id", ""),
                        "buyer_email": (ob.get("recipients") or [""])[0],
@@ -128,7 +144,8 @@ def list_followup_candidates(company_id: str, at: str = None) -> list[dict]:
             continue  # 超过第三轮 → 停止（交给策略复盘）
         thread_id = ob.get("thread_id") or ob.get("local_message_id", "")
         if _has_reply(inbounds, thread_id, ob.get("contact_id", ""),
-                      ob.get("sent_at") or ob.get("created_at", "")):
+                      ob.get("sent_at") or ob.get("created_at", ""),
+                      outbound=ob, outbound_records=outbounds):
             continue  # 已回复 → 停止
         sent_at = ob.get("sent_at") or ob.get("created_at", "")
         due_at = ob.get("followup_due_at") or _iso_add_days(sent_at, FOLLOWUP_DUE_DAYS)

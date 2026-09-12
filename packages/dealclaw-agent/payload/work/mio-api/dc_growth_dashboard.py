@@ -37,7 +37,9 @@ def _campaign(company_id: str):
     return read_campaign(company_id)
 
 
-def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str) -> bool:
+def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str,
+               outbound: dict | None = None, outbound_records: list | None = None) -> bool:
+    """是否已被人工回复（旧路径 + Adapter 引用匹配，见 email_metrics.legacy）。"""
     for ib in inbounds:
         if ib.get("binding_status") != "bound":
             continue
@@ -46,6 +48,13 @@ def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: s
         if contact_id and ib.get("contact_id") == contact_id \
                 and (ib.get("received_at") or "") >= (sent_at or ""):
             return True
+    if outbound is not None:
+        try:
+            from email_metrics import legacy as _legacy
+            records = outbound_records if outbound_records is not None else [outbound]
+            return _legacy.has_reply(outbound, records, inbounds)
+        except Exception:  # noqa: BLE001
+            return False
     return False
 
 
@@ -60,7 +69,8 @@ def _review_candidates(company_id: str) -> list[dict]:
         if int(ob.get("touch_number", 0) or 0) < 3:
             continue
         if _has_reply(inb, ob.get("thread_id") or ob.get("local_message_id", ""),
-                      ob.get("contact_id", ""), ob.get("sent_at") or ob.get("created_at", "")):
+                      ob.get("contact_id", ""), ob.get("sent_at") or ob.get("created_at", ""),
+                      outbound=ob, outbound_records=out):
             continue
         result.append({"resend_id": ob.get("resend_id", ""),
                        "buyer_email": (ob.get("recipients") or [""])[0],
@@ -248,6 +258,46 @@ def build_buyer_status(company_id: str) -> list[dict]:
     return rows
 
 
+# ── 3.5 邮件口径（统一读入口）────────────────────────────
+def _signal_reply_ids(signals: list[dict]) -> set:
+    return {s.get("source_message_id") for s in signals
+            if s.get("source_message_id")
+            and s.get("signal_type") in ("quote_request", "sample_request",
+                                         "meeting_interest", "missing_info")}
+
+
+def build_email_metrics(company_id: str, *, date: str | None = None, date_range=None,
+                        tz: str | None = None, store=None, signals=None) -> dict:
+    """看板的邮件指标块 —— **统一读入口** `email_metrics.service.read_email_metrics`。
+
+    口径由 `DC_EMAIL_METRICS_MODE` 决定（默认 legacy）；数字不可用时 `status="unavailable"`、
+    值为 None，不报假 0。看板的「触达漏斗」仍是企业数口径（去重企业），与本块（邮件数口径）
+    分开展示，不相互混算。
+    """
+    from email_metrics.service import read_email_metrics
+    if signals is None:
+        try:
+            signals = _signals(company_id)
+        except Exception:  # noqa: BLE001
+            signals = []
+    m = read_email_metrics(
+        company_id=company_id, date=date, date_range=date_range, report_timezone=tz,
+        store=store, opportunity_signals=signals,
+        legacy_replied=len(_signal_reply_ids(signals or [])), consumer="growth_dashboard",
+    )
+    return {
+        "mode": m["mode"],
+        "status": m["status"],
+        "v1_status": m.get("v1_status"),
+        "reasons": list(m.get("reasons") or []),
+        "metrics": dict(m["metrics"]),
+        "range": m.get("range"),
+        "report_timezone": m.get("report_timezone"),
+        "unassigned_count": m.get("unassigned_count"),
+        "data_complete": m["status"] == "ok",
+    }
+
+
 # ── 4. 策略效果 ──────────────────────────────────────────
 def build_strategy_effect(company_id: str) -> dict:
     f = build_funnel(company_id)
@@ -271,6 +321,7 @@ def build_dashboard(company_id: str) -> dict:
     return {
         "company_id": company_id,
         "funnel": build_funnel(company_id),
+        "email_metrics": build_email_metrics(company_id),
         "followup": build_followup_status(company_id),
         "buyers": build_buyer_status(company_id),
         "strategy": build_strategy_effect(company_id),
@@ -299,6 +350,18 @@ def format_dashboard(d: dict) -> str:
     lines = [f"📊 DealClaw 展会邮件看板 · {company}", ""]
     lines.append("## 触达漏斗")
     lines.append(f"发送 {f.get('sent',0)} → 送达 {f.get('delivered',0)} → 回复 {f.get('replied',0)} → 有效询盘 {f.get('valid_inquiry',0)} → 会议意向 {f.get('meeting_intent',0)}")
+    em = d.get("email_metrics")
+    if em:
+        from email_metrics.service import format_metrics_line
+        mode = em.get("mode", "legacy")
+        if em.get("status") == "unavailable":
+            reasons = "，".join(em.get("reasons") or [])
+            lines.append(f"邮件口径（{mode}）：数据不可用（{reasons}）")
+        else:
+            lines.append(format_metrics_line(
+                {"status": em.get("status"), "metrics": em.get("metrics") or {},
+                 "reasons": em.get("reasons")},
+                prefix=f"邮件口径（{mode} · 邮件数）："))
     lines.append("")
     lines.append("## 当前跟进")
     lines.append(f"待发送草稿 {fu.get('pending_drafts',0)}（回复 {fu.get('reply_drafts',0)} / 跟进 {fu.get('second_round',0)+fu.get('third_round',0)}）")

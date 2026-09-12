@@ -20,6 +20,11 @@ DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().paren
 BUSINESS_TZ = "Asia/Shanghai"
 
 
+def today_in_tz(tz: str = BUSINESS_TZ) -> str:
+    """企业业务时区的当日日期（「今日」口径的唯一来源，不用 UTC 直接取日）。"""
+    return datetime.now(timezone.utc).astimezone(ZoneInfo(tz)).date().isoformat()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -104,28 +109,44 @@ def _self_evolution_brief(company_id: str, days: int = 7) -> str:
         return ""
 
 
-def collect_metrics(company_id: str, campaign_id: str = None) -> dict:
-    """聚合发送/送达/回复/退信等指标（EmailStore + 信号层，统一口径）。"""
-    from email_gateway.store import EmailStore
+def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
+                    date_range=None, tz: str = None, store=None) -> dict:
+    """聚合发送/送达/回复/退信等指标（**统一读入口**：email_metrics.service）。
+
+    口径由 `DC_EMAIL_METRICS_MODE` 决定（legacy | shadow | v1），默认 legacy = 线上行为不变。
+    `date` / `date_range` 按企业业务时区（默认 Asia/Shanghai）算业务日，不是 UTC 日；
+    不传则为全部时间（保留旧可见语义）。
+    数字不可用时 `status="unavailable"` 且值为 None（**不报假 0**）。
+    """
     from dc_email_controller.dc_email_signals import list_signals
-    store = EmailStore()
-    outbounds = store.list_outbound_records(company_id=company_id)
-    if campaign_id:
-        outbounds = [o for o in outbounds if o.get("campaign_id") == campaign_id]
-    sent = len(outbounds)
-    delivered = sum(1 for o in outbounds if o.get("provider_status") == "delivered")
-    bounced = sum(1 for o in outbounds if o.get("provider_status") == "bounced")
+    from email_metrics.service import read_email_metrics
     # 回复：按唯一回复 message_id（信号）计数，与看板漏斗一致（Resend 路径生成信号，不写 inbound bound 记录）
-    reply_ids = {s.get("source_message_id") for s in list_signals(company_id, campaign_id=campaign_id)
+    signals = list_signals(company_id, campaign_id=campaign_id) or []
+    reply_ids = {s.get("source_message_id") for s in signals
                  if s.get("source_message_id")
-                 and s.get("signal_type") in ("quote_request", "sample_request", "meeting_interest", "missing_info")}
-    replied = len(reply_ids)
-    return {
-        "sent": sent,
-        "delivered": delivered,
-        "bounced": bounced,
-        "replied": replied,
-    }
+                 and s.get("signal_type") in ("quote_request", "sample_request",
+                                              "meeting_interest", "missing_info")}
+    m = read_email_metrics(
+        company_id=company_id, campaign_id=campaign_id, date=date, date_range=date_range,
+        report_timezone=tz or BUSINESS_TZ, store=store, opportunity_signals=signals,
+        legacy_replied=len(reply_ids), consumer="daily_report",
+    )
+    out = dict(m["metrics"])
+    out.update({
+        "status": m["status"],
+        "mode": m["mode"],
+        "reasons": list(m.get("reasons") or []),
+        "campaign_id": campaign_id or "",
+        "range": m.get("range"),
+    })
+    return out
+
+
+def _metrics_line(m: dict, prefix: str = "") -> str:
+    """指标行：数字不可用时显式说不可用，绝不显示 0。"""
+    from email_metrics.service import format_metrics_line
+    return format_metrics_line({"status": m.get("status"), "metrics": m,
+                                "reasons": m.get("reasons")}, prefix=prefix)
 
 
 def collect_pending_drafts(company_id: str) -> list[dict]:
@@ -305,11 +326,10 @@ def _today_metrics(company_id: str, plan: dict) -> str:
         except Exception:
             pass
         lines.append(f"今日会谈 {meetings} 家 · 收到回复 {replies} 家 · 待跟进 {_follow_count(plan)} 家")
-        # 邮件
+        # 邮件（业务时区的「今日」；口径由开关决定）
         try:
-            m = collect_metrics(company_id)
-            lines.append(f"邮件：发送 {m['sent']} · 送达 {m['delivered']} · "
-                         f"回复 {m['replied']} · 退信 {m['bounced']}")
+            m = collect_metrics(company_id, date=today)
+            lines.append(_metrics_line(m, prefix="邮件："))
         except Exception:
             pass
         # 新增商机（今日信号）
@@ -490,7 +510,8 @@ def build_morning_report(company_id: str) -> dict:
 
 def build_evening_report(company_id: str) -> dict:
     """晚报：今日总结 + 明日计划 + 看板摘要。"""
-    m = collect_metrics(company_id)
+    # 「今日」按企业业务时区取日（Asia/Shanghai），不是 UTC 日
+    m = collect_metrics(company_id, date=today_in_tz(BUSINESS_TZ))
     drafts = collect_pending_drafts(company_id)
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
@@ -522,7 +543,7 @@ def _format_morning(company_id, m, drafts, followups, funnel) -> str:
     if stage_line:
         lines.append(stage_line)
     lines += [
-        f"发送 {m['sent']} · 送达 {m['delivered']} · 回复 {m['replied']} · 退信 {m['bounced']}",
+        _metrics_line(m),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
     url = _followup_table_url(company_id)
@@ -538,7 +559,7 @@ def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
     if stage_line:
         lines.append(stage_line)
     lines += [
-        f"今日发送 {m['sent']} · 送达 {m['delivered']} · 回复 {m['replied']} · 退信 {m['bounced']}",
+        _metrics_line(m, prefix="今日"),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
     url = _followup_table_url(company_id)

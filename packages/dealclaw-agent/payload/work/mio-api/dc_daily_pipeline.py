@@ -122,11 +122,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _email_metrics(context: BriefContext, email_store=None) -> dict:
+    """统一口径读数（与 EmailProvider 同源同参：一次计算、同一批数字）。"""
+    from email_metrics.service import read_email_metrics
+    return read_email_metrics(
+        company_id=context.company, tenant=getattr(context, "tenant", None),
+        report_timezone=getattr(context, "tz", None), store=email_store,
+        consumer="daily_pipeline",
+    )
+
+
 def run_morning_brief(context: BriefContext, base_dir: Path, email_store=None,
                       opp_store=None, exh_store=None, reminded_keys=(),
                       top_n: int = 3) -> dict:
     """早报：三 Provider → 分层 → 跨 Provider 去重 → plan.json（Top-N 标注）。"""
-    email_result = safe_collect(EmailProvider(store=email_store), context)
+    metrics = _email_metrics(context, email_store)
+    email_result = safe_collect(EmailProvider(store=email_store, metrics=metrics), context)
     opp_result = safe_collect(OpportunityProvider(store=opp_store), context)
     exh_result = safe_collect(ExhibitionProvider(store=exh_store, reminded_keys=reminded_keys),
                               context)
@@ -139,6 +150,15 @@ def run_morning_brief(context: BriefContext, base_dir: Path, email_store=None,
 
     plan = build_plan(items, max_actions=10 ** 6)
     plan["layering"] = layer_info
+    plan["email_metrics"] = {
+        "mode": metrics.get("mode"),
+        "status": metrics.get("status"),
+        "v1_status": metrics.get("v1_status"),
+        "reasons": list(metrics.get("reasons") or []),
+        "metrics": dict(metrics.get("metrics") or {}),
+        "report_timezone": metrics.get("report_timezone"),
+        "range": metrics.get("range"),
+    }
     plan["cross_provider_dropped"] = [
         {"title": a.title, "source": a.source, "category": a.category} for a in dropped]
     plan["top_n"] = top_n
@@ -149,6 +169,7 @@ def run_morning_brief(context: BriefContext, base_dir: Path, email_store=None,
     return {
         "plan": plan,
         "layering": layer_info,
+        "email_metrics": plan["email_metrics"],
         "cross_provider_dropped": plan["cross_provider_dropped"],
         "provider_errors": (list(email_result.errors) + list(opp_result.errors)
                             + list(exh_result.errors)),

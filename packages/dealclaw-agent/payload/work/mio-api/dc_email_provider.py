@@ -29,6 +29,10 @@ from dc_daily_brief import (
 )
 from dc_daily_advisor import AdvisorSnapshot, ProposedAction, Advice, build_snapshot
 
+# 统一读入口（口径由 email_metrics.config 决定，默认 legacy = 线上行为不变）
+from email_metrics import legacy as legacy_adapter
+from email_metrics.service import STATUS_UNAVAILABLE, read_email_metrics
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -66,14 +70,33 @@ class EmailProvider:
     """从 EmailStore/email-facts 读数据，输出 result/action/risk/insight 四类 BriefItem。"""
     name = "email"
 
-    def __init__(self, store=None):
+    def __init__(self, store=None, metrics=None, date=None, date_range=None):
         self._store = store
+        self._metrics = metrics           # 复用上游已算好的口径结果（同一次计算、同一批数字）
+        self._date = date                 # 缺省 None = 全部时间（保持旧可见语义）
+        self._date_range = date_range
 
     def _get_store(self):
         if self._store is not None:
             return self._store
         from email_gateway.store import EmailStore
         return EmailStore()
+
+    def _read_metrics(self, context, outbounds, inbounds):
+        """统一口径读数（legacy / shadow / v1 三态由开关决定，消费方不自己聚合）。"""
+        if self._metrics is not None:
+            return self._metrics
+        metrics = read_email_metrics(
+            company_id=context.company, tenant=getattr(context, "tenant", None),
+            date=self._date, date_range=self._date_range,
+            report_timezone=getattr(context, "tz", None),
+            outbound_records=outbounds, inbound_records=inbounds,
+            consumer="email_provider",
+        )
+        # 旧口径的「回复」= 入站消息数（字段名已兼容）；v1 口径走 metrics_view 的唯一回复买家
+        if metrics.get("legacy") is not None:
+            metrics["legacy"]["replied"] = metrics["legacy"]["inbound_messages"]
+        return metrics
 
     def collect(self, context: BriefContext) -> ProviderResult:
         try:
@@ -84,6 +107,7 @@ class EmailProvider:
             return ProviderResult(name=self.name, items=[], updated_at="",
                                   warnings=[], errors=[f"{type(e).__name__}: {e}"])
 
+        self._metrics = self._read_metrics(context, outbounds, inbounds)
         items: list[BriefItem] = []
         items.append(self._make_result(context, outbounds, inbounds))
         items += self._make_actions(context, outbounds, inbounds)
@@ -94,10 +118,35 @@ class EmailProvider:
 
     # ── 四类 BriefItem ────────────────────────────────
     def _make_result(self, context, outbounds, inbounds) -> BriefItem:
-        sent = len(outbounds)
-        delivered = sum(1 for o in outbounds if o.get("provider_status") == "delivered")
-        bounced = sum(1 for o in outbounds if o.get("provider_status") == "bounced")
-        replied = self._count_replied(inbounds)
+        m = self._metrics or {}
+        metrics = m.get("metrics") or {}
+        sent, delivered = metrics.get("sent"), metrics.get("delivered")
+        bounced, replied = metrics.get("bounced"), metrics.get("replied")
+        status = m.get("status")
+        if status == STATUS_UNAVAILABLE or sent is None:
+            # 数据源不可用：绝不显示 0，显式标注原因（可下钻 evidence）
+            reasons = "，".join(m.get("reasons") or []) or "数据源不可用"
+            return BriefItem(
+                item_key=make_item_key(tenant=context.tenant, company=context.company,
+                                       scope="global", kind="result", source="email",
+                                       category="metrics", business_id="metrics", occurrence="1"),
+                kind="result",
+                dedupe_key=make_dedupe_key(source="email", category="metrics", scope="global",
+                                           business_id="metrics", occurrence="1"),
+                source="email", scope="global", category="metrics", priority="match",
+                title=f"邮件数据不可用（{reasons}）",
+                reason_facts=[FactRef(fact_id="data_status", kind="text",
+                                      value=str(status))],
+                reason=f"邮件数据不可用：{reasons}",
+                target_refs=[],
+                evidence_refs=[EvidenceRef(type="query", source="email_metrics", id="unavailable",
+                                           missing=reasons)],
+                due_at=None,
+                detail={"sent": None, "delivered": None, "bounced": None, "replied": None,
+                        "data_status": status, "data_reasons": list(m.get("reasons") or [])},
+                completion_rule=None, action_key=None, policy_version=None,
+            )
+        suffix = "（数据不完整）" if status == "partial" else ""
         facts = [
             FactRef(fact_id="sent", kind="number", value=sent),
             FactRef(fact_id="delivered", kind="number", value=delivered),
@@ -111,12 +160,15 @@ class EmailProvider:
             kind="result", dedupe_key=make_dedupe_key(source="email", category="metrics",
                                                       scope="global", business_id="metrics", occurrence="1"),
             source="email", scope="global", category="metrics", priority="match",
-            title=f"发送 {sent} · 送达 {delivered} · 回复 {replied} · 退信 {bounced}",
+            title=f"发送 {sent} · 送达 {delivered} · 回复 {replied} · 退信 {bounced}{suffix}",
             reason_facts=facts,
             reason=f"发送 {sent} 封，送达 {delivered}，回复 {replied}，退信 {bounced}",
             target_refs=[], evidence_refs=[EvidenceRef(type="snapshot", source="email_facts",
                                                        id=f"{context.company}:outbound")],
-            due_at=None, detail={"sent": sent, "delivered": delivered, "bounced": bounced, "replied": replied},
+            due_at=None, detail={"sent": sent, "delivered": delivered, "bounced": bounced,
+                                 "replied": replied, "data_status": status,
+                                 "data_reasons": list(m.get("reasons") or []),
+                                 "mode": m.get("mode")},
             completion_rule=None, action_key=None, policy_version=None,
         )
 
@@ -218,10 +270,15 @@ class EmailProvider:
 
     def _make_insight(self, context, outbounds, inbounds) -> BriefItem:
         """只输出事实，不含原因推断（推断在 Template Advisor 层，标低置信度假设）。"""
-        sent = len(outbounds)
-        delivered = sum(1 for o in outbounds if o.get("provider_status") == "delivered")
-        bounced = sum(1 for o in outbounds if o.get("provider_status") == "bounced")
-        replied = self._count_replied(inbounds)
+        m = self._metrics or {}
+        metrics = m.get("metrics") or {}
+        sent, delivered = metrics.get("sent"), metrics.get("delivered")
+        bounced, replied = metrics.get("bounced"), metrics.get("replied")
+        if m.get("status") == STATUS_UNAVAILABLE or sent is None:
+            reasons = "，".join(m.get("reasons") or []) or "数据源不可用"
+            return self._insight(context, f"邮件数据不可用（{reasons}）",
+                                 evidence=EvidenceRef(type="query", source="email_metrics",
+                                                      id="unavailable", missing=reasons))
         overdue_count = len(self._collect_overdue(outbounds, inbounds))
         if sent == 0:
             return self._insight(context, "暂无发送记录",
@@ -254,16 +311,23 @@ class EmailProvider:
 
     # ── 辅助 ───────────────────────────────────────────
     def _count_replied(self, inbounds) -> int:
-        # 简化口径：inbound 记录数即回复数（端到端验收场景 replied=0）；后续可接信号层
-        return len([ib for ib in inbounds if ib.get("direction") == "inbound"])
+        """旧口径「回复」= 入站消息数。字段名兼容走 Adapter：落盘是 `record_type`，
+        历史代码读 `direction` → 恒 0（本次修掉的 bug）。"""
+        return len([ib for ib in inbounds if legacy_adapter.is_inbound(ib, default=True)])
 
     def _has_reply(self, outbound, inbounds) -> bool:
-        rid = (outbound.get("resend_id") or outbound.get("local_message_id")
-               or outbound.get("smtp_message_id") or "")
-        for ib in inbounds:
-            if (ib.get("resend_id") == rid or ib.get("source_resend_id") == rid
-                    or ib.get("thread_id") == rid):
-                return True
+        """已回复判定（字段名 / 引用兼容）。
+
+        入站实测把 id 存在 `resend_received_id` 上，历史代码只读 `resend_id`
+        → 待跟进虚高（本次修掉的 bug）。这里统一按 Adapter 的引用索引匹配：
+        In-Reply-To / References / thread + 旧 id 兼容，匹配不到**不硬挂**。
+        """
+        replied_ids = set((self._metrics or {}).get("replied_outbound_ids") or [])
+        ids = set(legacy_adapter.outbound_ids(outbound))
+        if ids & replied_ids:
+            return True
+        if self._metrics is None:  # 未走统一读入口时退化为直接匹配
+            return legacy_adapter.has_reply(outbound, [outbound], inbounds)
         return False
 
 
