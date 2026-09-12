@@ -116,7 +116,7 @@ ensure_feishu_trusted() {
   echo "[dealclaw-runtime] feishu 插件 trusted 安装失败（无出网？），回退镜像内 sideload 副本" >&2
   return 1
 }
-# trusted 副本补丁：aochi Dockerfile 的 patch-feishu-latest-frame.mjs 只作用于
+# trusted 副本补丁：业务仓库 Dockerfile 的 patch-feishu-latest-frame.mjs 只作用于
 # 镜像内 /opt 副本；trusted install 后网关加载 PVC 副本，必须对它重放同一补丁
 # （幂等：已打过则 markers 全中直接跳过）。失败仅告警不阻塞——插件功能不受
 # 影响，只是流式卡片吐字可能变慢。

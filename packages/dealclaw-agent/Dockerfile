@@ -1,4 +1,4 @@
-FROM dealclaw-acr-registry.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/node:20-bookworm AS bridge-build
+FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/node:20-bookworm AS bridge-build
 WORKDIR /build
 
 # 配置 npm 使用国内镜像源 + 缓存挂载
@@ -33,7 +33,7 @@ RUN npm run build \
 
 # Internal ACR mirror — synced from ghcr.nju.edu.cn/openclaw/openclaw:2026.7.1
 # Original digest for verification: sha256:165b4992f1b4b74ffdd7a02c887ba006f9f5dc951eca420eef573a8b233b543f
-FROM dealclaw-acr-registry.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/openclaw:2026.7.1
+FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/openclaw:2026.7.1
 
 USER root
 
@@ -117,4 +117,3 @@ ENV TZ=Asia/Shanghai \
 USER node
 EXPOSE 18789
 CMD ["bash", "/opt/dealclaw/runtime/entrypoint.sh"]
-

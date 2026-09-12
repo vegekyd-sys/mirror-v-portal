@@ -1,14 +1,11 @@
-# NOTE: CI (Jenkins) builds this package with the CI Dockerfile from the aochi
-# repo (cicd/dealclaw-nexus/build/admin-web/Dockerfile), which overrides this
-# file at build time. This in-repo Dockerfile is kept for local/manual builds.
-FROM node:22-alpine AS build
+FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/node:20-bookworm AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
+FROM docker.m.daocloud.io/library/nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # base='/' — dist goes straight into the nginx html root.
 COPY --from=build /app/dist /usr/share/nginx/html

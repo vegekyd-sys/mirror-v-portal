@@ -1,4 +1,6 @@
-FROM node:22-alpine AS build
+# whatsapp-bridge CI image. Prisma schema is copied before dependency install
+# because both the build and the runtime database initializer require it.
+FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/node:20-bookworm AS build
 WORKDIR /app
 COPY package*.json tsconfig.json ./
 # schema 要先就位：build 脚本是 prisma generate && tsc，生成的类型 tsc 要用
@@ -7,8 +9,9 @@ RUN npm install
 COPY src ./src
 RUN npm run build
 
-FROM node:22-alpine
-ENV NODE_ENV=production
+FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/node:20-bookworm
+ENV NODE_ENV=production \
+    TZ=Asia/Shanghai
 WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma
@@ -16,7 +19,12 @@ COPY prisma ./prisma
 # 随包管理器而变（pnpm 下在虚拟 store 里，npm 下在 node_modules/.prisma），
 # 跨阶段拷路径不稳。generate 不连数据库，只读 schema，很快。
 # prisma CLI 放在 dependencies 里就是为了这里和 initContainer 的 migrate deploy。
-RUN npm install --omit=dev && npx prisma generate
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --omit=dev && npx prisma generate
 COPY --from=build /app/dist ./dist
 
 # APP_ENV 必须显式给：loadEnv.ts 靠 npm_lifecycle_event 猜环境，
