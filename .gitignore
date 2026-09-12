@@ -39,7 +39,10 @@ packages/dealclaw-agent/payload/memory/projects/dealclaw/insights/
 packages/dealclaw-agent/payload/memory/projects/dealclaw/outreach/
 packages/dealclaw-agent/payload/memory/projects/dealclaw/case-studies/
 packages/dealclaw-agent/payload/work/mio-api/data/
-work/
+
+# 仓库根目录的 scratch 工作区
+# 注意：必须锚定根（/work/），否则裸 work/ 会匹配任意层级，把 payload/work 一起吃掉
+/work/
 
 # reflection 审核候选输出（运行时，不进 Git）
 data/reflection-review/
