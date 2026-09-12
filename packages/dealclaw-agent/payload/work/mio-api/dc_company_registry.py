@@ -800,6 +800,49 @@ def _recover_created_record_ids(app_token: str, table_id: str, creates: list) ->
     return recovered if len(recovered) == len(creates) else []
 
 
+CONTACT_FIELD = "联系人"
+CONTACT_SEP = "；"
+CONTACT_MAX_LEN = 1000
+
+
+def _merge_contact_text(existing: str, new: str) -> str:
+    """联系人按「并集合并」写入：保留已有、追加新的、去重保序。
+
+    线索池以**公司**为幂等主体，但同一公司可以有多个联系人；
+    公司级去重绝不得把已经落库的联系人覆盖丢掉（D2 验收边界）。
+    """
+    parts: list[str] = []
+    for raw in (existing, new):
+        for piece in str(raw or "").split(CONTACT_SEP):
+            piece = piece.strip()
+            if piece and piece not in parts:
+                parts.append(piece)
+    return CONTACT_SEP.join(parts)[:CONTACT_MAX_LEN]
+
+
+def _fetch_contact_texts(app_token: str, table_id: str) -> dict:
+    """只读取 {record_id: 联系人文本}（失败返回 {}，不抛、不写）。"""
+    try:
+        result = _run_lark(
+            "base", "+record-list",
+            "--base-token", app_token,
+            "--table-id", table_id,
+            "--field-id", CONTACT_FIELD,
+            "--limit", "200",
+            "--format", "json",
+            "--as", "bot",
+        )
+        rows = parse_record_list(result)
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, str] = {}
+    for row in rows:
+        rid = row.get("record_id")
+        if rid:
+            out[rid] = str((row.get("fields") or {}).get(CONTACT_FIELD) or "")
+    return out
+
+
 def sync_contacts_to_pool(
     company_id: str,
     company_name: str,
@@ -816,15 +859,19 @@ def sync_contacts_to_pool(
     }]
 
     匹配不到 record_id 或 contact_text 为空时跳过。
-    返回 {"updated": n, "matched": n, "app_token": ..., "table_id": ...}
+    **联系人合并保留**：已落库的联系人会被保留，新联系人追加（并集），
+    不因公司级去重而覆盖丢已有联系人。
+    返回 {"updated": n, "matched": n, "skipped": n, ...}
     """
     pool = ensure_company_lead_pool(company_id, company_name)
     app_token = pool["app_token"]
     table_id = pool["table_id"]
     existing = _existing_record_index(app_token, table_id)
+    known_contacts = _fetch_contact_texts(app_token, table_id)
 
     updated = 0
     matched = 0
+    skipped = 0
     for u in contact_updates or []:
         cdp_key = _normalize_key(str(u.get("companyCdpId", "") or u.get("company_cdp_id", "")))
         website_key = _normalize_key(str(u.get("website", "") or u.get("domain", "")))
@@ -833,19 +880,27 @@ def sync_contacts_to_pool(
         if not record_id or not contact_text:
             continue
         matched += 1
+        before = known_contacts.get(record_id, "")
+        merged = _merge_contact_text(before, contact_text)
+        if merged == before.strip():
+            # 已有联系人已覆盖本次输入 → 不做无意义写入
+            skipped += 1
+            continue
         try:
             _run_lark(
                 "base", "+record-upsert",
                 "--base-token", app_token,
                 "--table-id", table_id,
                 "--record-id", record_id,
-                "--json", json.dumps({"联系人": contact_text[:1000]}, ensure_ascii=False),
+                "--json", json.dumps({CONTACT_FIELD: merged}, ensure_ascii=False),
                 "--as", "bot",
             )
+            known_contacts[record_id] = merged   # 同批多次更新不互相覆盖
             updated += 1
         except Exception:
             continue
-    return {"updated": updated, "matched": matched, "app_token": app_token, "table_id": table_id}
+    return {"updated": updated, "matched": matched, "skipped": skipped,
+            "app_token": app_token, "table_id": table_id}
 
 
 def get_lead_pool(company_id: str) -> Optional[Dict]:

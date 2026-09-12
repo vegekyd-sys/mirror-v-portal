@@ -56,6 +56,70 @@ STATUS_UNAVAILABLE = "unavailable"
 MAX_ITEMS = 200            # 单个缺失清单上限，超出只报计数
 SNAPSHOT_NAME = "feishu_interactions_snapshot.json"
 
+# ── 差异归类（D2 验收口径：只允许这 7 类，不自创）────────────
+CAT_MISSING_MEMORY = "缺失于Memory"
+CAT_MISSING_FEISHU = "缺失于飞书"
+CAT_DUPLICATE = "重复记录"
+CAT_UNASSIGNED = "未归属"
+CAT_PENDING_SYNC = "等待同步"
+CAT_EXCLUDED = "按规则有意排除"
+CAT_UNEXPLAINED = "未解释差异"
+
+DIFF_CATEGORIES = (
+    CAT_MISSING_MEMORY, CAT_MISSING_FEISHU, CAT_DUPLICATE,
+    CAT_UNASSIGNED, CAT_PENDING_SYNC, CAT_EXCLUDED,
+)
+# 前四类是「未解释差异」（需要人处理）；后两类是解释得清的正常状态。
+UNEXPLAINED_CATEGORIES = (
+    CAT_MISSING_MEMORY, CAT_MISSING_FEISHU, CAT_DUPLICATE, CAT_UNASSIGNED,
+)
+
+
+def _normalize_watermark(source_watermark) -> dict:
+    """把水位输入归一成 `{layer|'any': iso}`。None → 空（不做等待同步判定）。"""
+    if not source_watermark:
+        return {}
+    if isinstance(source_watermark, str):
+        return {"any": source_watermark}
+    if isinstance(source_watermark, dict):
+        return {str(k): str(v) for k, v in source_watermark.items() if v}
+    return {}
+
+
+def _parse_ts(value: str):
+    """ISO 时间字符串 → UTC datetime；解析不了返回 None。
+
+    不能直接用字符串比较：`_norm()` 会小写化，水位值未必小写，
+    't' > 'T' 会让「水位已过」误判成「等待同步」（假阴性）。
+    """
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _dup_findings(rows: list, key_fn, layer: str, *, note: str) -> list:
+    """同一键出现多次 → 重复记录（附键与重复次数）。"""
+    groups: dict[str, list] = {}
+    for row in rows:
+        k = key_fn(row)
+        if k:
+            groups.setdefault(k, []).append(row)
+    out = []
+    for k, group in groups.items():
+        if len(group) > 1:
+            item = _item(group[0], layer, note=note)
+            item["key"] = k
+            item["dup_count"] = len(group)
+            out.append(item)
+    return out
+
 # 飞书「沟通明细」子表列名 → 本模块规范字段名
 _FEISHU_FIELD_ALIASES = {
     "interaction_id": ("interaction_id", "互动ID"),
@@ -231,8 +295,16 @@ def _load_feishu_rows(company_id: str, *, feishu_rows=None, feishu_json=None,
 
 # ── 对账 ────────────────────────────────────────────────
 def reconcile_chain(company_id: str, *, touches=None, interactions=None,
-                    feishu_rows=None, feishu_json=None, memory_dir=None) -> dict:
-    """三层只读对账。返回报告 dict（`--json` 直接序列化这个）。"""
+                    feishu_rows=None, feishu_json=None, memory_dir=None,
+                    source_watermark=None, as_of=None, exclude_rules=None) -> dict:
+    """三层只读对账。返回报告 dict（`--json` 直接序列化这个）。
+
+    `source_watermark`：上游已同步水位（`{layer: iso}` 或单个 iso）。
+      **事件时间晚于水位 → 归「等待同步」，不算数据丢失**（避免把正常延迟误报成缺失）。
+    `as_of`：判定时点（默认 now）。
+    `exclude_rules`：按规则有意排除，形如 `{"channels": [...], "statuses": [...]}`；
+      未显式给出规则时**不猜**，一律不进这一类。
+    """
     root = memory_dir_for(company_id, memory_dir)
     layer_status: dict[str, dict] = {}
 
@@ -341,6 +413,94 @@ def reconcile_chain(company_id: str, *, touches=None, interactions=None,
             it, LAYER_INTERACTION,
             note="interaction 无对应触达（非邮件来源，或触达源已被裁剪）"))
 
+    # ── 差异归类（只允许 7 类；不自创类别）──────────────────────
+    wm = _normalize_watermark(source_watermark)
+    as_of_raw = as_of or datetime.now(timezone.utc).isoformat()
+    as_of_dt = _parse_ts(as_of_raw)
+    ex = exclude_rules or {}
+    ex_channels = {_norm(x) for x in ex.get("channels", []) if _norm(x)}
+    ex_statuses = {_norm(x) for x in ex.get("statuses", []) if _norm(x)}
+
+    def _is_pending(entry: dict, layer: str) -> bool:
+        """事件时间晚于上游水位 → 等待同步（正常延迟，不得算丢失）。
+
+        按 datetime（带时区）比较；解析不了就**不声称等待同步**，
+        宁可报真缺失，也不拿水位当挡箭牌。
+        """
+        w_raw = wm.get(layer) or wm.get("any") or ""
+        w_dt, ts_dt = _parse_ts(w_raw), _parse_ts(entry.get("occurred_at"))
+        if not (w_dt and ts_dt):
+            return False
+        if as_of_dt and as_of_dt < w_dt:
+            return False   # as_of 还没到水位，不做等待同步判定
+        return ts_dt > w_dt
+
+    def _is_excluded(entry: dict) -> bool:
+        """只认显式规则，不猜；没给规则就永远不进这一类。"""
+        return bool((entry.get("channel") and _norm(entry.get("channel")) in ex_channels)
+                    or (entry.get("status") and _norm(entry.get("status")) in ex_statuses)
+                    or entry.get("excluded") is True)
+
+    cat: dict[str, list] = {c: [] for c in DIFF_CATEGORIES}
+
+    def _sig(item: dict) -> tuple:
+        return (item.get("layer"), item.get("occurred_at"),
+                json.dumps(item.get("drilldown") or {}, sort_keys=True, ensure_ascii=False))
+
+    _seen_all: set = set()
+
+    def _add(cat_name: str, item: dict) -> None:
+        """每个事实只归一类：同一（层+时间+下钻键）已在任何类别出现过就不再重复计。"""
+        s = _sig(item)
+        if s in _seen_all:
+            return
+        _seen_all.add(s)
+        cat[cat_name].append(item)
+
+    # 分类优先级（每个事实只归一类，不重复计数）：
+    #   未归属 → 重复记录 → 等待同步/缺失于Memory → 缺失于飞书
+    # 理由：归属不明和重复展平是根因，先用它们定性，再用「缺在哪层」描述。
+    for layer, rows in ((LAYER_TOUCH, touches), (LAYER_INTERACTION, interactions),
+                        (LAYER_FEISHU, feishu)):
+        for r in rows:
+            if _norm(r.get("customer_id")):
+                continue
+            if _ref_key(r.get("source_system"), r.get("source_record_id")):
+                continue
+            if layer == LAYER_FEISHU and _norm(r.get("interaction_id")):
+                continue
+            _add(CAT_UNASSIGNED, _item(
+                r, layer, note="既无 customer_id 也无来源定位键（无法归属）"))
+    # 反向孤儿留到最后处理（见下）：先把「缺在哪一层」「重复展平」这些可行动信号定下来。
+    # 重复记录：一条来源记录被展平多次 / 飞书同一 interaction 多行。
+    # 注意「多对一」是允许的（慧记+慧译多条原始记录 → 一个 interaction），不进这一类。
+    for _dup in _dup_findings(
+            interactions, lambda r: _ref_key(r.get("source_system"), r.get("source_record_id")),
+            LAYER_INTERACTION,
+            note="同一来源记录产生多条 interaction（重复展平；多对一允许，重复展平不允许）"):
+        _add(CAT_DUPLICATE, _dup)
+    for _dup in _dup_findings(
+            feishu, lambda r: _norm(r.get("interaction_id")), LAYER_FEISHU,
+            note="同一 interaction_id 在飞书沟通明细出现多行（重复行）"):
+        _add(CAT_DUPLICATE, _dup)
+    for e in touch_without_interaction:
+        _add(CAT_PENDING_SYNC if _is_pending(e, LAYER_TOUCH) else CAT_MISSING_MEMORY, e)
+    for e in interaction_without_feishu:
+        _add(CAT_PENDING_SYNC if _is_pending(e, LAYER_INTERACTION) else CAT_MISSING_FEISHU, e)
+    for e in feishu_without_interaction:
+        _add(CAT_MISSING_MEMORY, e)
+    # 反向孤儿放到最后：它们往往是「已在 memory / 已缺于飞书」的同一批事实，
+    # 不应把「缺失于飞书」这个真正可行动的信号盖掉。
+    for e in interaction_without_touch:
+        _add(CAT_UNASSIGNED, e)
+    # 显式排除规则先于「未解释」：命中规则的挪到「按规则有意排除」
+    for c in (CAT_MISSING_MEMORY, CAT_MISSING_FEISHU, CAT_DUPLICATE, CAT_UNASSIGNED):
+        kept = []
+        for e in cat[c]:
+            (cat[CAT_EXCLUDED] if _is_excluded(e) else kept).append(e)
+        cat[c] = kept
+    unexplained_total = sum(len(cat[c]) for c in UNEXPLAINED_CATEGORIES)
+
     missing_total = len(touch_without_interaction) + len(interaction_without_feishu)
     orphan_total = len(interaction_without_touch) + len(feishu_without_interaction)
     report = {
@@ -359,6 +519,9 @@ def reconcile_chain(company_id: str, *, touches=None, interactions=None,
             "interaction_without_touch": cap(interaction_without_touch),
             "feishu_without_interaction": cap(feishu_without_interaction),
         },
+        "categories": {c: cap(cat[c]) for c in DIFF_CATEGORIES},
+        "watermark": {"source": wm, "as_of": as_of_raw,
+                       "note": "事件时间晚于水位 → 等待同步，不算丢失"},
         "summary": {
             "touch": len(touches),
             "interaction": len(interactions),
@@ -369,7 +532,9 @@ def reconcile_chain(company_id: str, *, touches=None, interactions=None,
             "feishu_without_interaction": len(feishu_without_interaction),
             "missing_total": missing_total,
             "orphan_total": orphan_total,
-            "unexplained_total": missing_total,
+            "unexplained_total": unexplained_total,
+            "categories": {c: len(cat[c]) for c in DIFF_CATEGORIES},
+            "unexplained_categories": list(UNEXPLAINED_CATEGORIES),
             "feishu_layer_judged": feishu_layer_usable,
             "feishu_layer_note": ("" if feishu_layer_usable
                                   else "飞书层不可用 → 跳 2 无法判定（不计入未解释差异）"),
@@ -379,7 +544,7 @@ def reconcile_chain(company_id: str, *, touches=None, interactions=None,
             "note": "第一周指标用已知异常发现率 / 问题可复现率 / 已确认代码 Bug 回归覆盖率",
         },
     }
-    report["exit_code"] = (0 if (missing_total == 0 and orphan_total == 0 and feishu_layer_usable)
+    report["exit_code"] = (0 if (unexplained_total == 0 and feishu_layer_usable)
                            else (2 if not feishu_layer_usable else 1))
     return report
 
@@ -417,7 +582,19 @@ def render_text(report: dict) -> str:
     for it in report["orphans"]["feishu_without_interaction"]["items"]:
         lines.append(f"     - {it['occurred_at']} {it['channel']}/{it['direction']} "
                      f"drilldown={it['drilldown']}")
+    lines.append("差异归类（只允许 7 类）：")
+    for c in DIFF_CATEGORIES:
+        lines.append(f"  · {c}: {s['categories'].get(c, 0)}")
+    import json as _json  # noqa: PLC0415
+    for c in DIFF_CATEGORIES:
+        for it in report["categories"][c]["items"]:
+            extra = (f" key={it['key']} dup={it['dup_count']}" if it.get("key") else "")
+            lines.append(f"     - [{c}] {it.get('occurred_at', '')} "
+                         f"{it.get('channel', '')}/{it.get('direction', '')}"
+                         f" drilldown={it.get('drilldown', '')}{extra}")
     lines.append(f"未解释差异 = {s['unexplained_total']}（验收口径：= 0）；"
+                 f"等待同步 {s['categories'].get(CAT_PENDING_SYNC, 0)} · "
+                 f"有意排除 {s['categories'].get(CAT_EXCLUDED, 0)}；"
                  f"exit_code={report['exit_code']}")
     return "\n".join(lines)
 
@@ -433,7 +610,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     company_id = argv[0]
     flags = {"--json": False}
-    for name in ("--touch-json", "--interaction-json", "--feishu-json", "--memory-dir"):
+    for name in ("--touch-json", "--interaction-json", "--feishu-json", "--memory-dir",
+                 "--source-watermark-json", "--as-of", "--exclude-json"):
         if name in argv:
             flags[name] = argv[argv.index(name) + 1]
     if "--json" in argv:
@@ -446,6 +624,12 @@ def main(argv: list[str] | None = None) -> int:
         kwargs["interactions"] = _read_json_file(flags["--interaction-json"])
     if flags.get("--feishu-json"):
         kwargs["feishu_json"] = flags["--feishu-json"]
+    if flags.get("--source-watermark-json"):
+        kwargs["source_watermark"] = _read_json_file(flags["--source-watermark-json"])
+    if flags.get("--exclude-json"):
+        kwargs["exclude_rules"] = _read_json_file(flags["--exclude-json"])
+    if flags.get("--as-of"):
+        kwargs["as_of"] = flags["--as-of"]
 
     report = reconcile_chain(company_id, **kwargs)
     print(json.dumps(report, ensure_ascii=False, indent=2) if flags["--json"]
