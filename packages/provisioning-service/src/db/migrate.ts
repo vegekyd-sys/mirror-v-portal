@@ -313,6 +313,65 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_llm_push_items_status ON llm_push_task_items(task_id, status);
     `);
 
+    // ── Rollout batch async task (v0.12) ───────────────────────────────────
+    // 把「全量镜像滚动」（POST /v1/tenants/batch/deployment）从同步串行 for
+    // 循环改为持久化任务：入队（pending）立即返回 taskId，进程内 worker 用
+    // FOR UPDATE SKIP LOCKED 认领，逐租户 recreate（scale 0 → patch → scale 1）
+    // 并边跑边推 SSE 进度。解决原同步接口串行 ~114 租户耗时 10min+ 而调用方
+    // （ops-agent）只等 120s 的超时缺口。
+    //   - 幂等入队：同一 service+image 已有 pending/running 任务时复用该任务，
+    //     避免 rollout cron 重复触发导致任务堆积。
+    //   - 租约（lease_expires_at）覆盖进程崩溃/重启：reaper 回收超时 running
+    //     任务回 pending，worker 断点续跑只处理仍 pending 的 item。
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rollout_batch_tasks (
+        id                    TEXT PRIMARY KEY,               -- 应用层 randomUUID()
+        service               TEXT NOT NULL CHECK (service IN ('dealclaw-agent','nexus-gateway')),
+        image                 TEXT NOT NULL,                  -- 规范化后的完整镜像
+        tag                   TEXT NOT NULL,                  -- 期望 tag（展示用）
+        status                TEXT NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending','running','succeeded','partial','failed','cancelled')),
+        total_count           INTEGER NOT NULL DEFAULT 0,
+        succeeded_count       INTEGER NOT NULL DEFAULT 0,
+        already_current_count INTEGER NOT NULL DEFAULT 0,
+        pinned_count          INTEGER NOT NULL DEFAULT 0,
+        skipped_count         INTEGER NOT NULL DEFAULT 0,
+        failed_count          INTEGER NOT NULL DEFAULT 0,
+        error                 TEXT,                           -- 任务级致命错误
+        actor                 TEXT,
+        actor_type            TEXT NOT NULL DEFAULT 'service' CHECK (actor_type IN ('admin','service')),
+        lease_owner           TEXT,                           -- worker 进程标识
+        lease_expires_at      TIMESTAMPTZ,                    -- 续租 TTL
+        cancel_requested      BOOLEAN NOT NULL DEFAULT FALSE, -- 协作式取消标记（预留）
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        started_at            TIMESTAMPTZ,
+        finished_at           TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_status ON rollout_batch_tasks(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_created ON rollout_batch_tasks(created_at DESC);
+      -- 幂等入队去重：一个 service+image 同一时刻只允许一个进行中的任务
+      CREATE UNIQUE INDEX IF NOT EXISTS rollout_batch_tasks_active_uq
+        ON rollout_batch_tasks(service, image)
+        WHERE status IN ('pending','running');
+
+      CREATE TABLE IF NOT EXISTS rollout_batch_task_items (
+        id          BIGSERIAL PRIMARY KEY,
+        task_id     TEXT NOT NULL REFERENCES rollout_batch_tasks(id) ON DELETE CASCADE,
+        tenant_id   TEXT NOT NULL,
+        namespace   TEXT NOT NULL,                            -- k8s namespace（enumerate 时快照，避免 worker 重查）
+        deployment  TEXT NOT NULL,                            -- deployment 名（展示/日志用）
+        status      TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','running','succeeded','already_current','pinned','skipped','failed')),
+        error       TEXT,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        started_at  TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_rollout_batch_items_task ON rollout_batch_task_items(task_id, id);
+      CREATE INDEX IF NOT EXISTS idx_rollout_batch_items_status ON rollout_batch_task_items(task_id, status);
+    `);
+
     // External chat API keys (v0.7) — authenticate third-party HTTP access
     // to the agent conversation endpoint (POST /api/external/chat). Scoped
     // per tenant (one enterprise = one tenant); optionally bound to a single

@@ -51,6 +51,10 @@ export interface ProvisioningConfig {
   llmPushWorkerIntervalMs: number;
   /** LLM push 任务租约 TTL（秒）——覆盖单租户最坏 ~40s 重启 */
   llmPushLeaseSeconds: number;
+  /** Rollout batch worker 轮询间隔（毫秒） */
+  rolloutBatchWorkerIntervalMs?: number;
+  /** Rollout batch 任务租约 TTL（秒）——覆盖单租户 recreate ~6s */
+  rolloutBatchLeaseSeconds?: number;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -73,5 +77,7 @@ export function loadConfig(): ProvisioningConfig {
     creditsLedgerToken: process.env.BILLING_SERVICE_TOKEN || process.env.PAYMENT_SERVICE_TOKEN || '',
     llmPushWorkerIntervalMs: Number(process.env.LLM_PUSH_WORKER_INTERVAL_MS ?? 500),
     llmPushLeaseSeconds: Number(process.env.LLM_PUSH_LEASE_SECONDS ?? 600),
+    rolloutBatchWorkerIntervalMs: Number(process.env.ROLLOUT_BATCH_WORKER_INTERVAL_MS ?? 500),
+    rolloutBatchLeaseSeconds: Number(process.env.ROLLOUT_BATCH_LEASE_SECONDS ?? 600),
   };
 }

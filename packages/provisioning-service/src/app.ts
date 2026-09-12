@@ -69,7 +69,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // grants no binding authority and no secret is returned.
   app.use(createTenantMachineAssertionRoutes(pool, serviceAuth));
 
-  app.use(createTenantRoutes(pool, config, authAndAudit));
+  app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
   // LLM push async task (SSE + REST) — worker publishes progress to the same
   // broker instance injected here from index.ts.

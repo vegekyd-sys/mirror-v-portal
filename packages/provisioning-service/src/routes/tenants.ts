@@ -25,9 +25,12 @@ import { getMasterKey } from '../services/crypto.js';
 import { getTenantDirectModeMap, getGlobalLlmProviders, applyTenantLlmConfig } from '../services/llm-providers.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import { getOverrideMap, setOverride, clearOverride, listOverrides } from '../services/tenant-image-overrides.js';
+import { enqueueRolloutBatch, getRolloutBatchDetail } from '../services/rollout-batch-task.js';
+import { isTerminalRolloutBatchStatus } from '../services/rollout-batch-types.js';
+import type { SseBroker } from '../services/sse-broker.js';
 import type { ProvisioningConfig } from '../config.js';
 
-export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void) {
+export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, authMiddleware?: (req: Request, res: Response, next: NextFunction) => void, broker?: SseBroker) {
 
   const registry = config.imageRegistry;
 
@@ -1075,7 +1078,13 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     }
   });
 
-  // POST /v1/tenants/batch/deployment — recreate (scale 0 → scale 1) all active tenants
+  // POST /v1/tenants/batch/deployment — enqueue an async rollout batch.
+  // Now a thin async-task facade: it validates + normalises the target, enqueues
+  // a rollout_batch_tasks row (idempotent per service+image) and returns the
+  // taskId immediately. The process-local worker recreates each tenant's
+  // Deployment in the background (see services/rollout-batch-task.ts) — the old
+  // synchronous for-loop blocked the request for 10+ minutes, blowing past the
+  // ops-agent caller's 120s AbortSignal.
   router.post('/v1/tenants/batch/deployment', async (req: Request, res: Response) => {
     try {
       const { service, image } = req.body;
@@ -1090,88 +1099,123 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       const fullImage = normalizeImage(service, image);
+      const tag = image.includes(':') ? (image.split(':').pop() as string) : image;
+      const { actor, actorType } = actorFromRequest(req);
+      // batch 是内部/管理面接口，actor 只会是 admin 或 service token（不会
+      // 走 external 通道），收窄类型以匹配任务表的 CHECK 约束。
+      const batchActorType: 'admin' | 'service' = actorType === 'admin' ? 'admin' : 'service';
 
-      const { rows } = await pool.query(
-        `SELECT tenant_id, k8s_namespace FROM tenants WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL`,
-      );
-
-      if (!rows.length) {
-        res.json({ ok: true, updated: 0, results: [] });
-        return;
-      }
-
-      const { updateDeploymentImageRecreate, getDeployment } = await import('../services/k8s-client.js');
-      // Pinned tenants are exempt from fleet rollout: load all overrides for
-      // this service in one query, then skip any tenant with a matching row.
-      const overrides = await getOverrideMap(pool, service);
-      const results: Array<{ tenantId: string; deployment: string; ok: boolean; skipped?: boolean; alreadyCurrent?: boolean; pinned?: boolean; error?: string }> = [];
-
-      for (const row of rows) {
-        const deploymentName = `${service}-${row.tenant_id}`;
-        // Skip pinned tenants — their image is operator-locked, not "deviant".
-        if (overrides.has(row.tenant_id)) {
-          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true, pinned: true });
-          continue;
-        }
-        try {
-          // Skip no-op updates: read the current image first and only
-          // recreate when it actually differs from the desired tag. This
-          // keeps the periodic rollout cron from churning every Deployment.
-          const current = await getDeployment(row.k8s_namespace, deploymentName);
-          if (!current) {
-            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped: true, error: 'deployment not found' });
-            continue;
-          }
-          const container = (current.spec?.template?.spec?.containers ?? []).find(
-            (c: any) => c.name === deploymentName,
-          );
-          if (container?.image === fullImage) {
-            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true, alreadyCurrent: true });
-            continue;
-          }
-          // Recreate (scale 0 → patch image → scale 1), NOT rolling update:
-          // a single-replica agent shares its SQLite PVC with the replacement
-          // pod, so a rolling update would briefly run two pods that deadlock
-          // on the same DB file and neither passes startupProbe.
-          const updated = await updateDeploymentImageRecreate(row.k8s_namespace, deploymentName, fullImage);
-          if (!updated) {
-            results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped: true, error: 'deployment not found' });
-            continue;
-          }
-          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: true });
-        } catch (err: unknown) {
-          const e = err as any;
-          const msg = e.message || String(e);
-          // 404 = deployment doesn't exist for this tenant (e.g. older tenants without nexus-gateway)
-          const skipped = /404|not found/i.test(msg);
-          results.push({ tenantId: row.tenant_id, deployment: deploymentName, ok: false, skipped, error: msg });
-          if (!skipped) {
-            console.error(`[batch-rollout] ${deploymentName}: ${msg}`);
-          }
-        }
-      }
-
-      const successCount = results.filter(r => r.ok && !r.alreadyCurrent && !r.pinned).length;
-      const alreadyCurrentCount = results.filter(r => r.alreadyCurrent).length;
-      const pinnedCount = results.filter(r => r.pinned).length;
-      const skippedCount = results.filter(r => r.skipped).length;
-      res.json({
-        ok: true,
-        updated: successCount,
-        total: rows.length,
-        failed: results.filter(r => !r.ok && !r.skipped).length,
-        skipped: skippedCount,
-        alreadyCurrent: alreadyCurrentCount,
-        pinned: pinnedCount,
+      const { taskId, reused } = await enqueueRolloutBatch(pool, {
         service,
         image: fullImage,
-        results,
+        tag,
+        actor,
+        actorType: batchActorType,
+      });
+
+      res.status(reused ? 200 : 202).json({
+        ok: true,
+        taskId,
+        status: 'pending',
+        service,
+        image: fullImage,
+        reused,
       });
     } catch (err: unknown) {
       const e = err as any;
-      console.error('Batch deployment update failed:', e);
-      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Batch update failed' });
+      console.error('Enqueue rollout batch failed:', e);
+      res.status(500).json({ code: 'INTERNAL', message: e.message || 'Enqueue batch failed' });
     }
+  });
+
+  // GET /v1/tenants/batch/deployment/:taskId — task detail + per-tenant items.
+  // The response carries the same counters as the old synchronous response
+  // (updated/total/failed/skipped/alreadyCurrent/pinned) so the ops-agent
+  // caller can poll it transparently.
+  router.get('/v1/tenants/batch/deployment/:taskId', async (req: Request, res: Response) => {
+    try {
+      const detail = await getRolloutBatchDetail(pool, req.params.taskId);
+      if (!detail) {
+        res.status(404).json({ code: 'NOT_FOUND', message: '任务不存在' });
+        return;
+      }
+      const t = detail.task;
+      res.json({
+        ok: true,
+        taskId: t.id,
+        status: t.status,
+        service: t.service,
+        image: t.image,
+        tag: t.tag,
+        updated: t.succeededCount,
+        total: t.totalCount,
+        failed: t.failedCount,
+        skipped: t.skippedCount,
+        alreadyCurrent: t.alreadyCurrentCount,
+        pinned: t.pinnedCount,
+        error: t.error,
+        results: detail.items.map((i) => ({
+          tenantId: i.tenantId,
+          deployment: i.deployment,
+          ok: i.status !== 'failed' && i.status !== 'skipped',
+          skipped: i.status === 'skipped',
+          alreadyCurrent: i.status === 'already_current',
+          pinned: i.status === 'pinned',
+          error: i.error,
+        })),
+      });
+    } catch (err) {
+      console.error('get rollout batch failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // GET /v1/tenants/batch/deployment/:taskId/stream — SSE progress. Degrades
+  // to a snapshot-and-close when no broker is wired (e.g. unit tests).
+  router.get('/v1/tenants/batch/deployment/:taskId/stream', async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    const detail = await getRolloutBatchDetail(pool, taskId);
+    if (!detail) {
+      res.status(404).json({ code: 'NOT_FOUND', message: '任务不存在' });
+      return;
+    }
+    const t = detail.task;
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+
+    if (!broker) {
+      // No broker — emit a snapshot + done, then close.
+      res.write(`event: snapshot\ndata: ${JSON.stringify({ taskId, status: t.status, totalCount: t.totalCount, succeededCount: t.succeededCount, alreadyCurrentCount: t.alreadyCurrentCount, pinnedCount: t.pinnedCount, skippedCount: t.skippedCount, failedCount: t.failedCount, error: t.error })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ taskId })}\n\n`);
+      res.end();
+      return;
+    }
+
+    broker.subscribe(taskId, res);
+
+    res.write(`event: snapshot\ndata: ${JSON.stringify({ taskId, status: t.status, totalCount: t.totalCount, succeededCount: t.succeededCount, alreadyCurrentCount: t.alreadyCurrentCount, pinnedCount: t.pinnedCount, skippedCount: t.skippedCount, failedCount: t.failedCount, error: t.error })}\n\n`);
+
+    if (isTerminalRolloutBatchStatus(t.status)) {
+      res.write(`event: done\ndata: ${JSON.stringify({ taskId })}\n\n`);
+      res.end();
+      broker.unsubscribe(taskId, res);
+      return;
+    }
+
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 15_000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      broker.unsubscribe(taskId, res);
+    });
   });
 
   // ── Batch deployment probe repair ──

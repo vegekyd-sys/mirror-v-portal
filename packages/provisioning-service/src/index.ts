@@ -7,6 +7,7 @@ import { pruneAuditLogs } from './services/audit.js';
 import { attachPodExecWebSocket } from './ws/pod-exec.js';
 import { SseBroker } from './services/sse-broker.js';
 import { startLlmPushWorker, startLlmPushReaper, startLlmPushPruner } from './services/llm-push-task.js';
+import { startRolloutBatchWorker, startRolloutBatchReaper, startRolloutBatchPruner } from './services/rollout-batch-task.js';
 
 async function main() {
   const config = loadConfig();
@@ -45,6 +46,11 @@ async function main() {
   startLlmPushReaper(pool);
   // Prune finished LLM-push tasks older than 30 days (history retention).
   startLlmPushPruner(pool);
+
+  // Rollout batch async worker + reaper + pruner — same pattern as LLM push.
+  startRolloutBatchWorker(pool, config, broker);
+  startRolloutBatchReaper(pool);
+  startRolloutBatchPruner(pool);
 
   // Registry sync — the image release registry's source of truth is the
   // container registry (replaces the removed Jenkins post-build hook).

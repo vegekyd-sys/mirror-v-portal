@@ -144,21 +144,80 @@ export async function runRolloutCycle(config: OpsConfig): Promise<RolloutResult[
 }
 
 async function callBatchDeploy(baseUrl: string, target: RolloutTarget, token: string): Promise<BatchResponse> {
-  const res = await fetch(`${baseUrl}/v1/tenants/batch/deployment`, {
+  // 1. Enqueue the rollout batch (async task facade). The endpoint returns a
+  //    taskId immediately instead of blocking for the whole multi-tenant
+  //    recreate — the old synchronous path took 10+ minutes and blew past the
+  //    120s AbortSignal.
+  const postRes = await fetch(`${baseUrl}/v1/tenants/batch/deployment`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ service: target.service, image: target.image }),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(30_000),
   });
 
-  const body = await res.json() as BatchResponse;
+  const postBody = (await postRes.json()) as {
+    ok?: boolean;
+    taskId?: string;
+    reused?: boolean;
+    code?: string;
+    message?: string;
+  };
 
-  if (!res.ok) {
-    throw new Error(`${body.code ?? 'HTTP ' + res.status}: ${body.message ?? 'batch deployment failed'}`);
+  if (!postRes.ok) {
+    throw new Error(`${postBody.code ?? 'HTTP ' + postRes.status}: ${postBody.message ?? 'batch deployment failed'}`);
+  }
+  if (!postBody.taskId) {
+    throw new Error('batch deployment returned no taskId');
   }
 
-  return body;
+  // 2. Poll the task until it reaches a terminal state. Recreating ~114
+  //    tenants serially takes ~10 minutes, so the poll window is generous
+  //    (30 min). The provisioning service de-duplicates a re-fire (cron
+  //    overlap) to the same taskId, so this never races a duplicate rollout.
+  const detailUrl = `${baseUrl}/v1/tenants/batch/deployment/${postBody.taskId}`;
+  const deadline = Date.now() + 30 * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    const detailRes = await fetch(detailUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const detail = (await detailRes.json()) as {
+      ok?: boolean;
+      status?: string;
+      updated?: number;
+      total?: number;
+      failed?: number;
+      skipped?: number;
+      alreadyCurrent?: number;
+      pinned?: number;
+      results?: BatchResponse['results'];
+      code?: string;
+      message?: string;
+    };
+
+    if (!detailRes.ok) {
+      throw new Error(`${detail.code ?? 'HTTP ' + detailRes.status}: ${detail.message ?? 'get batch detail failed'}`);
+    }
+
+    if (detail.status && ['succeeded', 'partial', 'failed', 'cancelled'].includes(detail.status)) {
+      return {
+        ok: true,
+        updated: detail.updated ?? 0,
+        total: detail.total ?? 0,
+        failed: detail.failed ?? 0,
+        skipped: detail.skipped ?? 0,
+        alreadyCurrent: detail.alreadyCurrent ?? 0,
+        pinned: detail.pinned ?? 0,
+        results: detail.results,
+      };
+    }
+
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+
+  throw new Error(`batch rollout task ${postBody.taskId} did not finish within 30 minutes`);
 }
