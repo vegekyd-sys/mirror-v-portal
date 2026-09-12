@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-11",
+  "note": "展会经营 Agent 能力注册表。只登记 can_do / requires / side_effect / outputs；**不写触发词**——路由由 orchestrator 按「用户目标 + 当前展会 + 阶段 + Memory」判断，不做关键词匹配。",
+  "stages": ["profiling", "planning", "inviting", "live", "followup"],
+  "roles_by_stage": {
+    "pre": "展前：策划与获客助手",
+    "live": "展中：现场作战助手",
+    "post": "展后：销售转化与复盘顾问"
+  },
+  "hard_rules": [
+    "真实业务禁令优先于一切：GDPR 隐私门、拒绝/黑名单买家不再触达、外部发送受授权控制。",
+    "读操作可直接执行；发邮件 / 写数据按现有授权控制。",
+    "阶段只作判断背景，不作为调用限制。"
+  ],
+  "skills": [
+    {
+      "id": "dealclaw-find-buyers",
+      "can_do": ["按已确认画像搜索目标买家公司", "质检去重", "写入企业线索池"],
+      "requires": ["已确认买家画像", "目标产品/市场"],
+      "side_effect": { "read": ["kb.json", "memory"], "write": ["线索池 Bitable", "leads.json"], "external_send": false, "cost": "搜索/LLM" },
+      "outputs": ["买家名单", "线索池记录"],
+      "stage_hint": ["planning", "inviting", "live"]
+    },
+    {
+      "id": "dealclaw-exhibition-invitation",
+      "can_do": ["展前邀约：搜买家→出名单客户确认→模板填充→发邀约邮件", "回写展会邀约名单"],
+      "requires": ["展会名称/日期/展位号", "买家名单经客户确认", "邮箱绑定"],
+      "side_effect": { "read": ["kb.json", "邀约名单", "send_window"], "write": ["exhibition-invitations.json", "线索池阶段"], "external_send": true, "channel": "email" },
+      "outputs": ["邀约邮件", "邀约名单"],
+      "stage_hint": ["inviting"]
+    },
+    {
+      "id": "dealclaw-onsite-recommend",
+      "can_do": ["展会现场搜未邀约的匹配买家", "主推/跟进分层", "推简讯卡"],
+      "requires": ["正在开展的展会"],
+      "side_effect": { "read": ["CDP 现场买家", "已邀约名单"], "write": [], "external_send": false, "note": "不落线索池（现场临时推荐）" },
+      "outputs": ["现场买家简讯卡"],
+      "stage_hint": ["live"]
+    },
+    {
+      "id": "dealclaw-exhibition-leads",
+      "can_do": ["展中名片 OCR / 录音 ASR / 匹配 / 意图分级", "写入线索池", "展后按意图分类生成跟进邮件"],
+      "requires": ["名片/录音素材", "GDPR 已获同意（写库前置）"],
+      "side_effect": { "read": ["素材", "kb.json"], "write": ["线索池", "interactions"], "external_send": true, "channel": "email" },
+      "outputs": ["线索池记录", "展后跟进邮件"],
+      "stage_hint": ["live", "followup"]
+    },
+    {
+      "id": "dealclaw-onsite-touch",
+      "can_do": ["对已到场买家发「到展邀请」邮件"],
+      "requires": ["到场买家名单（已邀约到场 / 现场推荐）", "展位号", "买家邮箱"],
+      "side_effect": { "read": ["到场通知", "kb.json", "展位"], "write": [], "external_send": true, "channel": "email(FD)" },
+      "outputs": ["到展邀请邮件"],
+      "stage_hint": ["live"]
+    },
+    {
+      "id": "dealclaw-after-exhibition-recommend",
+      "can_do": ["展后推荐：本届到展但未建联的理想买家，四组分流", "写线索池"],
+      "requires": ["已结束/闭展日的展会 exhibition_id"],
+      "side_effect": { "read": ["本届展会线索", "线索池"], "write": ["线索池"], "external_send": false },
+      "outputs": ["四组分流名单（未触达/已触达未建联/已建联/排除）"],
+      "stage_hint": ["followup"]
+    },
+    {
+      "id": "dealclaw-after-exhibition-review",
+      "can_do": ["展后复盘报告：漏斗诊断 + 阻塞定位 + 行动建议"],
+      "requires": ["exhibition_id", "企业身份", "本届时间范围"],
+      "side_effect": { "read": ["展会/买家/互动/商机/展后跟进数据"], "write": ["report.html/pdf", "线索表"], "external_send": false },
+      "outputs": ["展后复盘报告", "优先买家与行动"],
+      "stage_hint": ["followup"]
+    },
+    {
+      "id": "dealclaw-exhibition-dossier",
+      "can_do": ["记住展位号 / 展会信息", "生成展会目录（买家一览 + 每客档案）", "发布飞书文档"],
+      "requires": ["company_id"],
+      "side_effect": { "read": ["leads.json", "interactions.json", "exhibition-invitations.json", "kb.json", "meta.json"], "write": ["meta.json", "index.md", "飞书文档"], "external_send": false },
+      "outputs": ["展会目录 index.md", "飞书文档"],
+      "stage_hint": ["inviting", "live", "followup"]
+    },
+    {
+      "id": "dealclaw-smart-reply",
+      "can_do": ["询盘处理：意图识别 → 买家状态机迁移 → 资料充足则回复，否则断点通知"],
+      "requires": ["买家回复内容"],
+      "side_effect": { "read": ["企业画像"], "write": ["回复草稿", "买家状态"], "external_send": true, "channel": "email/WA" },
+      "outputs": ["回复草稿/发送", "断点通知"],
+      "stage_hint": ["live", "followup"]
+    },
+    {
+      "id": "dealclaw-email-growth-send",
+      "can_do": ["GS 规模化邮件触达", "自动序列（未回复则跟进）"],
+      "requires": ["买家列表", "已确认企业画像", "域名预热", "飞书通知绑定"],
+      "side_effect": { "read": ["bindings", "kb.json"], "write": ["send_log", "线索池阶段"], "external_send": true, "channel": "email(GS)" },
+      "outputs": ["批量邮件", "送达/回复统计"],
+      "stage_hint": ["inviting", "live", "followup"]
+    },
+    {
+      "id": "dealclaw-email-founder-direct",
+      "can_do": ["FD 一对一邮件（个性化）"],
+      "requires": ["目标买家邮箱", "企业画像"],
+      "side_effect": { "read": ["kb.json"], "write": ["sent-log"], "external_send": true, "channel": "email(FD)" },
+      "outputs": ["一对一邮件"],
+      "stage_hint": ["live", "followup"]
+    }
+  ]
+}

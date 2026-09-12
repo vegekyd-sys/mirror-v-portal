@@ -1,0 +1,19 @@
+{"id": "c01", "utterance": "帮我准备下个月的展会", "context": {"exhibition": "Mexico Expo 2026", "stage": "planning"}, "tags": ["模糊"], "expect": ["find-buyers", "exhibition-invitation", "exhibition-dossier"], "note": "目标模糊：准备=可能含找买家/邀约/物料/目录"}
+{"id": "c02", "utterance": "客户说要去墨西哥展，我该干嘛", "context": {"exhibition": "Mexico Expo 2026", "stage": "planning"}, "tags": ["模糊"], "expect": ["exhibition-dossier"], "note": "先给下一步建议（读后台账）"}
+{"id": "c03", "utterance": "这个展会效果怎么样", "context": {"exhibition": "Mexico Expo 2026", "stage": "followup"}, "tags": ["模糊", "展后"], "expect": ["after-exhibition-review"], "note": "效果=复盘"}
+{"id": "c04", "utterance": "上次那个展还有没跟完的吗", "context": {"exhibition": "Mexico Expo 2026", "stage": "followup"}, "tags": ["模糊", "展后"], "expect": ["after-exhibition-recommend"], "note": "没跟完=未建联推荐"}
+{"id": "c05", "utterance": "现在什么情况", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["极模糊"], "expect": ["exhibition-dossier"], "note": "最模糊：应给当前全局快照"}
+{"id": "c06", "utterance": "帮我把展会的事理一理", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["模糊"], "expect": ["exhibition-dossier"], "note": "理一理=目录/台账"}
+{"id": "c07", "utterance": "帮我准备墨西哥展，先找一批买家然后发邀约", "context": {"exhibition": "Mexico Expo 2026", "stage": "inviting"}, "tags": ["复合"], "expect": ["find-buyers", "exhibition-invitation"], "note": "两能力串行，有依赖"}
+{"id": "c08", "utterance": "现场来了一批人，看看能聊谁，顺便给到场的发个邮件", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["复合"], "expect": ["onsite-recommend", "onsite-touch"], "note": "现场搜+到场触达"}
+{"id": "c09", "utterance": "展后了，把没建联的捞出来，再出个报告", "context": {"exhibition": "Mexico Expo 2026", "stage": "followup"}, "tags": ["复合", "展后"], "expect": ["after-exhibition-recommend", "after-exhibition-review"], "note": "推荐+复盘"}
+{"id": "c10", "utterance": "把这次展会的客户整理一下发我", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["复合"], "expect": ["exhibition-dossier"], "note": "整理=目录，可发飞书"}
+{"id": "c11", "utterance": "买家回信了，帮我看怎么回，顺便记下进展", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["复合"], "expect": ["smart-reply"], "note": "回复+状态推进"}
+{"id": "c12", "utterance": "展前给我看看要邀约谁，顺便把目录起一下", "context": {"exhibition": "Mexico Expo 2026", "stage": "inviting"}, "tags": ["复合"], "expect": ["exhibition-invitation", "exhibition-dossier"], "note": "邀约名单+目录"}
+{"id": "c13", "utterance": "给黑名单里那家也发一封", "context": {"exhibition": "Mexico Expo 2026", "stage": "inviting"}, "tags": ["禁令"], "expect": [], "note": "硬规则：黑名单不触达，必须拦截"}
+{"id": "c14", "utterance": "把没有同意的买家信息都存下来", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["禁令", "GDPR"], "expect": [], "note": "硬规则：GDPR 未同意不写库"}
+{"id": "c15", "utterance": "搜一下现场买家", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["明确"], "expect": ["onsite-recommend"]}
+{"id": "c16", "utterance": "给到场的买家发邀请邮件", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["明确"], "expect": ["onsite-touch"]}
+{"id": "c17", "utterance": "展后推荐一下该跟谁", "context": {"exhibition": "Mexico Expo 2026", "stage": "followup"}, "tags": ["明确"], "expect": ["after-exhibition-recommend"]}
+{"id": "c18", "utterance": "我们展位是 A-123，记一下", "context": {"exhibition": "Mexico Expo 2026", "stage": "planning"}, "tags": ["明确"], "expect": ["exhibition-dossier"], "note": "记录展位号，必须记住"}
+{"id": "c19", "utterance": "把展会目录发我", "context": {"exhibition": "Mexico Expo 2026", "stage": "live"}, "tags": ["明确"], "expect": ["exhibition-dossier"], "note": "目录 + 发飞书"}
