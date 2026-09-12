@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+from enterprise_ids import canonical_company_id
+
 DATA_DIR = Path(os.environ.get("DC_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
 REGISTRY_FILE = DATA_DIR / "company_registry.json"
 
@@ -238,9 +240,14 @@ class CompanyRegistry:
         REGISTRY_FILE.write_text(json.dumps(self._entries, ensure_ascii=False, indent=2))
 
     def get(self, company_id: str) -> Optional[Dict]:
-        return self._entries.get(company_id)
+        raw = (company_id or "").strip()
+        canonical = canonical_company_id(raw)
+        return self._entries.get(canonical) or self._entries.get(raw)
 
     def set(self, company_id: str, info: Dict):
+        company_id = canonical_company_id(company_id)
+        if not company_id:
+            raise ValueError("company_id 不能为空")
         self._entries[company_id] = info
         self._save()
 
@@ -248,14 +255,55 @@ class CompanyRegistry:
         return dict(self._entries)
 
     def remove(self, company_id: str):
-        if company_id in self._entries:
-            del self._entries[company_id]
+        raw = (company_id or "").strip()
+        canonical = canonical_company_id(raw)
+        keys = [k for k in {raw, canonical} if k and k in self._entries]
+        if keys:
+            for key in keys:
+                del self._entries[key]
             self._save()
             return True
         return False
 
 
 # ── 核心 API ──
+
+def _discover_existing_lead_pool(company_name: str) -> Optional[Dict[str, str]]:
+    """按精确标题找回注册表之外的既有线索池，避免清理后重复建空表。
+
+    为什么需要它：租户数据清理可能只删掉本地注册表，飞书里的 Base 仍在。
+    此时若无恢复能力，就会另建一个空线索池，造成读写分叉（客户看 A 表、系统写 B 表）。
+    """
+    title = f"{company_name.strip()}线索池"
+    result = _run_lark("drive", "+search", "--query", title, "--as", "bot", "--json")
+    matches = []
+    for item in result.get("data", {}).get("results", []):
+        shown = re.sub(r"<[^>]+>", "", str(item.get("title_highlighted") or "")).strip()
+        if shown != title:
+            continue
+        meta = item.get("result_meta") or {}
+        token = str(meta.get("token") or "").strip()
+        if token:
+            matches.append({"app_token": token, "url": str(meta.get("url") or "")})
+    if len(matches) != 1:
+        return None
+
+    app_token = matches[0]["app_token"]
+    tables = _run_lark(
+        "base", "+table-list", "--base-token", app_token, "--as", "bot", "--json"
+    ).get("data", {}).get("tables", [])
+    table = next((t for t in tables if str(t.get("name") or "").strip() == "线索池"), None)
+    if table is None and len(tables) == 1:
+        table = tables[0]
+    table_id = str((table or {}).get("id") or (table or {}).get("table_id") or "").strip()
+    if not table_id:
+        return None
+    return {
+        "app_token": app_token,
+        "table_id": table_id,
+        "bitable_url": matches[0]["url"] or f"https://versa-ai.feishu.cn/base/{app_token}?table={table_id}",
+    }
+
 
 def ensure_company_lead_pool(
     company_id: str,
@@ -315,6 +363,24 @@ def ensure_company_lead_pool(
             }
         except RuntimeError:
             pass  # Bitable 可能被删了，走新建逻辑
+
+    # 租户数据清理可能只删掉本地注册表，飞书里的 Base 仍然存在。
+    # 先按精确标题恢复绑定，避免另建一个空线索池并造成读写分叉。
+    try:
+        recovered = _discover_existing_lead_pool(company_name)
+    except RuntimeError:
+        recovered = None
+    if recovered:
+        field_map = _get_field_map(recovered["app_token"], recovered["table_id"])
+        entry = {
+            **recovered,
+            "field_map": field_map,
+            "company_name": company_name,
+            "created_at": _now(),
+            "updated_at": _now(),
+        }
+        registry.set(company_id, entry)
+        return {**entry, "created": False, "recovered": True}
 
     # 2. 创建新线索池（lark-cli base 一步搞定：建 base + 建表 + 建全部字段）
     bitable = _create_bitable(company_name)
