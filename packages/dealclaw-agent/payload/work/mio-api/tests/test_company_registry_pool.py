@@ -158,6 +158,12 @@ class RegistryTestCase(unittest.TestCase):
         self._patch_dir = mock.patch.multiple(
             dcr, DATA_DIR=tmp, REGISTRY_FILE=tmp / "company_registry.json")
         self._patch_dir.start()
+        # 租户环境隔离：canonical_company_id 会把 slug/未知值归到当前租户 supplier_id，
+        # 而本套件用伪造公司号（c1/c2）验证「一企业一池、不串池」——
+        # 不隔离的话两个假公司会被归成同一个租户池，测试结果随机器配置漂移。
+        self._patch_canon = mock.patch.object(
+            dcr, "canonical_company_id", lambda v: (v or "").strip())
+        self._patch_canon.start()
         self.fake = FakeLark()
         self._patch_lark = mock.patch.object(dcr, "_run_lark", self.fake)
         self._patch_lark.start()
@@ -167,6 +173,7 @@ class RegistryTestCase(unittest.TestCase):
         self._patch_sub.start()
 
     def tearDown(self):
+        self._patch_canon.stop()
         self._patch_sub.stop()
         self._patch_lark.stop()
         self._patch_dir.stop()

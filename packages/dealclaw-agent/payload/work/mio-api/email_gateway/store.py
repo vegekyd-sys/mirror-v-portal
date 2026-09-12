@@ -462,6 +462,13 @@ class MarkdownEmailStore:
         """写入 outbound/inbound 快照 + 索引。返回是否新写入（幂等）。"""
         direction = message.get("direction", "outbound")
         rec = self._normalize(message)
+        # 公司号统一走 canonical：历史 slug 与当前 supplier_id 必须归一到同一个池，
+        # 否则同一家企业会分裂成两套事实（客户看 A 表、系统写 B 表）。
+        try:
+            from enterprise_ids import canonical_company_id
+            rec["company_id"] = canonical_company_id(rec.get("company_id", ""))
+        except ImportError:
+            pass
         company_id = rec.get("company_id", "") or ""
         ym = _ym(rec.get("sent_at") if direction == "outbound" else rec.get("received_at"))
         record_key = self._record_key(direction, message)
@@ -575,17 +582,31 @@ class MarkdownEmailStore:
         return out
 
     def list_outbound_records(self, company_id: str = None) -> list[dict]:
+        canonical = company_id
+        try:
+            from enterprise_ids import canonical_company_id
+            canonical = canonical_company_id(company_id) if company_id else None
+        except ImportError:
+            canonical_company_id = lambda value: value  # noqa: E731
         out = []
         for rec in _list_snapshots(self._outbound):
-            if company_id and rec.get("company_id") != company_id:
+            record_company = canonical_company_id(rec.get("company_id", ""))
+            if canonical and record_company != canonical:
                 continue
             out.append(rec)
         return out
 
     def list_inbound_records(self, company_id: str = None) -> list[dict]:
+        canonical = company_id
+        try:
+            from enterprise_ids import canonical_company_id
+            canonical = canonical_company_id(company_id) if company_id else None
+        except ImportError:
+            canonical_company_id = lambda value: value  # noqa: E731
         out = []
         for rec in _list_snapshots(self._inbound):
-            if company_id and rec.get("company_id") != company_id:
+            record_company = canonical_company_id(rec.get("company_id", ""))
+            if canonical and record_company != canonical:
                 continue
             out.append(rec)
         return out

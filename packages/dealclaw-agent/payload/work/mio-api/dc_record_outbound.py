@@ -25,6 +25,7 @@ from _tenant_env import load_tenant_env
 load_tenant_env()
 
 from email_gateway.store import EmailStore, utc_now  # noqa: E402
+from enterprise_ids import canonical_company_id  # noqa: E402
 
 
 def main() -> int:
@@ -42,6 +43,11 @@ def main() -> int:
 
     if not args.company_id or not args.resend_id or not args.to:
         print(json.dumps({"ok": False, "error": "missing required fields"}))
+        return 1
+
+    company_id = canonical_company_id(args.company_id)
+    if not company_id:
+        print(json.dumps({"ok": False, "error": "company_id cannot be resolved"}))
         return 1
 
     to_list = [t.strip() for t in args.to.split(",") if t.strip()]
@@ -64,7 +70,7 @@ def main() -> int:
         "subject": args.subject,
         "text_preview": args.text,
         "html": args.html,
-        "company_id": args.company_id,
+        "company_id": company_id,
         "campaign_id": args.campaign_id,
         "status": "sent",
         "created_at": now,
@@ -78,7 +84,7 @@ def main() -> int:
     try:
         inserted = store.insert_message(record)
         print(json.dumps({"ok": True, "inserted": inserted, "resend_id": args.resend_id,
-                          "company_id": args.company_id}))
+                          "company_id": company_id}))
         return 0
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": str(e)[:200]}), file=sys.stderr)
