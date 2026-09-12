@@ -250,10 +250,61 @@ class DisabledSender(Sender):
         return SendResult(ok=True, dry_run=True, sent=False, backend="disabled", message_id="")
 
 
+class WeixinSender(Sender):
+    """微信发送器：通过 OpenClaw message.send CLI 发送到微信会话。
+
+    为什么需要它：通知通道写死单一 IM（飞书）= 微信租户直接失能，
+    回复能识别、却没地方送达。通道必须可换，不是每家都上飞书。
+    """
+
+    def __init__(self, enabled: bool | None = None):
+        if enabled is None:
+            enabled = os.getenv("DC_NOTIFY_SEND_ENABLED", "1") == "1"
+        self.enabled = bool(enabled)
+        self.sent: list[dict] = []
+        self.account = os.getenv("DC_NOTIFY_WEIXIN_ACCOUNT", "")
+
+    def send(self, target: str, message: str, idempotency_key: str | None = None) -> SendResult:
+        if not target or not str(target).strip():
+            return SendResult(ok=False, error="target required", backend="weixin")
+        if not message or not str(message).strip():
+            return SendResult(ok=False, error="message required", backend="weixin")
+        rec = {"target": target, "message": message, "idempotency_key": idempotency_key}
+        if not self.enabled:
+            self.sent.append({**rec, "dry_run": True})
+            return SendResult(ok=True, dry_run=True, sent=False, backend="weixin", message_id="")
+        return self._send_via_cli(rec)
+
+    def _send_via_cli(self, rec: dict) -> SendResult:
+        cmd = ["openclaw", "message", "send", "--channel", "openclaw-weixin", "--json"]
+        if self.account:
+            cmd += ["--account", self.account]
+        cmd += ["--target", rec["target"], "--message", rec["message"]]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except FileNotFoundError:
+            return SendResult(ok=False, error="openclaw not found", backend="weixin")
+        except subprocess.TimeoutExpired:
+            return SendResult(ok=False, error="openclaw send timeout", backend="weixin")
+        if p.returncode != 0:
+            return SendResult(ok=False, backend="weixin",
+                              error=(p.stderr or p.stdout or "send failed")[-200:])
+        self.sent.append({**rec, "dry_run": False})
+        mid = ""
+        try:
+            data = json.loads(p.stdout or "{}")
+            mid = str((data.get("data") or {}).get("message_id")
+                      or data.get("message_id") or data.get("messageId") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return SendResult(ok=True, sent=True, backend="weixin", message_id=mid)
+
+
 def build_sender_from_env() -> Sender:
     """统一 Sender 工厂：按 DC_NOTIFY_SENDER_MODE 选择发送器。
 
     - 未配置/feishu（默认）→ FeishuSender（真实发送，开关默认开启）
+    - weixin → WeixinSender，通过 openclaw message send CLI 发到微信会话
     - disabled → DisabledSender，仅 dry_run，不标记 sent
 
     mock 不允许通过环境变量进入，只允许测试代码显式注入 NotifyEngine(sender=MockSender())。
@@ -262,6 +313,8 @@ def build_sender_from_env() -> Sender:
     mode = os.getenv("DC_NOTIFY_SENDER_MODE", "feishu").strip().lower()
     if mode == "feishu":
         return FeishuSender()
+    if mode == "weixin":
+        return WeixinSender()
     return DisabledSender()
 
 
@@ -476,7 +529,8 @@ class NotifyEngine:
         if not target:
             return {"company_id": company_id, "status": "route_invalid",
                     "error": "empty chat_id in route"}
-        if not (target.startswith("oc_") or target.startswith("ou_")):
+        if not (target.startswith("oc_") or target.startswith("ou_")
+                or target.endswith("@im.wechat")):
             return {"company_id": company_id, "status": "route_invalid",
                     "error": f"invalid target format: {target[:16]}"}
         return {"company_id": company_id, "chat_id": target,
@@ -502,7 +556,7 @@ class NotifyEngine:
         if r.get("status", "active") != "active":
             return {"company_id": company_id, "status": "route_invalid", "error": "route not active"}
         if target_type == "chat_id":
-            if not target_id.startswith("oc_"):
+            if not (target_id.startswith("oc_") or target_id.endswith("@im.wechat")):
                 return {"company_id": company_id, "status": "route_invalid", "error": "invalid chat_id"}
         elif target_type == "open_id":
             if not target_id.startswith("ou_"):

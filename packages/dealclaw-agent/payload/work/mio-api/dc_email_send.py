@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,6 +63,51 @@ def in_window(country: str, city: str | None = None) -> bool:
     tz = pytz.timezone(tzname)
     now = datetime.now(tz)
     return (now.weekday() < 5) and (8 <= now.hour < 18)
+
+
+def _land_outbound_fact(*, from_addr: str, to_list: list[str], subject: str,
+                        resend_id: str, enterprise: str) -> None:
+    """发信成功后 best-effort 落 outbound 事实（收信匹配的唯一依据）。
+
+    为什么必须有：收信侧靠 outbound 事实判断「这封回复回的是哪封邮件」。
+    直发通道只写 sent-log 不落事实时，匹配不到（no_matching_outbound），
+    信号永远不生成、通知永远不弹——而且不报错。事实层少写一条 → 下游静默失效。
+    这里失败只记日志，不影响发送结果本身。
+    """
+    try:
+        from email_gateway.store import EmailStore
+        store = EmailStore()
+        accounts: list = []
+        try:
+            accounts = store.list_accounts(enterprise_id=enterprise) or []
+        except Exception:  # noqa: BLE001
+            accounts = []
+        addr = (from_addr or "").split("<")[-1].strip(" <>").lower()
+        account_id = ""
+        for a in accounts:
+            if str(a.get("email_address", "")).lower() == addr:
+                account_id = str(a.get("account_id", ""))
+                break
+        if not account_id and accounts:
+            account_id = str(accounts[0].get("account_id", ""))
+        now = datetime.now(timezone.utc).isoformat()
+        store.insert_message({
+            "account_id": account_id,
+            "direction": "outbound",
+            "message_id": f"local_{uuid.uuid4().hex[:16]}",
+            "sender": from_addr,
+            "recipients": list(to_list),
+            "subject": subject,
+            "company_id": enterprise,
+            "resend_id": resend_id,
+            "local_message_id": resend_id or "",
+            "provider_status": "accepted",
+            "sent_at": now,
+            "created_at": now,
+        })
+    except Exception as e:  # noqa: BLE001
+        print(f"[dc_email_send] 落 outbound 事实失败（不影响发送结果）：{type(e).__name__}: {e}",
+              file=sys.stderr)
 
 
 def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
@@ -139,6 +185,11 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
                               resend_id=resend_id)
         except Exception:  # noqa: BLE001
             pass
+
+    # best-effort 落 outbound 事实（收信侧靠它把回复挂回原发件）
+    if success and resend_id and enterprise:
+        _land_outbound_fact(from_addr=from_addr, to_list=to_list, subject=subject,
+                            resend_id=resend_id, enterprise=enterprise)
 
     return {"success": success, "count": n, "error": err, "resend_id": resend_id}
 

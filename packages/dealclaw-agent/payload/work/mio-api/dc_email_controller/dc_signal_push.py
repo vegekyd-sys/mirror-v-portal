@@ -202,11 +202,26 @@ def format_candidate_message(cand: dict) -> str:
     if cand.get("category") == "bounce":
         return cand.get("title") or "退信提醒"
     title = cand.get("title") or "买家询盘"
+    # 带买家原文：只有摘要看不到「买家到底说了什么」，运营就无法判断该不该回、怎么回。
+    evidence = (cand.get("evidence") or "")
+    if isinstance(evidence, dict):
+        evidence = evidence.get("text") or evidence.get("summary") or ""
+    evidence = str(evidence or "").strip()
+    if evidence:
+        marker = "---- 回复的原邮件 ----"
+        if marker in evidence:
+            evidence = evidence.split(marker)[0].strip()   # 去掉被引用的原邮件
+        evidence = evidence[:300]
     missing = cand.get("missing_fields") or []
+    parts = [title]
+    if evidence:
+        parts.append(f"买家原文：{evidence}")
     if missing:
         cn = "、".join(_MISSING_CN.get(m, m) for m in missing)
-        return f"{title}。\n回复草稿已准备好，但还缺{cn}信息，等你确认发送。"
-    return f"{title}。\n回复草稿已准备好，等你确认发送。"
+        parts.append(f"回复草稿已准备好，但还缺{cn}信息，等你确认发送。")
+    else:
+        parts.append("回复草稿已准备好，等你确认发送。")
+    return "\n".join(parts)
 
 
 def _push_enabled(company_id: str) -> tuple[bool, str]:
@@ -229,7 +244,7 @@ def _push_enabled(company_id: str) -> tuple[bool, str]:
     _notify_allowed_raw = os.getenv("DC_NOTIFY_ALLOWED_COMPANIES", "").strip()
     notify_allowed = ({x.strip() for x in _notify_allowed_raw.split(",") if x.strip()}
                       if _notify_allowed_raw else None)
-    if not signal_ok or notify_mode != "feishu" or not notify_enabled:
+    if not signal_ok or notify_mode not in ("feishu", "weixin") or not notify_enabled:
         return False, "push_disabled"
     if allowed and company_id not in allowed:
         return False, "not_whitelisted"
