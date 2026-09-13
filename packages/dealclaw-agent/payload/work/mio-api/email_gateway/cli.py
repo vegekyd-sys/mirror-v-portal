@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .imap_sync import ImapSynchronizer
 from .providers import PROVIDERS, get_provider
-from .send_entry import send_for_account
+from .smtp_send import SmtpSender
 from .store import EmailStore
 from .verify import AccountVerifier
 
@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--bootstrap-days", type=int, default=0)
     sync.add_argument("--notify-text", action="store_true")
 
-    send = sub.add_parser("send", help="[DEPRECATED] 发信兼容薄壳；新代码用 dc_email_send.py send")
+    send = sub.add_parser("send")
     send.add_argument("--account-id", required=True)
     send.add_argument("--confirmed-by", required=True)
     send.add_argument("--to", required=True, help="comma-separated recipients")
@@ -213,8 +213,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             emit(results)
     elif args.command == "send":
-        # DEPRECATED 兼容薄壳：实现已收敛到 email_gateway.send_entry（dc_email_send.py send 同源）。
-        # 保留只为不破坏既有调用方；行为不变：异常原样抛出，成功输出 send 结果 JSON。
         text = ""
         if args.text_file:
             text = Path(args.text_file).read_text(encoding="utf-8")
@@ -227,15 +225,8 @@ def main(argv: list[str] | None = None) -> int:
             html = args.html
         if not text and not html:
             raise ValueError("provide at least one of --text/--text-file or --html/--html-file")
-        try:
-            account = store.get_account(args.account_id)
-        except KeyError:
-            # 旧行为兼容：account_id 也可直接是邮箱地址（SmtpSender 内部走 Resend 兼容分支）
-            account = None
         emit(
-            send_for_account(
-                store,
-                account=account,
+            SmtpSender(store).send(
                 account_id=args.account_id,
                 confirmed_by=args.confirmed_by,
                 to=_csv(args.to),
