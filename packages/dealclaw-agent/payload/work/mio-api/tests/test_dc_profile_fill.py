@@ -114,6 +114,26 @@ class ReadOnlyAndApplyTests(unittest.TestCase):
         self.assertEqual(set(payload), {"--product-tags", "--ad-products"})
         self.assertIn("apply_result", r)
 
+    def test_apply_reports_ignored_fields(self):
+        """服务端忽略某字段时要如实报告，不能假装写成功。"""
+        orig = pf.company_info
+        calls = {"n": 0}
+        def fake_info(oid, sid):
+            calls["n"] += 1
+            # 第一次=写前(空)；写后复查=只有 advantage 落库
+            return ({"companyName": "X", "productTags": "", "advantage": ""} if calls["n"] == 1
+                    else {"companyName": "X", "productTags": "", "advantage": "有优势"})
+        pf.company_info = fake_info
+        try:
+            r = pf.fill_one(open_id="o", supplier_id="s",
+                            extract={"product_tags": ["猫爬架"], "advantage": "有优势"},
+                            flat_cats=[], apply=True)
+        finally:
+            pf.company_info = orig
+        v = r["verify"]
+        self.assertIn("advantage", v["persisted"])
+        self.assertIn("product_tags", v["ignored_by_server"])
+
     def test_no_changes_no_write(self):
         r = pf.fill_one(open_id="o", supplier_id="s",
                         extract={"product_tags": [], "ad_products": [], "advantage": ""},

@@ -217,6 +217,20 @@ def fill_one(*, open_id: str, supplier_id: str, extract: dict,
     }
     if apply and payload:
         result["apply_result"] = apply_edit(payload, open_id=open_id, supplier_id=supplier_id)
+        # 写后复查：哪些字段真的落库、哪些被服务端忽略（避免"看着成功其实没写进"）
+        try:
+            after = current_profile(company_info(open_id, supplier_id))
+        except Exception as e:
+            after = {"_verify_error": str(e)}
+        persisted, ignored = [], []
+        for key in EDITABLE:
+            want = proposed.get(key)
+            if want in (None, "", []):
+                continue
+            want_s = ", ".join(str(x) for x in want) if isinstance(want, (list, tuple)) else str(want)
+            got = str(after.get(key) or "")
+            (persisted if got.strip() else ignored).append(key)
+        result["verify"] = {"persisted": persisted, "ignored_by_server": ignored, "after": after}
     return result
 
 
