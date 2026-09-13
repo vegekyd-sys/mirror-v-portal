@@ -28,9 +28,13 @@ def _max(vals):
     return round(max(vals), 1) if vals else None
 
 
-def load_reports(directory) -> list[dict]:
+def load_reports(directory, prefix: str = "") -> list[dict]:
+    """读 report-*.json；prefix 用于只取某一批场景（按文件名过滤，避免混批次）。"""
     out = []
     for f in sorted(glob.glob(str(Path(directory) / "report-*.json"))):
+        name = Path(f).name
+        if prefix and not name.startswith(f"report-{prefix}"):
+            continue
         try:
             out.append(json.loads(Path(f).read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
@@ -132,11 +136,12 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--date", default="")
     ap.add_argument("--scenarios", default="big,big2,small,small2,expo")
     ap.add_argument("--run", default="r3")
+    ap.add_argument("--prefix", default="", help="只统计 report-<prefix>*.json")
     ap.add_argument("--baseline-out", default="")
     ap.add_argument("--labeling-out", default="")
     args = ap.parse_args(argv)
 
-    reports = load_reports(args.dir)
+    reports = load_reports(args.dir, args.prefix)
     if not reports:
         print("没有 report-*.json，先跑 live_shadow")
         return 1
