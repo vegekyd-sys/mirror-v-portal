@@ -69,6 +69,23 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(mi.infer_type("random.pdf"), "catalog")
         self.assertEqual(mi.infer_type("x.mp4"), "video")
 
+    def test_multi_file_types_supported(self):
+        for fname, want in (("产品主图1.jpg", "sample"), ("产品介绍.pptx", "catalog"),
+                            ("技术参数表.pdf", "spec"), ("演示视频.mp4", "video")):
+            f = Path(self.tmp.name) / fname
+            f.write_bytes(b"x")
+            r = mi.ingest(enterprise="e2", file_path=f)
+            self.assertEqual(r["type"], want, fname)
+
+    def test_layer_publish_skipped_without_coords(self):
+        r = mi.ingest(enterprise="e3", file_path=self.src, mtype="catalog")
+        self.assertTrue(r["bitable"]["skipped"])          # 不谎报已写资料层/物料表
+
+    def test_unsupported_type_rejected(self):
+        f = Path(self.tmp.name) / "x.exe"; f.write_bytes(b"x")
+        with self.assertRaises(ValueError):
+            mi.ingest(enterprise="e4", file_path=f)
+
     def test_errors(self):
         with self.assertRaises(FileNotFoundError):
             mi.ingest(enterprise="e1", file_path=Path(self.tmp.name) / "nope.pdf")

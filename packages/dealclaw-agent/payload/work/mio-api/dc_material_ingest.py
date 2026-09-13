@@ -39,16 +39,25 @@ from dc_kb_engine import KBEngine, KB_DIR, DEFAULT_MATERIAL_TYPES, MATERIAL_LABE
 TYPE_HINTS = [
     ("certificate", r"证书|cert|认证|资质|iso|ce\b"),
     ("price", r"报价|price|quotation|quote"),
-    ("spec", r"规格|spec|参数|datasheet|技术"),
-    ("catalog", r"目录|catalog|画册|brochure|手册"),
+    ("spec", r"规格|spec|参数|datasheet|技术|参数表"),
+    ("catalog", r"目录|catalog|画册|brochure|手册|介绍|ppt|演示"),
     ("case_study", r"案例|case|项目|project"),
-    ("video", r"视频|video|\.mp4$"),
-    ("sample", r"样品|sample|实拍|photo"),
+    ("video", r"视频|video|\.(mp4|mov|avi|mkv)$"),
+    ("sample", r"样品|sample|实拍|photo|主图|实景"),
 ]
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+DOC_EXT = {".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".md"}
+VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv"}
+SUPPORTED_EXT = IMAGE_EXT | DOC_EXT | VIDEO_EXT
 
 
 def infer_type(filename: str, text: str = "") -> str:
+    ext = Path(filename).suffix.lower()
+    if ext in VIDEO_EXT:
+        return "video"
     blob = f"{filename}\n{text[:500]}".lower()
+    if ext in IMAGE_EXT and not any(k in blob for k in ("参数", "规格", "spec", "证书", "cert")):
+        return "sample"          # 产品图片默认 = 样品实拍
     for mtype, pattern in TYPE_HINTS:
         if re.search(pattern, blob):
             return mtype
@@ -61,6 +70,45 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def publish_to_layer(*, files: dict, base_token: str, table_id: str,
+                     field_id: str) -> dict:
+    """把物料写进资料层/物料表（复用 dealclaw-knowledge-base 的 fill_material_index）。
+
+    files: {物料类型中文名: [本地文件路径, ...]}
+    一条记录 = 一个可独立调用的物料单元（沿用该脚本的粒度铁律）。
+    """
+    if not (base_token and table_id and field_id):
+        return {"skipped": True, "reason": "未提供 base_token/table_id/field_id"}
+    script_dir = next((p for p in Path(__file__).resolve().parents
+                       if (p / "skills" / "dealclaw-knowledge-base" / "scripts"
+                           / "fill_material_index.py").exists()), None)
+    if script_dir is None:
+        return {"skipped": True, "reason": "未找到 fill_material_index.py"}
+    sys.path.insert(0, str(script_dir / "skills" / "dealclaw-knowledge-base" / "scripts"))
+    try:
+        import fill_material_index as fmi
+    except Exception as e:
+        return {"skipped": True, "reason": f"导入失败: {e}"}
+    records, manifest = [], {}
+    for cn_type, paths in files.items():
+        for p in paths:
+            name = Path(p).stem
+            records.append({"类型": cn_type, "文件名称": name, "状态": "✅",
+                            "营销用途": ""})
+            manifest[name] = [str(p)]
+    try:
+        rids = fmi.create_records(base_token, table_id, records)
+        mapping = {r["文件名称"]: rid for r, rid in zip(records, rids or [])}
+        for name, paths in manifest.items():
+            rid = mapping.get(name)
+            if rid:
+                fmi.attach_files(base_token, table_id, field_id, rid, paths)
+        return {"skipped": False, "ok": True, "records": len(records),
+                "attached": sum(1 for n in manifest if mapping.get(n))}
+    except Exception as e:
+        return {"skipped": False, "ok": False, "error": str(e)[:200]}
 
 
 def _maybe_upload_bitable(file_path: Path, *, app_token: str, table_id: str,
@@ -81,9 +129,11 @@ def _maybe_upload_bitable(file_path: Path, *, app_token: str, table_id: str,
 
 def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
            description: str = "", text: str = "", link: str = "",
-           bitable: tuple[str, str, str] = ("", "", "")) -> dict:
+           bitable: tuple[str, str, str, str] = ("", "", "", "")) -> dict:
     if not file_path.exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
+    if file_path.suffix.lower() not in SUPPORTED_EXT:
+        raise ValueError(f"不支持的文件类型 {file_path.suffix}（支持：{', '.join(sorted(SUPPORTED_EXT))}）")
     digest = sha256_of(file_path)
     if not mtype:
         mtype = infer_type(file_path.name, text)
@@ -117,8 +167,11 @@ def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
     })
     kb._save(enterprise, cur)
 
-    bitable_result = _maybe_upload_bitable(dest, app_token=bitable[0],
-                                          table_id=bitable[1], record_id=bitable[2])
+    # 资料层/物料表：既有脚本负责建记录 + 传附件（一条记录 = 一个物料单元）
+    cn_type = {v: k for k, v in MATERIAL_LABELS.items()}.get(mtype, MATERIAL_LABELS.get(mtype, mtype))
+    bitable_result = publish_to_layer(files={cn_type: [dest]},
+                                      base_token=bitable[0], table_id=bitable[1],
+                                      field_id=bitable[3] or bitable[2])
     # 回读验证：必须能通过下游读接口取到
     links = {m["type"]: m for m in kb.get_material_links(enterprise)}
     ok = mtype in links
@@ -141,9 +194,10 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--text-file", default="", help="解析出的文本（可选，会留存）")
     ap.add_argument("--link", default="", help="外部链接（如飞书文档）")
     ap.add_argument("--enterprise", default=os.environ.get("MIO_CDP_SUPPLIER_ID", ""))
-    ap.add_argument("--bitable-app-token", default="")
+    ap.add_argument("--bitable-app-token", default="", help="资料层/物料表 base token")
     ap.add_argument("--table-id", default="")
-    ap.add_argument("--record-id", default="")
+    ap.add_argument("--field-id", default="", help="附件列 field id")
+    ap.add_argument("--record-id", default="", help="（兼容旧参，等同 field-id 缺省时的占位）")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -154,7 +208,8 @@ def main(argv=None) -> int:  # pragma: no cover
     try:
         r = ingest(enterprise=args.enterprise, file_path=Path(args.file), mtype=args.type,
                    name=args.name, description=args.description, text=text, link=args.link,
-                   bitable=(args.bitable_app_token, args.table_id, args.record_id))
+                   bitable=(args.bitable_app_token, args.table_id, args.record_id,
+                            args.field_id))
     except Exception as e:
         print(f"入库失败: {e}", file=sys.stderr)
         return 1

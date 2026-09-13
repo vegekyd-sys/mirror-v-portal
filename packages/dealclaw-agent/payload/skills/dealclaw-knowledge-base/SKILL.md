@@ -33,17 +33,26 @@ author: ""
 
 ## 物料上传双路径
 
-**路径一：V 自主分析** — 用户发 PDF/照片/证书：先解析，再**必须落库**（不能只解析不入库，否则后续调不到）：
+**路径一：V 自主分析（用户发文件：PDF / 产品图片 / PPT / Office / 视频）**
 
 ```bash
+# ① 本地归档 + KB 物料库（必须；否则解析完就丢）
 python3 work/mio-api/dc_material_ingest.py \
-  --file "<用户原文件路径>" --type <catalog|price|spec|certificate|sample|case_study|video> \
-  --text-file "<解析出的文本>" --description "<一句话用途>"
-# 资料层存在时一并传 --bitable-app-token/--table-id/--record-id，把文件加入附件列
+  --file "<原文件>" --type <catalog|price|spec|certificate|sample|case_study|video> \
+  --text-file "<解析文本>" --description "<一句话用途>"
+# ② 写资料层 / 物料表（建记录 + 传附件），复用既有工具
+python3 skills/dealclaw-knowledge-base/scripts/fill_material_index.py create \
+  --base-token <资料层 app_token> --table-id <资料层 table_id> --records records.json
+python3 skills/dealclaw-knowledge-base/scripts/fill_material_index.py attach \
+  --base-token <app_token> --table-id <table_id> --field-id <附件列 field_id> \
+  --mapping name_to_rid.json --manifest manifest.json
+python3 skills/dealclaw-knowledge-base/scripts/fill_material_index.py sync \
+  --enterprise <企业> --status status.json
 ```
 
-工具行为：归档文件本体 → 留存解析文本 → 写 kb.json（status=ready）→ **回读验证**。
-`get_material_links()` 必须能取到该条目；**取不到即视为入库失败，如实报告，不得声称"已入库"**；缺 bitable 参数时明确报 skipped（不假装已同步文档）。
+- `dc_material_ingest.py` 也支持一次带 `--bitable-app-token/--table-id/--field-id`，内部复用 `fill_material_index` 建记录+传附件。
+- 粒度铁律：**一条记录 = 一个可独立调用的物料单元**（主图 1 张/条；参数表 N 页挂 1 条；证书 1 张/条）。
+- 校验：`get_material_links()` 必须能取到该条目；**取不到即视为失败，如实报告，不得声称"已入库"**；缺资料层坐标时明确报 `skipped`（不假装已写文档）。
 
 **路径二：用户在文档上传** — 打开 docx 或 bitable 直接拖入文件。V 定期同步回引擎。
 
