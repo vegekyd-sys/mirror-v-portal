@@ -21,10 +21,14 @@ class IngestTests(unittest.TestCase):
         self._orig_dir = kbe.KB_DIR
         kbe.KB_DIR = Path(self.tmp.name) / "memory"
         kbe.KB_DIR.mkdir(parents=True, exist_ok=True)
+        # 环境隔离：运行时 .env 里有真实 supplier id，会把 _key() 顶掉 → 测试内固定为空
+        self._orig_sid = kbe._resolve_supplier_id
+        kbe._resolve_supplier_id = lambda: ""
         self.src = Path(self.tmp.name) / "产品目录 2026.pdf"
         self.src.write_bytes(b"%PDF-1.4 fake catalog bytes")
 
     def tearDown(self):
+        kbe._resolve_supplier_id = self._orig_sid
         kbe.KB_DIR = self._orig_dir
         self.tmp.cleanup()
 
