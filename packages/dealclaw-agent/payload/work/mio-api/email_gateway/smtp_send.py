@@ -299,7 +299,8 @@ class SmtpSender:
                 "lead_id": lead_id,
                 "contact_id": contact_id,
                 "idempotency_key": idempotency_key,
-                "provider_status": "accepted" if provider_accepted else "",
+                # 状态口径统一：personal/SMTP 没有投递终态，显式落 unavailable（不能空、不能 0）
+                "provider_status": "accepted" if provider_accepted else "unavailable",
                 "touch_number": touch_number,
                 "content_version": content_version,
                 "legacy": not bool(campaign_id),

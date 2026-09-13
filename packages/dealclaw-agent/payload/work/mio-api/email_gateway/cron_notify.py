@@ -174,6 +174,99 @@ def _send_webhook(url: str, secret: str, payload: dict) -> None:
             raise RuntimeError(f"webhook failed: {result}")
 
 
+# ── A. 通知出口收敛：webhook（默认）↔ dc_notify ───────────────
+#
+# 默认（未配置 / webhook）= 现有行为：飞书自定义机器人 webhook 卡片。
+# 配置 DC_NOTIFY_OUTBOUND=dc_notify = 入站邮件通知改走 dc_notify 统一底座
+#   （NotifyEngine.publish + dispatch），出口 sender 由 DC_NOTIFY_SENDER_MODE 决定
+#   （feishu / weixin），不再写死飞书 webhook。
+# 切换开关：DC_NOTIFY_OUTBOUND（tenant-env.json → .env → 环境变量）。
+DC_NOTIFY_OUTBOUND_ENV = "DC_NOTIFY_OUTBOUND"
+
+
+def _outbound_mode() -> str:
+    """通知出口模式："webhook"（默认，飞书机器人卡片）或 "dc_notify"（统一底座）。"""
+    mode = _env_value(DC_NOTIFY_OUTBOUND_ENV, "webhook").strip().lower()
+    return mode or "webhook"
+
+
+def _dc_notify_engine():
+    """dc_notify 引擎工厂（测试可替换，注入 MockSender）。"""
+    from dc_notify import NotifyEngine
+    return NotifyEngine()
+
+
+def _dc_notify_company_id(enterprise_id: str = "") -> str:
+    """通知归属 company_id：账号 enterprise → MIO_CDP_SUPPLIER_ID → default。"""
+    for value in (enterprise_id, _env_value("MIO_CDP_SUPPLIER_ID", ""), "default"):
+        if value and str(value).strip():
+            return str(value).strip()
+    return "default"
+
+
+def _event_dedupe_key(account_id: str, event: dict) -> str:
+    """同一封入站邮件恒相同（防重复推送）：账号 + message_id（退化到 uid）。"""
+    ident = str(event.get("message_id") or "").strip() or f"uid:{event.get('uid')}"
+    return f"{account_id or event.get('account_id', '')}:{ident}"
+
+
+def _format_plain_event(event: dict) -> str:
+    """入站邮件通知正文（纯文本，适配任意 sender：feishu / weixin）。"""
+    lines = [
+        "📬 DealClaw 新邮件提醒",
+        f"收件邮箱：{event.get('email_address') or '未知'}",
+        f"发件人：{event.get('from') or '未知'}",
+        f"主题：{event.get('subject') or '（无主题）'}",
+    ]
+    preview = _excerpt(event.get("preview"))
+    if preview:
+        lines.append(f"邮件内容\n{preview}")
+    return "\n".join(lines)
+
+
+def notify_events_via_dc_notify(events: list[dict], *, account_id: str = "",
+                                enterprise_id: str = "", engine=None) -> dict:
+    """把入站邮件通知交给 dc_notify（publish → dispatch）。返回结构化结果。
+
+    - 只有本函数 publish 出来的 notification_id 会被 dispatch（only_ids），
+      不会顺手把别人 pending 的通知发出去。
+    - 逐条结果在 results 里（sent / dry_run / failed），失败带底层真实 error。
+    - 路由缺失（route_error）→ 消息保留 pending，由调用方报错，不静默丢。
+    """
+    if engine is None:
+        engine = _dc_notify_engine()
+    company_id = _dc_notify_company_id(enterprise_id)
+    notification_ids: list[str] = []
+    for event in events:
+        res = engine.publish(
+            company_id,
+            "signal_item",
+            payload={
+                "message": _format_plain_event(event),
+                "kind": "inbound_email",
+                "account_id": account_id or event.get("account_id", ""),
+                "email_address": event.get("email_address", ""),
+                "from": event.get("from", ""),
+                "subject": event.get("subject", ""),
+            },
+            dedupe_key=f"inbound-mail:{_event_dedupe_key(account_id, event)}",
+            slot="realtime",
+        )
+        nid = res.get("notification_id")
+        if nid:
+            notification_ids.append(nid)
+    if not notification_ids:
+        return {"status": "quiet", "company_id": company_id, "published": 0, "results": []}
+    dr = engine.dispatch(company_id, slot="realtime", only_ids=notification_ids)
+    return {
+        "status": dr.get("status"),
+        "company_id": company_id,
+        "published": len(notification_ids),
+        "results": dr.get("results", []),
+        "error": dr.get("error", ""),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sync mailboxes and send Feishu webhook cards")
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
@@ -182,7 +275,12 @@ def main(argv: list[str] | None = None) -> int:
     account_scope.add_argument("--all", action="store_true")
     parser.add_argument("--webhook", default="", help="Feishu bot webhook URL（fallback，未绑定群时用）")
     parser.add_argument("--webhook-secret", default="", help="Feishu bot signing secret（fallback）")
+    parser.add_argument("--outbound", default="", choices=["", "webhook", "dc_notify"],
+                        help="通知出口（默认取 DC_NOTIFY_OUTBOUND）：webhook=飞书机器人卡片；dc_notify=统一底座")
     args = parser.parse_args(argv)
+
+    # 通知出口：CLI 覆盖 DC_NOTIFY_OUTBOUND；默认 webhook = 现有行为不变
+    outbound_mode = args.outbound or _outbound_mode()
 
     store = EmailStore(args.data_dir)
     account_ids = (
@@ -192,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     errors: list[str] = []
     synced_any = False
-    webhook_failed = False
+    outbound_failed = False
     syncer = ImapSynchronizer(store)
     for account_id in account_ids:
         try:
@@ -203,6 +301,31 @@ def main(argv: list[str] | None = None) -> int:
             continue
         events = result.get("events", [])
         if not events:
+            continue
+        if outbound_mode == "dc_notify":
+            # 通知出口收敛：走 dc_notify 统一底座（sender 由 DC_NOTIFY_SENDER_MODE 决定）
+            try:
+                account = store.get_account(account_id)
+            except Exception:  # noqa: BLE001
+                account = {}
+            try:
+                nr = notify_events_via_dc_notify(
+                    events,
+                    account_id=account_id,
+                    enterprise_id=str(account.get("enterprise_id", "")),
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{account_id}:notify:{type(exc).__name__}")
+                outbound_failed = True
+                continue
+            if nr.get("status") == "route_error":
+                errors.append(f"{account_id}:notify:route_error:{str(nr.get('error') or '')[:120]}")
+                outbound_failed = True
+            for rr in nr.get("results", []):
+                if rr.get("status") == "failed":
+                    reason = str(rr.get("error") or "").strip()[:120] or "failed"
+                    errors.append(f"{account_id}:notify:{reason}")
+                    outbound_failed = True
             continue
         # 按 account 的 binding 路由：有启用绑定则发到各绑定的 webhook，否则 fallback 全局 --webhook
         bindings = [
@@ -224,8 +347,8 @@ def main(argv: list[str] | None = None) -> int:
                 _send_webhook(url, secret, card)
             except Exception as exc:
                 errors.append(f"{account_id}:webhook:{type(exc).__name__}")
-                webhook_failed = True
-    if (not synced_any) or webhook_failed:
+                outbound_failed = True
+    if (not synced_any) or outbound_failed:
         raise RuntimeError("; ".join(errors))
     if errors:
         print(f"警告：{len(errors)} 个邮箱同步/发送失败", file=sys.stderr)
