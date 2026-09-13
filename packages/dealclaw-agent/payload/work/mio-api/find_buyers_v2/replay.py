@@ -46,16 +46,13 @@ def replay(fixture: dict, *, deliver_limit: int = 10,
     meta = fixture.get("meta") or {}
     if not target_exhibition_ids:
         target_exhibition_ids = meta.get("target_exhibition_ids") or ()
-    if diag is not None:
-        with diag.stage("search"):
-            pass  # fixture 是「已取得的响应」，search 阶段计 0；真实链路在此计时
     legacy = run_legacy(pages, deliver_limit=deliver_limit)
-    if diag is not None:
-        with diag.stage("normalize"):
-            pass
+    t_norm = time.perf_counter()
     v2 = run_v2(pages, deliver_limit=deliver_limit,
                 target_exhibition_ids=target_exhibition_ids,
                 semantic_judge=semantic_judge, need_contact=need_contact)
+    if diag is not None:
+        diag.record_stage("normalize", (time.perf_counter() - t_norm) * 1000.0)
     raw_rows = [r["record"] for r in flatten_pages(pages)]
     return {
         "fixture": {

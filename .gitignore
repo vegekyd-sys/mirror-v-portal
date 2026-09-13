@@ -46,3 +46,6 @@ packages/dealclaw-agent/payload/work/mio-api/data/
 
 # reflection 审核候选输出（运行时，不进 Git）
 data/reflection-review/
+
+# 真实评测/影子产物（含公司名，不进 Git）
+packages/dealclaw-agent/payload/data/
