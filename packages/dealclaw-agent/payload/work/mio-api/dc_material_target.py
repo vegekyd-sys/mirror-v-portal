@@ -25,7 +25,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from dc_kb_engine import KB_DIR, KBEngine  # noqa: E402
+import dc_kb_engine as kbe  # noqa: E402
+from dc_kb_engine import KBEngine  # noqa: E402
 
 TABLE_NAMES = ("物料表", "资料层", "物料索引")
 MATERIAL_TYPES = ("产品目录", "报价单", "技术规格", "认证证书", "样品实拍", "客户案例", "产品视频")
@@ -61,7 +62,7 @@ def _key(enterprise: str) -> str:
 
 
 def _cache_path(enterprise: str) -> Path:
-    return KB_DIR / _key(enterprise) / "kb_targets.json"
+    return kbe.KB_DIR / _key(enterprise) / "kb_targets.json"
 
 
 def read_cache(enterprise: str) -> Optional[dict]:

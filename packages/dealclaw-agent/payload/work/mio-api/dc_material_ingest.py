@@ -35,7 +35,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from dc_kb_engine import KBEngine, KB_DIR, DEFAULT_MATERIAL_TYPES, MATERIAL_LABELS  # noqa: E402
+import dc_kb_engine as kbe  # noqa: E402
+from dc_kb_engine import KBEngine, DEFAULT_MATERIAL_TYPES, MATERIAL_LABELS  # noqa: E402
 
 # 物料表/资料层的下拉选项名（必须与建表时的 options 完全一致，否则接口报 not_found）
 BITABLE_TYPE_NAMES = {
@@ -174,7 +175,7 @@ def _maybe_upload_bitable(file_path: Path, *, app_token: str, table_id: str,
 def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
            description: str = "", text: str = "", link: str = "",
            bitable: tuple[str, str, str, str] = ("", "", "", ""),
-           auto_target: bool = True) -> dict:
+           auto_target: bool = True, allow_duplicate: bool = False) -> dict:
     if not file_path.exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
     if file_path.suffix.lower() not in SUPPORTED_EXT:
@@ -185,8 +186,26 @@ def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
     if mtype not in DEFAULT_MATERIAL_TYPES:
         raise ValueError(f"未知物料类型 {mtype}（可选：{', '.join(DEFAULT_MATERIAL_TYPES)}）")
 
+    # 跨渠道去重：同一张图/同一文件（不同压缩、不同文件名）只入一次
+    if not allow_duplicate:
+        try:
+            import dc_material_dedup as dd
+            fp = {"sha256": digest, "phash": dd.dhash(file_path),
+                  "kind": "image" if file_path.suffix.lower() in dd.IMAGE_EXT else "file",
+                  "name": file_path.name, "size": file_path.stat().st_size}
+            dup = dd.find_duplicate(enterprise, fp)
+            if dup:
+                return {
+                    "enterprise": enterprise, "type": mtype, "file": str(file_path),
+                    "sha256": digest, "duplicate_of": dup, "skipped_write": True,
+                    "verified_readable": True,
+                    "note": f"重复（{dup['match']}，距离 {dup['distance']}）→ 未重复建记录/附件/文档",
+                }
+        except Exception:
+            pass
+
     key = KBEngine()._key(enterprise) if hasattr(KBEngine(), "_key") else enterprise
-    dest_dir = KB_DIR / key / "materials" / mtype
+    dest_dir = kbe.KB_DIR / key / "materials" / mtype
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / file_path.name
     if file_path.resolve() != dest.resolve():
@@ -231,6 +250,15 @@ def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
                                       field_id=field_id)
     if target_info:
         bitable_result["target"] = target_info
+    try:
+        import dc_material_dedup as dd
+        dd.register(enterprise, {"sha256": digest, "phash": dd.dhash(dest),
+                                 "kind": "image" if dest.suffix.lower() in dd.IMAGE_EXT else "file",
+                                 "name": dest.name, "size": dest.stat().st_size},
+                    file=str(dest), mtype=mtype, source="user_upload")
+    except Exception:
+        pass
+
     # 回读验证：必须能通过下游读接口取到
     links = {m["type"]: m for m in kb.get_material_links(enterprise)}
     ok = mtype in links
@@ -261,6 +289,7 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--field-id", default="", help="附件列 field id")
     ap.add_argument("--record-id", default="", help="（兼容旧参，等同 field-id 缺省时的占位）")
     ap.add_argument("--no-auto-target", action="store_true", help="不自动解析物料表坐标")
+    ap.add_argument("--allow-duplicate", action="store_true", help="允许重复入库（默认去重）")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -285,7 +314,8 @@ def main(argv=None) -> int:  # pragma: no cover
                    name=args.name, description=args.description, text=text, link=args.link,
                    bitable=(args.bitable_app_token, args.table_id, args.record_id,
                             args.field_id),
-                   auto_target=not args.no_auto_target)
+                   auto_target=not args.no_auto_target,
+                   allow_duplicate=args.allow_duplicate)
     except Exception as e:
         print(f"入库失败: {e}", file=sys.stderr)
         return 1

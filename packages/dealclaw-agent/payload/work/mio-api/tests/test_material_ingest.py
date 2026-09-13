@@ -54,7 +54,13 @@ class IngestTests(unittest.TestCase):
     def test_idempotent_reingest(self):
         mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog")
         r2 = mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog")
-        self.assertTrue(r2["idempotent_update"])
+        # 同一文件二次入库 → 去重跳过（不重复建记录/附件/文档）
+        self.assertTrue(r2.get("skipped_write"))
+        self.assertEqual(r2["duplicate_of"]["match"], "exact")
+        # 显式允许重复时才走覆盖更新
+        r3 = mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog",
+                       allow_duplicate=True)
+        self.assertTrue(r3["idempotent_update"])
         kb = json.loads((kbe.KB_DIR / "e1" / "kb.json").read_text(encoding="utf-8"))
         ready = [k for k, v in kb["materials"].items() if v.get("status") == "ready"]
         self.assertEqual(ready, ["catalog"])          # 只置 ready 该类型，不重复建条目

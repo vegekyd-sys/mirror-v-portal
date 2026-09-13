@@ -28,7 +28,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from dc_kb_engine import KB_DIR, KBEngine, MATERIAL_LABELS  # noqa: E402
+import dc_kb_engine as kbe  # noqa: E402
+from dc_kb_engine import KBEngine, MATERIAL_LABELS  # noqa: E402
 from dc_material_ingest import (BITABLE_TYPE_NAMES, IMAGE_EXT, SUPPORTED_EXT,  # noqa: E402
                                infer_type, ingest)
 
@@ -63,7 +64,7 @@ def _lark(*args: str, timeout: int = 120) -> dict:
 # ── 人类侧 B：主题页文档 ────────────────────────────────────────────
 def _doc_cache(enterprise: str) -> Path:
     key = KBEngine()._key(enterprise)
-    return KB_DIR / key / "kb_doc.json"
+    return kbe.KB_DIR / key / "kb_doc.json"
 
 
 def read_doc(enterprise: str) -> dict:
