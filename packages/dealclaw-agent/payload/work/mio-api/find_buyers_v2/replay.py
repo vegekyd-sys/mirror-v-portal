@@ -39,7 +39,7 @@ def load_fixture(path) -> dict:
 def replay(fixture: dict, *, deliver_limit: int = 10,
            target_exhibition_ids: Iterable[str] = (),
            need_contact: bool = False,
-           semantic_judge=None, diag=None,
+           semantic_judge=None, diag=None, rank: str = "api",
            fixture_path: str = "") -> dict:
     """同一份 fixture 同时跑 legacy 与 v2，给出候选 diff、摘要 token 变化、阶段耗时。"""
     pages = fixture.get("pages") or []
@@ -50,7 +50,7 @@ def replay(fixture: dict, *, deliver_limit: int = 10,
     t_norm = time.perf_counter()
     v2 = run_v2(pages, deliver_limit=deliver_limit,
                 target_exhibition_ids=target_exhibition_ids,
-                semantic_judge=semantic_judge, need_contact=need_contact)
+                semantic_judge=semantic_judge, need_contact=need_contact, rank=rank)
     if diag is not None:
         diag.record_stage("normalize", (time.perf_counter() - t_norm) * 1000.0)
     raw_rows = [r["record"] for r in flatten_pages(pages)]

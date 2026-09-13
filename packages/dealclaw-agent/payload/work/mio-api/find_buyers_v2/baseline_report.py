@@ -104,7 +104,9 @@ def labeling_markdown(reports: list[dict], scenarios: list[str], run: str = "r3"
         "# find-buyers 标注表",
         "",
         "用法：在「标注」列填 ✅（合格买家）/ ❌（不合格），可加一句原因。",
-        "v2（新）= 按五维综合分排序的前 10；legacy（旧）= 接口返回顺序前 10（现网口径）。",
+        "v2（新）= 确定性前置（剔重/展会ID核验/字段检查/摘要）后**保留接口综合序**的前 10；",
+        "legacy（旧）= 接口返回顺序前 10（现网口径，无确定性前置）。",
+        "两者差异只来自确定性剔除，排序口径一致（不再用五维分排序）。",
         "",
     ]
     for scen in scenarios:
@@ -119,11 +121,14 @@ def labeling_markdown(reports: list[dict], scenarios: list[str], run: str = "r3"
             for i, it in enumerate(items, 1):
                 if not isinstance(it, dict):
                     continue
-                name = it.get("company", "")
-                site = it.get("website", "")
-                country = it.get("country", "")
+                name = it.get("company") or it.get("companyName") or ""
+                site = it.get("website") or it.get("companyWebsite") or ""
+                country = it.get("country") or it.get("countryEnName") or ""
                 score = (it.get("scores_raw") or {}).get("fiveCompositeScore")
-                profile = (it.get("profile") or "")[:60].replace("|", "/")
+                if score is None:
+                    score = it.get("fiveCompositeScore")
+                profile = (it.get("profile") or it.get("companyProfile") or
+                           it.get("companyProfileSummary") or it.get("buyerIntroduce") or "")[:60].replace("|", "/")
                 out.append(f"| {i} | {name} | {site} | {country} | {score} | {profile} | |")
             out.append("")
     return "\n".join(out)
