@@ -96,6 +96,27 @@ def link_by_email(company_id: str, recipients, *, data_dir=None) -> dict:
                 result["contact_name"] = str(l.get("_xq_contactName") or "")
             result["email"] = result["email"] or next((e for e in cand if e in emails), "")
             break
+    # ③ 域名兜底：同一域名的来信归到同一买家主体（联系人数据不全时用）
+    if not result["match"]:
+        doms = {_norm(e).split("@")[-1] for e in emails if "@" in _norm(e)}
+        for c in iter_contacts(company_id, data_dir):
+            cdom = str(c.get("domain") or _norm(c.get("email")).split("@")[-1]).lower()
+            if cdom and cdom in doms:
+                result.update({"lead_id": str(c.get("lead_id") or ""),
+                               "contact_id": str(c.get("contact_id") or ""),
+                               "contact_name": str(c.get("name") or ""),
+                               "email": _norm(c.get("email")),
+                               "match": "domain-contacts"})
+                break
+        if not result["match"]:
+            for l in iter_leads(data_dir):
+                ldom = str(l.get("domain") or "").lower().strip()
+                if ldom and ldom in doms:
+                    result.update({"lead_company": str(l.get("company_name") or ""),
+                                   "lead_domain": ldom,
+                                   "contact_name": result["contact_name"] or str(l.get("_xq_contactName") or ""),
+                                   "match": "domain-leads"})
+                    break
     return result
 
 

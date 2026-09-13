@@ -39,6 +39,12 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(r["lead_company"], "PT Example Indonesia")
         self.assertEqual(r["lead_domain"], "example.co.id")
 
+    def test_domain_fallback_matches_other_contact_in_domain(self):
+        """联系人邮箱没直接命中时，按域名兜底归到同一买家主体。"""
+        r = cl.link_by_email("acme", ["someone-else@example.com"], data_dir=self.d)
+        self.assertEqual(r["match"], "domain-contacts")
+        self.assertEqual(r["contact_id"], "LX456")
+
     def test_no_match_returns_empty(self):
         r = cl.link_by_email("acme", ["nobody@nowhere.com"], data_dir=self.d)
         self.assertEqual(r["match"], "")
