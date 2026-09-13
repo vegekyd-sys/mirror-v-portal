@@ -104,6 +104,68 @@ def belongs_to_tenant(rec: dict, mailboxes: set[str]) -> bool:
     return bool(rec_addresses(rec) & {m.lower() for m in mailboxes})
 
 
+def all_tenant_mailboxes(data_dir=None) -> dict:
+    """{租户: {邮箱...}} —— 由 accounts 的 enterprise_id 汇总。"""
+    base = _data_dir(data_dir)
+    out: dict[str, set] = {}
+    for p in glob.glob(str(base / "email-facts/accounts/*.md")):
+        for r in _records(Path(p)):
+            cid = str(r.get("enterprise_id") or "").strip()
+            addr = str(r.get("email_address") or "").strip().lower()
+            if cid and addr:
+                out.setdefault(cid, set()).add(addr)
+    return out
+
+
+def owner_tenant(rec: dict, tenant_boxes: dict) -> tuple[str, int]:
+    """按收发地址命中的租户邮箱数量判定归属；命中为 0 返回空。"""
+    addrs = rec_addresses(rec)
+    best, best_hits = "", 0
+    for cid, boxes in tenant_boxes.items():
+        hits = len(addrs & {b.lower() for b in boxes})
+        if hits > best_hits:
+            best, best_hits = cid, hits
+    return best, best_hits
+
+
+def rehome_quarantine(data_dir=None, apply: bool = False, keep_unassigned: bool = True) -> dict:
+    """把隔离区里的事实按正确租户归位（田耕郡 2026-09-13 确认）。"""
+    base = _data_dir(data_dir)
+    qroot = base / "_quarantine"
+    tenant_boxes = all_tenant_mailboxes(base)
+    report = {"tenants": {k: sorted(v) for k, v in tenant_boxes.items()},
+              "moved": 0, "unassigned": 0, "by_tenant": {}, "applied": apply}
+    if not qroot.exists():
+        return {**report, "note": "没有隔离区"}
+
+    facts = glob.glob(str(qroot / "email-facts/**/*.md"), recursive=True)
+    for f in facts:
+        path = Path(f)
+        m = re.search(r"\{.*\}", path.read_text(encoding="utf-8", errors="ignore"), re.S)
+        if not m:
+            continue
+        try:
+            rec = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            continue
+        cid, hits = owner_tenant(rec, tenant_boxes)
+        if not cid:
+            report["unassigned"] += 1
+            if apply and keep_unassigned:
+                dest = qroot / "unassigned" / path.relative_to(qroot / "email-facts")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                path.replace(dest)
+            continue
+        direction = "outbound" if "outbound" in path.parts else "inbound"
+        dest = base / "email-facts" / direction / cid / path.parent.name / path.name
+        report["moved"] += 1
+        report["by_tenant"][cid] = report["by_tenant"].get(cid, 0) + 1
+        if apply:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            path.replace(dest)
+    return report
+
+
 def quarantine_foreign_facts(company_id: str, data_dir=None, apply: bool = False) -> dict:
     """把「写进了本租户目录、但收发地址都不是本租户邮箱」的事实移到 _quarantine。
 
@@ -143,10 +205,13 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--company-id", default=os.environ.get("MIO_CDP_SUPPLIER_ID", ""))
     ap.add_argument("--data-dir", default="")
     ap.add_argument("--quarantine", action="store_true")
+    ap.add_argument("--rehome", action="store_true", help="把隔离区事实按正确租户归位")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    if args.quarantine:
+    if args.rehome:
+        r = rehome_quarantine(args.data_dir or None, apply=args.apply)
+    elif args.quarantine:
         r = quarantine_foreign_facts(args.company_id, args.data_dir or None, apply=args.apply)
     else:
         r = {"company_id": args.company_id,
