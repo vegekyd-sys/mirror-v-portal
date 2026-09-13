@@ -4,6 +4,10 @@ import type { ProvisioningConfig } from '../config.js';
 import { actorFromRequest } from '../services/audit.js';
 import { decryptValue } from '../services/crypto.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
+import {
+  ModelParamDiscoveryError,
+  ModelParamDiscoveryService,
+} from '../services/model-param-discovery.js';
 import { CatalogRepository, CatalogService, snapshotFingerprint } from '../services/model-catalog.js';
 import { enqueueLlmPush } from '../services/llm-push-task.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
@@ -15,6 +19,26 @@ function disabled(res: Response): void {
 
 function internalError(res: Response, code = 'INTERNAL', status = 500): void {
   res.status(status).json({ code, message: 'Model catalog request failed' });
+}
+
+function paramWriteDisabled(res: Response): void {
+  res.status(403).json({
+    code: 'MODEL_CATALOG_PARAM_WRITE_DISABLED',
+    message: 'Model catalog parameter writes are disabled',
+  });
+}
+
+function handleParamError(res: Response, error: unknown): void {
+  if (error instanceof ModelParamDiscoveryError) {
+    res.status(error.status).json({
+      code: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
+    return;
+  }
+  console.error('model catalog parameter operation failed:', error);
+  internalError(res);
 }
 
 function redactSnapshot(snapshot: Awaited<ReturnType<CatalogService['buildCompatibilitySnapshot']>>) {
@@ -34,6 +58,7 @@ export function createModelCatalogRoutes(
   if (authMiddleware) router.use(authMiddleware);
   const repository = new CatalogRepository(pool);
   const service = new CatalogService(repository);
+  const paramDiscovery = new ModelParamDiscoveryService(pool);
 
   router.post('/v1/admin/model-catalog/import', async (req, res) => {
     if (config.modelCatalogShadowImport !== true) return disabled(res);
@@ -70,6 +95,67 @@ export function createModelCatalogRoutes(
   router.get('/v1/admin/model-catalog/providers/:id/models', async (req, res) => {
     if (config.modelCatalogRead !== true) return disabled(res);
     res.json({ models: await repository.listModels(req.params.id) });
+  });
+
+  router.post('/v1/admin/model-catalog/discovery/preview', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    const providerInstanceId = typeof req.body?.providerInstanceId === 'string' ? req.body.providerInstanceId : '';
+    const adapter = req.body?.adapter;
+    if (!providerInstanceId || (adapter !== 'provider-api' && adapter !== 'builtin-catalog')) {
+      res.status(400).json({ code: 'MODEL_CATALOG_VALIDATION', message: 'providerInstanceId and explicit adapter are required' });
+      return;
+    }
+    try {
+      const { actor } = actorFromRequest(req);
+      res.json(await paramDiscovery.preview({
+        providerInstanceId,
+        ...(req.body.modelIds !== undefined ? { modelIds: req.body.modelIds } : {}),
+        adapter,
+        actor,
+      }));
+    } catch (error) {
+      handleParamError(res, error);
+    }
+  });
+
+  router.post('/v1/admin/model-catalog/discovery/apply', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    if (typeof req.body?.previewRunId !== 'string' || typeof req.body?.expectedProviderRevision !== 'string') {
+      res.status(400).json({ code: 'MODEL_CATALOG_VALIDATION', message: 'previewRunId and expectedProviderRevision are required' });
+      return;
+    }
+    try {
+      const { actor } = actorFromRequest(req);
+      res.json(await paramDiscovery.apply({
+        previewRunId: req.body.previewRunId,
+        expectedProviderRevision: req.body.expectedProviderRevision,
+        selections: req.body.selections,
+        actor,
+      }));
+    } catch (error) {
+      handleParamError(res, error);
+    }
+  });
+
+  router.patch('/v1/admin/model-catalog/models/:id/override', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const allowed = new Set(['expectedUpdatedAt', 'overrideParams', 'evidence']);
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) ||
+        Object.keys(req.body).some((key) => !allowed.has(key))) {
+      res.status(400).json({ code: 'MODEL_CATALOG_VALIDATION', message: 'Unknown or forbidden request field' });
+      return;
+    }
+    try {
+      const { actor } = actorFromRequest(req);
+      res.json(await paramDiscovery.replaceOverride(req.params.id, {
+        expectedUpdatedAt: req.body.expectedUpdatedAt,
+        overrideParams: req.body.overrideParams,
+        evidence: req.body.evidence,
+        actor,
+      }));
+    } catch (error) {
+      handleParamError(res, error);
+    }
   });
 
   router.get('/v1/admin/model-catalog/snapshot-preview', async (_req, res) => {

@@ -487,6 +487,66 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         encrypted_value TEXT NOT NULL, source_fingerprint TEXT NOT NULL, actor TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE llm_provider_models ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE llm_provider_models ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;
+      ALTER TABLE llm_provider_models ADD COLUMN IF NOT EXISTS discovery_run_id UUID;
+
+      CREATE TABLE IF NOT EXISTS llm_model_discovery_runs (
+        id UUID PRIMARY KEY,
+        provider_instance_id TEXT NOT NULL REFERENCES llm_provider_instances(id) ON DELETE CASCADE,
+        adapter TEXT NOT NULL CHECK (adapter IN ('provider-api','builtin-catalog')),
+        status TEXT NOT NULL CHECK (status IN ('previewed','applied','failed','expired')),
+        requested_model_ids JSONB NOT NULL,
+        candidates JSONB NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('provider-api','official-doc','builtin-catalog')),
+        source_url TEXT,
+        source_version TEXT,
+        raw_response_sha256 TEXT NOT NULL CHECK (raw_response_sha256 ~ '^[a-f0-9]{64}$'),
+        provider_revision TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        applied_at TIMESTAMPTZ,
+        applied_selection_ids JSONB,
+        apply_result JSONB,
+        error_summary TEXT,
+        CHECK (jsonb_typeof(requested_model_ids)='array'),
+        CHECK (jsonb_typeof(candidates)='array')
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_model_discovery_runs_provider
+        ON llm_model_discovery_runs(provider_instance_id, created_at DESC);
+
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname='llm_provider_models_discovery_run_id_fkey'
+             AND conrelid='llm_provider_models'::regclass
+        ) THEN
+          ALTER TABLE llm_provider_models ADD CONSTRAINT llm_provider_models_discovery_run_id_fkey
+            FOREIGN KEY (discovery_run_id) REFERENCES llm_model_discovery_runs(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+
+      CREATE TABLE IF NOT EXISTS llm_model_param_evidence (
+        id UUID PRIMARY KEY,
+        model_row_id TEXT NOT NULL REFERENCES llm_provider_models(id) ON DELETE CASCADE,
+        run_id UUID REFERENCES llm_model_discovery_runs(id) ON DELETE SET NULL,
+        layer TEXT NOT NULL CHECK (layer IN ('discovered','override')),
+        field_name TEXT NOT NULL,
+        value_json JSONB NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('provider-api','official-doc','builtin-catalog','manual-contract')),
+        source_url TEXT,
+        source_version TEXT,
+        observed_at TIMESTAMPTZ NOT NULL,
+        raw_sha256 TEXT NOT NULL CHECK (raw_sha256 ~ '^[a-f0-9]{64}$'),
+        confidence TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
+        notes TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_model_param_evidence_model
+        ON llm_model_param_evidence(model_row_id, created_at DESC);
     `);
 
     console.log(JSON.stringify({

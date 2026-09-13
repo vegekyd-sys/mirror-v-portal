@@ -12,6 +12,7 @@ const TRACKED_ENV = [
   'MODEL_CATALOG_READ',
   'MODEL_CATALOG_SHADOW_IMPORT',
   'MODEL_CATALOG_SNAPSHOT_WRITE',
+  'MODEL_CATALOG_PARAM_WRITE',
 ] as const;
 const originalEnv = Object.fromEntries(TRACKED_ENV.map((key) => [key, process.env[key]])) as Record<
   (typeof TRACKED_ENV)[number],
@@ -30,21 +31,22 @@ afterEach(() => {
   restoreCatalogEnv();
 });
 
-function createConfig(read: boolean): ProvisioningConfig {
+function createConfig(read: boolean, paramWrite = false): ProvisioningConfig {
   return {
     port: 0, databaseUrl: '', k8sDryRun: true, runtimeNamespace: 'test', imageRegistry: 'test',
     nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test', agentPvcSize: '1Gi',
     agentPvcStorageClass: 'test', agentPvcAccessMode: 'ReadWriteOnce', ossEndpoint: '', ossBucket: '',
     ossSecretName: '', backupImage: '', creditsLedgerUrl: '', creditsLedgerToken: '',
     modelCatalogRead: read, modelCatalogShadowImport: false, modelCatalogSnapshotWrite: false,
+    modelCatalogParamWrite: paramWrite,
     llmPushWorkerIntervalMs: 100, llmPushLeaseSeconds: 600,
   };
 }
 
-function createApp(pool: pg.Pool, read: boolean) {
+function createApp(pool: pg.Pool, read: boolean, paramWrite = false) {
   const app = express();
   app.use(express.json());
-  app.use(createModelCatalogRoutes(pool, createConfig(read)));
+  app.use(createModelCatalogRoutes(pool, createConfig(read, paramWrite)));
   return app;
 }
 
@@ -82,6 +84,66 @@ describe('model catalog status API', () => {
     expect(response.status).toBe(500);
     expect(JSON.stringify(response.body)).not.toContain('secret');
     expect(JSON.stringify(response.body)).not.toContain('postgres');
+  });
+
+  it('allows discovery preview while independently blocking parameter writes', async () => {
+    const query = async (sql: string, values?: unknown[]) => {
+      if (sql.includes('FROM llm_provider_instances WHERE id=')) return { rows: [{
+        id: 'provider-id', legacy_provider_name: 'aochi-aliyun', template_key: 'custom-openai',
+        base_url: 'https://workspace-123.maas.aliyuncs.com/compatible-mode/v1', updated_at: new Date(0),
+      }] };
+      if (sql.includes('FROM llm_provider_models')) return { rows: [{
+        id: 'model-id', provider_instance_id: 'provider-id', model_id: 'qwen3.7-plus',
+        discovered_params: null, override_params: { inputModalities: ['text', 'image'] },
+        effective_params: { inputModalities: ['text'], outputModalities: ['text'] },
+        params_status: 'fallback', revision: '0', updated_at: new Date(0),
+      }] };
+      if (sql.includes('INSERT INTO llm_model_discovery_runs')) {
+        expect(values?.[1]).toBe('provider-id');
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    };
+    const app = createApp({ query } as unknown as pg.Pool, true, false);
+    const preview = await request(app).post('/v1/admin/model-catalog/discovery/preview').send({
+      providerInstanceId: 'provider-id', modelIds: ['qwen3.7-plus'], adapter: 'builtin-catalog',
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body.models).toHaveLength(1);
+    expect(preview.body.models[0].candidateDiscoveredParams.contextWindow).toBe(1_000_000);
+    expect(preview.body.models[0].candidateEffectiveParams).toMatchObject({
+      inputModalities: ['text', 'image'], outputModalities: ['text'],
+      toolCalling: true, structuredOutput: true,
+    });
+    expect(preview.body.models[0].current.overrideParams.inputModalities).toEqual(['text', 'image']);
+    expect(preview.body.models[0].status).toBe('conflict');
+    expect(preview.body.models[0].conflicts).toEqual([{
+      field: 'inputModalities',
+      currentOverride: ['text', 'image'],
+      discovered: ['text', 'image', 'video'],
+      reason: 'override-differs-from-discovered',
+    }]);
+    const apply = await request(app).post('/v1/admin/model-catalog/discovery/apply').send({
+      previewRunId: preview.body.runId,
+      expectedProviderRevision: preview.body.providerRevision,
+      selections: [{ modelRowId: 'model-id', expectedUpdatedAt: new Date(0).toISOString() }],
+    });
+    expect(apply.status).toBe(403);
+    expect(apply.body.code).toBe('MODEL_CATALOG_PARAM_WRITE_DISABLED');
+  });
+
+  it('rejects client-owned discovered/effective/status fields in override writes', async () => {
+    const pool = { query: async () => { throw new Error('must not query'); } } as unknown as pg.Pool;
+    const response = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({
+        expectedUpdatedAt: new Date(0).toISOString(),
+        overrideParams: {},
+        effectiveParams: {},
+        evidence: { sourceKind: 'manual-contract', observedAt: new Date(0).toISOString(), notes: 'test' },
+      });
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('MODEL_CATALOG_VALIDATION');
   });
 
   it('builds preview once and returns a diff and fingerprint for that snapshot', async () => {
