@@ -320,5 +320,51 @@ class TtlCleanupTests(unittest.TestCase):
         self.assertEqual(removed, 1)
 
 
+class ScoreDiagnosticsTests(unittest.TestCase):
+    """分数诊断埋点：只读观测，不进卡片、不进 metrics、不影响交付。"""
+
+    def test_record_scores_summary_and_log(self):
+        import find_buyers_card as fbc
+        with tempfile.TemporaryDirectory() as td:
+            old_jobs, old_log = fbc.JOBS_DIR, fbc.SCORE_LOG
+            fbc.JOBS_DIR = Path(td) / "jobs"
+            fbc.SCORE_LOG = Path(td) / "scores.jsonl"
+            try:
+                card = FindBuyersCard("t-score", "ou_score", "oc_score", job_id="fb_score_test")
+                summary = card.record_scores([88, 62, 91, 75.5, None, "x", 40], delivered=3)
+                self.assertEqual(summary["count"], 5)          # None / "x" 被跳过，不当 0 处理
+                self.assertEqual(summary["ge_threshold"], 3)   # 88 / 91 / 75.5
+                self.assertEqual(summary["max"], 91.0)
+                self.assertEqual(summary["min"], 40.0)
+                # JSONL 落盘（TTL 清理 job 文件后仍可统计）
+                lines = fbc.SCORE_LOG.read_text(encoding="utf-8").strip().splitlines()
+                self.assertEqual(len(lines), 1)
+                self.assertEqual(json.loads(lines[0])["delivered"], 3)
+                # 分数不得进入卡片指标/卡片 DSL
+                self.assertNotIn("scores", card.state.get("metrics", {}))
+                self.assertEqual(card.state["diagnostics"]["delivered"], 3)
+                dsl = {"title": "找买家", "status": "质检中", "state": "running",
+                       "metrics": [{"label": k, "value": v} for k, v in card.state["metrics"].items()]}
+                rendered = json.dumps(render_card(dsl), ensure_ascii=False)
+                self.assertNotIn("diagnostics", rendered)
+                self.assertNotIn("91", rendered)
+            finally:
+                fbc.JOBS_DIR, fbc.SCORE_LOG = old_jobs, old_log
+
+    def test_record_scores_empty_is_silent(self):
+        import find_buyers_card as fbc
+        with tempfile.TemporaryDirectory() as td:
+            old_jobs, old_log = fbc.JOBS_DIR, fbc.SCORE_LOG
+            fbc.JOBS_DIR = Path(td) / "jobs"
+            fbc.SCORE_LOG = Path(td) / "scores.jsonl"
+            try:
+                card = FindBuyersCard("t-score", "ou_score", "oc_score", job_id="fb_score_empty")
+                self.assertEqual(card.record_scores([]), {})
+                self.assertFalse(fbc.SCORE_LOG.exists())
+                self.assertNotIn("diagnostics", card.state)
+            finally:
+                fbc.JOBS_DIR, fbc.SCORE_LOG = old_jobs, old_log
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

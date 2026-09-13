@@ -36,6 +36,13 @@ from card_adapter import CardAdapter
 _WS_ROOT = Path(__file__).resolve().parents[3]
 JOBS_DIR = _WS_ROOT / "data" / "runtime" / "jobs" / "find-buyers"
 
+# 分数诊断（只读观测）：append-only JSONL —— job 状态文件会被 TTL 清理，分数分布需要长期留存。
+# 不进卡片、不进 metrics、不向用户输出；任何异常静默，不影响交付主流程。
+DIAG_DIR = _WS_ROOT / "data" / "runtime" / "diagnostics"
+SCORE_LOG = DIAG_DIR / "find-buyers-scores.jsonl"
+SCORE_THRESHOLD_ENV = "DC_FIND_BUYERS_SCORE_THRESHOLD"
+DEFAULT_SCORE_THRESHOLD = 75.0
+
 # 状态枚举（第 6 条）
 VALID_STATES = {"queued", "running", "waiting_user", "partial", "failed", "cancelled", "done"}
 
@@ -56,6 +63,60 @@ STEP_ORDER = {"target_confirmed": 1, "searching": 2, "qualifying": 3, "syncing":
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _score_threshold() -> float:
+    """诊断/早停用的 AI匹配分 阈值（默认 75，可用环境变量覆盖）。"""
+    raw = (os.environ.get(SCORE_THRESHOLD_ENV) or "").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        return DEFAULT_SCORE_THRESHOLD
+    return val if val > 0 else DEFAULT_SCORE_THRESHOLD
+
+
+def _numeric_scores(scores) -> list[float]:
+    """只接受可比较的数值分数；缺失/非数值一律跳过，不当 0 处理。"""
+    out: list[float] = []
+    for s in scores or []:
+        if isinstance(s, bool):
+            continue
+        if isinstance(s, (int, float)):
+            out.append(float(s))
+        elif isinstance(s, str):
+            try:
+                out.append(float(s.strip()))
+            except ValueError:
+                continue
+    return out
+
+
+def _percentile(ordered: list[float], q: float) -> float:
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = (len(ordered) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(ordered) - 1)
+    frac = pos - lo
+    return ordered[lo] + (ordered[hi] - ordered[lo]) * frac
+
+
+def score_summary(scores, threshold: float) -> dict:
+    """候选 AI匹配分 的分布摘要（内部诊断用，不对外输出）。"""
+    vals = sorted(_numeric_scores(scores))
+    if not vals:
+        return {"count": 0}
+    return {
+        "count": len(vals),
+        "min": round(vals[0], 1),
+        "p50": round(_percentile(vals, 0.5), 1),
+        "p90": round(_percentile(vals, 0.9), 1),
+        "max": round(vals[-1], 1),
+        "threshold": threshold,
+        "ge_threshold": sum(1 for v in vals if v >= threshold),
+    }
 
 
 def extract_lead_pool_ids(url: str) -> tuple[str, str]:
@@ -252,6 +313,49 @@ class FindBuyersCard:
         self._advance("syncing", "正在将最终结果同步到企业线索池", metrics)
 
     # ── 终态（第 7、8 条）──
+    # ── 分数诊断（只读观测，不改变交付行为）──
+    def record_scores(self, scores, threshold: Optional[float] = None,
+                      delivered: int = 0) -> dict:
+        """记录本次候选的 AI匹配分 分布，供后续校准阈值/早停规则。
+
+        写入 job 状态的 diagnostics 字段与 data/runtime/diagnostics/find-buyers-scores.jsonl。
+        分数不进卡片、不进 metrics、不向用户输出；任何异常静默，不影响交付。
+        """
+        summary: dict = {}
+        try:
+            th = float(threshold) if threshold is not None else _score_threshold()
+            summary = score_summary(scores, th)
+            if not summary.get("count"):
+                return {}
+            self.state["diagnostics"] = {
+                "scores": summary,
+                "delivered": int(delivered or 0),
+                "recorded_at": _now(),
+            }
+            self._persist()
+            self._append_score_log(summary, delivered)
+        except Exception:
+            return {}
+        return summary
+
+    def _append_score_log(self, summary: dict, delivered: int) -> None:
+        try:
+            if self.dry_run:
+                return
+            SCORE_LOG.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps({
+                "job_id": self.job_id,
+                "tenant_id": self.tenant_id,
+                "chat_id": self.chat_id,
+                "delivered": int(delivered or 0),
+                "scores": summary,
+                "ts": _now(),
+            }, ensure_ascii=False)
+            with SCORE_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
+
     def _final(self, state: str, status: str, metrics: dict, links: list | None = None,
                summary: list | None = None, buyers: list | None = None) -> None:
         if self.state["state"] in TERMINAL_STATES:
