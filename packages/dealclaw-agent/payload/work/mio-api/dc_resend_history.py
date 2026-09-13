@@ -42,7 +42,12 @@ def _key(explicit: str = "") -> str:
 
 
 def _get(path: str, key: str, timeout: int = 25) -> dict:
-    req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {key}"})
+    # Cloudflare 会按浏览器签名拦默认 UA（error code 1010），必须带正常 UA
+    req = urllib.request.Request(API + path, headers={
+        "Authorization": f"Bearer {key}",
+        "User-Agent": "DealClawEmailBot/1.0 (+https://dealclaw.datathink.com)",
+        "Accept": "application/json",
+    })
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
