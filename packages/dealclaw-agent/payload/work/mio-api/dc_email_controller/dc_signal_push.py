@@ -336,6 +336,27 @@ def _route_verified(company_id: str) -> bool:
         return False
 
 
+def _dispatch_failure_reason(dr: dict) -> str:
+    """把 dispatch 结果里的真实发送器错误取出来，用于 candidate last_error。
+
+    为什么：原来只写 "dispatch failed"，线上看不到失败原因（例如
+    `Unknown account "0ae3af3617e2-im-bot" for channel openclaw-weixin.`），
+    排障必须回读 notifications/failed.md。通知记录本来就落真实 error，
+    candidate 侧必须一致透传，否则「失败」两个字便丢掉了全部诊断信息。
+    """
+    errs: list[str] = []
+    for rr in dr.get("results", []) or []:
+        if rr.get("status") != "failed":
+            continue
+        detail = str(rr.get("error") or "").strip()
+        if detail and detail not in errs:
+            errs.append(detail)
+    if errs:
+        return ("dispatch failed: " + " | ".join(errs))[:300]
+    fallback = str(dr.get("error") or dr.get("status") or "unknown").strip()
+    return f"dispatch failed: {fallback}"[:300]
+
+
 def _deliver_live(candidates: list[dict]) -> list[dict]:
     """live 模式：publish → dispatch → mark_sent 全链路（不再人工确认）。
 
@@ -362,7 +383,7 @@ def _deliver_live(candidates: list[dict]) -> list[dict]:
             mark_candidate_sent(cid, message_id)
             pushed.append({"candidate_id": cid, "notification_id": nid, "message_id": message_id})
         elif any(rr.get("status") == "failed" for rr in dr.get("results", [])):
-            mark_candidate_failed(cid, "dispatch failed")
+            mark_candidate_failed(cid, _dispatch_failure_reason(dr))
     return pushed
 
 

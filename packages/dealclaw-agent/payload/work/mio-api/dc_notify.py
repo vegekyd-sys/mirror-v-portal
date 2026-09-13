@@ -129,6 +129,23 @@ class SendResult:
     backend: str = ""
 
 
+def _cli_error(stdout: str, stderr: str, fallback: str = "send failed") -> str:
+    """从 CLI 输出里取「真实错误行」，透传进通知记录的 last_error。
+
+    为什么：直接截 stdout/stderr 尾部会把 `[openclaw] Debug/Help` 这类噪音一起写进
+    last_error，线上只看到一堆提示、看不到 `Unknown account "..." for channel ...`
+    这条真正的原因。取第一条非空、非 CLI 提示行，失败再退回尾部 200 字符。
+    """
+    for text in (stderr, stdout):
+        for line in (text or "").splitlines():
+            line = line.strip()
+            if not line or line.startswith("[openclaw]"):
+                continue
+            return line[:200]
+    tail = ((stderr or "").strip() or (stdout or "").strip())
+    return tail[-200:] if tail else fallback
+
+
 class Sender(ABC):
     """统一发送器接口。
 
@@ -224,7 +241,7 @@ class FeishuSender(Sender):
             return SendResult(ok=False, error="lark-cli send timeout", backend="feishu")
 
         if p.returncode != 0:
-            return SendResult(ok=False, error=(p.stderr or p.stdout or "send failed")[-200:],
+            return SendResult(ok=False, error=_cli_error(p.stdout, p.stderr),
                               backend="feishu")
         self.sent.append({**rec, "dry_run": False})
         # 从 JSON 输出尽力提取 message_id（lark-cli 返回 {ok, data:{message_id}}）
@@ -288,7 +305,7 @@ class WeixinSender(Sender):
             return SendResult(ok=False, error="openclaw send timeout", backend="weixin")
         if p.returncode != 0:
             return SendResult(ok=False, backend="weixin",
-                              error=(p.stderr or p.stdout or "send failed")[-200:])
+                              error=_cli_error(p.stdout, p.stderr))
         self.sent.append({**rec, "dry_run": False})
         mid = ""
         try:
@@ -667,8 +684,13 @@ class NotifyEngine:
 
     # ── dispatch ──
 
-    def dispatch(self, company_id: str, slot: str | None = None, dry_run: bool = False) -> dict:
-        """按 company_id（+可选 slot）分发 pending。返回结构化结果。"""
+    def dispatch(self, company_id: str, slot: str | None = None, dry_run: bool = False,
+                 only_ids: list[str] | None = None) -> dict:
+        """按 company_id（+可选 slot）分发 pending。返回结构化结果。
+
+        only_ids：只分发这些 notification_id（可选）。供 cron_notify 这类「本轮只发自己
+        publish 的那几条」的调用方使用；不传 = 保持原行为（该 company+slot 全部分发）。
+        """
         if not company_id or not company_id.strip():
             return {"status": "error", "error": "company_id required"}
 
@@ -677,6 +699,11 @@ class NotifyEngine:
         # 过滤 slot
         if slot is not None:
             pending = [r for r in pending if r.get("slot") == slot]
+
+        # 过滤 notification_id（本轮自己发布的那几条，不误发他人 pending）
+        if only_ids:
+            wanted = {str(i) for i in only_ids if i}
+            pending = [r for r in pending if r.get("notification_id") in wanted]
 
         if not pending:
             self._audit_log("notify.quiet", company_id, "-", "dispatch: no pending items")
