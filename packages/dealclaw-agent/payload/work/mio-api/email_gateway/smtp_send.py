@@ -279,6 +279,18 @@ class SmtpSender:
             # 回查真实 Message-ID（Resend 走 API，SMTP 退回本地 make_msgid）
             smtp_message_id = self._query_smtp_message_id(account, resend_id, message_id)
 
+            resolved_name = ""
+            # 联系人/线索兜底解析：调用方没传就从收件人邮箱反查（回信才能正确定位买家）
+            if not lead_id or not contact_id:
+                try:
+                    from dc_contact_link import link_by_email
+                    _link = link_by_email(company_id, envelope)
+                    lead_id = lead_id or _link.get("lead_id", "")
+                    contact_id = contact_id or _link.get("contact_id", "")
+                    resolved_name = _link.get("contact_name", "") or ""
+                except Exception:
+                    resolved_name = ""
+
             # Persist enriched outbound facts. Mark legacy when campaign_id is absent.
             outbound = {
                 "account_id": account_id,
@@ -288,6 +300,9 @@ class SmtpSender:
                 "recipients": envelope,
                 "subject": subject,
                 "text_preview": text,
+                # 正文原文：邮件回信/案卷要显示原文，不能只有 preview（2026-09-13 修）
+                "text": text or "",
+                "html": html or "",
                 "related": True,
                 "status": "sent",
                 "created_at": utc_now(),
@@ -298,6 +313,7 @@ class SmtpSender:
                 "campaign_id": campaign_id,
                 "lead_id": lead_id,
                 "contact_id": contact_id,
+                "contact_name": resolved_name,
                 "idempotency_key": idempotency_key,
                 # 状态口径统一：personal/SMTP 没有投递终态，显式落 unavailable（不能空、不能 0）
                 "provider_status": "accepted" if provider_accepted else "unavailable",
