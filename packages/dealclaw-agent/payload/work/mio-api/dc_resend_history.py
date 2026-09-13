@@ -65,7 +65,30 @@ def _get(path: str, key: str, timeout: int = 25) -> dict:
 
 
 def list_side(direction: str, key: str, limit: int) -> list[dict]:
-    path = f"/emails?limit={int(limit)}" if direction == "sent" else f"/emails/receiving?limit={int(limit)}"
+    """分页拉取（Resend：单页上限 100，用 after=<last id> 翻页）。"""
+    total = max(int(limit or 100), 1)
+    out: list[dict] = []
+    cursor = ""
+    base = "/emails" if direction == "sent" else "/emails/receiving"
+    while len(out) < total:
+        path = f"{base}?limit=100" + (f"&after={cursor}" if cursor else "")
+        d = _get(path, key)
+        items = d.get("data") if isinstance(d, dict) else None
+        if not isinstance(items, list) or not items:
+            break
+        out.extend(items)
+        if not d.get("has_more"):
+            break
+        cursor = str(items[-1].get("id") or "")
+        if not cursor:
+            break
+    return out[:total]
+
+
+def list_side_single(direction: str, key: str, limit: int) -> list[dict]:
+    """（保留：单页拉取，仅取前 limit 条）"""
+    path = (f"/emails?limit={int(limit)}" if direction == "sent"
+            else f"/emails/receiving?limit={int(limit)}")
     d = _get(path, key)
     items = d.get("data") if isinstance(d, dict) else None
     return items if isinstance(items, list) else []
