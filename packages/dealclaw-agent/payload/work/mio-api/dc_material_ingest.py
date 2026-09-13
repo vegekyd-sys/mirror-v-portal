@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -69,6 +70,41 @@ def infer_type(filename: str, text: str = "") -> str:
         if re.search(pattern, blob):
             return mtype
     return "catalog"
+
+
+def download_attachment(*, message_id: str, file_key: str, resource_type: str = "file",
+                        out_dir: Optional[Path] = None) -> Path:
+    """把飞书消息里的附件/图片落到本地，返回本地路径。
+
+    实时流程里用户发的是消息资源（om_ + img_/file_ key），而物料表上传要求本地相对路径，
+    这一步就是缺失的桥。任何失败都抛异常（调用方须如实报告，不得跳过）。
+    """
+    if not (message_id and file_key):
+        raise ValueError("需要 message_id 与 file_key")
+    out_dir = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="dc_material_"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = ["lark-cli", "im", "+messages-resources-download",
+           "--message-id", message_id, "--file-key", file_key,
+           "--type", resource_type, "--as", "bot", "--json"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(out_dir), timeout=180)
+    if r.returncode != 0:
+        raise RuntimeError(f"附件下载失败: {(r.stderr or r.stdout)[:200]}")
+    # 落到 cwd 下的安全相对路径；文件名从产物里取，取不到就用 file_key
+    data = {}
+    try:
+        data = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        pass
+    rel = str(((data.get("data") or {}).get("path")
+               or (data.get("data") or {}).get("file_path") or "")).strip()
+    candidates = []
+    if rel:
+        candidates.append(out_dir / rel)
+    candidates += sorted(p for p in out_dir.rglob("*") if p.is_file())
+    for c in candidates:
+        if c.is_file() and c.stat().st_size > 0:
+            return c
+    raise RuntimeError("附件下载成功但未找到本地文件")
 
 
 def sha256_of(path: Path) -> str:
@@ -210,7 +246,10 @@ def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
 
 def main(argv=None) -> int:  # pragma: no cover
     ap = argparse.ArgumentParser(description="用户上传物料 → 写入物料库")
-    ap.add_argument("--file", required=True, help="物料文件路径")
+    ap.add_argument("--file", default="", help="物料文件路径（本地）")
+    ap.add_argument("--from-message", default="", help="飞书消息 message_id（与 --file-key 配合自动下载）")
+    ap.add_argument("--file-key", default="", help="消息资源 key（img_xxx / file_xxx）")
+    ap.add_argument("--resource-type", default="file", choices=["file", "image"])
     ap.add_argument("--type", default="", help=f"物料类型（{', '.join(DEFAULT_MATERIAL_TYPES)}）")
     ap.add_argument("--name", default="")
     ap.add_argument("--description", default="")
@@ -229,8 +268,20 @@ def main(argv=None) -> int:  # pragma: no cover
         print("缺少 enterprise（可用 --enterprise 或 MIO_CDP_SUPPLIER_ID）", file=sys.stderr)
         return 2
     text = Path(args.text_file).read_text(encoding="utf-8") if args.text_file else ""
+    file_arg = args.file
+    if not file_arg and args.from_message and args.file_key:
+        try:
+            file_arg = str(download_attachment(message_id=args.from_message,
+                                               file_key=args.file_key,
+                                               resource_type=args.resource_type))
+        except Exception as e:
+            print(f"附件下载失败: {e}", file=sys.stderr)
+            return 1
+    if not file_arg:
+        print("需要 --file 或 --from-message/--file-key", file=sys.stderr)
+        return 2
     try:
-        r = ingest(enterprise=args.enterprise, file_path=Path(args.file), mtype=args.type,
+        r = ingest(enterprise=args.enterprise, file_path=Path(file_arg), mtype=args.type,
                    name=args.name, description=args.description, text=text, link=args.link,
                    bitable=(args.bitable_app_token, args.table_id, args.record_id,
                             args.field_id),

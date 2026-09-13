@@ -86,6 +86,27 @@ class IngestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mi.ingest(auto_target=False, enterprise="e4", file_path=f)
 
+    def test_attachment_download_bridge(self):
+        """飞书消息附件 → 本地路径：下载成功才继续入库。"""
+        import subprocess as sp
+        orig = sp.run
+        def fake_run(cmd, **kw):
+            out_dir = Path(kw.get("cwd") or ".")
+            f = out_dir / "产品图.png"
+            f.write_bytes(b"png-bytes")
+            class R: returncode = 0; stdout = '{"ok":true,"data":{"path":"产品图.png"}}'; stderr = ""
+            return R()
+        sp.run = fake_run
+        try:
+            got = mi.download_attachment(message_id="om_x", file_key="img_x", resource_type="image")
+        finally:
+            sp.run = orig
+        self.assertTrue(got.exists() and got.stat().st_size > 0)
+
+    def test_attachment_download_requires_keys(self):
+        with self.assertRaises(ValueError):
+            mi.download_attachment(message_id="", file_key="")
+
     def test_errors(self):
         with self.assertRaises(FileNotFoundError):
             mi.ingest(auto_target=False, enterprise="e1", file_path=Path(self.tmp.name) / "nope.pdf")

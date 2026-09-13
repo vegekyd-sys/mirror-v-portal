@@ -36,10 +36,14 @@ author: ""
 **路径一：V 自主分析（用户发文件：PDF / 产品图片 / PPT / Office / 视频）**
 
 ```bash
-# ① 本地归档 + KB 物料库（必须；否则解析完就丢）
+# ① 入站附件先落本地（用户发的是消息资源，物料表上传需要本地路径）
+#    有 message_id + file_key（img_xxx/file_xxx）时自动下载；已有本地路径则跳过
 python3 work/mio-api/dc_material_ingest.py \
-  --file "<原文件>" --type <catalog|price|spec|certificate|sample|case_study|video> \
+  --from-message "<om_xxx>" --file-key "<img_xxx|file_xxx>" --resource-type <image|file> \
+  --type <catalog|price|spec|certificate|sample|case_study|video> \
   --text-file "<解析文本>" --description "<一句话用途>"
+#    也可以直接给本地文件：--file "<本地路径>"（两者取其一）
+#    下载失败必须如实报错并终止，不得跳过入库还宣称已处理
 # ② 写资料层 / 物料表（建记录 + 传附件）
 #    坐标**自动解析**（缓存 → 发现 → 兜底创建），不需要向用户/运维要 token：
 #    dc_material_ingest 已内置；单独跑时：
