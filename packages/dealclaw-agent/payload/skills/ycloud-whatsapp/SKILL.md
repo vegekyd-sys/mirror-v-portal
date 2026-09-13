@@ -33,10 +33,10 @@ description: >-
 当用户说「初始化 WhatsApp 配置」「给我 WhatsApp 飞书 webhook」「注册飞书应用」等，或需要把
 WhatsApp 入站同步到飞书时，进入此流程：先注册 app，再把 webhookUrl 返回给用户。读取当前智能体自己的：
 
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `FEISHU_VERIFICATION_TOKEN`
-- `FEISHU_ENCRYPT_KEY`
+- `WA_FEISHU_APP_ID`
+- `WA_FEISHU_APP_SECRET`
+- `WA_FEISHU_VERIFICATION_TOKEN`
+- `WA_FEISHU_ENCRYPT_KEY`
 - `FEISHU_INVITE_APP_IDS`（可选，逗号分隔的 `cli_...`）
 - `FEISHU_INVITE_OPEN_IDS`（可选，逗号分隔的 `ou_...`）
 - `FEISHU_INVITE_MOBILES`（可选，逗号分隔）
@@ -51,10 +51,10 @@ POST $BRIDGE/api/feishu/apps
 
 ```json
 {
-  "appId": "$FEISHU_APP_ID",
-  "appSecret": "$FEISHU_APP_SECRET",
-  "verificationToken": "$FEISHU_VERIFICATION_TOKEN",
-  "encryptKey": "$FEISHU_ENCRYPT_KEY",
+  "appId": "$WA_FEISHU_APP_ID",
+  "appSecret": "$WA_FEISHU_APP_SECRET",
+  "verificationToken": "$WA_FEISHU_VERIFICATION_TOKEN",
+  "encryptKey": "$WA_FEISHU_ENCRYPT_KEY",
   "inviteAppIds": "$FEISHU_INVITE_APP_IDS",
   "inviteOpenIds": "$FEISHU_INVITE_OPEN_IDS",
   "inviteMobiles": "$FEISHU_INVITE_MOBILES",
