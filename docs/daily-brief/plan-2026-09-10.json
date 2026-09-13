@@ -28,10 +28,10 @@
         {
           "fact_id": "next_step_due",
           "kind": "time",
-          "value": "2026-09-09T13:59:24.547552+00:00"
+          "value": "2026-09-11T09:16:20.963588+00:00"
         }
       ],
-      "reason": "Overdue Co 下一步「发送正式报价」已于 2026-09-09T13:59:24.547552+00:00 到期，需立即处理",
+      "reason": "Overdue Co 下一步「发送正式报价」已于 2026-09-11T09:16:20.963588+00:00 到期，需立即处理",
       "target_refs": [
         {
           "type": "buyer",
@@ -58,7 +58,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-09T13:59:24.547552+00:00",
+      "due_at": "2026-09-11T09:16:20.963588+00:00",
       "detail": {
         "customer_id": "C002",
         "company": "Overdue Co",
@@ -132,7 +132,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-10T13:59:24.548270+00:00",
+      "due_at": "2026-09-12T09:16:20.964324+00:00",
       "detail": {
         "customer_id": "C001",
         "company": "Reply Co",
@@ -206,7 +206,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-10T13:59:24.548342+00:00",
+      "due_at": "2026-09-12T09:16:20.964425+00:00",
       "detail": {
         "customer_id": "C003",
         "company": "Quote Co",
@@ -226,6 +226,52 @@
         "expected_count": 1
       },
       "action_key": "f15875bb00c97492",
+      "policy_version": null
+    },
+    {
+      "item_key": "a9fabc4fbd946072",
+      "kind": "action",
+      "dedupe_key": "exhibition:stage_profiling:none:stage:none:profiling:1",
+      "source": "exhibition",
+      "scope": "none",
+      "category": "stage_profiling",
+      "priority": "deadline",
+      "title": "锁定第一推荐产品（画像）",
+      "reason_facts": [
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "profiling"
+        }
+      ],
+      "reason": "当前阶段「画像」，阶段目标：锁定第一推荐产品（画像）",
+      "target_refs": [
+        {
+          "type": "exhibition",
+          "id": "none"
+        }
+      ],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "due_at": "2026-09-12T09:16:20.966790+00:00",
+      "detail": {
+        "stage": "profiling",
+        "stage_goal": true
+      },
+      "completion_rule": {
+        "type": "signal_resolved",
+        "params": {
+          "signal_id": "stage:none:profiling"
+        },
+        "expected_count": 1
+      },
+      "action_key": "10e01c8b2c62f1b5",
       "policy_version": null
     },
     {
@@ -525,7 +571,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-09T13:59:24.547211+00:00",
+      "due_at": "2026-09-11T09:16:20.963155+00:00",
       "detail": {
         "overdue_count": 65,
         "buyer_emails": [
@@ -842,9 +888,109 @@
       "completion_rule": null,
       "action_key": null,
       "policy_version": null
+    },
+    {
+      "item_key": "38f9a511c4595b2d",
+      "kind": "result",
+      "dedupe_key": "exhibition:metrics:none:metrics:1",
+      "source": "exhibition",
+      "scope": "none",
+      "category": "metrics",
+      "priority": "match",
+      "title": "展会阶段：画像",
+      "reason_facts": [
+        {
+          "fact_id": "stage",
+          "kind": "text",
+          "value": "profiling"
+        }
+      ],
+      "reason": "展会阶段：画像",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "profiling"
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "c544ad2c0001f58e",
+      "kind": "risk",
+      "dedupe_key": "exhibition:stage_gap:none:画像未完成:1",
+      "source": "exhibition",
+      "scope": "none",
+      "category": "stage_gap",
+      "priority": "match",
+      "title": "画像未完成",
+      "reason_facts": [
+        {
+          "fact_id": "understanding_done",
+          "kind": "text",
+          "value": "false"
+        }
+      ],
+      "reason": "第一推荐产品尚未锁定，方案依据不足",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {},
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
+    },
+    {
+      "item_key": "4a845b2c28b4b66a",
+      "kind": "insight",
+      "dedupe_key": "exhibition:insight:none:insight:1",
+      "source": "exhibition",
+      "scope": "none",
+      "category": "insight",
+      "priority": "match",
+      "title": "本届展会「none」当前阶段：画像",
+      "reason_facts": [
+        {
+          "fact_id": "insight",
+          "kind": "text",
+          "value": "本届展会「none」当前阶段：画像"
+        }
+      ],
+      "reason": "本届展会「none」当前阶段：画像",
+      "target_refs": [],
+      "evidence_refs": [
+        {
+          "type": "snapshot",
+          "source": "exhibition_meta",
+          "id": "none",
+          "missing": null
+        }
+      ],
+      "due_at": null,
+      "detail": {
+        "stage": "profiling"
+      },
+      "completion_rule": null,
+      "action_key": null,
+      "policy_version": null
     }
   ],
-  "created_at": "2026-09-10T13:59:24.548728+00:00",
+  "created_at": "2026-09-12T09:16:20.967341+00:00",
   "revision": 1,
   "layering": {
     "batch_layered": true,
@@ -855,6 +1001,7 @@
     ],
     "remaining_count": 65
   },
+  "cross_provider_dropped": [],
   "top_n": 3,
   "top_n_action_keys": [
     "c47f5b2697be01a9",

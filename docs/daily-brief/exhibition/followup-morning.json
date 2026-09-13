@@ -31,7 +31,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-10T16:19:50.007215+00:00",
+      "due_at": "2026-09-12T09:16:21.059618+00:00",
       "detail": {
         "stage": "followup",
         "stage_goal": true
@@ -88,7 +88,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-10T16:19:50.007271+00:00",
+      "due_at": "2026-09-12T09:16:21.059676+00:00",
       "detail": {
         "customer_id": "C2",
         "company": "Hotel Group BR",
@@ -149,7 +149,7 @@
           "missing": null
         }
       ],
-      "due_at": "2026-09-10T16:19:50.007288+00:00",
+      "due_at": "2026-09-12T09:16:21.059695+00:00",
       "detail": {
         "customer_id": "C3",
         "company": "Retail SA",
@@ -419,7 +419,7 @@
       "policy_version": null
     }
   ],
-  "created_at": "2026-09-10T16:19:50.007477+00:00",
+  "created_at": "2026-09-12T09:16:21.059888+00:00",
   "revision": 1,
   "layering": {
     "batch_layered": false,
