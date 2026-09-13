@@ -198,7 +198,7 @@ node scripts/resend/domain-setup.mjs dns-detect --domain mail.dealclaw.io
 
 ## 飞书通知绑定 API 参考
 
-Resend 邮件事件通过 `webhook.dealclaw.io` 中间层转发到飞书群。**永远不要直接配 Resend webhook 到飞书 bot URL**。
+Resend 邮件事件通过 `dealclaw.datathink.com/webhook` 中间层转发到飞书群。**永远不要直接配 Resend webhook 到飞书 bot URL**。
 
 ### 概念：agent_email
 

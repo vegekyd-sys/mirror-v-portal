@@ -3,7 +3,7 @@
 dc_webhook_handler.py — 本地邮件事实链业务处理（P0-E3C）
 
 职责：把远端 webhook 事件落地成 outbound 状态更新 / sendlog / 七信号 /
-push 候选。事件本身由服务端 FastAPI（webhook.dealclaw.io 的 /inbound）收 + 验签 +
+push 候选。事件本身由服务端 FastAPI（`dealclaw.datathink.com/webhook` 的 /inbound）收 + 验签 +
 暂存，经 dc_email_ingest canonical claim 去重后，进到本模块：
 
   handle_status_event(event_type, data)  → 投递状态（delivered/bounced/complained/failed）

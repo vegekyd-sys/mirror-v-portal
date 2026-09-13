@@ -15,10 +15,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -140,6 +143,57 @@ class RunChecksTest(unittest.TestCase):
     def test_json_serializable(self):
         d = "ok.example.com"
         json.dumps(ddh.run_checks([d], runner=runner_for(good_answers(d))), ensure_ascii=False)
+
+
+class TrackEndpointTest(unittest.TestCase):
+    """像素端点体检：死链由系统发现，不靠人眼。"""
+
+    def test_skipped_without_url(self):
+        self.assertFalse(ddh.check_track_endpoint(None)["checked"])
+
+    def test_missing_route_on_404(self):
+        err = urllib.error.HTTPError("https://x/px/p", 404, "Not Found", None, None)
+        with mock.patch("dc_domain_health.urllib.request.urlopen", side_effect=err):
+            self.assertEqual(ddh.check_track_endpoint("https://x")["status"], "missing_route")
+
+    def test_ok_requires_image_content_type(self):
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "image/gif"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch("dc_domain_health.urllib.request.urlopen", return_value=Resp()):
+            self.assertEqual(ddh.check_track_endpoint("https://x")["status"], "ok")
+
+    def test_non_image_is_error(self):
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch("dc_domain_health.urllib.request.urlopen", return_value=Resp()):
+            self.assertEqual(ddh.check_track_endpoint("https://x")["status"], "error")
+
+    def test_webhook_url_defaults_to_env(self):
+        """不写死域名：默认读 DC_WEBHOOK_URL。"""
+        with mock.patch.dict(os.environ, {"DC_WEBHOOK_URL": "https://env.example/webhook"}):
+            self.assertEqual(ddh.build_parser().parse_args([]).webhook_url,
+                             "https://env.example/webhook")
+
+    def test_no_hardcoded_stale_domain_in_module(self):
+        """防回归：模块里不得再出现已下线域名。"""
+        src = Path(ddh.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("webhook.dealclaw.io", src)
 
 
 if __name__ == "__main__":

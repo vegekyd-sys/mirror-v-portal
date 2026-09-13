@@ -7,7 +7,7 @@
     python3 tests/smoke_test.py http://127.0.0.1:8080 whsec_dGVzdA==
 
 base_url 要带上路由前缀（ROUTE_PREFIX）。k8s 部署是 /webhook：
-    python3 tests/smoke_test.py https://webhook.dealclaw.io/webhook whsec_xxx
+    python3 tests/smoke_test.py https://dealclaw.datathink.com/webhook whsec_xxx
 
 只用标准库，方便直接丢到服务器上跑。
 """

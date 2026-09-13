@@ -19,7 +19,8 @@
 用法：
     python3 dc_domain_health.py --domains send.dealclaw.io,mail.dealclaw.io
     python3 dc_domain_health.py --domains ... --data-dir "$DC_DATA_DIR" --json
-    python3 dc_domain_health.py --domains ... --webhook-url https://webhook.dealclaw.io
+    python3 dc_domain_health.py --domains ... --webhook-url "$DC_WEBHOOK_URL"
+    （--webhook-url 默认读 DC_WEBHOOK_URL；**不写死域名**——写死历史地址就是被过期文档误导）
 
 退出码：0 = 全部 ok / 只有 warning；1 = 有域「不能收信」；2 = 入参错误
 """
@@ -27,8 +28,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -177,6 +180,29 @@ def last_inbound_at(data_dir: str | Path, enterprise: str = "") -> str:
     return last
 
 
+def check_track_endpoint(webhook_url: str | None) -> dict:
+    """打开追踪像素端点体检：GET `<webhook>/px/<probe>`。
+
+    404 = 服务端没有该路由 → 像素永远加载失败、而且不报错（邮件里带一张死图）。
+    只有 200 且 content-type 是图片才算真通。
+    """
+    if not webhook_url:
+        return {"checked": False, "status": "skipped", "note": "未提供 webhook 地址"}
+    target = webhook_url.rstrip("/") + "/px/dc-health-probe"
+    try:
+        with urllib.request.urlopen(target, timeout=10) as resp:  # noqa: S310
+            ctype = resp.headers.get("Content-Type", "")
+            ok = resp.status < 400 and "image" in ctype
+            return {"checked": True, "url": target, "http_status": resp.status,
+                    "content_type": ctype, "status": "ok" if ok else "error"}
+    except urllib.error.HTTPError as e:
+        return {"checked": True, "url": target, "http_status": e.code,
+                "status": "missing_route" if e.code == 404 else "error"}
+    except Exception as e:  # noqa: BLE001
+        return {"checked": True, "url": target, "status": "error",
+                "error": f"{type(e).__name__}: {e}"}
+
+
 def check_webhook(url: str | None) -> dict:
     """入站端点体检：一次 GET /health（只读，不带凭据）。"""
     if not url:
@@ -201,6 +227,7 @@ def run_checks(domains, *, data_dir=None, webhook_url=None, runner=None) -> dict
         "sends_mail": False,
         "domains": domain_reports,
         "webhook": check_webhook(webhook_url),
+        "track_endpoint": check_track_endpoint(webhook_url),
         "summary": {
             "domains": len(domain_reports),
             "broken": sum(1 for d in domain_reports if d["verdict"] == STATUS_BROKEN),
@@ -230,6 +257,13 @@ def render_text(report: dict) -> str:
         lines.append(f"入站端点 /health：{w.get('status')}（{w.get('url')}）")
     else:
         lines.append(f"入站端点：未检查（{w.get('note', '')}）")
+    t = report.get("track_endpoint") or {}
+    if t.get("checked"):
+        extra = (" ← 服务端没有 /px 路由，像素永远加载失败"
+                 if t.get("status") == "missing_route" else "")
+        lines.append(f"追踪像素端点：{t.get('status')}（http={t.get('http_status')}）{extra}")
+    else:
+        lines.append(f"追踪像素端点：未检查（{t.get('note', '')}）")
     if "accounts" in report:
         lines.append("账户收信通道：")
         for a in report["accounts"]:
@@ -248,7 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--domains", default=",".join(DEFAULT_DOMAINS),
                     help="逗号分隔的域名列表")
     ap.add_argument("--data-dir", default=None, help="DC_DATA_DIR（读账户/收信通道）")
-    ap.add_argument("--webhook-url", default=None, help="入站端点（只 GET /health）")
+    ap.add_argument("--webhook-url", default=os.environ.get("DC_WEBHOOK_URL") or None,
+                    help="入站端点（只 GET /health 与 /px 探活）；默认读 DC_WEBHOOK_URL")
     ap.add_argument("--json", action="store_true")
     return ap
 

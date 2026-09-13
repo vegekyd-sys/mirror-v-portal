@@ -21,9 +21,17 @@ if (!toRaw || !subject || !html) {
 
 const to = toRaw.split(',').map(s => s.trim());
 
-// Embed tracking pixel
-const pixelUrl = `http://webhook.dealclaw.io/px/${trackId}`;
-const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:none" />`;
+// 打开追踪像素：**默认不嵌**。
+// 历史版本硬编码 http://webhook.dealclaw.io/px/<id>：该域名已下线（Cloudflare 1033），
+// 而且现役 webhook 服务上并没有 /px 路由，等于每封信都带一张加载失败的死图，还不报错。
+// 需要追踪时用 DC_TRACK_BASE_URL 显式开启（形如 dealclaw.datathink.com/webhook），
+// 前提是服务端先提供 /px/:id 路由；宁可不带像素，也不发死链。
+const trackBase = (process.env.DC_TRACK_BASE_URL || '')
+  .trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+const pixelUrl = trackBase ? `https://${trackBase}/px/${trackId}` : '';
+const trackedHtml = pixelUrl
+  ? html + `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:none" />`
+  : html;
 
 if (dryRun) {
   console.log(`DRY RUN: to=${to.join(',')} subject="${subject}" track=${trackId}`);
