@@ -64,7 +64,8 @@ def run_legacy(raw_pages, *, deliver_limit: int = 10) -> dict:
 def run_v2(raw_pages, *, deliver_limit: int = 10,
            target_exhibition_ids: Iterable[str] = (),
            semantic_judge: Optional[Callable[[list[dict]], Optional[list[bool]]]] = None,
-           need_contact: bool = False) -> dict:
+           need_contact: bool = False,
+           rank: str = "score") -> dict:
     """v2 流水线（纯函数）。
 
     semantic_judge: 接收模型摘要行，返回等长布尔列表（True=保留）；返回 None 表示不判、全保留。
@@ -107,11 +108,18 @@ def run_v2(raw_pages, *, deliver_limit: int = 10,
                     kept.append(n)
             norms = kept
 
-    ranked = rank_for_delivery(norms)
+    # 排序口径：score=按五维分（实测会把平台/服务商顶上来，不推荐）；
+    #           api=保留接口综合序（确定性只剔重/剔展会不符，不改次序）
+    if rank == "api":
+        ranked = sorted(norms, key=lambda n: (n.get("page") if n.get("page") is not None else 10 ** 6,
+                                              n.get("position") if n.get("position") is not None else 10 ** 6))
+    else:
+        ranked = rank_for_delivery(norms)
     delivered = ranked[:deliver_limit]
 
     return {
         "mode": "v2",
+        "rank": rank,
         "considered": len(norms) + len(dropped),
         "kept": len(norms),
         "delivered": delivered,
