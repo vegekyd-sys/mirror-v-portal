@@ -20,6 +20,7 @@ import html as htmllib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -54,6 +55,18 @@ def fetch_html(url: str, timeout: int = 20) -> str:
         return raw.decode(charset, "ignore")
     except LookupError:
         return raw.decode("utf-8", "ignore")
+
+
+def fetch_rendered(url: str, wait_ms: int = 2500, timeout: int = 120) -> str:
+    """用 puppeteer 渲染 JS 站点后取 HTML（真实官网多为前端渲染，urllib 拿不到图片）。"""
+    script = HERE / "site_render.mjs"
+    if not script.exists():
+        raise RuntimeError("缺少 site_render.mjs")
+    r = subprocess.run(["node", str(script), url, str(wait_ms)],
+                       capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(f"渲染失败: {(r.stderr or '')[:200]}")
+    return r.stdout
 
 
 def text_of(html: str) -> str:
@@ -150,13 +163,20 @@ def download(url: str, out_dir: Path, *, max_mb: float = 20.0, timeout: int = 30
 
 def crawl(*, url: str, enterprise: str, company_name: str = "", out_dir: Path | None = None,
           max_files: int = 30, max_mb: float = 20.0, dry_run: bool = False,
-          auto_target: bool = True) -> dict:
-    """官网 → 抽取 → 下载 → 双写。返回完整报告（含逐条状态与失败原因）。"""
-    html = fetch_html(url)
+          auto_target: bool = True, render: bool = False, wait_ms: int = 2500,
+          html_file: str = "") -> dict:
+    """官网 → 抽取 → 下载 → 双写。返回完整报告（含逐条状态与失败原因）。
+
+    render=True 走 puppeteer 渲染（JS 站点必备）；html_file 可直接吃预渲染 HTML。
+    """
+    if html_file:
+        html = Path(html_file).read_text(encoding="utf-8", errors="ignore")
+    else:
+        html = fetch_rendered(url, wait_ms=wait_ms) if render else fetch_html(url)
     page_text = text_of(html)
     assets = extract_assets(html, url)
     items = plan(assets, page_text, max_files=max_files)
-    report = {"url": url, "enterprise": enterprise,
+    report = {"url": url, "enterprise": enterprise, "rendered": bool(render or html_file),
               "found": {k: len(v) for k, v in assets.items()},
               "planned": len(items), "downloaded": [], "failed": [],
               "dry_run": dry_run, "pipeline": {}}
@@ -191,6 +211,9 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--max-files", type=int, default=30)
     ap.add_argument("--max-mb", type=float, default=20.0)
     ap.add_argument("--no-auto-target", action="store_true")
+    ap.add_argument("--render", action="store_true", help="用 puppeteer 渲染 JS 站点")
+    ap.add_argument("--wait-ms", type=int, default=2500)
+    ap.add_argument("--html-file", default="", help="直接吃预渲染 HTML（配合浏览器抓取）")
     ap.add_argument("--dry-run", action="store_true", help="只抽取不下载不写")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
@@ -202,7 +225,8 @@ def main(argv=None) -> int:  # pragma: no cover
         r = crawl(url=args.url, enterprise=args.enterprise, company_name=args.company_name,
                   out_dir=Path(args.out_dir) if args.out_dir else None,
                   max_files=args.max_files, max_mb=args.max_mb, dry_run=args.dry_run,
-                  auto_target=not args.no_auto_target)
+                  auto_target=not args.no_auto_target, render=args.render,
+                  wait_ms=args.wait_ms, html_file=args.html_file)
     except Exception as e:
         print(f"抓取失败: {e}", file=sys.stderr)
         return 1
