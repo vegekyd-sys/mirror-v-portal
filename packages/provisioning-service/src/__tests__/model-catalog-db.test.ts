@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { migrate } from '../db/migrate.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
+import { CatalogRepository } from '../services/model-catalog.js';
 import { upsertRuntimeConfig } from '../services/runtime-config.js';
 
 const { Pool } = pg;
@@ -71,5 +72,12 @@ describe.skipIf(!process.env.DATABASE_URL)('model catalog PostgreSQL integration
     expect(models.rows.find((row) => row.model_id === 'chat-model').override_params.reasoning).toBe(true);
     expect(models.rows.find((row) => row.model_id === 'vision-model').effective_params.inputModalities).toContain('image');
     expect(Number(runs.rows[0].count)).toBe(1);
+
+    const status = await new CatalogRepository(pool).getStatus();
+    expect(status.totals).toMatchObject({ providers: 1, models: 2 });
+    expect(status.modelStatuses.fallback).toBe(2);
+    expect(status.recentImportRuns).toHaveLength(1);
+    expect(JSON.stringify(status)).not.toContain('encrypted_api_key');
+    expect(JSON.stringify(status)).not.toContain('test-secret-never-return');
   });
 });

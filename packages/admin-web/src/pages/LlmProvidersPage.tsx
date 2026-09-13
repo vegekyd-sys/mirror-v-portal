@@ -9,6 +9,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { IconAlert, IconRefresh } from '../components/icons';
 import LlmPushProgressModal from '../components/LlmPushProgressModal';
+import ModelCatalogPanel from '../components/ModelCatalogPanel';
+import PricingShadowSummary from '../components/PricingShadowSummary';
 
 /** PUT/DELETE 全局供应商库后，后端异步任务入队返回的响应体。 */
 interface PushEnqueueResponse {
@@ -759,6 +761,9 @@ export default function LlmProvidersPage() {
           </table>
         )}
       </div>
+
+      <ModelCatalogPanel onPushTask={setPushTaskId} />
+      <PricingShadowSummary />
 
       <div className="section-title" style={{ fontSize: 14 }}>
         操作日志

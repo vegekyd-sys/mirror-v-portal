@@ -11,6 +11,7 @@ const auth = 'Bearer test-token';
 const tenantId = `pricing-db-${randomUUID()}`;
 const accountId = `acct_${tenantId}`;
 const requestId = `pricing-shadow-${randomUUID()}`;
+const originalPricingShadow = process.env.LLM_PRICING_SHADOW;
 
 beforeAll(async () => {
   process.env.PAYMENT_SERVICE_TOKEN = 'test-token';
@@ -32,10 +33,15 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await query('DELETE FROM llm_usage_events WHERE tenant_id=$1', [tenantId]);
-  await query('DELETE FROM credits_transactions WHERE account_id=$1', [accountId]);
-  await query('DELETE FROM credits_accounts WHERE id=$1', [accountId]);
-  await closePool();
+  try {
+    await query('DELETE FROM llm_usage_events WHERE tenant_id=$1', [tenantId]);
+    await query('DELETE FROM credits_transactions WHERE account_id=$1', [accountId]);
+    await query('DELETE FROM credits_accounts WHERE id=$1', [accountId]);
+    await closePool();
+  } finally {
+    if (originalPricingShadow === undefined) delete process.env.LLM_PRICING_SHADOW;
+    else process.env.LLM_PRICING_SHADOW = originalPricingShadow;
+  }
 });
 
 describe.skipIf(!process.env.DATABASE_URL)('LLM pricing PostgreSQL integration', () => {
@@ -115,5 +121,28 @@ describe.skipIf(!process.env.DATABASE_URL)('LLM pricing PostgreSQL integration',
     );
     expect(afterAccount.rows[0]).toEqual(beforeAccount.rows[0]);
     expect(afterTransactions.rows[0].count).toBe(beforeTransactions.rows[0].count);
+
+    const summary = await request(app)
+      .get('/v1/admin/llm-pricing/summary?limit=5')
+      .set('Authorization', auth);
+    expect(summary.status).toBe(200);
+    expect(summary.body.planCount).toBeGreaterThan(0);
+    expect(summary.body.shadowStatuses.resolved + summary.body.shadowStatuses.free).toBeGreaterThan(0);
+    expect(summary.body.legacyComparisonCount).toBeGreaterThan(0);
+    expect(summary.body.deltaCounts.zero + summary.body.deltaCounts.nonzero).toBeGreaterThan(0);
+    expect(summary.body.deltaSamples.length).toBeLessThanOrEqual(5);
+  });
+
+  it('disables pricing observation APIs with the existing shadow flag', async () => {
+    process.env.LLM_PRICING_SHADOW = 'false';
+    try {
+      const response = await request(app)
+        .get('/v1/admin/llm-pricing/summary')
+        .set('Authorization', auth);
+      expect(response.status).toBe(503);
+      expect(response.body.code).toBe('DISABLED');
+    } finally {
+      process.env.LLM_PRICING_SHADOW = 'true';
+    }
   });
 });

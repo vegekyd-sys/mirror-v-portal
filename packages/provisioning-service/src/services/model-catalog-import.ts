@@ -41,6 +41,14 @@ function fingerprint(config: LlmProvidersConfig): string {
   return createHmac('sha256', secret).update(canonical(config)).digest('hex');
 }
 
+function safeItemError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/api.?key|encrypted|password|secret|token|postgres|sql|constraint/i.test(message)) {
+    return 'Item import failed';
+  }
+  return message.slice(0, 200);
+}
+
 /** Imports the current legacy runtime authority into shadow tables only. */
 export async function importLegacyCatalog(
   pool: pg.Pool,
@@ -84,7 +92,7 @@ export async function importLegacyCatalog(
       items.push({ provider: provider.name, status: 'imported' });
     } catch (error) {
       errorCount += 1;
-      items.push({ provider: provider.name, status: 'error', reason: error instanceof Error ? error.message : String(error) });
+      items.push({ provider: provider.name, status: 'error', reason: safeItemError(error) });
       continue;
     }
 
@@ -128,7 +136,7 @@ export async function importLegacyCatalog(
         items.push({ provider: provider.name, model: model.id, status: 'imported' });
       } catch (error) {
         errorCount += 1;
-        items.push({ provider: provider.name, model: model.id, status: 'error', reason: error instanceof Error ? error.message : String(error) });
+        items.push({ provider: provider.name, model: model.id, status: 'error', reason: safeItemError(error) });
       }
     }
   }

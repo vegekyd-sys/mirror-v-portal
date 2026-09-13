@@ -13,6 +13,10 @@ function disabled(res: Response): void {
   res.status(503).json({ code: 'DISABLED', message: 'Model catalog feature is disabled' });
 }
 
+function internalError(res: Response, code = 'INTERNAL', status = 500): void {
+  res.status(status).json({ code, message: 'Model catalog request failed' });
+}
+
 function redactSnapshot(snapshot: Awaited<ReturnType<CatalogService['buildCompatibilitySnapshot']>>) {
   return {
     ...snapshot,
@@ -41,7 +45,20 @@ export function createModelCatalogRoutes(
       const { actor } = actorFromRequest(req);
       res.json(await importLegacyCatalog(pool, { dryRun: req.body.dryRun, actor }));
     } catch (error) {
-      res.status(422).json({ code: 'IMPORT_FAILED', message: error instanceof Error ? error.message : String(error) });
+      console.error('model catalog import failed:', error);
+      internalError(res, 'IMPORT_FAILED', 422);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/status', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    const requestedLimit = Number(req.query.limit ?? 10);
+    const limit = Number.isFinite(requestedLimit) ? requestedLimit : 10;
+    try {
+      res.json(await repository.getStatus(limit));
+    } catch (error) {
+      console.error('model catalog status failed:', error);
+      internalError(res);
     }
   });
 
@@ -59,13 +76,15 @@ export function createModelCatalogRoutes(
     if (config.modelCatalogRead !== true) return disabled(res);
     try {
       const legacy = await getGlobalLlmProviders(pool);
-      const snapshot = await service.buildCompatibilitySnapshot(legacy);
-      const diff = await service.diffCompatibilitySnapshot(legacy ?? {
+      const previous = legacy ?? {
         providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [],
-      });
-      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: snapshotFingerprint(snapshot), diff });
+      };
+      const snapshot = await service.buildCompatibilitySnapshot(legacy);
+      const diff = service.diffCompatibilitySnapshot(previous, snapshot);
+      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: diff.fingerprint, diff });
     } catch (error) {
-      res.status(422).json({ code: 'SNAPSHOT_INVALID', message: error instanceof Error ? error.message : String(error) });
+      console.error('model catalog snapshot preview failed:', error);
+      internalError(res, 'SNAPSHOT_INVALID', 422);
     }
   });
 
@@ -107,7 +126,8 @@ export function createModelCatalogRoutes(
       const task=await enqueueLlmPush(pool,{kind:'global_push',scope:null,trigger:'retry',prevLibrary:previous,nextLibrary:restored,actor,actorType:actorType==='external'?'service':actorType});
       res.json({ok:true,...task,streamUrl:`/v1/admin/llm-push-tasks/${task.taskId}/stream`});
     } catch (error) {
-      res.status(500).json({code:'INTERNAL',message:error instanceof Error?error.message:String(error)});
+      console.error('model catalog snapshot restore failed:', error);
+      internalError(res);
     }
   });
 
@@ -163,8 +183,9 @@ export function createModelCatalogRoutes(
       });
       res.json({ ok: true, ...task, streamUrl: `/v1/admin/llm-push-tasks/${task.taskId}/stream` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(message.includes('too long') ? 422 : 500).json({ code: message.includes('too long') ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', message });
+      const tooLarge = error instanceof Error && error.message.includes('too long');
+      console.error('model catalog snapshot publish failed:', error);
+      internalError(res, tooLarge ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', tooLarge ? 422 : 500);
     }
   });
 
