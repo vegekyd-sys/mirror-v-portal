@@ -8,7 +8,7 @@
 
 约束（硬）：
   - 只写 data/runtime/diagnostics/；不进卡片、不进 metrics、不向用户输出；
-  - 候选只存**稳定假名**（email_metrics.pseudonym），不存公司名 / 域名 / 联系方式；
+  - 候选只存**本地 HMAC 稳定假名**，不存公司名 / 域名 / 联系方式；
   - 采不到的数值一律记 None，**不得估算或伪造**（缺 token 就记 null，宁可缺不编）；
   - 任何异常静默，绝不影响交付主流程。
 
@@ -25,18 +25,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# 复用同仓库的稳定假名（HMAC-SHA256，盐来自 DC_DIAGNOSTIC_SALT）
 _WS_ROOT = Path(__file__).resolve().parents[3]
-if str(_WS_ROOT / "work" / "mio-api") not in sys.path:
-    sys.path.insert(0, str(_WS_ROOT / "work" / "mio-api"))
-try:  # pragma: no cover - 取决于部署布局
-    from email_metrics.pseudonym import pseudonym as _pseudonym
-except Exception:  # pragma: no cover
-    _pseudonym = None  # 由 _candidate_id 兜底
 
 DIAG_DIR = _WS_ROOT / "data" / "runtime" / "diagnostics"
 JOBS_LOG = DIAG_DIR / "find-buyers-jobs.jsonl"
 CANDIDATES_LOG = DIAG_DIR / "find-buyers-candidates.jsonl"
+
+# 诊断日志轮转 / 保留期限（第 2 条）：单文件上限 + 保留份数
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_KEEP = 5
 
 # 阶段口径（顺序即流水线顺序，不得随意新增/改名）
 STAGES = ("search", "normalize", "qualify", "contact", "pool", "card")
@@ -79,16 +76,35 @@ def _int_or_none(value) -> Optional[int]:
 
 
 def candidate_id(company: str) -> str:
-    """候选假名（稳定、可跨次对齐、不可反查公司名）。"""
-    if _pseudonym is not None:
-        return _pseudonym("buyer", str(company or ""))
+    """候选假名：本地 HMAC-SHA256（盐 DC_DIAGNOSTIC_SALT），稳定、不可反查。"""
     import hashlib
     import hmac
     import os
 
+    value = str(company or "").strip()
+    if not value:
+        return ""
     salt = (os.environ.get("DC_DIAGNOSTIC_SALT") or "dealclaw-diag-v1").encode("utf-8")
-    digest = hmac.new(salt, f"buyer:{company}".encode("utf-8"), hashlib.sha256).hexdigest()
+    digest = hmac.new(salt, f"buyer:{value}".encode("utf-8"), hashlib.sha256).hexdigest()
     return f"buyer_{digest[:12]}"
+
+
+def rotate_if_needed(path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP) -> None:
+    """日志轮转/保留期限：超限时整体改名 .1，旧文件依次后移，只留 keep 份。失败静默。"""
+    try:
+        p = Path(path)
+        if not p.exists() or p.stat().st_size < max_bytes:
+            return
+        oldest = Path(f"{p}.{keep}")
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(keep - 1, 0, -1):
+            src = Path(f"{p}.{i}")
+            if src.exists():
+                src.rename(Path(f"{p}.{i + 1}"))
+        p.rename(Path(f"{p}.1"))
+    except Exception:
+        pass
 
 
 class JobDiagnostics:
@@ -239,9 +255,11 @@ class JobDiagnostics:
             if self.dry_run:
                 return summary
             self._jobs_log.parent.mkdir(parents=True, exist_ok=True)
+            rotate_if_needed(self._jobs_log)
             with self._jobs_log.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
             if self.candidates:
+                rotate_if_needed(self._cand_log)
                 with self._cand_log.open("a", encoding="utf-8") as fh:
                     for c in self.candidates:
                         fh.write(json.dumps({"job_id": self.job_id, **c}, ensure_ascii=False) + "\n")

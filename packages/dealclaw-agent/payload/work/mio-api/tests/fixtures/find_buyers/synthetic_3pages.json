@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "name": "synthetic-3pages",
+    "kind": "synthetic",
+    "target_exhibition_ids": ["152996309411"],
+    "notes": "结构 fixture（进 Git）：覆盖跨页重复/同名不同域名/缺字段/展会ID不匹配/低分/多国别。字段与 CLI searchAIV2 返回对齐。"
+  },
+  "pages": [
+    {
+      "page": 1,
+      "records": [
+        {"companyName": "TIMKEN DE MEXICO", "companyWebsite": "https://www.timken.com", "country": "MX", "industry": "Bearings", "companyProfile": "Distribuidor de rodamientos y transmisión de potencia para industria.", "purchaseTags": ["bearings", "power transmission"], "companyAttributes": "分销商", "staffSizeLevel": "5000+", "preExhibitionIds": ["152996309411"], "AI匹配分": 92},
+        {"companyName": "PACIFIC TRANSMISSION", "companyWebsite": "pacifictransmission.com", "country": "MY", "industry": "Power Transmission", "companyProfile": "Importer of belts, pulleys and couplings for OEM plants.", "purchaseTags": ["belts", "pulleys"], "companyAttributes": "进口商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 88},
+        {"companyName": "METAL CRAFT TRADING", "companyWebsite": "metalcraft.com.my", "country": "MY", "industry": "Metal Trading", "companyProfile": "General metal trading and fabrication supplies.", "companyAttributes": "贸易商", "staffSizeLevel": "11-50", "preExhibitionIds": ["152996309411"], "AI匹配分": 81},
+        {"companyName": "BIRLA INDUSTRIES LLC", "companyWebsite": "birla-ind.com", "country": "AE", "industry": "Industrial Supply", "companyProfile": "Industrial spare parts trading across GCC.", "purchaseTags": ["spare parts"], "companyAttributes": "贸易商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 64},
+        {"companyName": "KENNAMETAL SUPPLY", "companyWebsite": "kennametal-dist.com", "country": "DE", "industry": "Cutting Tools", "companyProfile": "Distribution of cutting tools and machine accessories.", "purchaseTags": ["cutting tools"], "companyAttributes": "分销商", "staffSizeLevel": "201-500", "preExhibitionIds": ["152996309411"], "AI匹配分": 79},
+        {"companyName": "HANOI BEARING DIST", "companyWebsite": "hanoibearing.vn", "country": "VN", "industry": "Bearings", "companyProfile": "Bearing importer for local factories.", "purchaseTags": ["bearings"], "companyAttributes": "进口商", "staffSizeLevel": "11-50", "preExhibitionIds": ["140000000001"], "AI匹配分": 86}
+      ]
+    },
+    {
+      "page": 2,
+      "records": [
+        {"companyName": "PACIFIC TRANSMISSION", "companyWebsite": "http://www.pacifictransmission.com/en", "country": "MY", "industry": "Power Transmission", "companyProfile": "Importer of belts, pulleys and couplings for OEM plants. Regional distributor.", "purchaseTags": ["belts", "couplings"], "companyAttributes": "进口商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 90},
+        {"companyName": "ALPHA MACHINERY SUPPLIES", "companyWebsite": "alphamach.com", "country": "US", "industry": "Machinery", "companyProfile": "MRO supplier for manufacturing plants.", "purchaseTags": ["MRO", "transmission"], "companyAttributes": "分销商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 77},
+        {"companyName": "KENNAMETAL SUPPLY", "companyWebsite": "kennametal-trading.de", "country": "DE", "industry": "Cutting Tools", "companyProfile": "Trading arm for cutting tool consumables.", "purchaseTags": ["cutting tools", "inserts"], "companyAttributes": "贸易商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 72},
+        {"companyName": "EURO POWER TRANSMISSION", "companyWebsite": "europt.eu", "industry": "Power Transmission", "companyProfile": "European distributor of drive components.", "purchaseTags": ["drive components"], "companyAttributes": "分销商", "staffSizeLevel": "201-500", "preExhibitionIds": ["152996309411"], "AI匹配分": 83},
+        {"companyName": "SINO BEARING TRADING", "companyWebsite": "sinobearing.cn", "country": "CN", "industry": "Bearings", "companyProfile": "Domestic bearing trading.", "purchaseTags": ["bearings"], "companyAttributes": "贸易商", "staffSizeLevel": "11-50", "preExhibitionIds": ["152996309411"], "AI匹配分": 41},
+        {"companyName": "RAVI ENTERPRISES", "companyWebsite": "ravi-ent.in", "country": "IN", "industry": "Industrial Supply", "companyProfile": "Importer of transmission components for Indian OEMs.", "purchaseTags": ["transmission components"], "companyAttributes": "进口商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 76}
+      ]
+    },
+    {
+      "page": 3,
+      "records": [
+        {"companyName": "GLOBAL BELT SUPPLY", "companyWebsite": "globalbelt.com", "country": "BR", "industry": "Belts", "companyProfile": "Distribuidora de correias industriais.", "purchaseTags": ["belts"], "companyAttributes": "分销商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 85},
+        {"companyName": "PACIFIC TRANSMISSION", "companyWebsite": "pacifictransmission.com", "country": "MY", "industry": "Power Transmission", "companyProfile": "Older duplicate record.", "purchaseTags": ["belts"], "companyAttributes": "进口商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 60},
+        {"companyName": "ANDES INDUSTRIAL", "companyWebsite": "andesindustrial.cl", "country": "CL", "industry": "Industrial Supply", "companyProfile": "Proveedor industrial multisector.", "purchaseTags": ["transmission"], "companyAttributes": "贸易商", "staffSizeLevel": "11-50", "preExhibitionIds": [], "AI匹配分": 74},
+        {"companyName": "NORTHWIND SUPPLY INC", "companyWebsite": "northwind.ca", "country": "CA", "industry": "Industrial Supply", "companyProfile": "MRO distributor for mining and food plants.", "purchaseTags": ["MRO"], "staffSizeLevel": "201-500", "preExhibitionIds": ["152996309411"], "AI匹配分": 80},
+        {"companyName": "SAHARA TRADING CO", "companyWebsite": "sahara-trading.eg", "country": "EG", "industry": "Trading", "companyProfile": "General trading and import.", "purchaseTags": ["general"], "companyAttributes": "贸易商", "staffSizeLevel": "11-50", "preExhibitionIds": ["152996309411"], "AI匹配分": 68},
+        {"companyName": "LATAM BEARING DIST", "companyWebsite": "latambearing.mx", "country": "MX", "industry": "Bearings", "companyProfile": "Distribuidor de rodamientos para maquinaria.", "purchaseTags": ["bearings"], "companyAttributes": "分销商", "staffSizeLevel": "51-200", "preExhibitionIds": ["152996309411"], "AI匹配分": 87}
+      ]
+    }
+  ]
+}
