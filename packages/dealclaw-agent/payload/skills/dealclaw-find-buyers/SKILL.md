@@ -172,6 +172,18 @@ CLI 查询返回 `response.data`（买家列表在 `response.data.page.records`�
 - 第一版按钮只做 open_url（打开线索池、查看任务详情），不做 callback。
 - 卡片不显示内部评分、个人联系方式、接口错误栈；线索池链接必须属于当前企业。
 - 分数诊断走 `record_scores`（见「阶段 D：入池与交付」）：只写 `diagnostics` 与诊断 JSONL，不写 metrics，卡片不展示任何分数。
+
+### 任务诊断（只读观测）
+
+用 `cards/find_buyers_diag.JobDiagnostics(job_id, tenant_id, chat_id)` 记录。全部只写诊断文件，**不进卡片、不进 metrics、不向用户输出**：
+
+1. **分阶段耗时**：`with diag.stage("<search|normalize|qualify|contact|pool|card>"):`；六个阶段口径固定，不得自行改名。
+2. **模型用量**：`diag.record_llm(stage=, calls=, input_tokens=, output_tokens=)`。**从运行时用量读取；读不到就传 None（不得估算、不得伪造）**。
+3. **候选诊断**：`diag.add_candidate(company, page=, position=, score=, qualified=, excluded_reason=, delivered=)`。`company` 只用于生成稳定假名（`buyer_xxx`），**不落公司名 / 域名 / 联系方式**。
+4. **落盘**：`diag.flush()` → `data/runtime/diagnostics/find-buyers-jobs.jsonl`（每任务一行汇总）+ `find-buyers-candidates.jsonl`（每候选一行）。
+5. **聚合基线**：`python3 cards/find_buyers_diag.py`（或 `aggregate()`）输出阶段耗时 / token / **分页分数分布**，作为 replay A/B 的基线数据。
+
+采集失败静默，不影响交付；**缺数据就留空，不允许用估算值补**。
 - 名单明细仍走 REDLINES「≤5 逐条 / >5 总结+链接」，不塞进卡片。
 - 任务状态按 TTL 清理（`cleanup_expired`），不进长期 memory。
 
