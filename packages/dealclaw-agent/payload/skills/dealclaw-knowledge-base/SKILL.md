@@ -33,7 +33,17 @@ author: ""
 
 ## 物料上传双路径
 
-**路径一：V 自主分析** — 用户发 PDF/照片/证书，V 分析后匹配资料层条目，调 `lark-cli base +record-upload-attachment` 将文件存入 bitable 对应行的附件列，状态更新为 ✅。引擎同步。
+**路径一：V 自主分析** — 用户发 PDF/照片/证书：先解析，再**必须落库**（不能只解析不入库，否则后续调不到）：
+
+```bash
+python3 work/mio-api/dc_material_ingest.py \
+  --file "<用户原文件路径>" --type <catalog|price|spec|certificate|sample|case_study|video> \
+  --text-file "<解析出的文本>" --description "<一句话用途>"
+# 资料层存在时一并传 --bitable-app-token/--table-id/--record-id，把文件加入附件列
+```
+
+工具行为：归档文件本体 → 留存解析文本 → 写 kb.json（status=ready）→ **回读验证**。
+`get_material_links()` 必须能取到该条目；**取不到即视为入库失败，如实报告，不得声称"已入库"**；缺 bitable 参数时明确报 skipped（不假装已同步文档）。
 
 **路径二：用户在文档上传** — 打开 docx 或 bitable 直接拖入文件。V 定期同步回引擎。
 
