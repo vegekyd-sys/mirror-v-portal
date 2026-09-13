@@ -7,8 +7,71 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { query } from '../db/pool.js';
+import { calculatePricingAmount, LlmPricingService, subtractPricingAmounts, type PricingRepository } from '../services/llm-pricing.js';
+import type { PricePlanV1 } from '../domain/llm-pricing.js';
 
 const router = Router();
+
+const pricingRepository: PricingRepository = {
+  async findPublishedPlans(provider: string, model: string, occurredAt: Date): Promise<PricePlanV1[]> {
+    const { rows } = await query(
+      `SELECT p.*, COALESCE(json_agg(i.* ORDER BY i.priority DESC) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+         FROM llm_model_price_plans p LEFT JOIN llm_model_price_items i ON i.plan_id=p.id
+        WHERE p.provider_key=$1 AND p.model_id=$2 AND p.status='published'
+          AND p.valid_from <= $3 AND (p.valid_to IS NULL OR p.valid_to > $3)
+        GROUP BY p.id`, [provider, model, occurredAt],
+    );
+    return rows.map((row: any) => ({
+      id: row.id, currency: row.currency, unitScale: String(row.unit_scale),
+      skus: row.items.map((item: any) => ({
+        id: item.id, usageType: item.usage_type, unitPrice: String(item.unit_price),
+        priority: item.priority, conditions: item.conditions ?? {},
+      })),
+    }));
+  },
+};
+const pricingService = new LlmPricingService(pricingRepository);
+
+async function writePricingShadow(usageEventId: string): Promise<void> {
+  const { rows } = await query('SELECT * FROM llm_usage_events WHERE id=$1', [usageEventId]);
+  const event = rows[0];
+  if (!event) return;
+  const resolution = await pricingService.resolve({
+    provider: event.provider, model: event.model, occurredAt: new Date(event.created_at),
+    usage: {
+      inputTokens: String(event.input_tokens), outputTokens: String(event.output_tokens),
+      cacheHitTokens: String(event.cache_hit_tokens), cacheMissTokens: String(event.cache_miss_tokens),
+    },
+  });
+  const { rows: legacyRows } = await query(
+    `SELECT input_cache_hit_peak,input_cache_hit_offpeak,input_cache_miss_peak,input_cache_miss_offpeak,
+            output_peak,output_offpeak,currency
+       FROM llm_token_pricing WHERE provider=$1 AND model=$2`,
+    [event.provider,event.model],
+  );
+  let legacyAmount: string | null = null;
+  const legacy = legacyRows[0];
+  if (legacy) {
+    const local = new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Shanghai',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date(event.created_at));
+    const weekday=local.find((part)=>part.type==='weekday')?.value??'Sun';
+    const hour=Number(local.find((part)=>part.type==='hour')?.value??0);
+    const peak=['Mon','Tue','Wed','Thu','Fri'].includes(weekday)&&([9,10,11,14,15,16,17].includes(hour));
+    legacyAmount=calculatePricingAmount([
+      {id:'legacy-hit',usageType:'input-cache-read',unitPrice:String(peak?legacy.input_cache_hit_peak:legacy.input_cache_hit_offpeak),priority:0,conditions:{}},
+      {id:'legacy-miss',usageType:'input-cache-write',unitPrice:String(peak?legacy.input_cache_miss_peak:legacy.input_cache_miss_offpeak),priority:0,conditions:{}},
+      {id:'legacy-output',usageType:'output',unitPrice:String(peak?legacy.output_peak:legacy.output_offpeak),priority:0,conditions:{}},
+    ],{inputTokens:String(event.input_tokens),outputTokens:String(event.output_tokens),cacheHitTokens:String(event.cache_hit_tokens),cacheMissTokens:String(event.cache_miss_tokens)},'1000000');
+  }
+  const deltaAmount=resolution.amount&&legacyAmount?subtractPricingAmounts(resolution.amount,legacyAmount):null;
+  await query(
+    `INSERT INTO llm_usage_pricing_shadows
+       (usage_event_id,resolver_version,status,price_plan_id,matched_item_ids,amount,currency,legacy_amount,delta_amount,pricing_snapshot,error_code)
+     VALUES ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (usage_event_id) DO NOTHING`,
+    [usageEventId, resolution.status, resolution.planId ?? null, resolution.matchedSkuIds,
+      resolution.amount ?? null, resolution.currency ?? null, legacyAmount, deltaAmount,
+      JSON.stringify({ contractVersion: 1, resolution }), resolution.reason ?? null],
+  );
+}
 
 const STATUSES = new Set(['ok', 'error', 'blocked', 'synthesized']);
 
@@ -73,6 +136,15 @@ router.post('/v1/billing/llm-usage', async (req, res) => {
       // Replay of an already-recorded request_id — acknowledge, no duplicate.
       res.json({ ok: true, duplicate: true });
       return;
+    }
+    // Shadow is deliberately post-write and best-effort: it never changes the
+    // legacy response and never touches accounts, monthly usage or transactions.
+    if (process.env.LLM_PRICING_SHADOW === 'true') {
+      try {
+        await writePricingShadow(rows[0].id);
+      } catch (shadowError) {
+        console.error('llm pricing shadow failed:', shadowError);
+      }
     }
     res.json({ ok: true, id: rows[0].id });
   } catch (err) {

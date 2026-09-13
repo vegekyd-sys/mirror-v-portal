@@ -450,6 +450,45 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT FALSE;
     `);
 
+    // P0 structured model catalog is expand-only and remains shadow data until
+    // an administrator explicitly publishes a compatibility snapshot.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_provider_instances (
+        id TEXT PRIMARY KEY, legacy_provider_name TEXT NOT NULL UNIQUE,
+        template_key TEXT NOT NULL DEFAULT 'custom-openai', display_name TEXT,
+        protocol TEXT NOT NULL DEFAULT 'openai-completions' CHECK (protocol IN ('openai-completions')),
+        base_url TEXT NOT NULL, encrypted_api_key TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('legacy-import','manual','builtin-catalog')),
+        enabled BOOLEAN NOT NULL DEFAULT TRUE, metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS llm_provider_models (
+        id TEXT PRIMARY KEY, provider_instance_id TEXT NOT NULL REFERENCES llm_provider_instances(id) ON DELETE CASCADE,
+        model_id TEXT NOT NULL, display_name TEXT, model_type TEXT NOT NULL DEFAULT 'unknown',
+        runtime_enabled BOOLEAN NOT NULL DEFAULT FALSE, discovered_params JSONB, override_params JSONB,
+        effective_params JSONB NOT NULL, params_schema_version INTEGER NOT NULL DEFAULT 1,
+        params_status TEXT NOT NULL CHECK (params_status IN ('complete','incomplete','fallback','invalid')),
+        source TEXT NOT NULL CHECK (source IN ('legacy-import','manual','builtin-catalog')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (model_type IN ('chat','embedding','rerank','image-generation','image-edit','speech','transcription','audio-generation','video-generation','multimodal-embedding','unknown')),
+        CHECK (jsonb_typeof(effective_params)='object'), UNIQUE(provider_instance_id, model_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_provider_models_runtime ON llm_provider_models(provider_instance_id, runtime_enabled);
+      CREATE TABLE IF NOT EXISTS llm_catalog_import_runs (
+        id UUID PRIMARY KEY, source_kind TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running','succeeded','partial','failed')),
+        total_count INTEGER NOT NULL DEFAULT 0, succeeded_count INTEGER NOT NULL DEFAULT 0,
+        skipped_count INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+        report JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ,
+        UNIQUE(source_kind, source_fingerprint)
+      );
+      CREATE TABLE IF NOT EXISTS llm_catalog_snapshot_backups (
+        id UUID PRIMARY KEY, runtime_config_id BIGINT REFERENCES runtime_configs(id) ON DELETE SET NULL,
+        encrypted_value TEXT NOT NULL, source_fingerprint TEXT NOT NULL, actor TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

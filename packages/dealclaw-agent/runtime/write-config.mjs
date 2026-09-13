@@ -81,6 +81,31 @@ if (llmDoc && llmDoc.providers.length > 0) {
       fail(`LLM_PROVIDERS: provider ${p.name} needs at least one model`);
     }
     const envName = `LLM_KEY_${p.name.toUpperCase().replace(/-/g, '_')}`;
+    const compatibleModels = p.models.flatMap((m) => {
+      const spec = typeof m === 'string' ? { id: m } : m;
+      if (!spec || typeof spec.id !== 'string' || !spec.id) {
+        fail(`LLM_PROVIDERS: provider ${p.name} has an invalid model entry`);
+      }
+      // Missing fields are legacy-compatible; explicit non-chat/non-supported
+      // entries stay in the catalog but never enter OpenClaw's chat list.
+      if ((spec.modelType && spec.modelType !== 'chat') ||
+          (spec.protocol && spec.protocol !== 'openai-completions')) return [];
+      const fallback = defaultModelSpec(spec.id, spec.reasoning === true, spec.vision === true);
+      const contextWindow = Number.isSafeInteger(spec.contextWindow) && spec.contextWindow > 0
+        ? spec.contextWindow : fallback.contextWindow;
+      const maxTokens = Number.isSafeInteger(spec.maxOutputTokens) && spec.maxOutputTokens > 0
+        ? spec.maxOutputTokens : fallback.maxTokens;
+      const input = Array.isArray(spec.inputModalities) &&
+        spec.inputModalities.length > 0 &&
+        spec.inputModalities.every((value) => ['text', 'image', 'audio', 'video'].includes(value))
+        ? [...new Set(spec.inputModalities)]
+        : fallback.input;
+      return [{ ...fallback, name: typeof spec.displayName === 'string' ? spec.displayName : spec.id, contextWindow, maxTokens, input }];
+    });
+    if (compatibleModels.length === 0) {
+      console.warn(`[dealclaw-runtime] LLM_PROVIDERS: provider ${p.name} has no chat-compatible models — skipped`);
+      continue;
+    }
     nextProviders[p.name] = {
       baseUrl: p.baseUrl.replace(/\/+$/, ''),
       api: 'openai-completions',
@@ -89,13 +114,7 @@ if (llmDoc && llmDoc.providers.length > 0) {
       // upstreams; raise to 600s so transient stalls fall through to the
       // fallback chain instead of hard-failing the turn.
       timeoutSeconds: Number(process.env.DEALCLAW_LLM_PROVIDER_TIMEOUT_SECONDS || 600),
-      models: p.models.map((m) => {
-        const spec = typeof m === 'string' ? { id: m } : m;
-        if (!spec || typeof spec.id !== 'string' || !spec.id) {
-          fail(`LLM_PROVIDERS: provider ${p.name} has an invalid model entry`);
-        }
-        return defaultModelSpec(spec.id, spec.reasoning === true, spec.vision === true);
-      }),
+      models: compatibleModels,
     };
     // Single-quote the secret; escape embedded quotes safely.
     const quoted = `'${p.apiKey.replace(/'/g, `'\\''`)}'`;
@@ -114,9 +133,10 @@ if (llmDoc && llmDoc.providers.length > 0) {
     }
     primaryModel = llmDoc.defaultModel;
   } else {
-    // No explicit default → first provider's first model.
-    const first = llmDoc.providers[0];
-    primaryModel = `${first.name}/${first.models[0]?.id ?? ''}`;
+    // No explicit default → first chat-compatible provider model.
+    const firstProviderName = Object.keys(nextProviders)[0];
+    const firstModel = firstProviderName ? nextProviders[firstProviderName].models[0] : null;
+    primaryModel = firstProviderName && firstModel ? `${firstProviderName}/${firstModel.id}` : null;
   }
 
   // ── Fallback chain (OpenClaw model failover) ───────────────────────

@@ -216,6 +216,49 @@ export async function migrate() {
     )
   `);
 
+  // ── P0 generic LLM pricing catalog + immutable shadow snapshots ──
+  await query(`
+    CREATE TABLE IF NOT EXISTS llm_model_price_plans (
+      id TEXT PRIMARY KEY, provider_instance_id TEXT NOT NULL, provider_model_id TEXT NOT NULL,
+      provider_key TEXT NOT NULL, model_id TEXT NOT NULL, version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft','published','superseded','disabled')),
+      currency CHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'), unit_scale INTEGER NOT NULL DEFAULT 1000000 CHECK (unit_scale > 0),
+      valid_from TIMESTAMPTZ NOT NULL, valid_to TIMESTAMPTZ, source TEXT NOT NULL, source_key TEXT NOT NULL,
+      contract_version INTEGER NOT NULL DEFAULT 1, published_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (valid_to IS NULL OR valid_to > valid_from), UNIQUE(provider_instance_id, provider_model_id, version), UNIQUE(source, source_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_price_plan_resolve
+      ON llm_model_price_plans(provider_key, model_id, valid_from, valid_to) WHERE status='published';
+    CREATE TABLE IF NOT EXISTS llm_model_price_items (
+      id TEXT PRIMARY KEY, plan_id TEXT NOT NULL REFERENCES llm_model_price_plans(id) ON DELETE RESTRICT,
+      usage_type TEXT NOT NULL CHECK (usage_type IN ('input','input-cache-read','input-cache-write','output','request','image','audio-second','video-second')),
+      unit_price NUMERIC(24,12) NOT NULL CHECK (unit_price >= 0), priority INTEGER NOT NULL DEFAULT 0,
+      conditions JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(conditions)='object'),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(plan_id, usage_type, priority, conditions)
+    );
+    CREATE TABLE IF NOT EXISTS llm_price_sync_runs (
+      id UUID PRIMARY KEY, source_kind TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running','succeeded','partial','failed')),
+      total_count INTEGER NOT NULL DEFAULT 0, succeeded_count INTEGER NOT NULL DEFAULT 0,
+      skipped_count INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+      report JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ,
+      UNIQUE(source_kind, source_fingerprint)
+    );
+    ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS pricing_status TEXT;
+    ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS price_plan_id TEXT;
+    ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS pricing_snapshot JSONB;
+    ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS upstream_cost_amount NUMERIC(24,12);
+    ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS upstream_cost_currency CHAR(3);
+    CREATE TABLE IF NOT EXISTS llm_usage_pricing_shadows (
+      usage_event_id VARCHAR(64) PRIMARY KEY REFERENCES llm_usage_events(id) ON DELETE CASCADE,
+      resolver_version INTEGER NOT NULL, status TEXT NOT NULL CHECK (status IN ('resolved','unknown','conflict','pending','free')),
+      price_plan_id TEXT, matched_item_ids TEXT[] NOT NULL DEFAULT '{}', amount NUMERIC(24,12), currency CHAR(3),
+      legacy_amount NUMERIC(24,12), delta_amount NUMERIC(24,12), pricing_snapshot JSONB NOT NULL,
+      error_code TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK ((status IN ('resolved','free') AND amount IS NOT NULL) OR status NOT IN ('resolved','free'))
+    );
+  `);
+
   // ── v2.1: billing_mode column (live/shadow) ──
   await query(`ALTER TABLE skill_billing_events ADD COLUMN IF NOT EXISTS billing_mode VARCHAR(8) DEFAULT 'live'`);
   await query(`CREATE INDEX IF NOT EXISTS idx_billing_events_mode ON skill_billing_events(billing_mode, created_at DESC)`);

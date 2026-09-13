@@ -30,9 +30,11 @@ beforeAll(async () => {
   process.env.BILLING_SERVICE_TOKEN = 'test-token';
   process.env.ADMIN_API_TOKEN = 'test-token';
 
-  // Probe DB availability before running heavy setup
-  // Clean skill_prices so latest seed data applies
+  // Probe DB availability and create the schema before cleaning seeded rows.
+  // Run migrate again after cleanup so the latest seed data is applied on both
+  // a fresh database and an existing test database.
   try {
+    await migrate();
     await query('DELETE FROM skill_prices');
     await migrate();
     // Production currently defaults skills to 'shadow' (no charge) until formal
@@ -314,8 +316,8 @@ describe('POST /v1/skill-prices/estimate', () => {
       .set('Authorization', SVC_AUTH)
       .send({ skillId: 'dealclaw-find-buyers', quantity: 10 });
     expect(res.status).toBe(200);
-    expect(res.body.totalCredit).toBe(3000);
-    expect(res.body.unitPrice).toBe(300);
+    expect(res.body.totalCredit).toBe(8000);
+    expect(res.body.unitPrice).toBe(800);
     expect(res.body.isDefault).toBe(false);
   });
 
@@ -342,7 +344,7 @@ describe('POST /v1/billing/estimate', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.estimatedCredit).toBe(6000);
+    expect(res.body.estimatedCredit).toBe(10000);
     expect(res.body.eventId).toBeDefined();
   });
 });
@@ -365,7 +367,7 @@ describe('POST /v1/billing/settle', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.actualCredit).toBe(3000);
+    expect(res.body.actualCredit).toBe(8000);
     expect(res.body.transactionId).toBeDefined();
   });
 
@@ -390,7 +392,7 @@ describe('POST /v1/billing/can-afford', () => {
       .send({ accountId: TEST_ACCOUNT, skillId: 'dealclaw-find-buyers', quantity: 50 });
     expect(res.status).toBe(200);
     expect(res.body.canAfford).toBe(false);
-    expect(res.body.estimatedCredit).toBe(15000);
+    expect(res.body.estimatedCredit).toBe(40000);
     expect(res.body.balance).toBe(10000);
   });
 });

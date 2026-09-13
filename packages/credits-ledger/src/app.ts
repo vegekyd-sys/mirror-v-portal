@@ -9,6 +9,7 @@ import llmUsageRouter from './routes/llm-usage.js';
 import customerAdminRouter from './routes/customer-admin.js';
 import adminAuthRouter, { requireAdmin, requireServiceOrAdmin } from './routes/admin-auth.js';
 import adminSkillsRouter from './routes/admin-skills.js';
+import llmPricingRouter from './routes/llm-pricing.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 export function createApp() {
@@ -45,6 +46,7 @@ export function createApp() {
   app.use(requireServiceOrAdmin, skillPricesRouter);
   app.use(requireServiceOrAdmin, billingRouter);
   app.use(requireServiceOrAdmin, llmUsageRouter);
+  app.use(requireServiceOrAdmin, llmPricingRouter);
 
   // ── Customer admin (topup/renew/create-customer/v-command/plans/customers) ──
   // Money-creation + account-management endpoints: service token or admin JWT.

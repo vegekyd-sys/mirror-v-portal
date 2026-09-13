@@ -19,6 +19,7 @@ import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { createAuditMiddleware } from './services/audit.js';
 import { createTenantMachineAssertionRoutes } from './routes/tenant-machine-assertions.js';
+import { createModelCatalogRoutes } from './routes/model-catalog.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: SseBroker = new SseBroker()) {
   const app = express();
@@ -71,6 +72,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
 
   app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
+  app.use(createModelCatalogRoutes(pool, config, authAndAudit));
   // LLM push async task (SSE + REST) — worker publishes progress to the same
   // broker instance injected here from index.ts.
   app.use(createLlmPushRoutes(pool, broker, authAndAudit));

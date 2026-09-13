@@ -40,9 +40,16 @@ export const LLM_MODEL_SELECTION_KEY = 'LLM_MODEL_SELECTION';
 
 export interface LlmModelSpec {
   id: string;
+  displayName?: string;
+  modelType?: 'chat' | 'embedding' | 'rerank' | 'image-generation' | 'image-edit' | 'speech' | 'transcription' | 'audio-generation' | 'video-generation' | 'multimodal-embedding' | 'unknown';
+  protocol?: 'openai-completions';
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  inputModalities?: Array<'text' | 'image' | 'audio' | 'video'>;
   reasoning?: boolean;
   /** True marks the model as vision-capable (accepts image input). */
   vision?: boolean;
+  compat?: Record<string, boolean | string | number>;
 }
 
 export interface LlmProviderSpec {
@@ -189,10 +196,29 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
         if (!MODEL_ID_PATTERN.test(id)) throw new LlmProvidersError(`模型 ID「${id || '(空)'}」不合法`);
         if (seenModels.has(id)) throw new LlmProvidersError(`提供商 ${name} 模型重复：${id}`);
         seenModels.add(id);
+        const positiveInt = (value: unknown): number | undefined =>
+          typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+        const modalities = Array.isArray(spec.inputModalities)
+          ? spec.inputModalities.filter((value): value is 'text' | 'image' | 'audio' | 'video' =>
+              value === 'text' || value === 'image' || value === 'audio' || value === 'video')
+          : undefined;
+        const modelType = typeof spec.modelType === 'string' ? spec.modelType as LlmModelSpec['modelType'] : undefined;
+        const allowedTypes = new Set(['chat', 'embedding', 'rerank', 'image-generation', 'image-edit', 'speech', 'transcription', 'audio-generation', 'video-generation', 'multimodal-embedding', 'unknown']);
+        if (modelType !== undefined && !allowedTypes.has(modelType)) throw new LlmProvidersError(`模型 ${id} 的 modelType 不合法`);
+        if (spec.protocol !== undefined && spec.protocol !== 'openai-completions') throw new LlmProvidersError(`模型 ${id} 的 protocol 不受支持`);
         models.push({
           id,
+          ...(str(spec.displayName) ? { displayName: str(spec.displayName).slice(0, 128) } : {}),
+          ...(modelType ? { modelType } : {}),
+          ...(spec.protocol === 'openai-completions' ? { protocol: spec.protocol } : {}),
+          ...(positiveInt(spec.contextWindow) ? { contextWindow: positiveInt(spec.contextWindow) } : {}),
+          ...(positiveInt(spec.maxOutputTokens) ? { maxOutputTokens: positiveInt(spec.maxOutputTokens) } : {}),
+          ...(modalities && modalities.length > 0 ? { inputModalities: [...new Set(modalities)] } : {}),
           ...(spec.reasoning === true ? { reasoning: true } : {}),
           ...(spec.vision === true ? { vision: true } : {}),
+          ...(spec.compat && typeof spec.compat === 'object' && !Array.isArray(spec.compat)
+            ? { compat: Object.fromEntries(Object.entries(spec.compat).filter(([, value]) => ['boolean', 'string', 'number'].includes(typeof value))) as Record<string, boolean | string | number> }
+            : {}),
         });
       } else {
         throw new LlmProvidersError(`提供商 ${name} 的模型条目不合法`);
@@ -212,8 +238,12 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
     const [pName, ...rest] = defaultModel.split('/');
     const modelId = rest.join('/');
     const provider = providers.find((p) => p.name === pName);
-    if (!provider || !provider.models.some((m) => m.id === modelId)) {
+    const model = provider?.models.find((m) => m.id === modelId);
+    if (!model) {
       throw new LlmProvidersError(`默认模型 ${defaultModel} 不在已配置的提供商/模型列表中`);
+    }
+    if ((model.modelType && model.modelType !== 'chat') || (model.protocol && model.protocol !== 'openai-completions')) {
+      throw new LlmProvidersError(`默认模型 ${defaultModel} 不是兼容的 chat 模型`);
     }
   }
 
@@ -255,6 +285,13 @@ export function validateLlmProviders(input: unknown): LlmProvidersConfig {
       if (!ref) continue;
       if (!modelExistsIn({ providers, defaultModel, imageModel, compactionModel, fallbackModels }, ref)) {
         throw new LlmProvidersError(`备用模型 ${ref} 不在已配置的提供商/模型列表中`);
+      }
+      const [providerName, ...modelParts] = ref.split('/');
+      const fallbackModel = providers.find((provider) => provider.name === providerName)
+        ?.models.find((model) => model.id === modelParts.join('/'));
+      if ((fallbackModel?.modelType && fallbackModel.modelType !== 'chat') ||
+          (fallbackModel?.protocol && fallbackModel.protocol !== 'openai-completions')) {
+        throw new LlmProvidersError(`备用模型 ${ref} 不是兼容的 chat 模型`);
       }
       if (defaultModel && ref === defaultModel) {
         throw new LlmProvidersError(`备用模型 ${ref} 与默认模型相同（备用链不应包含主模型）`);
@@ -393,7 +430,19 @@ export function modelSpecSignature(
   if (!provider) return null;
   const model = provider.models.find((m) => m.id === modelId);
   if (!model) return null;
-  return JSON.stringify(model);
+  const compat = model.compat
+    ? Object.fromEntries(Object.entries(model.compat).sort(([left], [right]) => left.localeCompare(right)))
+    : undefined;
+  return JSON.stringify({
+    protocol: model.protocol ?? 'openai-completions',
+    id: model.id,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxOutputTokens,
+    inputModalities: model.inputModalities ? [...model.inputModalities].sort() : undefined,
+    reasoning: model.reasoning === true,
+    vision: model.vision === true,
+    compat,
+  });
 }
 
 /**
@@ -463,6 +512,9 @@ export function tenantNeedsLlmRestart(
   if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) return true;
   for (const ref of afterFallbacks) {
     if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
+      return true;
+    }
+    if (modelSpecSignature(now, ref) !== modelSpecSignature(prev, ref)) {
       return true;
     }
   }

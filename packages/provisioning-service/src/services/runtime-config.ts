@@ -92,7 +92,10 @@ export async function resolveTenantConfig(
 }
 
 /** Upsert a config entry in the given scope (global when tenantId is null). */
-export async function upsertRuntimeConfig(pool: pg.Pool, input: RuntimeConfigInput): Promise<void> {
+export async function upsertRuntimeConfig(
+  pool: Pick<pg.Pool, 'query'> | pg.PoolClient,
+  input: RuntimeConfigInput,
+): Promise<void> {
   const key = validateConfigKey(input.key);
   const value = validateConfigValue(input.value);
   const encrypted = encryptValue(value);
