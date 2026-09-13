@@ -160,14 +160,47 @@ def sync(*, base_token: str, table_id: str, company_id: str, pool_table: str = "
                       "--as", "bot", "--format", "json")
             if d.get("ok"):
                 result["created"] += len(chunk)
-    # 更新线索池汇总字段（最近跟进时间 / 最近回复摘要 / 往来条数）
+    # 写回线索池汇总字段（按买家域名匹配线索池行）
     if apply and pool_table and rows:
         last = rows[-1]
-        fields = {"最近跟进时间": last["时间"], "往来条数": len(rows)}
         inbound = [r for r in rows if r["方向"] == ["入"]]
+        summary = {"最近跟进时间": last["时间"], "往来条数": len(rows)}
         if inbound:
-            fields["最近回复摘要"] = inbound[-1]["原文"][:120]
-        result["pool_update"] = fields
+            summary["最近回复摘要"] = inbound[-1]["原文"][:120]
+        result["pool_update"] = summary
+        # 找出本批邮件涉及的对手方域名
+        import re as _re
+        from dc_tenant_mailboxes import tenant_mailboxes as _tm
+        boxes = {b.lower() for b in _tm(company_id)}
+        doms = set()
+        for r in rows:
+            for a in _re.findall(r"[\w.+-]+@[\w.-]+", str(r.get("原文", ""))):
+                pass
+        # 直接按事实层对手方域名
+        try:
+            import dc_thread_dossier as _td
+            for rec in _td.load_facts(data_dir, company_id):
+                addrs = [str(rec.get("sender") or "")] + [str(x) for x in (rec.get("recipients") or [])]
+                for a in addrs:
+                    d = a.split("@")[-1].lower().strip("> ")
+                    if a and "@" in a and d not in {b.split("@")[-1] for b in boxes}:
+                        doms.add(d)
+        except Exception:
+            pass
+        pool_rows, pool_rids = read_rows(base_token=base_token, table_id=pool_table)
+        updated = 0
+        for row, rid in zip(pool_rows, pool_rids):
+            site = str(row.get("官网") or "").lower()
+            rdom = site.replace("https://", "").replace("http://", "").split("/")[0]
+            rdoms = {rdom, rdom.replace("www.", "")} if rdom else set()
+            if rdoms & doms:
+                upd = _lark("base", "+record-batch-update", "--base-token", base_token,
+                            "--table-id", pool_table,
+                            "--json", json.dumps({"update_records": {rid: summary}}, ensure_ascii=False),
+                            "--as", "bot", "--format", "json")
+                if upd.get("ok"):
+                    updated += 1
+        result["pool_rows_updated"] = updated
     return result
 
 
