@@ -308,10 +308,11 @@ const config = {
           }
         : {}),
       ...(imageModel ? { imageModel: { primary: imageModel } } : {}),
-      // Run-level ceiling: default is 300s which truncates long multi-tool
-      // tasks (e.g. find-buyers crawls). 900s accommodates them; provider
-      // idle timeouts stay lower (see provider timeoutSeconds below).
-      timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 900),
+      // Run-level ceiling (upstream OpenClaw default is 48h; we cap it lower
+      // to bound runaway tool loops). 1800s accommodates long multi-tool
+      // tasks (e.g. find-buyers crawls); provider idle timeouts stay lower
+      // (see provider timeoutSeconds below).
+      timeoutSeconds: Number(process.env.DEALCLAW_AGENT_RUN_TIMEOUT_SECONDS || 1800),
       // reasoning off (skip reasoning tokens — faster first-token + streaming)
       reasoningDefault: 'off',
       // Reasoning model + high thinking caused "思考过载" (b4083949 / 158a70e):
