@@ -45,7 +45,7 @@ FOLLOWUP_FIELDS = [
 POOL_SUMMARY_FIELDS = [
     {"name": "最近跟进时间", "type": "text"},
     {"name": "最近回复摘要", "type": "text"},
-    {"name": "往来条数", "type": "number", "formatter": "0"},
+    {"name": "往来条数", "type": "number"},
 ]
 
 
@@ -98,7 +98,8 @@ def setup(*, base_token: str, pool_table: str = "", apply: bool = False) -> dict
             if f["name"] in have:
                 continue
             _lark("base", "+field-create", "--base-token", base_token, "--table-id", pool_table,
-                  "--json", json.dumps(f, ensure_ascii=False), "--as", "bot", "--json")
+                  "--json", json.dumps(f, ensure_ascii=False), "--as", "bot",
+                  "--format", "json")
             out["pool_fields_created"].append(f["name"])
     return out
 
