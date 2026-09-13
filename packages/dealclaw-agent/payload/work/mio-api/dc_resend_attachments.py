@@ -82,6 +82,14 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
+    # 租户收口：只处理与本租户绑定邮箱有往来的邮件
+    try:
+        from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
+        boxes = tenant_mailboxes(company_id)
+        if boxes:
+            items = [it for it in items if belongs_to_tenant(it, boxes)]
+    except Exception:
+        pass
     report = {"ok": True, "scanned": len(items), "messages_with_att": 0,
               "attachments": 0, "downloaded": 0, "skipped": 0, "failed": [], "apply": apply}
     root = base / "email-facts" / "attachments" / company_id

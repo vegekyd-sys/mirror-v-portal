@@ -136,7 +136,7 @@ def to_fact(item: dict, det: dict, direction: str, company_id: str) -> dict:
 
 
 def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
-         key: str = "", dry_run: bool = False) -> dict:
+         key: str = "", dry_run: bool = False, all_tenants: bool = False) -> dict:
     key = _key(key)
     if not key:
         return {"ok": False, "error": "缺少 RESEND_API_KEY"}
@@ -155,6 +155,14 @@ def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
             report["sides"][side] = {"fetched": 0, "error": str(e)[:200]}
             report["errors"].append({"side": side, "error": str(e)[:200]})
             continue
+        # 租户收口：只保留与本租户绑定邮箱有往来的邮件（田耕郡 2026-09-13）
+        try:
+            from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
+            boxes = tenant_mailboxes(company_id)
+            if boxes and not all_tenants:
+                items = [it for it in items if belongs_to_tenant(it, boxes)]
+        except Exception:
+            pass
         written = 0
         if not dry_run:
             from email_gateway.store import MarkdownEmailStore
@@ -179,10 +187,11 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--limit", type=int, default=100)
     ap.add_argument("--company-id", default=os.environ.get("MIO_CDP_SUPPLIER_ID", ""))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--all-tenants", action="store_true", help="不按租户邮箱收口（默认收口）")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     r = pull(direction=args.direction, limit=args.limit, company_id=args.company_id,
-             dry_run=args.dry_run)
+             dry_run=args.dry_run, all_tenants=args.all_tenants)
     if args.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
     else:

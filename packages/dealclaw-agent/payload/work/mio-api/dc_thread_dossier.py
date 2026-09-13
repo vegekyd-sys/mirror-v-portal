@@ -104,6 +104,15 @@ def load_facts(data_dir=None, company_id: str = "") -> list[dict]:
                 continue
             rec["_direction"] = direction
             out.append(rec)
+    # 租户收口：只并本租户绑定邮箱的往来（不串租户）
+    if company_id:
+        try:
+            from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
+            boxes = tenant_mailboxes(company_id, base)
+            if boxes:
+                out = [r for r in out if belongs_to_tenant(r, boxes)]
+        except Exception:
+            pass
     return out
 
 
