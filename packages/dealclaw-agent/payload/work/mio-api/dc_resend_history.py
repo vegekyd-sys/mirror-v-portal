@@ -35,7 +35,10 @@ API = "https://api.resend.com"
 
 
 def _key(explicit: str = "") -> str:
-    return explicit or os.environ.get("RESEND_API_KEY", "").strip()
+    """优先用可读专用 key（RESEND_API_KEY_READ），避免动发送用的 key。"""
+    return (explicit
+            or os.environ.get("RESEND_API_KEY_READ", "").strip()
+            or os.environ.get("RESEND_API_KEY", "").strip())
 
 
 def _get(path: str, key: str, timeout: int = 25) -> dict:
