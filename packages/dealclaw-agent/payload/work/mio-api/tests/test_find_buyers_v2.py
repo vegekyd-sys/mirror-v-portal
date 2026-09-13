@@ -50,7 +50,7 @@ class NormalizeTests(unittest.TestCase):
         """真实响应里没有 AI匹配分：主分取 totalQualityScore，并保留各原始分数。"""
         n = normalize_record({"companyName": "A", "totalQualityScore": 160.6,
                               "fiveCompositeScore": 4.0, "fiveMatchScore": 0.0})
-        self.assertEqual(n["score"], 160.6)
+        self.assertEqual(n["score"], 4.0)          # 主分 = 五维综合分（0–5）
         self.assertEqual(n["scores_raw"]["fiveCompositeScore"], 4.0)
         self.assertEqual(n["scores_raw"]["fiveMatchScore"], 0.0)
 

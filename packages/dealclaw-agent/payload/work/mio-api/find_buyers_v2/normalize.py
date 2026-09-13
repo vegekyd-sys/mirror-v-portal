@@ -39,10 +39,12 @@ PRODUCT_KEYS = ("purchaseTags", "productList", "matchedProducts", "tags", "关�
 BUYER_TYPE_KEYS = ("companyAttributes", "buyerType", "buyerTypes", "buyerTag", "buyer_tags")
 SIZE_KEYS = ("staffSizeLevel", "tradeScaleLevel", "annualRevenueLevel", "scale", "size")
 EXHIBITION_KEYS = ("preExhibitionIds", "preExhibitionId", "exhibitionIds")
-# 真实响应里的分数字段（2026-09-13 用真实 searchAIV2 响应核实：没有 AI匹配分）：
-#   totalQualityScore ≈ 0–160；five*Score ≈ 0–5（本样本 fiveMatchScore 恒为 0）
-# 口径未定前，score 只用于排序/诊断，**不作停止线**。
-SCORE_KEYS = ("totalQualityScore", "fiveCompositeScore", "fiveMatchScore",
+# 真实响应里的分数字段（2026-09-13 核实：响应里没有 AI匹配分）。
+# 口径（田耕郡 2026-09-13 定）：**主分用五维综合分 fiveCompositeScore（0–5）**，
+# totalQualityScore / fiveRecommend / fiveValuable / fiveActive / fiveComplete 作辅助参考。
+# 实测该字段高度压缩（p50≈3.04、p75≈3.08、p90≈3.10、≥3.5 仅 4%），
+# 因此质量线用**分位数**表达，不用绝对分当阈值。
+SCORE_KEYS = ("fiveCompositeScore", "totalQualityScore", "fiveMatchScore",
               "AI匹配分", "ai_score", "aiMatchScore", "matchScore")
 SCORE_FIELD_CANDIDATES = ("totalQualityScore", "fiveCompositeScore", "fiveMatchScore",
                           "fiveRecommendScore", "fiveValuableScore", "fiveActiveScore",

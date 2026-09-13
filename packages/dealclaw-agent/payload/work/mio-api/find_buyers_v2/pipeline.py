@@ -177,4 +177,6 @@ def compare_delivery(legacy: dict, v2: dict) -> dict:
         "only_v2": [x for x in v_ids if x not in set(l_ids)],
         "same_position": same_order,
         "order_agreement": round(same_order / max(len(l_ids), 1), 3),
+        # 主指标：集合重叠率（两者交付集合交集 / 较大集合）
+        "overlap_ratio": round(len(set(l_ids) & set(v_ids)) / max(len(set(l_ids) | set(v_ids)), 1), 3),
     }

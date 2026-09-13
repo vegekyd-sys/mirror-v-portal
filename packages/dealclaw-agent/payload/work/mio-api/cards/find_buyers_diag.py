@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -38,8 +39,26 @@ LOG_KEEP = 5
 # 阶段口径（顺序即流水线顺序，不得随意新增/改名）
 STAGES = ("search", "normalize", "qualify", "contact", "pool", "card")
 
-# 交付口径：分页分数分布需要知道的阈值档位
-SCORE_BUCKETS = (75.0, 70.0, 50.0)
+# 分页分数分布档位：按五维综合分 0–5 的真实分布校准（p90≈3.10、≥3.5 仅 4%、p50≈3.04）。
+# 可用 DC_FIND_BUYERS_SCORE_BUCKETS="3.5,3.1,3.0" 覆盖。
+DEFAULT_SCORE_BUCKETS = (3.5, 3.1, 3.0)
+
+
+def _score_buckets() -> tuple:
+    raw = (os.environ.get("DC_FIND_BUYERS_SCORE_BUCKETS") or "").strip()
+    if raw:
+        out = []
+        for part in raw.split(","):
+            try:
+                out.append(float(part.strip()))
+            except ValueError:
+                continue
+        if out:
+            return tuple(out)
+    return DEFAULT_SCORE_BUCKETS
+
+
+SCORE_BUCKETS = DEFAULT_SCORE_BUCKETS
 
 
 def _now() -> str:
@@ -218,9 +237,9 @@ class JobDiagnostics:
             slot["scored"] += 1
             slot["min"] = s if slot["min"] is None else min(slot["min"], s)
             slot["max"] = s if slot["max"] is None else max(slot["max"], s)
-            for th in SCORE_BUCKETS:
+            for th in _score_buckets():
                 if s >= th:
-                    k = f"ge_{int(th)}"
+                    k = "ge_" + str(th).replace(".", "_")
                     slot["ge"][k] = slot["ge"].get(k, 0) + 1
         excluded: dict[str, int] = {}
         for c in cand:
@@ -315,8 +334,8 @@ def aggregate(jobs_log: Optional[Path] = None, last_n: int = 20) -> dict:
             tgt = per_page.setdefault(page, {"jobs": 0, "scored": 0, "ge_75": 0, "ge_70": 0, "ge_50": 0})
             tgt["jobs"] += 1
             tgt["scored"] += int(slot.get("scored") or 0)
-            for k in ("ge_75", "ge_70", "ge_50"):
-                tgt[k] += int((slot.get("ge") or {}).get(k) or 0)
+            for k, v in (slot.get("ge") or {}).items():
+                tgt[k] = tgt.get(k, 0) + int(v or 0)
         d = (r.get("candidates") or {}).get("delivered")
         if isinstance(d, int):
             delivered.append(float(d))

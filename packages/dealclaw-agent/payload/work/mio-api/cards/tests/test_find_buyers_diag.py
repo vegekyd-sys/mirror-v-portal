@@ -106,10 +106,10 @@ class FlushAndAggregateTests(unittest.TestCase):
             d.record_stage("search", 1000 + i * 100)
             d.record_stage("pool", 500)
             d.record_llm("qualify", calls=4, input_tokens=20000, output_tokens=3000)
-            for pos, score in enumerate([90, 80, 76, 70, 40], start=1):
+            for pos, score in enumerate([4.0, 3.5, 3.1, 3.0, 2.0], start=1):
                 d.add_candidate(f"CO{i}-{pos}", page=1, position=pos, score=score,
-                                qualified=score >= 70, delivered=score >= 76)
-            for pos, score in enumerate([72, 55, 30], start=1):
+                                qualified=score >= 3.0, delivered=score >= 3.1)
+            for pos, score in enumerate([3.2, 2.5, 1.0], start=1):
                 d.add_candidate(f"P2CO{i}-{pos}", page=2, position=pos, score=score,
                                 qualified=False, excluded_reason="相关性不足")
             d.flush()
@@ -130,10 +130,11 @@ class FlushAndAggregateTests(unittest.TestCase):
             self.assertEqual(agg["tokens_total"]["qualify"]["p50"], 23000.0)
             p1, p2 = agg["per_page_scores"]["1"], agg["per_page_scores"]["2"]
             self.assertEqual(p1["scored"], 15)
-            self.assertEqual(p1["ge_75"], 9)     # 每任务 90/80/76 = 3
-            self.assertEqual(p1["ge_70"], 12)    # + 70
+            self.assertEqual(p1["ge_3_5"], 6)     # 每任务 4.0/3.5 = 2
+            self.assertEqual(p1["ge_3_1"], 9)     # + 3.1
+            self.assertEqual(p1["ge_3_0"], 12)    # + 3.0
             self.assertEqual(p2["scored"], 9)
-            self.assertEqual(p2["ge_70"], 3)     # 每任务 72
+            self.assertEqual(p2["ge_3_0"], 3)     # 每任务 3.2
             self.assertEqual(agg["delivered"]["p50"], 3.0)
 
     def test_flush_is_silent_on_bad_path(self):
