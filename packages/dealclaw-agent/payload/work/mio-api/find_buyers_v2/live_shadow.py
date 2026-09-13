@@ -40,9 +40,28 @@ DEFAULT_SEARCHER = (_WS_ROOT / "skills" / "dealclaw-find-buyers"
 
 
 def run_search(*, tag_keyword="", countries="", page=1, page_size=100,
-               pre_exhibition_ids="", features="", searcher: Path = DEFAULT_SEARCHER,
+               pre_exhibition_ids="", features="", categories="",
+               searcher: Path = DEFAULT_SEARCHER,
                timeout: int = 120) -> tuple[dict, float]:
-    """调一次只读搜索，返回 (响应 dict, 秒)。"""
+    """调一次只读搜索，返回 (响应 dict, 秒)。
+
+    有 categories（结构化采购类目 JSON）时走 xiaoyuan CLI（脚本侧暂无该参数），
+    否则走本地 search_aiv2.py。
+    """
+    if categories:
+        cmd = ["xiaoyuan",
+               "--open-id", os.environ.get("MIO_V_OPEN_ID", ""),
+               "--supplier-id", os.environ.get("MIO_CDP_SUPPLIER_ID", ""),
+               "--timeout", str(timeout),
+               "buyer", "search", "--supplier-categories", categories,
+               "--countries", countries, "--page-num", str(page),
+               "--page-size", str(page_size)]
+        t0 = time.perf_counter()
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
+        elapsed = time.perf_counter() - t0
+        if out.returncode != 0:
+            raise RuntimeError(f"cli search 失败: {out.stderr[-300:]}")
+        return json.loads(out.stdout), elapsed
     cmd = [sys.executable, str(searcher),
            "--open-id", os.environ.get("MIO_V_OPEN_ID", ""),
            "--supplier-id", os.environ.get("MIO_CDP_SUPPLIER_ID", ""),
@@ -83,6 +102,7 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--tag-keyword", default="")
     ap.add_argument("--countries", default="")
     ap.add_argument("--pre-exhibition-ids", default="")
+    ap.add_argument("--categories", default="", help="结构化采购类目 JSON（优先于产品词）")
     ap.add_argument("--features", default="")
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--runs", type=int, default=2)
@@ -101,7 +121,7 @@ def main(argv=None) -> int:  # pragma: no cover
         for page in range(1, args.pages + 1):
             raw, sec = run_search(tag_keyword=args.tag_keyword, countries=args.countries,
                                   page=page, pre_exhibition_ids=args.pre_exhibition_ids,
-                                  features=args.features)
+                                  features=args.features, categories=args.categories)
             search_ms.append(sec * 1000.0)
             raw_pages.append(raw)
             stem = f"{args.scenario}-r{run}-p{page}"
