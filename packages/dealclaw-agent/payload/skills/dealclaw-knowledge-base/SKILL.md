@@ -40,9 +40,12 @@ author: ""
 python3 work/mio-api/dc_material_ingest.py \
   --file "<原文件>" --type <catalog|price|spec|certificate|sample|case_study|video> \
   --text-file "<解析文本>" --description "<一句话用途>"
-# ② 写资料层 / 物料表（建记录 + 传附件），复用既有工具
+# ② 写资料层 / 物料表（建记录 + 传附件）
+#    坐标**自动解析**（缓存 → 发现 → 兜底创建），不需要向用户/运维要 token：
+#    dc_material_ingest 已内置；单独跑时：
+python3 work/mio-api/dc_material_target.py --company-name "<企业名>"   # 输出/创建 物料表 坐标
 python3 skills/dealclaw-knowledge-base/scripts/fill_material_index.py create \
-  --base-token <资料层 app_token> --table-id <资料层 table_id> --records records.json
+  --base-token <上一步的 base_token> --table-id <table_id> --records records.json
 python3 skills/dealclaw-knowledge-base/scripts/fill_material_index.py attach \
   --base-token <app_token> --table-id <table_id> --field-id <附件列 field_id> \
   --mapping name_to_rid.json --manifest manifest.json

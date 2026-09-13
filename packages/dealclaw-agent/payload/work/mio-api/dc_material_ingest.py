@@ -36,6 +36,13 @@ if str(HERE) not in sys.path:
 
 from dc_kb_engine import KBEngine, KB_DIR, DEFAULT_MATERIAL_TYPES, MATERIAL_LABELS  # noqa: E402
 
+# 物料表/资料层的下拉选项名（必须与建表时的 options 完全一致，否则接口报 not_found）
+BITABLE_TYPE_NAMES = {
+    "catalog": "产品目录", "price": "报价单", "spec": "技术规格",
+    "certificate": "认证证书", "sample": "样品实拍",
+    "case_study": "客户案例", "video": "产品视频",
+}
+
 TYPE_HINTS = [
     ("certificate", r"证书|cert|认证|资质|iso|ce\b"),
     ("price", r"报价|price|quotation|quote"),
@@ -95,7 +102,8 @@ def publish_to_layer(*, files: dict, base_token: str, table_id: str,
     for cn_type, paths in files.items():
         for p in paths:
             name = Path(p).stem
-            records.append({"类型": cn_type, "文件名称": name, "状态": "✅",
+            # select 字段用数组值；类型名必须命中建表时的 options
+            records.append({"文件名称": name, "类型": [cn_type], "状态": ["✅"],
                             "营销用途": ""})
             manifest[name] = [str(p)]
     try:
@@ -129,7 +137,8 @@ def _maybe_upload_bitable(file_path: Path, *, app_token: str, table_id: str,
 
 def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
            description: str = "", text: str = "", link: str = "",
-           bitable: tuple[str, str, str, str] = ("", "", "", "")) -> dict:
+           bitable: tuple[str, str, str, str] = ("", "", "", ""),
+           auto_target: bool = True) -> dict:
     if not file_path.exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
     if file_path.suffix.lower() not in SUPPORTED_EXT:
@@ -167,11 +176,25 @@ def ingest(*, enterprise: str, file_path: Path, mtype: str = "", name: str = "",
     })
     kb._save(enterprise, cur)
 
-    # 资料层/物料表：既有脚本负责建记录 + 传附件（一条记录 = 一个物料单元）
-    cn_type = {v: k for k, v in MATERIAL_LABELS.items()}.get(mtype, MATERIAL_LABELS.get(mtype, mtype))
+    # 资料层/物料表：未传坐标时自动解析（找不到就建），不再向人要 token
+    cn_type = BITABLE_TYPE_NAMES.get(mtype, MATERIAL_LABELS.get(mtype, mtype))
+    base_token, table_id, field_id = bitable[0], bitable[1], (bitable[3] or bitable[2])
+    target_info: dict = {}
+    if not (base_token and table_id and field_id) and auto_target:
+        try:
+            import dc_material_target as dmt
+            tgt = dmt.resolve_target(enterprise, company_name=name or "")
+            base_token = tgt["base_token"]; table_id = tgt["table_id"]
+            field_id = tgt["attachment_field_id"]
+            target_info = {"resolved": True, "source": tgt.get("source"),
+                           "created": tgt.get("created")}
+        except Exception as e:
+            target_info = {"resolved": False, "error": str(e)[:160]}
     bitable_result = publish_to_layer(files={cn_type: [dest]},
-                                      base_token=bitable[0], table_id=bitable[1],
-                                      field_id=bitable[3] or bitable[2])
+                                      base_token=base_token, table_id=table_id,
+                                      field_id=field_id)
+    if target_info:
+        bitable_result["target"] = target_info
     # 回读验证：必须能通过下游读接口取到
     links = {m["type"]: m for m in kb.get_material_links(enterprise)}
     ok = mtype in links
@@ -198,6 +221,7 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--table-id", default="")
     ap.add_argument("--field-id", default="", help="附件列 field id")
     ap.add_argument("--record-id", default="", help="（兼容旧参，等同 field-id 缺省时的占位）")
+    ap.add_argument("--no-auto-target", action="store_true", help="不自动解析物料表坐标")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -209,7 +233,8 @@ def main(argv=None) -> int:  # pragma: no cover
         r = ingest(enterprise=args.enterprise, file_path=Path(args.file), mtype=args.type,
                    name=args.name, description=args.description, text=text, link=args.link,
                    bitable=(args.bitable_app_token, args.table_id, args.record_id,
-                            args.field_id))
+                            args.field_id),
+                   auto_target=not args.no_auto_target)
     except Exception as e:
         print(f"入库失败: {e}", file=sys.stderr)
         return 1

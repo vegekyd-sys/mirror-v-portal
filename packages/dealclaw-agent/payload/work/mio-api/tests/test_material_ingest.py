@@ -33,7 +33,7 @@ class IngestTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_ingest_writes_and_is_readable_downstream(self):
-        r = mi.ingest(enterprise="100000834234", file_path=self.src, mtype="catalog",
+        r = mi.ingest(auto_target=False, enterprise="100000834234", file_path=self.src, mtype="catalog",
                       description="2026 版产品目录", text="猫爬架 产品目录 正文")
         self.assertTrue(r["verified_readable"])
         self.assertEqual(r["type"], "catalog")
@@ -52,15 +52,15 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(kb["materials"]["catalog"]["sha256"], r["sha256"])
 
     def test_idempotent_reingest(self):
-        mi.ingest(enterprise="e1", file_path=self.src, mtype="catalog")
-        r2 = mi.ingest(enterprise="e1", file_path=self.src, mtype="catalog")
+        mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog")
+        r2 = mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog")
         self.assertTrue(r2["idempotent_update"])
         kb = json.loads((kbe.KB_DIR / "e1" / "kb.json").read_text(encoding="utf-8"))
         ready = [k for k, v in kb["materials"].items() if v.get("status") == "ready"]
         self.assertEqual(ready, ["catalog"])          # 只置 ready 该类型，不重复建条目
 
     def test_bitable_skipped_without_params_not_faked(self):
-        r = mi.ingest(enterprise="e1", file_path=self.src, mtype="catalog")
+        r = mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="catalog")
         self.assertTrue(r["bitable"]["skipped"])                  # 不谎报已同步文档
 
     def test_type_inference(self):
@@ -74,23 +74,23 @@ class IngestTests(unittest.TestCase):
                             ("技术参数表.pdf", "spec"), ("演示视频.mp4", "video")):
             f = Path(self.tmp.name) / fname
             f.write_bytes(b"x")
-            r = mi.ingest(enterprise="e2", file_path=f)
+            r = mi.ingest(auto_target=False, enterprise="e2", file_path=f)
             self.assertEqual(r["type"], want, fname)
 
     def test_layer_publish_skipped_without_coords(self):
-        r = mi.ingest(enterprise="e3", file_path=self.src, mtype="catalog")
+        r = mi.ingest(auto_target=False, enterprise="e3", file_path=self.src, mtype="catalog")
         self.assertTrue(r["bitable"]["skipped"])          # 不谎报已写资料层/物料表
 
     def test_unsupported_type_rejected(self):
         f = Path(self.tmp.name) / "x.exe"; f.write_bytes(b"x")
         with self.assertRaises(ValueError):
-            mi.ingest(enterprise="e4", file_path=f)
+            mi.ingest(auto_target=False, enterprise="e4", file_path=f)
 
     def test_errors(self):
         with self.assertRaises(FileNotFoundError):
-            mi.ingest(enterprise="e1", file_path=Path(self.tmp.name) / "nope.pdf")
+            mi.ingest(auto_target=False, enterprise="e1", file_path=Path(self.tmp.name) / "nope.pdf")
         with self.assertRaises(ValueError):
-            mi.ingest(enterprise="e1", file_path=self.src, mtype="不存在的类型")
+            mi.ingest(auto_target=False, enterprise="e1", file_path=self.src, mtype="不存在的类型")
 
 
 if __name__ == "__main__":
