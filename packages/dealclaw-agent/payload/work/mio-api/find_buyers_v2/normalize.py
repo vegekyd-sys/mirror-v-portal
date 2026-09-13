@@ -39,7 +39,14 @@ PRODUCT_KEYS = ("purchaseTags", "productList", "matchedProducts", "tags", "关�
 BUYER_TYPE_KEYS = ("companyAttributes", "buyerType", "buyerTypes", "buyerTag", "buyer_tags")
 SIZE_KEYS = ("staffSizeLevel", "tradeScaleLevel", "annualRevenueLevel", "scale", "size")
 EXHIBITION_KEYS = ("preExhibitionIds", "preExhibitionId", "exhibitionIds")
-SCORE_KEYS = ("AI匹配分", "ai_score", "aiMatchScore", "matchScore")
+# 真实响应里的分数字段（2026-09-13 用真实 searchAIV2 响应核实：没有 AI匹配分）：
+#   totalQualityScore ≈ 0–160；five*Score ≈ 0–5（本样本 fiveMatchScore 恒为 0）
+# 口径未定前，score 只用于排序/诊断，**不作停止线**。
+SCORE_KEYS = ("totalQualityScore", "fiveCompositeScore", "fiveMatchScore",
+              "AI匹配分", "ai_score", "aiMatchScore", "matchScore")
+SCORE_FIELD_CANDIDATES = ("totalQualityScore", "fiveCompositeScore", "fiveMatchScore",
+                          "fiveRecommendScore", "fiveValuableScore", "fiveActiveScore",
+                          "fiveCompleteScore")
 INDUSTRY_KEYS = ("industry", "industryName", "行业")
 
 
@@ -108,6 +115,9 @@ def normalize_record(rec: dict, *, page: Optional[int] = None,
         "size": pick(rec, SIZE_KEYS),
         "exhibitions": pick_list(rec, EXHIBITION_KEYS),
         "score": to_float(pick(rec, SCORE_KEYS)),
+        "scores_raw": {k: v for k, v in
+                       ((k, to_float(rec.get(k))) for k in SCORE_FIELD_CANDIDATES)
+                       if v is not None},
         "page": page,
         "position": position,
         "key_company": _norm_company(company),
