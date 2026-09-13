@@ -15,11 +15,11 @@
   },
   "heartbeat": {
     "interval_hours": 6,
-    "enabled": false,
+    "enabled": true,
     "tasks": [
       "reflection_analysis",
       "memory_scan",
-      "compress_memory"
+      "log_compress"
     ]
   },
   "reflection": {

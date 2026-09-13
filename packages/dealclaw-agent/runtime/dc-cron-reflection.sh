@@ -27,7 +27,7 @@ TZ="${DEALCLAW_CRON_TZ:-Asia/Shanghai}"
 WS="${DEALCLAW_WORKSPACE:-/data/workspace}"
 AGENT="${DEALCLAW_AGENT:-dealclaw}"
 DECL_KEY="dealclaw-reflection-heartbeat"
-EVERY="6h"
+EVERY=""      # 留空表示未指定；稍后由 knight.config.heartbeat.interval_hours 或默认 6h 填充
 CRON_EXPR=""
 
 # ── 参数解析 ──
@@ -47,15 +47,18 @@ done
 python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-reflection] 非法时区: $TZ" >&2; exit 1; }
 
-# ── 读取开关（knight.config.heartbeat.enabled）──
-enabled="$(python3 - "$WS" <<'PY'
+# ── 读取开关与周期（knight.config.heartbeat.enabled / interval_hours）──
+read -r enabled interval_hours <<<"$(python3 - "$WS" <<'PY'
 import json, sys, pathlib
 p = pathlib.Path(sys.argv[1]) / "knight.config.json"
 try:
     c = json.loads(p.read_text(encoding="utf-8"))
 except Exception:
     c = {}
-print("1" if (c.get("heartbeat") or {}).get("enabled") else "0")
+hb = c.get("heartbeat") or {}
+iv = hb.get("interval_hours")
+iv = str(int(iv)) if isinstance(iv, (int, float)) and iv > 0 else ""
+print(("1" if hb.get("enabled") else "0") + " " + iv)
 PY
 )"
 case "${DEALCLAW_REFLECTION_ENABLED:-}" in
@@ -73,6 +76,9 @@ if [[ -n "$CRON_EXPR" ]]; then
   SCHED_ARGS=(--cron "$CRON_EXPR" --tz "$TZ")
   SCHED_DESC="${CRON_EXPR} @ ${TZ}"
 else
+  # 周期优先级：CLI --every > knight.config.heartbeat.interval_hours > 6h
+  [[ -z "$EVERY" ]] && EVERY="${interval_hours:+${interval_hours}h}"
+  [[ -z "$EVERY" ]] && EVERY="6h"
   SCHED_ARGS=(--every "$EVERY")
   SCHED_DESC="${EVERY}"
 fi
