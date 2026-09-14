@@ -11,5 +11,12 @@
     "baseUrl": "https://api.deepseek.com",
     "apiKey": "REPLACE"
   },
-  "vercel": { "projectId": "REPLACE", "teamId": "REPLACE" }
+  "vercel": { "projectId": "REPLACE", "teamId": "REPLACE" },
+  "alibaba": {
+    "enabled": false,
+    "region": "ap-southeast-1",
+    "apiKey": "REPLACE_WITH_FC_SANDBOX_KEY",
+    "templateId": "",
+    "trialTenantId": "alibaba-trial"
+  }
 }

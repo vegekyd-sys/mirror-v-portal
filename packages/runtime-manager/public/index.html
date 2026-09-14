@@ -113,7 +113,7 @@
         selected = $("tenant").value;
       $("tenant").replaceChildren(
         ...d.tenants.map((t) => {
-          const o = node("option", t.name + (t.app_id ? " · 飞书" : ""));
+          const o = node("option", t.name + (t.app_id ? " · 飞书" : "") + (t.runtime_provider === "alibaba" ? " · 阿里云" : " · Vercel"));
           o.value = t.id;
           return o;
         }),

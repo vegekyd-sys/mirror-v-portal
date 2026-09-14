@@ -35,8 +35,18 @@ export interface RuntimeProvider {
   ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
 }
 
+export interface RuntimeSandbox {
+  name: string;
+  status: string;
+  update(options: { timeout: number }): Promise<unknown>;
+  readFileToBuffer(options: { path: string }): Promise<Buffer | null>;
+  writeFiles(files: { path: string; content: Buffer }[]): Promise<unknown>;
+  runCommand(options: { cmd: string; args?: string[]; env?: Record<string, string>; stdout?: Writable; signal?: AbortSignal }): Promise<{ exitCode: number; stdout(): Promise<string>; stderr(): Promise<string> }>;
+  stop(options?: { signal?: AbortSignal }): Promise<{ status: string; snapshot?: { id: string } }>;
+}
+
 export class VercelProvider implements RuntimeProvider {
-  private handles = new Map<string, Sandbox>();
+  protected handles = new Map<string, RuntimeSandbox>();
   constructor(readonly config: Config) {}
   token(tenantId: string) {
     return createHmac("sha256", this.config.encryptionKey)
@@ -46,38 +56,41 @@ export class VercelProvider implements RuntimeProvider {
   name(tenantId: string) {
     return `${this.config.sandboxPrefix}-${tenantId}`;
   }
-  async get(tenant: Tenant, resume = true) {
+  async get(tenant: Tenant, resume = true): Promise<RuntimeSandbox> {
     return Sandbox.get({
       ...this.config.vercel,
       resume,
       name: tenant.sandbox_name || this.name(tenant.id),
     });
   }
+  protected checkConfiguration() {
+    if (!this.config.snapshotId) throw new Error("SNAPSHOT_NOT_READY");
+  }
+  protected async create(tenant: Tenant, name: string): Promise<RuntimeSandbox> {
+    return Sandbox.getOrCreate({
+      ...this.config.vercel, name,
+      source: { type: "snapshot", snapshotId: this.config.snapshotId! },
+      persistent: true, snapshotExpiration: 0,
+      keepLastSnapshots: { count: 2, expiration: 0 },
+      resources: { vcpus: 2 }, timeout: 1_200_000,
+      tags: { purpose: "nexus-trial", tenant: tenant.id },
+    });
+  }
   async ensure(
     tenant: Tenant,
     onProvision?: (name: string) => Promise<void>,
   ): Promise<RuntimeHandle> {
-    if (!this.config.snapshotId) throw new Error("SNAPSHOT_NOT_READY");
+    this.checkConfiguration();
     const start = Date.now();
-    const name = tenant.sandbox_name || this.name(tenant.id);
+    let name = tenant.sandbox_name || this.name(tenant.id);
     // Never silently recreate a previously provisioned tenant whose snapshot expired.
     // SDK getOrCreate can recreate an expired sandbox, which would lose user state.
-    let sbx: Sandbox;
+    let sbx: RuntimeSandbox;
     if (this.config.optimizeRuntime !== false && this.handles.has(tenant.id))
       sbx = this.handles.get(tenant.id)!;
     else if (tenant.sandbox_name) sbx = await this.get(tenant);
-    else
-      sbx = await Sandbox.getOrCreate({
-        ...this.config.vercel,
-        name,
-        source: { type: "snapshot", snapshotId: this.config.snapshotId },
-        persistent: true,
-        snapshotExpiration: 0,
-        keepLastSnapshots: { count: 2, expiration: 0 },
-        resources: { vcpus: 2 },
-        timeout: 1_200_000,
-        tags: { purpose: "nexus-trial", tenant: tenant.id },
-      });
+    else sbx = await this.create(tenant, name);
+    name = sbx.name;
     const sandboxAcquireMs = Date.now() - start;
     await onProvision?.(name);
     const reused = tenant.state === "ready";

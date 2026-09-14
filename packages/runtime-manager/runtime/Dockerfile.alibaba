@@ -1,0 +1,12 @@
+FROM node:24-bookworm
+RUN mkdir -p /vercel/sandbox/nexus/runtime /vercel/sandbox/nexus/payload /vercel/sandbox/agent-data
+COPY payload.tar /tmp/nexus-payload.tar
+RUN tar -xf /tmp/nexus-payload.tar --strip-components=3 -C /vercel/sandbox/nexus/payload \
+    && rm /tmp/nexus-payload.tar \
+    && npm install --prefix /vercel/sandbox/nexus/runtime --omit=dev --no-audit --no-fund openclaw@2026.7.1 \
+    && node /vercel/sandbox/nexus/runtime/node_modules/openclaw/openclaw.mjs --version \
+    && npm cache clean --force \
+    && chown -R node:node /vercel/sandbox
+# FC image conversion adds its own execution agent. This image contains no keys,
+# customer state, or running OpenClaw process. Nexus injects the runtime at wake.
+WORKDIR /vercel/sandbox

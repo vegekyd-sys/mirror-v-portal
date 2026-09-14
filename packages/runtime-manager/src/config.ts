@@ -14,6 +14,7 @@ export interface Config {
   sandboxPrefix: string;
   model: { id: string; baseUrl: string; apiKey: string };
   vercel: { token: string; teamId: string; projectId: string };
+  alibaba?: { apiKey: string; region: string; templateId: string; trialTenantId?: string; enabled?: boolean };
   dataDir: string;
 }
 

@@ -21,6 +21,7 @@ export interface Tenant {
   wake_count: number;
   last_wake_ms: number | null;
   snapshot_id: string | null;
+  runtime_provider?: "vercel" | "alibaba";
 }
 export interface Run {
   schedule_id?: string;
@@ -86,6 +87,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS elastic_events_run ON elastic_events(run_id,seq);
       CREATE INDEX IF NOT EXISTS elastic_events_tenant ON elastic_events(tenant_id,seq DESC);
     `);
+    await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS runtime_provider text NOT NULL DEFAULT 'vercel' CHECK (runtime_provider IN ('vercel','alibaba'))`);
     await this.boss.start();
     await this.boss.createQueue("agent-turn", {
       retryLimit: 1000,
@@ -165,6 +167,7 @@ export class Store {
     name: string,
     appId?: string,
     appSecret?: string,
+    runtimeProvider: "vercel" | "alibaba" = "vercel",
   ) {
     const existing = appId
       ? await this.pool.query<Tenant>(
@@ -172,15 +175,20 @@ export class Store {
           [appId],
         )
       : { rows: [] };
-    if (existing.rows[0]) return existing.rows[0];
+    if (existing.rows[0]) {
+      if ((existing.rows[0].runtime_provider ?? "vercel") !== runtimeProvider)
+        throw Error("TENANT_PROVIDER_IMMUTABLE");
+      return existing.rows[0];
+    }
     await this.pool.query(
-      "INSERT INTO elastic_tenants(id,name,app_id,secret,idle_seconds) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING",
+      "INSERT INTO elastic_tenants(id,name,app_id,secret,idle_seconds,runtime_provider) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING",
       [
         id,
         name,
         appId || null,
         appSecret ? this.seal(appSecret) : null,
         this.config.idleTimeoutSeconds,
+        runtimeProvider,
       ],
     );
     return this.tenant(id);

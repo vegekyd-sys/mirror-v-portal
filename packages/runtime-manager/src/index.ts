@@ -5,6 +5,8 @@ import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
 import { VercelProvider } from "./provider.js";
+import { AlibabaProvider } from "./alibaba-provider.js";
+import { ProviderRouter } from "./provider-router.js";
 import { RuntimeManager } from "./manager.js";
 import { FeishuEdge } from "./feishu.js";
 const config = loadConfig(),
@@ -12,10 +14,13 @@ const config = loadConfig(),
 await store.init();
 const scheduler=new Scheduler(store);await scheduler.init();
 await store.createTenant(config.trialTenantId, "DealClaw 试用");
+const alibabaTrialId = config.alibaba?.trialTenantId || "alibaba-trial";
+if (config.alibaba?.enabled && config.alibaba.apiKey && config.alibaba.templateId)
+  await store.createTenant(alibabaTrialId, "DealClaw 阿里云试用", undefined, undefined, "alibaba");
 const edge = new FeishuEdge(store);
 const manager = new RuntimeManager(
   store,
-  new VercelProvider(config),
+  new ProviderRouter({ vercel: new VercelProvider(config), alibaba: new AlibabaProvider(config) }),
   (run, text) => edge.delta(run, text),
   (run, kind, data) => edge.progress(run, kind, data),
 );
@@ -83,6 +88,13 @@ app.use("/onboard", async (req, res, next) => {
 app.post("/v1/tenants", async (req, res, next) => {
   try {
     const { botAppId, botAppSecret } = req.body;
+    const runtimeProvider = req.body.runtimeProvider ?? "vercel";
+    if (!["vercel", "alibaba"].includes(runtimeProvider)) {
+      res.status(400).json({ error: "INVALID_RUNTIME_PROVIDER" }); return;
+    }
+    if (runtimeProvider === "alibaba" && (!config.alibaba?.enabled || !config.alibaba.apiKey || !config.alibaba.templateId)) {
+      res.status(503).json({ error: "ALIBABA_NOT_CONFIGURED" }); return;
+    }
     if (!botAppId || !botAppSecret) {
       res.status(400).json({ error: "APP_CREDENTIALS_REQUIRED" });
       return;
@@ -92,6 +104,7 @@ app.post("/v1/tenants", async (req, res, next) => {
       "扫码创建的 DealClaw",
       botAppId,
       botAppSecret,
+      runtimeProvider,
     );
     edge.connect(t);
     res.json({ tenant: { tenantId: t.id } });
@@ -115,8 +128,8 @@ app.put("/v1/tenants/:id/credentials", async (req, res, next) => {
 app.get("/api/state", async (_req, res, next) => {
   try {
     const tenants = await store.pool.query(
-      "SELECT id,name,app_id,state,sandbox_name,idle_seconds,last_error,last_wake_ms,wake_count FROM elastic_tenants WHERE app_id IS NOT NULL OR id=$1 ORDER BY created_at",
-      [config.trialTenantId],
+      "SELECT id,name,app_id,state,sandbox_name,idle_seconds,last_error,last_wake_ms,wake_count,runtime_provider FROM elastic_tenants WHERE app_id IS NOT NULL OR id=ANY($1::text[]) ORDER BY created_at",
+      [[config.trialTenantId, alibabaTrialId]],
     );
     const runs = await store.pool.query(
       "SELECT id,tenant_id,text,status,CASE WHEN status='running' THEN coalesce((SELECT string_agg(data->>'text','' ORDER BY seq) FROM elastic_events WHERE run_id=elastic_runs.id AND kind='delta'),output) ELSE output END AS output,error,delivery FROM elastic_runs WHERE channel <> 'profile' ORDER BY created_at DESC LIMIT 50",
