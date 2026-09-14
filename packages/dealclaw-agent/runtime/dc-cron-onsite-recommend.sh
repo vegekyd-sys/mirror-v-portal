@@ -42,8 +42,6 @@ COUNTRY_TZ='{
   "Kazakhstan": "Asia/Almaty"
 }'
 
-TZ_ARG="${1:-}"
-
 # 解析时区：显式 --tz 优先；否则从当前展会国家映射；兜底 Asia/Shanghai
 resolve_tz() {
   local arg1="${1:-}"
@@ -78,7 +76,10 @@ print(tzmap.get('''$country'''.strip(), 'Asia/Shanghai'))
   echo "Asia/Shanghai"
 }
 
-TZ="$(resolve_tz "$1" "$2")"
+# set -u 下必须给位置参数兜底：entrypoint 是不带参数调用的，裸 "$1" 会直接
+# unbound variable 退出，三条 cron 一条都注册不上（失败还被 entrypoint 的
+# `|| echo 失败` 吞掉，只在启动日志留一行）。
+TZ="$(resolve_tz "${1:-}" "${2:-}")"
 
 # 校验时区合法
 python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
