@@ -421,6 +421,35 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
     if outbound is None:
         return {**result, "status": "unmatched", "failure_reason": "no_matching_outbound"}
 
+    # 落库：把入站邮件本体写进事实层（字段与 imap_sync.py 的 inbound 记录对齐）。
+    # 修复点：此前 handle_inbound_event 只做「信号 / 通知 / 草稿」，不写事实层 →
+    # Resend 邮箱的回复进不了 EmailStore：早晚报「实际回复」数不到、买家案卷查不到原文。
+    # 幂等：store 按 message_id 取键（同 message_id 只落一份）；失败 best-effort，不影响信号与通知。
+    try:
+        from email_gateway.store import utc_now
+        store.insert_message({
+            "account_id": account_id,
+            "direction": "inbound",
+            "message_id": message_id,
+            "resend_received_id": email_id,
+            "in_reply_to": in_reply_to,
+            "references": reference_candidates,
+            "sender": from_email,
+            "recipients": [to_email] if to_email else [],
+            "subject": subject,
+            "text_preview": (text or "")[:1200],
+            "received_at": utc_now(),
+            "created_at": utc_now(),
+            "related": True,
+            "company_id": outbound.get("company_id", "") or account.get("enterprise_id", ""),
+            "campaign_id": outbound.get("campaign_id", ""),
+            "lead_id": outbound.get("lead_id", ""),
+            "contact_id": outbound.get("contact_id", ""),
+            "thread_id": outbound.get("thread_id") or outbound.get("local_message_id", ""),
+        })
+    except Exception:
+        pass
+
     # 生成七信号 + 自动触发 Push 决策（shadow/live）；best-effort
     try:
         from .dc_email_signals import analyze_reply, process_reply
