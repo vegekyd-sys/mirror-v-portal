@@ -109,6 +109,69 @@ def _self_evolution_brief(company_id: str, days: int = 7) -> str:
         return ""
 
 
+# ── 出数前自愈：入站事实层有界补齐（best-effort）──────────────────────
+# 背景：Resend 入站原先不写事实层（已修：handle_inbound_event 落库），但补丁上线前漏掉的
+# 回复、以及 webhook 丢投 / 轮询游标越过的历史缺口，不会自动回来。
+# 这里在早晚报「出数前」有界补一次：只拉入站、限条数、短超时、失败不影响出数。
+SELFHEAL_ENV = "DC_DAILY_INBOUND_SELFHEAL"                     # 0/false 可关闭；默认开
+SELFHEAL_LIMIT_ENV = "DC_DAILY_INBOUND_SELFHEAL_LIMIT"         # 默认 50
+SELFHEAL_TIMEOUT_ENV = "DC_DAILY_INBOUND_SELFHEAL_TIMEOUT"     # 默认 25 秒
+
+
+def _ensure_recent_inbound(company_id: str, limit: int | None = None) -> dict:
+    """出数前的有界自愈：拉最近 N 条入站写进事实层（幂等、best-effort）。
+
+    - 只拉入站（direction=received）、只要邮件本体，**不拉附件、不组装案卷**；
+    - 短超时（默认 25s）+ 整体 try/except：失败/超时只返回错误，绝不抛给调用方；
+    - 幂等：EmailStore 按 message_id 取键，同一天早晚两报重复跑不会重复计数。
+
+    返回 {ok, written, fetched, skipped_reason?, error?}，供日志/诊断使用。
+    """
+    flag = (os.environ.get(SELFHEAL_ENV, "1") or "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return {"ok": True, "skipped_reason": "disabled"}
+    if not company_id:
+        return {"ok": True, "skipped_reason": "no_company"}
+    try:
+        lim = int(limit or os.environ.get(SELFHEAL_LIMIT_ENV, "50") or 50)
+    except Exception:
+        lim = 50
+    try:
+        tmo = int(os.environ.get(SELFHEAL_TIMEOUT_ENV, "25") or 25)
+    except Exception:
+        tmo = 25
+    if lim <= 0:
+        return {"ok": True, "skipped_reason": "limit_disabled"}
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+
+    try:
+        import dc_resend_history as hist
+    except Exception as e:  # 模块缺失也不影响出数
+        return {"ok": False, "error": str(e)[:200]}
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = ex.submit(hist.pull, direction="received", limit=lim, company_id=company_id)
+        r = fut.result(timeout=tmo)
+    except _FutTimeout:
+        return {"ok": False, "error": f"timeout>{tmo}s"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        # 超时也不等线程：不能因为自愈把日报拖住（worker 自带 25s 网络超时）
+        ex.shutdown(wait=False)
+
+    r = r or {}
+    sides = r.get("sides") or {}
+    return {
+        "ok": bool(r.get("ok")),
+        "written": int(r.get("written") or 0),
+        "fetched": int(((sides.get("received") or {}).get("fetched")) or 0),
+        "errors": r.get("errors") or [],
+    }
+
+
 def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
                     date_range=None, tz: str = None, store=None) -> dict:
     """聚合发送/送达/回复/退信等指标（**统一读入口**：email_metrics.service）。
@@ -118,6 +181,8 @@ def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
     不传则为全部时间（保留旧可见语义）。
     数字不可用时 `status="unavailable"` 且值为 None（**不报假 0**）。
     """
+    # 出数前自愈：有界补齐最近入站（只补缺失，不改口径）；失败/超时不影响出数。
+    selfheal = _ensure_recent_inbound(company_id)
     from dc_email_controller.dc_email_signals import list_signals
     from email_metrics.service import read_email_metrics
     # 回复：按唯一回复 message_id（信号）计数，与看板漏斗一致（Resend 路径生成信号，不写 inbound bound 记录）
