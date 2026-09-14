@@ -12,6 +12,33 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _client import add_auth_args, emit, fail, parse_json_array, post_json
 
 
+def _annotate_ai_hunter(resp: dict) -> dict:
+	"""给 searchAIV2 原始结果补可展示的 AI 猎客标记字段。
+
+	平台新增字段：hunterBuyerFlag=1，hunterBuyerTypes=[]；保留原字段，
+	只追加 aiHunterMarked / aiHunterLabel，并在 response.data 计数。
+	"""
+	data = (resp.get("response") or {}).get("data") or {}
+	page = data.get("page") or {}
+	records = page.get("records") or []
+	count = 0
+	for rec in records:
+		raw = rec.get("hunterBuyerFlag")
+		marked = raw is True or str(raw).strip().lower() in {"1", "true", "yes"}
+		raw_types = rec.get("hunterBuyerTypes") or []
+		if isinstance(raw_types, (list, tuple, set)):
+			types = [str(v).strip() for v in raw_types if str(v).strip()]
+		else:
+			types = [v.strip() for v in str(raw_types).replace("，", ",").split(",") if v.strip()]
+		rec["aiHunterMarked"] = marked
+		rec["aiHunterLabel"] = "🤖 AI猎客" + ("｜" + "、".join(types) if marked and types else "") if marked else ""
+		if marked:
+			count += 1
+	if isinstance(data, dict):
+		data["aiHunterCount"] = count
+	return resp
+
+
 def main() -> None:
 	p = argparse.ArgumentParser(description="小元-多条件搜买家 searchAIV2")
 	add_auth_args(p)
@@ -79,7 +106,7 @@ def main() -> None:
 		supplier_id=args.supplier_id,
 		timeout=args.timeout,
 	)
-	emit({"tool": "searchAIV2", "request": body, "response": resp})
+	emit({"tool": "searchAIV2", "request": body, "response": _annotate_ai_hunter(resp)})
 
 
 if __name__ == "__main__":

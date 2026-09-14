@@ -175,6 +175,26 @@ def extract_purchase_tags(rec: dict) -> list:
     return out
 
 
+def extract_ai_hunter_marker(rec: dict) -> dict:
+    """读取 searchAIV2 新增的 AI 猎客买家标记（2026-09-15 田耕郡要求展示）。
+
+    `hunterBuyerFlag=1` 表示该买家公司在米奥侧带 AI 猎客标记；
+    `hunterBuyerTypes` 是补充类型（实测：AI对话（意图概要））。
+    这是**买家画像字段**，不是本 skill 调用了 Hunter.io 的数据源，允许对用户展示。
+    """
+    raw_flag = rec.get("hunterBuyerFlag")
+    marked = raw_flag is True or str(raw_flag).strip().lower() in {"1", "true", "yes"}
+    raw_types = rec.get("hunterBuyerTypes") or []
+    if isinstance(raw_types, (list, tuple, set)):
+        types = [str(v).strip() for v in raw_types if str(v).strip()]
+    else:
+        types = [v.strip() for v in re.split(r"[,;，；|]", str(raw_types)) if v.strip()]
+    label = ""
+    if marked:
+        label = "🤖 AI猎客" + ("｜" + "、".join(types) if types else "")
+    return {"aiHunterMarked": marked, "aiHunterTypes": types, "aiHunterLabel": label}
+
+
 def format_record(rec: dict) -> dict:
     """将 searchAIV2 单条记录转为 DC-LS 表格行。"""
     return {
@@ -192,6 +212,7 @@ def format_record(rec: dict) -> dict:
         "companyAttributes": rec.get("companyAttributes") or [],
         "hasContact": has_any_contact(rec),
         "purchaseTags": extract_purchase_tags(rec),
+        **extract_ai_hunter_marker(rec),
     }
 
 
@@ -211,6 +232,7 @@ def format_results(
     total = page.get("total", 0)
 
     formatted = [format_record(r) for r in records]
+    hunter_count = sum(1 for r in formatted if r.get("aiHunterMarked"))
     dropped = 0
     if require_contact:
         before = len(formatted)
@@ -221,6 +243,8 @@ def format_results(
     summary = f"📊 {term} [{field}] ({country_str}) — {len(formatted)} 条入库 | 共 {total} 条匹配"
     if dropped:
         summary += f" (过滤无联系方式 {dropped} 条)"
+    if hunter_count:
+        summary += f"｜🤖 AI猎客标记 {hunter_count} 家"
 
     out = {
         "status": "success",
@@ -229,6 +253,7 @@ def format_results(
         "searchField": field,
         "country": country or [],
         "records": formatted,
+        "aiHunterCount": hunter_count,
         "pagination": {
             "total": total,
             "allTotal": raw.get("allTotal", total),

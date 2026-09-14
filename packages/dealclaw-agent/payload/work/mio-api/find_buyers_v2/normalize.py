@@ -50,6 +50,10 @@ SCORE_FIELD_CANDIDATES = ("totalQualityScore", "fiveCompositeScore", "fiveMatchS
                           "fiveRecommendScore", "fiveValuableScore", "fiveActiveScore",
                           "fiveCompleteScore")
 INDUSTRY_KEYS = ("industry", "industryName", "行业")
+# searchAIV2 新增字段（2026-09-15 schema/只读抽样核实）：
+# hunterBuyerFlag=1，hunterBuyerTypes=["AI对话（意图概要）"]。
+HUNTER_FLAG_KEYS = ("hunterBuyerFlag", "aiHunterFlag", "isAiHunter", "ai_hunter")
+HUNTER_TYPE_KEYS = ("hunterBuyerTypes", "aiHunterTypes", "ai_hunter_types")
 
 
 def pick(rec: dict, keys: Iterable[str]) -> str:
@@ -101,6 +105,26 @@ def to_float(value) -> Optional[float]:
         return None
 
 
+def ai_hunter_marker(rec: dict) -> dict:
+    """归一化 AI 猎客买家标记，供交付展示与模型摘要保留。
+
+    这是米奥返回的买家画像字段，不是本 skill 实际调用 Hunter.io 的数据源。
+    """
+    raw_flag = None
+    for key in HUNTER_FLAG_KEYS:
+        if key in rec:
+            raw_flag = rec.get(key)
+            break
+    marked = raw_flag is True or str(raw_flag).strip().lower() in {"1", "true", "yes"}
+    types = []
+    for key in HUNTER_TYPE_KEYS:
+        if rec.get(key) not in (None, ""):
+            types = as_list(rec.get(key))
+            break
+    label = "🤖 AI猎客" + ("｜" + "、".join(types) if marked and types else "") if marked else ""
+    return {"ai_hunter_marked": marked, "ai_hunter_types": types, "ai_hunter_label": label}
+
+
 def normalize_record(rec: dict, *, page: Optional[int] = None,
                      position: Optional[int] = None) -> dict:
     company = pick(rec, COMPANY_KEYS)
@@ -124,6 +148,7 @@ def normalize_record(rec: dict, *, page: Optional[int] = None,
         "position": position,
         "key_company": _norm_company(company),
         "key_domain": _norm_domain(website),
+        **ai_hunter_marker(rec),
     }
 
 
