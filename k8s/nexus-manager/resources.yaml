@@ -10,7 +10,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-options: Prune=false
 spec:
-  description: Dedicated NAS for Nexus Manager
+  description: nexus-manager
   type: nas
   reclaimPolicy: Retain
   parameters:
