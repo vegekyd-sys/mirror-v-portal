@@ -254,7 +254,14 @@ if (wechatBound && process.env.DEALCLAW_WECHAT_TRUSTED !== '1') pluginLoadPaths.
 const deniedTools = [
   'message',
   'gateway',
-  'cron',
+  // cron is intentionally ALLOWED: without it the agent has no durable way to
+  // honour 「明天提醒我跟进」 and falls back to backgrounding `sleep`, which dies
+  // on the next pod restart / image upgrade — the reminder is then lost
+  // silently. AGENTS.md 「延时提醒一律走调度器」 assumes this tool exists.
+  // Safe to expose: the agent cron tool hard-rejects payload.kind="command"
+  // (assertNoCronCommandPayload), so it can only schedule systemEvent/agentTurn
+  // jobs, never shell. The six product crons stay on the CLI path in
+  // runtime/dc-cron-*.sh, which the tool can neither create nor edit.
   'nodes',
   // sessions_spawn is intentionally ALLOWED: it lets the main agent delegate
   // long multi-tool tasks (find-buyers crawls) to an isolated sub-session that
