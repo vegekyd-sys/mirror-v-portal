@@ -256,7 +256,11 @@ const deniedTools = [
   'gateway',
   'cron',
   'nodes',
-  'sessions_spawn',
+  // sessions_spawn is intentionally ALLOWED: it lets the main agent delegate
+  // long multi-tool tasks (find-buyers crawls) to an isolated sub-session that
+  // runs with its own runTimeoutSeconds and pushes its final result back to the
+  // parent via the built-in completion event. This is how long tasks escape the
+  // 1800s run ceiling without blocking the Feishu reply (P1 async).
   'sessions_send',
   'sessions_list',
   'sessions_history',
@@ -320,6 +324,14 @@ const config = {
       // emit 8 chars of answer, hitting the 15min run ceiling. Drop one notch
       // (high → medium) to bound thinking without disabling it.
       thinkingDefault: 'medium',
+      // Sub-agent delegation: 'prefer' strongly instructs the main agent to
+      // hand non-trivial work (find-buyers / 开发信 crawls) to sessions_spawn
+      // sub-agents instead of grinding through it inline and hitting the run
+      // ceiling. Sub-agents run with their own runTimeoutSeconds and push
+      // results back via completion events.
+      subagents: {
+        delegationMode: 'prefer',
+      },
       contextTokens: 1_000_000,
       typingMode: 'instant',
       // Multi-user tenants: each Feishu peer gets its own concurrent budget
