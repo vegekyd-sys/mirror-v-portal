@@ -1,7 +1,8 @@
 FROM dealclaw-acr-registry-vpc.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/openclaw:2026.9.4@sha256:6bc0bf3117e1c5074db8a064084a5f9d41ece1aa2a16369a82f53207b846a5c3
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends git python3 ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+# The pinned OpenClaw image already contains these runtime tools. Verify that
+# contract without contacting Debian mirrors during every application build.
+RUN git --version && python3 --version && curl --version && test -s /etc/ssl/certs/ca-certificates.crt
 # CI builds remain on the existing builder; no host Docker socket is mounted.
 RUN corepack enable
 ARG KUBECTL_VERSION=v1.36.2
