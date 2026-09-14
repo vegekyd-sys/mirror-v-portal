@@ -34,6 +34,20 @@ test('restart preserves native configuration, work and identity; secrets remain 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('first boot is available before a model credential is configured', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-manager-empty-'));
+  try {
+    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://manager.example.com',
+      OPENCLAW_GATEWAY_TOKEN: 'a'.repeat(40), OPENCLAW_HOME: `${root}/home`, OPENCLAW_STATE_DIR: `${root}/state`,
+      OPENCLAW_CONFIG_PATH: `${root}/state/openclaw.json`, OPENCLAW_WORKSPACE_DIR: `${root}/workspace`,
+      NEXUS_MODEL_BASE_URL: 'https://models.example.com/v1', NEXUS_MODEL_ID: 'model', NEXUS_UI_BASE_PATH: '/nexus-manager/openclaw' };
+    bootstrap(env, path.resolve(import.meta.dirname, '../payload'));
+    const config = fs.readFileSync(env.OPENCLAW_CONFIG_PATH, 'utf8');
+    assert.ok(config.includes('${NEXUS_MODEL_API_KEY}'));
+    assert.equal(JSON.parse(config).agents.defaults.model.primary, 'nexus/model');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('base paths reject traversal, encoded separators and URL injection', () => {
   assert.equal(normalizeUiBasePath('/nexus-manager/openclaw/'), '/nexus-manager/openclaw');
   assert.equal(normalizeUiBasePath('/'), '');

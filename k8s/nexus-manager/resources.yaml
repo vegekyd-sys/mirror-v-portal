@@ -102,8 +102,6 @@ spec:
               drop: [ALL]
           envFrom:
             - secretRef:
-                name: nexus-manager-credentials-initial
-            - secretRef:
                 name: nexus-manager-gateway
           env:
             - name: NEXUS_ADMIN_ORIGIN

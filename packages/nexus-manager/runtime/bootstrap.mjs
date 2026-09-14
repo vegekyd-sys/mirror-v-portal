@@ -29,7 +29,6 @@ export function bootstrap(env = process.env, payload = '/opt/nexus-manager/paylo
   }
   // First boot only. Native Control UI remains the owner of mutable configuration.
   if (!fs.existsSync(configPath)) {
-    if (!env.NEXUS_MODEL_API_KEY) throw new Error('Initial model credential is missing');
     const base = new URL(env.NEXUS_MODEL_BASE_URL);
     if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) throw new Error('Model endpoint must use HTTPS without credentials');
     if (!env.NEXUS_MODEL_ID) throw new Error('Initial model ID is missing');

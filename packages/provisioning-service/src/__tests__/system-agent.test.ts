@@ -47,6 +47,18 @@ describe('system agent management', () => {
     expect(patch[2].spec.template.spec.containers[0].envFrom[1].secretRef.name).toBe('nexus-manager-gateway');
     expect(JSON.stringify(result)).not.toContain('new-secret');
   });
+  it('creates the first credential version for an agent started without a model key', async () => {
+    const d: any = deployment(); d.spec.template.spec.containers[0].envFrom = [{ secretRef: { name: 'nexus-manager-gateway' } }];
+    const request = vi.fn().mockResolvedValueOnce(d).mockResolvedValue({});
+    await createSystemAgentService(request).credentials('first-secret', '7');
+    const secret = request.mock.calls[1][2];
+    expect(secret.data).toEqual({ NEXUS_MODEL_API_KEY: Buffer.from('first-secret').toString('base64') });
+    const patch = request.mock.calls[2][2];
+    expect(patch.spec.template.spec.containers[0].envFrom).toEqual([
+      { secretRef: { name: 'nexus-manager-gateway' } },
+      { secretRef: { name: secret.metadata.name } },
+    ]);
+  });
   it('rejects foreign pod logs before accessing logs or secrets', async () => {
     const request = vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'nexus-manager-abc' } }] });
     await expect(createSystemAgentService(request).logs('customer-pod', false)).rejects.toMatchObject({ status: 404 });

@@ -127,7 +127,7 @@ NAS 上保存权威状态；依赖缓存和可重建索引优先放临时存储�
 
 NAS 上的原生配置是运行配置唯一权威来源，启动只做首次初始化，不覆盖原生 UI 保存的修改。首版不再新增第二套模型/通道配置表单或 Gateway 配置 RPC adapter，直接使用嵌入的原生界面。
 
-模型 API Key 是例外：外层凭据表单更新 `${NEXUS_MODEL_API_KEY}` 对应的 Kubernetes Secret；初始化的 `nexus` 供应商引用它。新增供应商需在原生 UI 配置其凭据；只有明确引用该变量的供应商才使用外层更新的 Key。
+模型 API Key 是例外：首启无需预置 Key，外层凭据表单会创建并更新 `${NEXUS_MODEL_API_KEY}` 对应的版本化 Kubernetes Secret，然后滚动重启 Pod；初始化的 `nexus` 供应商引用它。新增供应商需在原生 UI 配置其凭据；只有明确引用该变量的供应商才使用外层更新的 Key。
 
 生效流程：校验输入 → 创建新版 immutable Secret → 带 resourceVersion 更新 Deployment 引用 → Recreate 重建 → 页面轮询 Pod 状态。停止状态只保存，下一次启动加载。保留旧 Secret，支持显式恢复上一版。
 

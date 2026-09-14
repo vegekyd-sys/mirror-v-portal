@@ -30,7 +30,6 @@ kubectl apply --dry-run=server -f /tmp/nexus-manager.yaml
 
 在 `dealclaw-system` namespace 通过现有密钥发布流程创建：
 
-- `nexus-manager-credentials-initial`：`NEXUS_MODEL_API_KEY`，设置 immutable=true。
 - `nexus-manager-gateway`：`OPENCLAW_GATEWAY_TOKEN`，至少 32 字符随机值。
 - `registry-secret-vpc`：复用现有 ACR 拉取凭据，并复制到独立 namespace。
 - `datathink-tls`：复用现有 `*.datathink.com` TLS Secret，并复制到独立 namespace。
@@ -52,7 +51,7 @@ NEXUS_MANAGER_UI_URL=https://<UI 域名>
 - 控制台入口 `/nexus-manager`。外层管理栏不依赖 Gateway 启动成功；iframe 使用独立域名和原生认证。
 - Gateway 监听容器 loopback:18790；同进程管理的轻量代理在 18789 提供 HTTP/WS，保留原生认证，只对 UI HTML 的 CSP framing 指令进行定向适配。
 - 原生 UI 首次输入 Gateway 凭据，通过运维人员执行 `openclaw devices list` / `openclaw devices approve <requestId>` 完成配对。不要把 Gateway token 放入 URL。
-- 主供应商初始化为 `nexus`，API Key 引用 `${NEXUS_MODEL_API_KEY}`；其他模型、通道、定时任务在原生 UI 配置。原生插件是否随镜像提供须在部署验证时确认，缺少时固定版本加入镜像。
+- 主供应商初始化为 `nexus`，API Key 引用 `${NEXUS_MODEL_API_KEY}`。首启可不提供该变量，随后由管理控制台创建版本化 Secret 并重启 Pod；其他模型、通道、定时任务在原生 UI 配置。原生插件是否随镜像提供须在部署验证时确认，缺少时固定版本加入镜像。
 - 凭据更换保存新版 immutable Secret，乐观锁更新 Deployment 引用，Recreate 重建 Pod；停止状态只保存，下一次启动生效。
 - 页面明确显示 Pod 状态；模型 Key 认证与余额必须通过实际对话确认，不声称自动做了模型验证。
 - “恢复上一版凭据”切换到保留 Secret，触发重新加载。不自动删除历史 Secret；后续人工清理须排除当前和回退引用。

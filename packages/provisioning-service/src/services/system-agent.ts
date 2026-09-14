@@ -62,9 +62,8 @@ export function createSystemAgentService(request: RequestFn = clusterRequest) {
     if (!c) throw new SystemAgentError(409, '实例容器配置不匹配');
     return c;
   }
-  function secretName(d: any): string {
+  function secretName(d: any): string | undefined {
     const name = container(d).envFrom?.find((v: any) => v.secretRef?.name?.startsWith('nexus-manager-credentials-'))?.secretRef.name;
-    if (!name) throw new SystemAgentError(409, '凭据引用不匹配');
     return name;
   }
   async function update(s: ReturnType<typeof settings>, d: any, spec: any, annotations?: any) {
@@ -75,9 +74,11 @@ export function createSystemAgentService(request: RequestFn = clusterRequest) {
   async function switchSecret(s: ReturnType<typeof settings>, d: any, name: string) {
     const current = secretName(d);
     const containers = d.spec.template.spec.containers.map((c: any) => c.name !== NAME ? c : ({
-      ...c, envFrom: c.envFrom.map((ref: any) => ref.secretRef?.name === current ? { secretRef: { name } } : ref),
+      ...c, envFrom: current
+        ? c.envFrom.map((ref: any) => ref.secretRef?.name === current ? { secretRef: { name } } : ref)
+        : [...(c.envFrom || []), { secretRef: { name } }],
     }));
-    await update(s, d, { template: { spec: { containers } } }, { [PREVIOUS]: current });
+    await update(s, d, { template: { spec: { containers } } }, current ? { [PREVIOUS]: current } : undefined);
     return { accepted: true, message: d.spec.replicas === 0 ? '已保存；下次启动加载新凭据' : '已保存，正在重建 Pod；模型可用性请在原生 UI 验证' };
   }
   return {
@@ -112,7 +113,8 @@ export function createSystemAgentService(request: RequestFn = clusterRequest) {
       if (typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 8192 || /[\r\n\0]/.test(apiKey)) throw new SystemAgentError(400, 'API Key 格式不正确');
       const s = settings(); const d = await request('GET', s.deployment);
       if (!version || d.metadata.resourceVersion !== version) throw new SystemAgentError(409, '实例已变化，请刷新后重试');
-      const previous = await request('GET', `${s.core}/secrets/${secretName(d)}`);
+      const current = secretName(d);
+      const previous = current ? await request('GET', `${s.core}/secrets/${current}`) : { data: {} };
       const name = `nexus-manager-credentials-${randomUUID()}`;
       await request('POST', `${s.core}/secrets`, {
         apiVersion: 'v1', kind: 'Secret', immutable: true, type: 'Opaque',
