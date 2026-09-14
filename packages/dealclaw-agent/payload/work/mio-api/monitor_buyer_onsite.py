@@ -164,13 +164,37 @@ def _run_xiaoyuan(*args) -> dict | None:
         return None
 
 
-def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str) -> str:
-    """查公司简介（1-2 句）。优先 company_profile，否则用买家特征 + 行业标签。
+def build_buyer_tags(industry: str, chars: str) -> list[str]:
+    """把「行业标签 + 买家特征」整理成标签列表，**与公司简介分开展示**。
 
-    失败静默返回空串，不影响主流程。每次新到场多 2 个只读 API 调用。
+    2026-09-15 截图实证：这两类值以前被拼进「公司介绍」行，于是有的卡片显示简介原文、
+    有的卡片显示标签，同一栏位两种含义。现在标签单独一行；简介缺失时不拿它顶替。
+    """
+    tags = []
+    if industry:
+        items = [t.strip() for t in industry.split(",") if t.strip() and t.strip() != "其他"]
+        if items:
+            tags.append("行业：" + "/".join(items[:3]))
+    if chars:
+        tags.append(clip_text(chars.replace(",", "、"), CHARACTERISTICS_MAX_LEN))
+    return tags
+
+
+def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str) -> dict:
+    """查「简介原文 + 买家标签」，**分开**返回（2026-09-15 田耕郡口径）。
+
+    截图实证（Solarvolt / ALIMENTOS 两张卡）：同一个「公司介绍」行里其实混了两类数据——
+    有的买家平台给了简介原文（海外买家基本是英文），有的**平台没给简介**、只剩
+    「行业 / 买家特征」标签。并列展示就成了「有的显示原文、有的显示标签」，体验不一致。
+
+    新口径：简介行只放原文；标签另起一行；简介缺失由展示层明确写「平台未提供简介」，
+    **不再拿标签顶替简介**。
+
+    返回 {"intro": str, "tags": [str], "status": "ok"|"no_profile"|"unavailable"}。
+    失败静默（status=unavailable），不影响主流程；每次新到场多 2 个只读 API 调用。
     """
     if not (company_name or purchaser_id or exhibition_id):
-        return ""
+        return {"intro": "", "tags": [], "status": "unavailable"}
     cdp_id = ""
     try:
         d = _run_xiaoyuan("buyer", "onsite", "--exhibition-id", exhibition_id,
@@ -184,7 +208,7 @@ def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str
         pass
 
     if not cdp_id:
-        return ""
+        return {"intro": "", "tags": [], "status": "unavailable"}
 
     try:
         d2 = _run_xiaoyuan("buyer", "detail", "--company-cdp-id", cdp_id)
@@ -206,20 +230,14 @@ def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str
             industry = (bi.get("purchase_big_industry_cns") or "").strip()
             chars = (bi.get("buyer_characteristics") or "").strip()
             if profile:
-                return clip_text(profile)
-            parts = []
-            # 行业标签（中文）放前，英文特征放后并限长，尽量不让英文占主体
-            if industry:
-                tags = [t for t in industry.split(",") if t and t != "其他"]
-                if tags:
-                    parts.append("行业：" + "/".join(tags[:3]))
-            if chars:
-                parts.append(clip_text(chars.replace(",", "、"), CHARACTERISTICS_MAX_LEN))
-            if parts:
-                return "；".join(parts)
+                return {"intro": clip_text(profile),
+                        "tags": build_buyer_tags(industry, chars), "status": "ok"}
+            # 平台没给简介原文：intro 留空，标签交展示层单独一行，不再拼进简介
+            return {"intro": "", "tags": build_buyer_tags(industry, chars),
+                    "status": "no_profile"}
     except Exception:
         pass
-    return ""
+    return {"intro": "", "tags": [], "status": "unavailable"}
 
 
 def notice_key(n: dict) -> str:
@@ -260,6 +278,8 @@ def format_card_text(n: dict) -> str:
     arrival = (fields.get("到场时间（本地）") or fields.get("到场时间")
                or fields.get("到场时间(本地)") or "")
     intro = n.get("_intro") or ""
+    tags = n.get("_tags") or []
+    intro_status = n.get("_intro_status") or ""
 
     lines = ["📥 邀约买家已到场", f"公司：{company}"]
     if contact:
@@ -270,10 +290,17 @@ def format_card_text(n: dict) -> str:
         lines.append(f"电话/WhatsApp：{phone}")
     if arrival:
         lines.append(f"到场时间：{arrival}")
+    # 简介 / 标签分两行：结构恒定，不再「有的显示原文、有的显示标签」
     if intro:
         # 纯英文简介明确标注为原文，避免与中文标签混排后看似「中英混杂」
         label = "公司介绍" if has_cjk(intro) else "公司介绍（英文原文）"
         lines.append(f"{label}：{intro}")
+    elif intro_status == "no_profile":
+        lines.append("公司介绍：—（平台未提供简介）")
+    elif intro_status == "unavailable":
+        lines.append("公司介绍：—（本次未取到）")
+    if tags:
+        lines.append("公司标签：" + " ｜ ".join(tags))
     return "\n".join(lines)
 
 
@@ -339,9 +366,12 @@ def main() -> None:
         return
 
     for n in new_notices:
-        n["_intro"] = fetch_company_intro(
+        info = fetch_company_intro(
             n.get("company") or "", str(n.get("purchaserId") or ""), n.get("exhibitionId") or "",
         )
+        n["_intro"] = info.get("intro") or ""
+        n["_tags"] = info.get("tags") or []
+        n["_intro_status"] = info.get("status") or ""
         text = format_card_text(n)
         send_feishu_card(chat_id, text, dry_run=args.dry_run)
         print(f"NOTIFIED: {n.get('company') or n.get('title') or notice_key(n)}")

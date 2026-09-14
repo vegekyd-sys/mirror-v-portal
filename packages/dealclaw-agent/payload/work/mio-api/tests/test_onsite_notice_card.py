@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""test_onsite_notice_card.py — 「邀约买家到场」卡片两个问题的回归测试（2026-09-14 田耕郡报）
+"""test_onsite_notice_card.py — 「邀约买家到场」卡片问题的回归测试
 
-问题：
+2026-09-14 田耕郡报（已修）：
   ① 输出提示信息中英文混杂 —— 简介优先取英文 `company_profile`；兜底把英文
      buyer_characteristics 与中文「行业：」拼在一起；标签还写了英文缩写 `电话/WA`
   ② 公司简介被截断 —— `fetch_company_intro` 里 `profile[:120]` 硬截
+
+2026-09-15 田耕郡报（本次修）：
+  ③ 两张截图对比：同一个「公司介绍」行里混了两类数据 —— Solarvolt 卡是「平台没给简介、
+     只剩行业/特征标签」的兜底，ALIMENTOS 卡是简介原文（英文）。同一栏位两种含义，体验不一致。
 
 修复口径：
   · 中文字段优先（买家公司简介 / companyProfileCn / company_profile_cn），英文兜底
   · 纯英文简介在中文卡片里**标注为「公司介绍（英文原文）」**，不再裸混排
   · 简介不做 120 硬截；超 INTRO_MAX_LEN 才在句读处截断 + 省略号
   · 标签统一中文（电话/WhatsApp）
+  · **简介与标签分两行**：简介行只放原文，标签另起一行；简介缺失写「—（平台未提供简介）」/
+    「—（本次未取到）」，**不再拿标签顶替简介**（卡片结构恒定）
 
 运行：cd work/mio-api && python3 -m unittest tests.test_onsite_notice_card -v
 """
@@ -83,6 +89,40 @@ class CardTextTest(unittest.TestCase):
         self.assertIn("联系人：Paty Rico", text)
         self.assertIn("邮箱：sergio@example.com", text)
 
+    # ── 2026-09-15 截图实证：简介与标签必须分家 ──
+    def test_two_screenshots_render_consistently(self):
+        """Solarvolt（无简介、只有标签）vs ALIMENTOS（有英文简介）结构一致。"""
+        solar = {"company": "Solarvolt", "contactName": "Paty Rico",
+                 "_intro": "", "_tags": ["行业：家电3C", "积极到展"],
+                 "_intro_status": "no_profile"}
+        t1 = M.format_card_text(solar)
+        self.assertIn("公司介绍：—（平台未提供简介）", t1)
+        self.assertIn("公司标签：行业：家电3C ｜ 积极到展", t1)
+        self.assertNotIn("公司介绍：积极到展", t1, "标签不得再冒充简介")
+
+        ali = {"company": "ALIMENTOS", "contactName": "gcorral@colpac.com.mx",
+               "_intro": "Distributor of food products based in Miami, Florida, US",
+               "_tags": ["行业：食品/饮料"], "_intro_status": "ok"}
+        t2 = M.format_card_text(ali)
+        self.assertIn("公司介绍（英文原文）：Distributor of food", t2)
+        self.assertIn("公司标签：行业：食品/饮料", t2)
+
+    def test_intro_and_tags_are_separate_lines(self):
+        n = {"company": "Acme", "_intro": "上海某公司，主营叉车租赁。",
+             "_tags": ["行业：机械/五金"], "_intro_status": "ok"}
+        lines = M.format_card_text(n).splitlines()
+        self.assertIn("公司介绍：上海某公司，主营叉车租赁。", lines)
+        self.assertIn("公司标签：行业：机械/五金", lines)
+
+    def test_unavailable_intro_is_explicit_not_faked(self):
+        """取不到简介时不报假、也不拿标签顶替。"""
+        n = {"company": "Acme", "_intro": "", "_tags": [], "_intro_status": "unavailable"}
+        self.assertIn("公司介绍：—（本次未取到）", M.format_card_text(n))
+
+    def test_no_intro_no_status_keeps_old_shape(self):
+        """没跑过查询（无 _intro_status）时不多出一行。"""
+        self.assertNotIn("公司介绍", M.format_card_text({"company": "Acme"}))
+
 
 class IntroFetchTest(unittest.TestCase):
     """fetch_company_intro：不硬截 + 中文字段优先 + 失败静默。"""
@@ -100,12 +140,13 @@ class IntroFetchTest(unittest.TestCase):
         profile = "优质买家。" * 60          # 300 字，超过旧上限 120
         with self._patch({"buyerInfo": {"company_profile": profile}}):
             got = M.fetch_company_intro("ACME", "P1", "E1")
-        self.assertEqual(len(got), len(profile), "300 字简介不应被 120 截断")
+        self.assertEqual(got["status"], "ok")
+        self.assertEqual(len(got["intro"]), len(profile), "300 字简介不应被 120 截断")
 
     def test_over_limit_clipped_with_ellipsis(self):
         profile = "A" * (M.INTRO_MAX_LEN + 200)
         with self._patch({"buyerInfo": {"company_profile": profile}}):
-            got = M.fetch_company_intro("ACME", "P1", "E1")
+            got = M.fetch_company_intro("ACME", "P1", "E1")["intro"]
         self.assertLessEqual(len(got), M.INTRO_MAX_LEN + 1)
         self.assertTrue(got.endswith("…"))
 
@@ -113,22 +154,37 @@ class IntroFetchTest(unittest.TestCase):
         with self._patch({"buyerInfo": {"companyProfile": "English profile text",
                                         "买家公司简介": "中文简介：越南叉车经销商"}}):
             got = M.fetch_company_intro("ACME", "P1", "E1")
-        self.assertEqual(got, "中文简介：越南叉车经销商")
+        self.assertEqual(got["intro"], "中文简介：越南叉车经销商")
 
-    def test_fallback_puts_chinese_industry_first(self):
+    def test_no_profile_returns_tags_separately(self):
+        """平台没给简介 —— intro 留空、status=no_profile，标签单独给出。"""
         with self._patch({"buyerInfo": {"purchase_big_industry_cns": "机械,五金",
                                         "buyer_characteristics": "strong buyer, big volume"}}):
             got = M.fetch_company_intro("ACME", "P1", "E1")
-        self.assertTrue(got.startswith("行业：机械/五金"), got)
-        self.assertIn("strong buyer", got)
+        self.assertEqual(got["intro"], "")
+        self.assertEqual(got["status"], "no_profile")
+        self.assertEqual(got["tags"][0], "行业：机械/五金")
+        self.assertIn("strong buyer", got["tags"][1])
+
+    def test_profile_keeps_industry_tag_as_well(self):
+        """有简介时行业标签仍单独保留，不被塞进简介。"""
+        with self._patch({"buyerInfo": {"company_profile": "Distributor of food products",
+                                        "purchase_big_industry_cns": "食品,其他"}}):
+            got = M.fetch_company_intro("ACME", "P1", "E1")
+        self.assertEqual(got["intro"], "Distributor of food products")
+        self.assertEqual(got["tags"], ["行业：食品"])
 
     def test_silent_on_failure(self):
         with mock.patch.object(M, "_run_xiaoyuan", side_effect=RuntimeError("boom")):
-            self.assertEqual(M.fetch_company_intro("ACME", "P1", "E1"), "")
+            got = M.fetch_company_intro("ACME", "P1", "E1")
+        self.assertEqual(got["status"], "unavailable")
+        self.assertEqual(got["intro"], "")
 
-    def test_no_cdp_id_returns_empty(self):
+    def test_no_cdp_id_returns_unavailable(self):
         with self._patch({"buyerInfo": {"company_profile": "x"}}, search_hit=False):
-            self.assertEqual(M.fetch_company_intro("ACME", "P1", "E1"), "")
+            got = M.fetch_company_intro("ACME", "P1", "E1")
+        self.assertEqual(got["status"], "unavailable")
+        self.assertEqual(got["intro"], "")
 
 
 if __name__ == "__main__":
