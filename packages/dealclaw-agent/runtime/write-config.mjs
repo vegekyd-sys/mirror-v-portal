@@ -263,14 +263,16 @@ const deniedTools = [
   // jobs, never shell. The six product crons stay on the CLI path in
   // runtime/dc-cron-*.sh, which the tool can neither create nor edit.
   'nodes',
-  // sessions_spawn is intentionally ALLOWED: it lets the main agent delegate
-  // long multi-tool tasks (find-buyers crawls) to an isolated sub-session that
-  // runs with its own runTimeoutSeconds and pushes its final result back to the
-  // parent via the built-in completion event. This is how long tasks escape the
-  // 1800s run ceiling without blocking the Feishu reply (P1 async).
-  'sessions_send',
-  'sessions_list',
-  'sessions_history',
+  // sessions_* orchestration tools are intentionally ALLOWED (full set):
+  // - sessions_spawn: delegate long multi-tool tasks (find-buyers crawls) to an
+  //   isolated sub-session with its own runTimeoutSeconds, escaping the 1800s
+  //   run ceiling without blocking the Feishu reply (P1 async).
+  // - sessions_list: enumerate spawned sub-sessions and their status.
+  // - sessions_history: read a sub-session's transcript.
+  // - sessions_send: append follow-up instructions to a running sub-session.
+  // Together they give the main agent the full orchestration surface it needs to
+  // manage long-running delegated work. Spawned sub-agents still do NOT inherit
+  // these (they run in leaf mode), so only the main orchestrator can fan out.
   'image_generate',
   'video_generate',
   'music_generate',
