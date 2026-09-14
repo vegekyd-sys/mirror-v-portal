@@ -15,6 +15,7 @@ const manager = new RuntimeManager(
   store,
   new VercelProvider(config),
   (run, text) => edge.delta(run, text),
+  (run, kind, data) => edge.progress(run, kind, data),
 );
 await edge.start();
 await manager.start();

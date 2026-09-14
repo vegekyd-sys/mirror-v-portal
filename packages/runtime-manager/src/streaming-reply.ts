@@ -3,6 +3,15 @@ import type { Store } from "./store.js";
 export class StreamingReply {
   private text = "";
   private sent = "";
+  private status = "";
+  private publicSnapshot = "";
+  private content() { return [this.text || this.publicSnapshot, this.status].filter(Boolean).join("\n\n"); }
+  progress(status: string, snapshot?: string) {
+    if (this.closed || this.failed) return;
+    this.status = status;
+    if (snapshot !== undefined) this.publicSnapshot = snapshot;
+    this.schedule();
+  }
   private sequence = 0;
   private cardId?: string;
   private messageId?: string;
@@ -30,7 +39,7 @@ export class StreamingReply {
     this.scheduled = true;
     this.work = this.work.then(async () => {
       try {
-        while (!this.closed && this.text !== this.sent) {
+        while (!this.closed && this.content() && this.content() !== this.sent) {
           const delay = Math.max(0, 150 - (Date.now() - this.lastFlushAt));
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
           if (this.closed) break;
@@ -59,7 +68,7 @@ export class StreamingReply {
   }
   private async flush() {
     await this.load();
-    const content = this.text;
+    const content = this.content();
     if (!content || content === this.sent) return;
     // Card content is bounded; the durable final-reply path handles longer output.
     if (content.length > 28000) throw Error("STREAM_TOO_LONG");
@@ -116,6 +125,7 @@ export class StreamingReply {
           at: Date.now(),
           messageId: this.messageId,
           characters: content.length,
+          contentKind: this.text || this.publicSnapshot ? "assistant" : "tool-status",
         },
         this.runId,
       );
@@ -143,6 +153,8 @@ export class StreamingReply {
 
     await this.work;
     this.text = output;
+    this.status = "";
+    this.publicSnapshot = "";
     try {
       await this.load();
       if (!this.cardId) await this.flush();

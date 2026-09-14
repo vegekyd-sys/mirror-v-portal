@@ -90,6 +90,7 @@ export class VercelProvider implements RuntimeProvider {
         "quiesce.mjs",
         "model-proxy.mjs",
         "backup.mjs",
+        "progress-patch.mjs",
       ].map((file) => ({
         path: `/vercel/sandbox/nexus/${file}`,
         content: fs.readFileSync(
@@ -207,6 +208,10 @@ export class VercelProvider implements RuntimeProvider {
               }
               output += event.delta || "";
               await onEvent("delta", { text: event.delta || "" });
+            } else if (event.type === "nexus.tool") {
+              await onEvent("tool-progress", { name: event.name, phase: event.phase, toolCallId: event.toolCallId });
+            } else if (event.type === "nexus.public_snapshot") {
+              await onEvent("public-progress", { text: event.text });
             } else if (event.type === "response.completed") {
               completed = true;
               await onEvent("runtime-completed", {

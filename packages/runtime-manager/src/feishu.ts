@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import * as lark from "@larksuiteoapi/node-sdk";
+import { TypingReaction } from "./typing-reaction.js";
 import { StreamingReply } from "./streaming-reply.js";
 import type { Run, Store, Tenant } from "./store.js";
 export class FeishuEdge {
   clients = new Map<string, { ws: lark.WSClient; api: lark.Client }>();
   streams = new Map<string, StreamingReply>();
-  constructor(readonly store: Store) {}
-  delta(run: Run, text: string) {
+  readonly typing: TypingReaction;
+  constructor(readonly store: Store) { this.typing = new TypingReaction(store); }
+  private stream(run: Run) {
     if (run.channel !== "feishu" || !run.message_id) return;
     const api = this.clients.get(run.tenant_id)?.api;
     if (!api) return;
@@ -21,13 +23,33 @@ export class FeishuEdge {
       );
       this.streams.set(run.id, stream);
     }
-    stream.push(text);
+    return stream;
+  }
+  delta(run: Run, text: string) { this.stream(run)?.push(text); }
+  progress(run: Run, kind: string, data: any) {
+    if (kind === "waking") {
+      const api=this.clients.get(run.tenant_id)?.api;
+      if(api && run.channel === "feishu") this.typing.start(run,api);
+      // Typing acknowledges receipt; do not count a placeholder as model first text.
+      return;
+    }
+    if(kind === "tool-progress") {
+      const labels: Record<string,string>={read:"读取文件",write:"写入文件",edit:"编辑文件",exec:"执行命令",process:"等待执行结果",web_search:"搜索资料",web_fetch:"读取网页"};
+      const label=labels[data.name] || "执行工具";
+      this.stream(run)?.progress(data.phase === "result" ? `✓ ${label}完成` : `⏳ 正在${label}…`);
+    } else if(kind === "public-progress") this.stream(run)?.progress("",data.text);
+    else if(kind === "runtime-completed") this.streams.get(run.id)?.progress("");
   }
   async start() {
     const { rows } = await this.store.pool.query<Tenant>(
       "SELECT * FROM elastic_tenants WHERE app_id IS NOT NULL AND secret IS NOT NULL",
     );
     for (const tenant of rows) this.connect(tenant);
+    const stale = await this.store.pool.query<Run>("SELECT r.* FROM elastic_runs r WHERE r.delivery='sent' AND EXISTS (SELECT 1 FROM elastic_events e WHERE e.run_id=r.id AND e.kind='typing-added') AND NOT EXISTS (SELECT 1 FROM elastic_events e WHERE e.run_id=r.id AND e.kind='typing-removed')");
+    for(const run of stale.rows) {
+      const api=this.clients.get(run.tenant_id)?.api;
+      if(api) await this.typing.stop(run,api).catch(()=>{});
+    }
     await this.store.boss.work<{ runId: string }>(
       "feishu-reply",
       { pollingIntervalSeconds: 1 },
@@ -74,6 +96,9 @@ export class FeishuEdge {
             [run.id],
           );
           await this.store.event(run.tenant_id, "feishu-delivered", {}, run.id);
+          await this.typing.stop(run,client.api).catch(async()=>{
+            await this.store.event(run.tenant_id,"typing-cleanup-error",{},run.id);
+          });
         }
       },
     );
@@ -97,7 +122,7 @@ export class FeishuEdge {
         } catch {}
         if (m.message_type !== "text" || !text.trim()) return;
         // Acknowledge after the durable transaction; agent execution never blocks WS delivery.
-        await this.store.enqueue(
+        const run = await this.store.enqueue(
           tenant.id,
           m.message_id,
           `${tenant.id}:${m.chat_id}`,
@@ -105,6 +130,7 @@ export class FeishuEdge {
           "feishu",
           m.message_id,
         );
+        if (run.delivery !== "sent") this.typing.start(run,api);
       },
     });
     this.clients.set(tenant.id, { ws, api });

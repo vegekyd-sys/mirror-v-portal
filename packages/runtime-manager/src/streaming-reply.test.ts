@@ -106,3 +106,14 @@ test("coalesces blocked updates and sends final snapshot without draining old fr
   const config=JSON.parse(f.api.cardkit.v1.card.create.mock.calls[0][0].data.data).config;
   expect(config.streaming_config.print_strategy).toBe('fast');
 });
+test("tool progress opens a card before answer text and is removed on completion", async () => {
+  const f=fixture();
+  const stream=new StreamingReply(f.store,f.api,'run','tenant','parent');
+  stream.progress('⏳ 正在读取文件…');
+  await new Promise(resolve=>setTimeout(resolve,20));
+  expect(f.contents[0]).toContain('正在读取文件');
+  stream.push('文件已检查');
+  expect(await stream.finish('最终结果')).toBe(true);
+  expect(f.contents.at(-1)).toBe('最终结果');
+  expect(f.api.im.message.reply).toHaveBeenCalledTimes(1);
+});

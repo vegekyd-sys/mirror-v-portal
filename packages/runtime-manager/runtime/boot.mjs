@@ -1,3 +1,4 @@
+import { installProgress } from "./progress-patch.mjs";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
@@ -10,7 +11,7 @@ const fingerprint = createHash("sha256")
       process.env.NEXUS_MODEL_BASE_URL,
       process.env.NEXUS_MODEL_KEY,
       process.env.NEXUS_OPTIMIZE,
-      "runtime-v2",
+      "runtime-v3-progress",
     ].join("\0"),
   )
   .digest("hex");
@@ -41,6 +42,7 @@ const env = {
     : {}),
 };
 // No credentials in the filesystem snapshot. Values resolve from process env.
+installProgress(`${base}/runtime/node_modules/openclaw`);
 const cfg = {
   gateway: {
     mode: "local",

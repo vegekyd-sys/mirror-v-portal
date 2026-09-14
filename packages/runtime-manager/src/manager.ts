@@ -8,6 +8,7 @@ export class RuntimeManager {
     readonly store: Store,
     readonly provider: RuntimeProvider,
     readonly onDelta?: (run: Run, text: string) => void,
+    readonly onProgress?: (run: Run, kind: string, data: any) => void,
   ) {}
   async start() {
     await this.store.boss.work<{ runId: string }>(
@@ -71,6 +72,7 @@ export class RuntimeManager {
           },
           runId,
         );
+        this.onProgress?.(current, "waking", {});
         const handle = await this.provider.ensure(tenant, async (name) => {
           tenant.sandbox_name = name;
           await db.query(
@@ -105,6 +107,7 @@ export class RuntimeManager {
           async (kind, data) => {
             await this.store.event(tenant.id, kind, data, runId);
             if (kind === "delta") this.onDelta?.(current, data.text);
+            else this.onProgress?.(current, kind, data);
           },
         );
         await db.query("BEGIN");
