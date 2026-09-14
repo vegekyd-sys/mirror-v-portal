@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,35 @@ def _workspace_root() -> Path:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── 展示工具：简介不硬截 + 中英不混排 ────────────────────────
+#
+# 历史问题（2026-09-14 田耕郡报）：
+#   ① 公司简介被 `profile[:120]` 硬截断——120 是早期遗留值，飞书文本消息上限远大于此；
+#   ② 卡片中英混杂——简介优先取 `company_profile`（海外买家多为英文），
+#      兑底又把英文 buyer_characteristics 与中文「行业：」拼在一起；
+#      标签还写成了英文缩写「电话/WA」。
+INTRO_MAX_LEN = 500          # 简介展示上限（保护性上限，不是内容裁剪）
+CHARACTERISTICS_MAX_LEN = 200
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def has_cjk(text: str) -> bool:
+    """文本里是否含中文（用于判定要不要标注「英文原文」）。"""
+    return bool(_CJK_RE.search(text or ""))
+
+
+def clip_text(text: str, limit: int = INTRO_MAX_LEN) -> str:
+    """在句读处截断（优先 。！？.!?），超限补省略号；未超限原样返回。"""
+    t = (text or "").strip()
+    if len(t) <= limit:
+        return t
+    window = t[:limit]
+    cut = max((window.rfind(ch) for ch in "。！？!?."), default=-1)
+    if cut >= limit // 2:
+        return window[: cut + 1] + "…"
+    return window.rstrip() + "…"
 
 
 def _state_path(company_id: str) -> Path:
@@ -162,18 +192,29 @@ def fetch_company_intro(company_name: str, purchaser_id: str, exhibition_id: str
         items = data if isinstance(data, list) else [data]
         for it in items:
             bi = it.get("buyerInfo") or it or {}
-            profile = (bi.get("company_profile") or bi.get("companyProfile") or "").strip()
+            # 中文字段优先：先取平台可能给的中文简介，再退到英文原文键。
+            # （英文简介在中文卡片里会被误认为「中英混杂」，展示层会标注原文）
+            profile = (
+                bi.get("买家公司简介")
+                or bi.get("companyProfileCn")
+                or bi.get("company_profile_cn")
+                or bi.get("company_profile")
+                or bi.get("companyProfile")
+                or bi.get("buyerIntroduce")
+                or ""
+            ).strip()
             industry = (bi.get("purchase_big_industry_cns") or "").strip()
             chars = (bi.get("buyer_characteristics") or "").strip()
             if profile:
-                return profile[:120]
+                return clip_text(profile)
             parts = []
-            if chars:
-                parts.append(chars.replace(",", "、"))
+            # 行业标签（中文）放前，英文特征放后并限长，尽量不让英文占主体
             if industry:
                 tags = [t for t in industry.split(",") if t and t != "其他"]
                 if tags:
                     parts.append("行业：" + "/".join(tags[:3]))
+            if chars:
+                parts.append(clip_text(chars.replace(",", "、"), CHARACTERISTICS_MAX_LEN))
             if parts:
                 return "；".join(parts)
     except Exception:
@@ -202,12 +243,22 @@ def format_card_text(n: dict) -> str:
             k, _, v = line.partition("：")
             fields[k.strip()] = v.strip()
 
-    company = n.get("company") or fields.get("公司名称") or n.get("title") or "(未知买家)"
-    contact = n.get("contactName") or fields.get("买家姓名") or ""
-    phone = (n.get("phone") or n.get("mobile") or fields.get("手机号码") or fields.get("WhatsApp") or "")
+    company = n.get("company") or fields.get("公司名称") or fields.get("企业名称") or n.get("title") or "(未知买家)"
+    contact = (fields.get("买家姓名") or fields.get("联系人") or fields.get("姓名")
+               or n.get("contactName") or "")
+    contact = str(contact).strip()
+    phone = (n.get("phone") or n.get("mobile") or fields.get("手机号码") or fields.get("手机")
+             or fields.get("电话") or fields.get("WhatsApp") or "")
     phone = phone.replace("#a", "").replace("#A", "").strip()
-    email = n.get("email") or ""
-    arrival = fields.get("到场时间（本地）") or fields.get("到场时间") or ""
+    email = (n.get("email") or fields.get("邮箱") or "").strip()
+    # 平台有时把邮箱塞进「联系人」（2026-09-15 截图实证：联系人 = 邮箱，两行重复）
+    # → 邮箱形态的值不当联系人；若邮箱为空则回填到邮箱行，避免丢信息。
+    if "@" in contact:
+        if not email:
+            email = contact
+        contact = ""
+    arrival = (fields.get("到场时间（本地）") or fields.get("到场时间")
+               or fields.get("到场时间(本地)") or "")
     intro = n.get("_intro") or ""
 
     lines = ["📥 邀约买家已到场", f"公司：{company}"]
@@ -216,11 +267,13 @@ def format_card_text(n: dict) -> str:
     if email:
         lines.append(f"邮箱：{email}")
     if phone:
-        lines.append(f"电话/WA：{phone}")
+        lines.append(f"电话/WhatsApp：{phone}")
     if arrival:
         lines.append(f"到场时间：{arrival}")
     if intro:
-        lines.append(f"公司介绍：{intro}")
+        # 纯英文简介明确标注为原文，避免与中文标签混排后看似「中英混杂」
+        label = "公司介绍" if has_cjk(intro) else "公司介绍（英文原文）"
+        lines.append(f"{label}：{intro}")
     return "\n".join(lines)
 
 
