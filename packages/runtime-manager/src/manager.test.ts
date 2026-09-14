@@ -173,3 +173,24 @@ test("real queue drains concurrent messages in tenant order", async () => {
     m.stopTimer();
   }
 }, 25000);
+test("queued message recovers interrupted idle release without being marked uncertain",async()=>{
+ const t=await tenant(),r=await s.enqueue(t.id,'idle-crash','session','hihi');
+ await s.pool.query("UPDATE elastic_tenants SET state='quiescing' WHERE id=$1",[t.id]);
+ let stops=0,executions=0;
+ const m=new RuntimeManager(s,provider(async()=>{executions++;return 'hi';},async()=>{stops++;return {stopped:true};}));
+ await m.process(r.id);
+ expect(stops).toBe(1);expect(executions).toBe(1);
+ expect((await s.run(r.id)).status).toBe('succeeded');
+});
+test("shutdown waits for an in-flight idle release before closing storage",async()=>{
+ const t=await tenant();
+ await s.pool.query("UPDATE elastic_tenants SET state='ready',last_activity=now()-interval '1 hour' WHERE id=$1",[t.id]);
+ let release!:()=>void,entered!:()=>void;
+ const gate=new Promise<void>(r=>{release=r;}),started=new Promise<void>(r=>{entered=r;});
+ const m=new RuntimeManager(s,provider(undefined,async()=>{entered();await gate;return {stopped:true};}));
+ const collecting=m.collect(t.id);await started;
+ let drained=false;const draining=m.drainCollector().then(()=>{drained=true;});
+ await new Promise(r=>setTimeout(r,20));expect(drained).toBe(false);
+ release();await collecting;await draining;
+ expect((await s.tenant(t.id)).state).toBe('sleeping');
+});

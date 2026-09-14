@@ -34,6 +34,17 @@ export class RuntimeManager {
       if (["succeeded", "failed", "uncertain"].includes(current.status))
         return true;
       const tenant = await this.store.tenant(run.tenant_id, db);
+      // A stopped controller may leave idle release in progress. This is not
+      // evidence of an executed message; finish the idempotent stop under lock.
+      if (tenant.state === "quiescing" && current.status === "queued") {
+        const active = await db.query("SELECT 1 FROM elastic_runs WHERE tenant_id=$1 AND status='running' LIMIT 1", [tenant.id]);
+        if (!active.rowCount) {
+          const stopped = await this.provider.stop(tenant);
+          tenant.state = stopped.stopped ? "sleeping" : "ready";
+          await db.query("UPDATE elastic_tenants SET state=$2,snapshot_id=coalesce($3,snapshot_id),last_error=NULL WHERE id=$1", [tenant.id,tenant.state,stopped.snapshotId || null]);
+          await this.store.event(tenant.id,"idle-release-recovered",{stopped:stopped.stopped},runId);
+        }
+      }
       // A controller crash may have left a tool with an external side effect.
       // Never replay that turn merely because the queue lease expired.
       if (
@@ -49,6 +60,10 @@ export class RuntimeManager {
           [tenant.id],
         );
         await this.store.event(tenant.id, "recovery-required", {}, runId);
+        if (current.channel === "feishu") {
+          await db.query("UPDATE elastic_runs SET delivery='pending' WHERE id=$1", [runId]);
+          await this.store.boss.send("feishu-reply", {runId}, {singletonKey:runId});
+        }
         return true;
       }
       // Preserve arrival order across the parallel queue workers.
@@ -215,6 +230,10 @@ export class RuntimeManager {
     } finally {
       this.collecting = false;
     }
+  }
+  async drainCollector() {
+    this.stopTimer();
+    while (this.collecting) await new Promise(resolve => setTimeout(resolve, 50));
   }
   stopTimer() {
     if (this.timer) clearInterval(this.timer);

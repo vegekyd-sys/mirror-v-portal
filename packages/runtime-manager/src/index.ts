@@ -151,6 +151,7 @@ async function close() {
   manager.stopTimer();
   edge.close();
   server.close();
+  await manager.drainCollector();
   await store.close();
   process.exit(0);
 }
