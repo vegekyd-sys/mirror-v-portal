@@ -1,0 +1,56 @@
+{
+  "schema": "nexus.sandbox-baseline.v1",
+  "createdAt": "2026-09-14T06:39:53.398Z",
+  "sdkVersion": "1.9.3",
+  "caller": "local-mac",
+  "runtime": "node24",
+  "vcpus": 1,
+  "memoryMiB": 2048,
+  "timeoutMs": 120000,
+  "networkPolicy": "deny-all",
+  "openclawTested": false,
+  "persistenceTested": false,
+  "notes": [
+    "Three sequential fresh creates. Not a controlled provider-cold-cache test.",
+    "Timings include local client and control API network latency.",
+    "No production payload, model credentials, or tenant state loaded."
+  ],
+  "trials": [
+    {
+      "trial": 1,
+      "sandboxId": "sbx_fX6cXDiWIZkBjinzU1IKvaP31z3e",
+      "createMs": 1034,
+      "commandMs": 1009,
+      "readyCommandMs": 2043,
+      "exitCode": 0,
+      "markerOk": true,
+      "node": "v24.14.1",
+      "stopMs": 2838,
+      "finalStatus": "stopped"
+    },
+    {
+      "trial": 2,
+      "sandboxId": "sbx_rUTsrw89L4J0axeaLst0qsq29F4y",
+      "createMs": 1010,
+      "commandMs": 827,
+      "readyCommandMs": 1837,
+      "exitCode": 0,
+      "markerOk": true,
+      "node": "v24.14.1",
+      "stopMs": 2720,
+      "finalStatus": "stopped"
+    },
+    {
+      "trial": 3,
+      "sandboxId": "sbx_ULEhwciPdKvHazo1jO9UQlPyEj6m",
+      "createMs": 700,
+      "commandMs": 775,
+      "readyCommandMs": 1475,
+      "exitCode": 0,
+      "markerOk": true,
+      "node": "v24.14.1",
+      "stopMs": 2868,
+      "finalStatus": "stopped"
+    }
+  ]
+}

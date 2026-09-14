@@ -1,0 +1,15 @@
+{
+  "databaseUrl": "postgresql://nexus:REPLACE@127.0.0.1:55436/nexus_elastic",
+  "adminToken": "REPLACE_WITH_RANDOM_TOKEN",
+  "encryptionKey": "REPLACE_WITH_64_HEX_CHARACTERS",
+  "port": 8097,
+  "idleTimeoutSeconds": 60,
+  "trialTenantId": "elastic-trial",
+  "sandboxPrefix": "nexus-elastic-YOUR_UNIQUE_PREFIX",
+  "model": {
+    "id": "anthropic/claude-sonnet-4.6",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiKey": "REPLACE"
+  },
+  "vercel": { "projectId": "REPLACE", "teamId": "REPLACE" }
+}

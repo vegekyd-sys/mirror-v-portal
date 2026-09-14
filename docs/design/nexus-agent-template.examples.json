@@ -1,0 +1,85 @@
+{
+  "$comment": "Design examples only. Not an implemented API or deployable configuration. Versions and artifact refs below are illustrative.",
+  "schemaVersion": "nexus.agent-template.proposal.v1",
+  "templates": [
+    {
+      "id": "dealclaw",
+      "displayName": "DealClaw",
+      "version": "proposed-v1",
+      "runtime": {
+        "engine": "openclaw",
+        "imageDigestRef": "artifact://openclaw/validated-runtime",
+        "adapterContract": "nexus.runtime.v1"
+      },
+      "payload": {
+        "artifactDigestRef": "artifact://payloads/dealclaw/reviewed",
+        "skillsBundle": "dealclaw-sales",
+        "memorySeed": "approved-business-seed",
+        "excludeRuntimeState": true
+      },
+      "resources": { "vcpus": 1, "memoryMiB": 2048, "benchmarkRequired": true },
+      "lifecycle": {
+        "policy": "on-demand",
+        "idleTimeoutSeconds": 600,
+        "maxConcurrentWriters": 1,
+        "quiesceRequired": true,
+        "checkpointRequired": true
+      },
+      "state": {
+        "scope": "customerId/agentId",
+        "mountPath": "/data",
+        "schemaVersion": 1,
+        "backupPolicyRef": "policy://agent-state-standard"
+      },
+      "channelTargets": ["web", "feishu", "wechat", "whatsapp"],
+      "conversationScope": "agentId/bindingId/channelConversationId/threadId",
+      "credentialPolicyRef": "policy://dealclaw-scoped-tools",
+      "scheduleOwnership": "nexus-scheduler",
+      "regionPolicyRef": "policy://customer-data-region"
+    },
+    {
+      "id": "mirror-v",
+      "displayName": "Mirror V",
+      "version": "proposed-v1",
+      "runtime": {
+        "engine": "openclaw",
+        "imageDigestRef": "artifact://v-platform/validated-runtime",
+        "adapterContract": "nexus.runtime.v1"
+      },
+      "payload": {
+        "source": "v-core",
+        "sourceRevisionRef": "review-required",
+        "artifactDigestRef": "artifact://payloads/mirror-v/distributable",
+        "skillsBundle": "approved-v-skills",
+        "memorySeed": "minimal-public-seed",
+        "identityOverlay": "instance-owner",
+        "excludeRuntimeState": true,
+        "excludePrivateUserProfile": true,
+        "excludeSourceCredentials": true
+      },
+      "resources": { "vcpus": 2, "memoryMiB": 4096, "benchmarkRequired": true },
+      "lifecycle": {
+        "policy": "on-demand",
+        "idleTimeoutSeconds": 600,
+        "maxConcurrentWriters": 1,
+        "quiesceRequired": true,
+        "checkpointRequired": true
+      },
+      "credentialPolicyRef": "policy://instance-owner-approved-connections",
+      "stateScope": "customerId/agentId",
+      "scheduleOwnership": "nexus-scheduler"
+    },
+    {
+      "id": "xingqing",
+      "displayName": "星擎 Agent",
+      "version": "contract-pending",
+      "status": "draft-not-available",
+      "runtimeContract": "nexus.runtime.v1",
+      "payloadSource": "pending-project-review",
+      "capabilityTargets": ["content-planning", "makaron-media-tools", "delivery-review"],
+      "externalJobs": "persist-provider-task-id-and-wake-on-callback",
+      "lifecycle": { "policy": "on-demand", "idleTimeoutSeconds": 300 },
+      "credentialPolicyRef": "policy://customer-scoped-media-access"
+    }
+  ]
+}
