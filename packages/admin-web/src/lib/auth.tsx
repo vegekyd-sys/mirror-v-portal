@@ -1,3 +1,4 @@
+import { LOCAL_PREVIEW, previewUser } from "./local-preview";
 // Auth session state: login (passphrase → JWT exchange), restore-on-load via
 // GET /v1/admin/auth/me, and logout. Consumed by the router guard and layout.
 import {
@@ -37,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AdminUser | null>(null);
 
   useEffect(() => {
+    if (LOCAL_PREVIEW) { setUser(previewUser); setReady(true); return; }
     if (!getToken()) {
       setReady(true);
       return;

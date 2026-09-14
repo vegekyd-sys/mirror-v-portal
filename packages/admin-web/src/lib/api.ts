@@ -1,3 +1,4 @@
+import { LOCAL_PREVIEW, previewResponse } from "./local-preview";
 // Unified API client for the DealClaw admin SPA.
 //
 // All endpoints are same-origin (/v1/*) and routed by the ingress directly to
@@ -76,6 +77,7 @@ const RETRY_BACKOFF_MS = [400, 800, 1600];
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function requestOnce<T = unknown>(path: string, opts: RequestOptions): Promise<T> {
+  if (LOCAL_PREVIEW) return previewResponse(path, opts.method) as T;
   const token = getToken();
   let res: Response;
   try {

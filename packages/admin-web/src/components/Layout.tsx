@@ -1,3 +1,4 @@
+import { LOCAL_PREVIEW } from "../lib/local-preview";
 // App shell: dark sidebar navigation + light content area (phase 3 redesign).
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
@@ -75,8 +76,8 @@ export default function Layout() {
           <div className="side-status">
             <span className="status-dot" />
             <div>
-              服务运行正常
-              <div className="sub">前端静态托管 · API 实时同步</div>
+              {LOCAL_PREVIEW ? "本地结构预览 · 示例数据" : "服务运行正常"}
+              <div className="sub">{LOCAL_PREVIEW ? "不连接线上 · 操作不执行" : "前端静态托管 · API 实时同步"}</div>
             </div>
           </div>
           <div className="side-user">
@@ -95,6 +96,7 @@ export default function Layout() {
       </aside>
       <main className="main">
         <div className="container">
+          {LOCAL_PREVIEW && <div className="hint" style={{marginBottom:16}}>本地页面结构预览 · 全部为示例数据与示例价格 · 不连接线上服务</div>}
           <Outlet />
         </div>
       </main>
