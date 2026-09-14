@@ -10,7 +10,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-options: Prune=false
 spec:
-  description: nexus-manager
+  description: cnfs
   type: nas
   reclaimPolicy: Retain
   parameters:
@@ -20,7 +20,6 @@ spec:
     encryptType: None
     enableTrashCan: "true"
     trashCanReservedDays: "5"
-    vSwitchId: NAS_VSWITCH_ID
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass

@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-keys = ['NAS_VSWITCH_ID', 'NEXUS_MANAGER_IMAGE', 'ADMIN_HOST', 'NEXUS_UI_HOST',
+keys = ['NEXUS_MANAGER_IMAGE', 'ADMIN_HOST', 'NEXUS_UI_HOST',
         'MODEL_BASE_URL', 'MODEL_ID', 'PROVISIONING_NAMESPACE']
 values = {}
 for key in keys:
