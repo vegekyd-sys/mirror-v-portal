@@ -88,8 +88,10 @@ def _land_outbound_fact(*, from_addr: str, to_list: list[str], subject: str,
             if str(a.get("email_address", "")).lower() == addr:
                 account_id = str(a.get("account_id", ""))
                 break
-        if not account_id and accounts:
-            account_id = str(accounts[0].get("account_id", ""))
+        if not account_id:
+            # 匹配不到发件账号 → 不落事实。account_id 是回复挂回原发件的唯一依据，
+            # 兜底取 accounts[0] 会串账号，比漏写更糟。
+            return
         now = datetime.now(timezone.utc).isoformat()
         store.insert_message({
             "account_id": account_id,
@@ -186,8 +188,8 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
         except Exception:  # noqa: BLE001
             pass
 
-    # best-effort 落 outbound 事实（收信侧靠它把回复挂回原发件）
-    if success and resend_id and enterprise:
+    # 只有 FD 通道才补落：GS 通道 send.mjs 已通过 dc_record_outbound.py 落过，再落会重复
+    if success and resend_id and enterprise and channel.upper() == "FD":
         _land_outbound_fact(from_addr=from_addr, to_list=to_list, subject=subject,
                             resend_id=resend_id, enterprise=enterprise)
 

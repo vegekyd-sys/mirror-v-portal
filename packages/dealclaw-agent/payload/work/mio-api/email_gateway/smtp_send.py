@@ -315,7 +315,10 @@ class SmtpSender:
                 "contact_id": contact_id,
                 "contact_name": resolved_name,
                 "idempotency_key": idempotency_key,
-                "provider_status": "accepted" if provider_accepted else "",
+                # 个人邮箱 SMTP 无投递回执：发信成功即乐观默认 delivered，
+                # 后续 IMAP 扫到退信 NDR 时由 mark_bounced_by_contact 改回 bounced。
+                # 方向不能反：失败必须留空，不能写成 delivered。
+                "provider_status": "delivered" if provider_accepted else "",
                 "touch_number": touch_number,
                 "content_version": content_version,
                 "legacy": not bool(campaign_id),

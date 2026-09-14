@@ -581,6 +581,40 @@ class MarkdownEmailStore:
                 out.append(rec)
         return out
 
+    def mark_bounced_by_contact(self, account_id: str, buyer_email: str,
+                                category: str = "unknown") -> bool:
+        """个人邮箱退信回写：按「账号+收件人」定位最近一封 outbound，标 bounced。"""
+        matches = self.find_outbounds_by_contact(account_id, buyer_email)
+        if not matches:
+            return False
+        target = max(matches, key=lambda r: (r.get("sent_at") or r.get("created_at") or ""))
+        if target.get("provider_status") in _TERMINAL:
+            return False
+        rec = dict(target)
+        rec["provider_status"] = "bounced"
+        reason = (f"[{category}] bounced (IMAP NDR)" if category and category != "unknown"
+                  else "bounced (IMAP NDR)")
+        rec["failure_reason"] = reason[:500]
+        rec["updated_at"] = utc_now()
+        rel = self._locate_outbound_path(target)
+        path = self.root / rel
+        if not path.exists():
+            key = self._record_key("outbound", {
+                "account_id": target.get("account_id", ""),
+                "local_message_id": target.get("local_message_id", ""),
+                "created_at": target.get("created_at", ""),
+            })
+            ym = _ym(target.get("sent_at") or target.get("created_at"))
+            rel = self._record_path("outbound", target.get("company_id", ""), ym, key)
+            path = self.root / rel
+        if not path.exists():
+            return False
+        with self._record_lock(f"bounce:{account_id}:{buyer_email.strip().lower()}"):
+            _write_snapshot(path, rec)
+            self._append_delivery_event(target.get("resend_id") or buyer_email,
+                                        "bounced", rec["failure_reason"])
+        return True
+
     def list_outbound_records(self, company_id: str = None) -> list[dict]:
         canonical = company_id
         try:

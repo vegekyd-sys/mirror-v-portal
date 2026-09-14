@@ -16,6 +16,30 @@ from .providers import get_provider
 from .secrets import resolve_secret
 from .store import EmailStore, utc_now
 
+# 退信（NDR）识别/解析/分类：dc_bounce_detect.py 位于 work/mio-api/ 根目录
+# （与 enterprise_ids 同模式）。cwd 不在根目录时（cron/服务）把根目录挂上 sys.path 再试，
+# 仍失败则降级为「永不判退信」，绝不因缺模块中断收信。
+try:
+    from dc_bounce_detect import (
+        is_bounce, classify_bounce, extract_bounced_recipient, body_text,
+    )
+except Exception:  # noqa: BLE001
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _root = str(_Path(__file__).resolve().parents[1])
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from dc_bounce_detect import (
+            is_bounce, classify_bounce, extract_bounced_recipient, body_text,
+        )
+    except Exception:  # noqa: BLE001
+        is_bounce = lambda msg, sender="", subject="": False  # noqa: E731
+        classify_bounce = lambda text="": "unknown"  # noqa: E731
+        extract_bounced_recipient = lambda msg: ""  # noqa: E731
+        body_text = lambda msg, limit=4000: ""  # noqa: E731
+
 
 def _decode(value: str | None) -> str:
     if not value:
@@ -238,10 +262,7 @@ class ImapSynchronizer:
                 sender = ", ".join(address for _, address in getaddresses(msg.get_all("From", [])))
                 from_addresses = [address for _, address in getaddresses(msg.get_all("From", []))]
                 first_from = from_addresses[0] if from_addresses else sender
-                related = self.store.has_outbound_reference(account_id, reference_candidates)
-                if not related:
-                    # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
-                    related = self.store.find_outbound_by_contact(account_id, first_from) is not None
+                subject = _decode(msg.get("Subject"))
                 recipients = [address for _, address in getaddresses(msg.get_all("To", []))]
                 sent_at = None
                 if msg.get("Date"):
@@ -249,6 +270,34 @@ class ImapSynchronizer:
                         sent_at = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
                     except Exception:
                         sent_at = None
+
+                # 退信分流：NDR 不当买家回复，而是把原 outbound 标成 bounced
+                if is_bounce(msg, first_from, subject):
+                    bounced_email = extract_bounced_recipient(msg) or ""
+                    category = classify_bounce(body_text(msg))
+                    if bounced_email:
+                        self.store.mark_bounced_by_contact(account_id, bounced_email, category)
+                    self.store.insert_message({
+                        "account_id": account_id, "direction": "inbound",
+                        "folder": folder, "uidvalidity": uidvalidity, "uid": uid,
+                        "message_id": message_id, "in_reply_to": in_reply_to,
+                        "references": references, "sender": sender,
+                        "recipients": recipients, "subject": subject,
+                        "sent_at": sent_at, "text_preview": _body_preview(msg, limit=500),
+                        "related": False, "status": "received", "created_at": utc_now(),
+                    })
+                    result.fetched += 1
+                    last_uid = uid
+                    self.store.update_sync_state(
+                        account_id=account_id, folder=folder,
+                        uidvalidity=uidvalidity, last_uid=last_uid,
+                    )
+                    continue
+
+                related = self.store.has_outbound_reference(account_id, reference_candidates)
+                if not related:
+                    # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
+                    related = self.store.find_outbound_by_contact(account_id, first_from) is not None
                 stored_preview = _body_preview(msg) if related else ""
                 notification_preview = (
                     stored_preview[:200]
@@ -267,7 +316,7 @@ class ImapSynchronizer:
                         "references": references,
                         "sender": sender,
                         "recipients": recipients,
-                        "subject": _decode(msg.get("Subject")),
+                        "subject": subject,
                         "sent_at": sent_at,
                         # Header-only notifications for unrelated personal mail.
                         # Bodies are retained only for messages tied to a known
