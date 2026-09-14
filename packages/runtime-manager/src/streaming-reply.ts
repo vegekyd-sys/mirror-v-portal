@@ -6,7 +6,8 @@ export class StreamingReply {
   private sequence = 0;
   private cardId?: string;
   private messageId?: string;
-  private timer?: NodeJS.Timeout;
+  private scheduled = false;
+  private lastFlushAt = 0;
   private work: Promise<void> = Promise.resolve();
   private failed = false;
   private closed = false;
@@ -20,23 +21,29 @@ export class StreamingReply {
   push(delta: string) {
     if (this.closed || this.failed) return;
     this.text += delta;
-    if (!this.timer) {
-      this.schedule();
-      this.timer = setTimeout(() => {
-        this.timer = undefined;
-        if (this.text !== this.sent) this.schedule();
-      }, 800);
-    }
+    this.schedule();
   }
   private schedule() {
-    this.work = this.work
-      .then(() => this.flush())
-      .catch(async () => {
-        this.failed = true;
-        await this.store
-          .event(this.tenantId, "feishu-stream-error", {}, this.runId)
-          .catch(() => {});
-      });
+    // V latest-snapshot patch: retain only the newest cumulative text while
+    // an API call is in flight, rather than queuing every obsolete frame.
+    if (this.scheduled) return;
+    this.scheduled = true;
+    this.work = this.work.then(async () => {
+      try {
+        while (!this.closed && this.text !== this.sent) {
+          const delay = Math.max(0, 150 - (Date.now() - this.lastFlushAt));
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          if (this.closed) break;
+          this.lastFlushAt = Date.now();
+          await this.flush();
+        }
+      } finally {
+        this.scheduled = false;
+      }
+    }).catch(async () => {
+      this.failed = true;
+      await this.store.event(this.tenantId, "feishu-stream-error", {}, this.runId).catch(() => {});
+    });
   }
   private async load() {
     if (this.cardId) return;
@@ -62,7 +69,15 @@ export class StreamingReply {
           type: "card_json",
           data: JSON.stringify({
             schema: "2.0",
-            config: { streaming_mode: true, update_multi: true },
+            config: {
+              streaming_mode: true,
+              update_multi: true,
+              streaming_config: {
+                print_frequency_ms: { default: 70 },
+                print_step: { default: 1 },
+                print_strategy: "fast",
+              },
+            },
             body: {
               elements: [{ tag: "markdown", element_id: "answer", content }],
             },
@@ -125,7 +140,7 @@ export class StreamingReply {
   }
   async finish(output: string): Promise<boolean> {
     this.closed = true;
-    if (this.timer) clearTimeout(this.timer);
+
     await this.work;
     this.text = output;
     try {

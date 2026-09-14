@@ -20,7 +20,7 @@ try {
     t.id,
     "rollout-proof-" + Date.now(),
     parent.session_key,
-    "【Nexus 升级验收】这是技术验收，不接续其他业务话题。不要修改文件。请用文件工具读取工作目录的 nexus-profile-proof.txt，只回复“升级验收：”和文件原文。",
+    process.env.NEXUS_VERIFY_PROMPT || "【Nexus 升级验收】这是技术验收，不接续其他业务话题。不要修改文件。请用文件工具读取工作目录的 nexus-profile-proof.txt，只回复“升级验收：”和文件原文。",
     "feishu",
     parent.message_id,
   );
@@ -60,7 +60,7 @@ try {
         runId: r.id,
         status: r.status,
         delivery: r.delivery,
-        outputContainsMarker: r.output.includes("official-deepseek-stream-914"),
+        outputContainsMarker: process.env.NEXUS_VERIFY_PROMPT ? undefined : r.output.includes("official-deepseek-stream-914"),
         feishuReadback: readback,
         events,
       };

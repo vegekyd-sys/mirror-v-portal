@@ -84,3 +84,25 @@ test("stream API failures allow durable final fallback", async () => {
   a.push("test");
   expect(await a.finish("test")).toBe(false);
 });
+test("coalesces blocked updates and sends final snapshot without draining old frames", async () => {
+  const f = fixture();
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  f.api.cardkit.v1.cardElement.content = async (x: any) => {
+    calls.push(x.data.content);
+    await blocked;
+    return { code: 0 };
+  };
+  const stream = new StreamingReply(f.store,f.api,'run','tenant','parent');
+  stream.push('开始');
+  await new Promise(resolve => setTimeout(resolve,20));
+  for(let i=0;i<100;i++) stream.push('字');
+  const done=stream.finish('完整最终回答');
+  release();
+  expect(await done).toBe(true);
+  expect(calls).toEqual(['开始']);
+  expect(f.contents.at(-1)).toBe('完整最终回答');
+  const config=JSON.parse(f.api.cardkit.v1.card.create.mock.calls[0][0].data.data).config;
+  expect(config.streaming_config.print_strategy).toBe('fast');
+});
