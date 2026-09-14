@@ -5,12 +5,6 @@ USER root
 RUN git --version && python3 --version && curl --version && test -s /etc/ssl/certs/ca-certificates.crt
 # CI builds remain on the existing builder; no host Docker socket is mounted.
 RUN corepack enable
-ARG KUBECTL_VERSION=v1.36.2
-RUN arch="$(dpkg --print-architecture)" \
-    && curl -fsSL --retry 3 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" -o /tmp/kubectl \
-    && curl -fsSL --retry 3 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl.sha256" -o /tmp/kubectl.sha256 \
-    && cd /tmp && echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check \
-    && install -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl kubectl.sha256
 RUN npm install --omit=dev --no-save --legacy-peer-deps \
     --prefix /opt/nexus-manager/plugins/feishu @openclaw/feishu@2026.9.4 \
     && chown -R node:node /opt/nexus-manager
