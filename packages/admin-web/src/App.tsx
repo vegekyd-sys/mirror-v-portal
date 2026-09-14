@@ -21,6 +21,7 @@ import ChatApiKeysPage from './pages/ChatApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import ChatPage from './pages/ChatPage';
+import SystemAgentPage from './pages/SystemAgentPage';
 
 // Router basename mirrors vite `base` (phase 3: '/' → empty basename).
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
             <Route path="agents" element={<AgentsPage />} />
+            <Route path="nexus-manager" element={<SystemAgentPage />} />
             <Route path="agents/:tenantId" element={<AgentDetailPage />} />
             <Route path="llm-providers" element={<LlmProvidersPage />} />
             <Route path="llm-token-pricing" element={<LlmTokenPricingPage />} />

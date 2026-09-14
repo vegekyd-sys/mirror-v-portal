@@ -19,6 +19,7 @@ import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { createAuditMiddleware } from './services/audit.js';
 import { createTenantMachineAssertionRoutes } from './routes/tenant-machine-assertions.js';
+import { createSystemAgentRoutes } from './routes/system-agent.js';
 import { createModelCatalogRoutes } from './routes/model-catalog.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: SseBroker = new SseBroker()) {
@@ -70,6 +71,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // grants no binding authority and no secret is returned.
   app.use(createTenantMachineAssertionRoutes(pool, serviceAuth));
 
+  app.use('/v1/admin/system-agent', createSystemAgentRoutes(authAndAudit));
   app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
   app.use(createModelCatalogRoutes(pool, config, authAndAudit));
