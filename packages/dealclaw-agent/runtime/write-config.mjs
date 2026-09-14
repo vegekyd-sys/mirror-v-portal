@@ -338,8 +338,16 @@ const config = {
       // sub-agents instead of grinding through it inline and hitting the run
       // ceiling. Sub-agents run with their own runTimeoutSeconds and push
       // results back via completion events.
+      // - maxConcurrent: cap concurrent sub-agents per main session (fan-out bound).
+      // - maxSpawnDepth: 1 = no nesting (default) — sub-agents cannot spawn
+      //   further sub-agents, so only the main orchestrator can fan out.
+      // - runTimeoutSeconds: sub-agent default run ceiling (7200s = 2h), 4x the
+      //   main run ceiling (1800s) so delegated long tasks outlive the parent turn.
       subagents: {
         delegationMode: 'prefer',
+        maxConcurrent: 4,
+        maxSpawnDepth: 1,
+        runTimeoutSeconds: 7200,
       },
       contextTokens: 1_000_000,
       typingMode: 'instant',
