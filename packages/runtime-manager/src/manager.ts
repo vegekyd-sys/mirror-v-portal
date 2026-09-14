@@ -1,4 +1,4 @@
-import type { Store } from "./store.js";
+import type { Store, Run } from "./store.js";
 import type { RuntimeProvider } from "./provider.js";
 
 export class RuntimeManager {
@@ -7,6 +7,7 @@ export class RuntimeManager {
   constructor(
     readonly store: Store,
     readonly provider: RuntimeProvider,
+    readonly onDelta?: (run: Run, text: string) => void,
   ) {}
   async start() {
     await this.store.boss.work<{ runId: string }>(
@@ -61,7 +62,15 @@ export class RuntimeManager {
           "UPDATE elastic_tenants SET state='waking',last_error=NULL WHERE id=$1",
           [tenant.id],
         );
-        await this.store.event(tenant.id, "waking", {}, runId);
+        await this.store.event(
+          tenant.id,
+          "waking",
+          {
+            at: Date.now(),
+            queueMs: Date.now() - new Date(current.created_at).getTime(),
+          },
+          runId,
+        );
         const handle = await this.provider.ensure(tenant, async (name) => {
           tenant.sandbox_name = name;
           await db.query(
@@ -84,6 +93,7 @@ export class RuntimeManager {
             wakeMs: handle.wakeMs,
             reused: handle.reused,
             sandboxName: handle.name,
+            ...handle.timings,
           },
           runId,
         );
@@ -92,7 +102,10 @@ export class RuntimeManager {
           tenant,
           current.session_key,
           current.text,
-          (kind, data) => this.store.event(tenant.id, kind, data, runId),
+          async (kind, data) => {
+            await this.store.event(tenant.id, kind, data, runId);
+            if (kind === "delta") this.onDelta?.(current, data.text);
+          },
         );
         await db.query("BEGIN");
         try {

@@ -1,9 +1,28 @@
 import { createHash } from "node:crypto";
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { Store, Tenant } from "./store.js";
+import { StreamingReply } from "./streaming-reply.js";
+import type { Run, Store, Tenant } from "./store.js";
 export class FeishuEdge {
   clients = new Map<string, { ws: lark.WSClient; api: lark.Client }>();
+  streams = new Map<string, StreamingReply>();
   constructor(readonly store: Store) {}
+  delta(run: Run, text: string) {
+    if (run.channel !== "feishu" || !run.message_id) return;
+    const api = this.clients.get(run.tenant_id)?.api;
+    if (!api) return;
+    let stream = this.streams.get(run.id);
+    if (!stream) {
+      stream = new StreamingReply(
+        this.store,
+        api,
+        run.id,
+        run.tenant_id,
+        run.message_id,
+      );
+      this.streams.set(run.id, stream);
+    }
+    stream.push(text);
+  }
   async start() {
     const { rows } = await this.store.pool.query<Tenant>(
       "SELECT * FROM elastic_tenants WHERE app_id IS NOT NULL AND secret IS NOT NULL",
@@ -21,7 +40,18 @@ export class FeishuEdge {
           const text =
             run.output ||
             "本次执行未能安全完成，请在 Nexus 试用页查看状态。为避免重复操作，系统没有自动重做。";
-          const chars = Array.from(text);
+          const stream =
+            this.streams.get(run.id) ||
+            new StreamingReply(
+              this.store,
+              client.api,
+              run.id,
+              run.tenant_id,
+              run.message_id!,
+            );
+          const streamed = await stream.finish(text);
+          this.streams.delete(run.id);
+          const chars = Array.from(streamed ? "" : text);
           for (let offset = 0; offset < chars.length; offset += 5000) {
             const uuid = createHash("sha256")
               .update(`${run.id}:${offset}`)

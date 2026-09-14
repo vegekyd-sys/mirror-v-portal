@@ -1,0 +1,182 @@
+import type * as lark from "@larksuiteoapi/node-sdk";
+import type { Store } from "./store.js";
+export class StreamingReply {
+  private text = "";
+  private sent = "";
+  private sequence = 0;
+  private cardId?: string;
+  private messageId?: string;
+  private timer?: NodeJS.Timeout;
+  private work: Promise<void> = Promise.resolve();
+  private failed = false;
+  private closed = false;
+  constructor(
+    readonly store: Store,
+    readonly api: lark.Client,
+    readonly runId: string,
+    readonly tenantId: string,
+    readonly parentMessageId: string,
+  ) {}
+  push(delta: string) {
+    if (this.closed || this.failed) return;
+    this.text += delta;
+    if (!this.timer) {
+      this.schedule();
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        if (this.text !== this.sent) this.schedule();
+      }, 800);
+    }
+  }
+  private schedule() {
+    this.work = this.work
+      .then(() => this.flush())
+      .catch(async () => {
+        this.failed = true;
+        await this.store
+          .event(this.tenantId, "feishu-stream-error", {}, this.runId)
+          .catch(() => {});
+      });
+  }
+  private async load() {
+    if (this.cardId) return;
+    const { rows } = await this.store.pool.query(
+      "SELECT * FROM elastic_streams WHERE run_id=$1",
+      [this.runId],
+    );
+    if (rows[0]) {
+      this.cardId = rows[0].card_id;
+      this.messageId = rows[0].message_id;
+      this.sequence = Number(rows[0].sequence);
+    }
+  }
+  private async flush() {
+    await this.load();
+    const content = this.text;
+    if (!content || content === this.sent) return;
+    // Card content is bounded; the durable final-reply path handles longer output.
+    if (content.length > 28000) throw Error("STREAM_TOO_LONG");
+    if (!this.cardId) {
+      const r = await this.api.cardkit.v1.card.create({
+        data: {
+          type: "card_json",
+          data: JSON.stringify({
+            schema: "2.0",
+            config: { streaming_mode: true, update_multi: true },
+            body: {
+              elements: [{ tag: "markdown", element_id: "answer", content }],
+            },
+          }),
+        },
+      });
+      if (r.code !== 0 || !r.data?.card_id) throw Error("CARD_CREATE_FAILED");
+      this.cardId = r.data.card_id;
+      await this.store.pool.query(
+        "INSERT INTO elastic_streams(run_id,card_id,sequence) VALUES($1,$2,0) ON CONFLICT(run_id) DO NOTHING",
+        [this.runId, this.cardId],
+      );
+    }
+    if (!this.messageId) {
+      const r = await this.api.im.message.reply({
+        path: { message_id: this.parentMessageId },
+        data: {
+          msg_type: "interactive",
+          content: JSON.stringify({
+            type: "card",
+            data: { card_id: this.cardId },
+          }),
+          uuid: this.runId,
+        },
+      });
+      if (r.code !== 0 || !r.data?.message_id) throw Error("CARD_SEND_FAILED");
+      this.messageId = r.data.message_id;
+      await this.store.pool.query(
+        "UPDATE elastic_streams SET message_id=$2 WHERE run_id=$1",
+        [this.runId, this.messageId],
+      );
+      await this.store.event(
+        this.tenantId,
+        "feishu-first-content",
+        {
+          at: Date.now(),
+          messageId: this.messageId,
+          characters: content.length,
+        },
+        this.runId,
+      );
+    }
+    const sequence = ++this.sequence;
+    await this.store.pool.query(
+      "UPDATE elastic_streams SET sequence=$2 WHERE run_id=$1",
+      [this.runId, sequence],
+    );
+    const r = await this.api.cardkit.v1.cardElement.content({
+      path: { card_id: this.cardId, element_id: "answer" },
+      data: { content, sequence, uuid: `${this.runId}:${sequence}` },
+    });
+    if (r.code !== 0) throw Error("CARD_UPDATE_FAILED");
+    this.sent = content;
+    await this.store.event(
+      this.tenantId,
+      "feishu-stream-update",
+      { at: Date.now(), characters: content.length, sequence },
+      this.runId,
+    );
+  }
+  async finish(output: string): Promise<boolean> {
+    this.closed = true;
+    if (this.timer) clearTimeout(this.timer);
+    await this.work;
+    this.text = output;
+    try {
+      await this.load();
+      if (!this.cardId) await this.flush();
+      if (!this.cardId || output.length > 28000)
+        throw Error("FINAL_CARD_UNAVAILABLE");
+      const sequence = ++this.sequence;
+      await this.store.pool.query(
+        "UPDATE elastic_streams SET sequence=$2 WHERE run_id=$1",
+        [this.runId, sequence],
+      );
+      const r = await this.api.cardkit.v1.card.update({
+        path: { card_id: this.cardId },
+        data: {
+          sequence,
+          uuid: `${this.runId}:${sequence}`,
+          card: {
+            type: "card_json",
+            data: JSON.stringify({
+              schema: "2.0",
+              config: { streaming_mode: false, update_multi: true },
+              body: {
+                elements: [
+                  { tag: "markdown", element_id: "answer", content: output },
+                ],
+              },
+            }),
+          },
+        },
+      });
+      if (r.code !== 0) return false;
+      return true;
+    } catch {
+      if (this.cardId) {
+        try {
+          const sequence = ++this.sequence;
+          await this.store.pool.query(
+            "UPDATE elastic_streams SET sequence=$2 WHERE run_id=$1",
+            [this.runId, sequence],
+          );
+          await this.api.cardkit.v1.card.settings({
+            path: { card_id: this.cardId },
+            data: {
+              sequence,
+              settings: JSON.stringify({ config: { streaming_mode: false } }),
+            },
+          });
+        } catch {}
+      }
+      return false;
+    }
+  }
+}

@@ -10,6 +10,7 @@ export interface Config {
   idleTimeoutSeconds: number;
   trialTenantId: string;
   snapshotId?: string;
+  optimizeRuntime?: boolean;
   sandboxPrefix: string;
   model: { id: string; baseUrl: string; apiKey: string };
   vercel: { token: string; teamId: string; projectId: string };

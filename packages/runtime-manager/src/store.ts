@@ -70,6 +70,10 @@ export class Store {
         created_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz,
         UNIQUE(tenant_id, request_key)
       );
+      CREATE TABLE IF NOT EXISTS elastic_streams (
+        run_id uuid PRIMARY KEY REFERENCES elastic_runs(id), card_id text NOT NULL,
+        message_id text, sequence integer NOT NULL DEFAULT 0
+      );
       CREATE INDEX IF NOT EXISTS elastic_runs_pending ON elastic_runs(tenant_id, created_at) WHERE status IN ('queued','running');
       CREATE TABLE IF NOT EXISTS elastic_events (
         seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

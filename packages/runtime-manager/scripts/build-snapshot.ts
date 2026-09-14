@@ -77,7 +77,13 @@ try {
     "--no-fund",
     "openclaw@2026.7.1",
   ]);
-  for (const filename of ["boot.mjs", "invoke.mjs", "quiesce.mjs"]) {
+  for (const filename of [
+    "boot.mjs",
+    "invoke.mjs",
+    "quiesce.mjs",
+    "model-proxy.mjs",
+    "backup.mjs",
+  ]) {
     await sbx.writeFiles([
       {
         path: `/vercel/sandbox/nexus/${filename}`,

@@ -1,15 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
 import type { Config } from "./config.js";
 import type { Tenant } from "./store.js";
 
+export async function finishOutput(sink: Writable) {
+  sink.end();
+  await finished(sink);
+}
+
 export interface RuntimeHandle {
   name: string;
   reused: boolean;
   wakeMs: number;
+  timings?: Record<string, number | boolean>;
 }
 export interface RuntimeProvider {
   ensure(
@@ -28,6 +36,7 @@ export interface RuntimeProvider {
 }
 
 export class VercelProvider implements RuntimeProvider {
+  private handles = new Map<string, Sandbox>();
   constructor(readonly config: Config) {}
   token(tenantId: string) {
     return createHmac("sha256", this.config.encryptionKey)
@@ -54,7 +63,9 @@ export class VercelProvider implements RuntimeProvider {
     // Never silently recreate a previously provisioned tenant whose snapshot expired.
     // SDK getOrCreate can recreate an expired sandbox, which would lose user state.
     let sbx: Sandbox;
-    if (tenant.sandbox_name) sbx = await this.get(tenant);
+    if (this.config.optimizeRuntime !== false && this.handles.has(tenant.id))
+      sbx = this.handles.get(tenant.id)!;
+    else if (tenant.sandbox_name) sbx = await this.get(tenant);
     else
       sbx = await Sandbox.getOrCreate({
         ...this.config.vercel,
@@ -67,9 +78,39 @@ export class VercelProvider implements RuntimeProvider {
         timeout: 1_200_000,
         tags: { purpose: "nexus-trial", tenant: tenant.id },
       });
+    const sandboxAcquireMs = Date.now() - start;
     await onProvision?.(name);
     const reused = tenant.state === "ready";
     await sbx.update({ timeout: 1_200_000 });
+    const setupStart = Date.now();
+    if (!this.handles.has(tenant.id)) {
+      const files = [
+        "boot.mjs",
+        "invoke.mjs",
+        "quiesce.mjs",
+        "model-proxy.mjs",
+        "backup.mjs",
+      ].map((file) => ({
+        path: `/vercel/sandbox/nexus/${file}`,
+        content: fs.readFileSync(
+          new URL(`../runtime/${file}`, import.meta.url),
+        ),
+      }));
+      const revision = createHash("sha256")
+        .update(Buffer.concat(files.map((f) => f.content)))
+        .digest("hex");
+      const revisionPath = "/vercel/sandbox/nexus/runtime-revision.txt";
+      const installed = await sbx
+        .readFileToBuffer({ path: revisionPath })
+        .catch(() => null);
+      if (installed?.toString() !== revision)
+        await sbx.writeFiles([
+          ...files,
+          { path: revisionPath, content: Buffer.from(revision) },
+        ]);
+    }
+    const scriptDeployMs = Date.now() - setupStart;
+    const bootCommandStart = Date.now();
     const result = await sbx.runCommand({
       cmd: "node",
       args: ["/vercel/sandbox/nexus/boot.mjs"],
@@ -78,6 +119,8 @@ export class VercelProvider implements RuntimeProvider {
         NEXUS_MODEL_KEY: this.config.model.apiKey,
         NEXUS_MODEL_BASE_URL: this.config.model.baseUrl,
         NEXUS_MODEL_ID: this.config.model.id,
+        NEXUS_OPTIMIZE: this.config.optimizeRuntime === false ? "0" : "1",
+        NEXUS_CPU_PROFILE: process.env.NEXUS_CPU_PROFILE || "0",
       },
       signal: AbortSignal.timeout(180000),
     });
@@ -91,7 +134,25 @@ export class VercelProvider implements RuntimeProvider {
       );
       throw new Error("OPENCLAW_BOOT_FAILED");
     }
-    return { name, reused, wakeMs: Date.now() - start };
+    const bootCommandMs = Date.now() - bootCommandStart;
+    let boot: any = {};
+    try {
+      boot = JSON.parse((await result.stdout()).trim().split("\n").at(-1)!);
+    } catch {}
+    this.handles.set(tenant.id, sbx);
+    return {
+      name,
+      reused: !!boot.processReused,
+      wakeMs: Date.now() - start,
+      timings: {
+        sandboxAcquireMs,
+        scriptDeployMs,
+        bootCommandMs,
+        openclawBootMs: boot.openclawBootMs ?? -1,
+        bootScriptMs: boot.bootScriptMs ?? -1,
+        processReused: !!boot.processReused,
+      },
+    };
   }
   async execute(
     tenant: Tenant,
@@ -99,15 +160,27 @@ export class VercelProvider implements RuntimeProvider {
     text: string,
     onEvent: (kind: string, data: any) => Promise<void>,
   ): Promise<string> {
-    const sbx = await this.get(tenant);
-    await sbx.update({ timeout: 1_200_000 });
+    const executeStart = Date.now();
+    const sbx =
+      this.config.optimizeRuntime === false
+        ? await this.get(tenant)
+        : this.handles.get(tenant.id) || (await this.get(tenant));
+    if (this.config.optimizeRuntime === false)
+      await sbx.update({ timeout: 1_200_000 });
+    await onEvent("dispatch", {
+      at: Date.now(),
+      executeSetupMs: Date.now() - executeStart,
+    });
+    let firstDeltaAt: number | undefined;
+    const invokeStart = Date.now();
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
     let output = "";
     let completed = false;
     let chain = Promise.resolve();
     const sink = new Writable({
       write(chunk, _encoding, callback) {
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         const frames = buffer.split(/\r?\n\r?\n/);
         buffer = frames.pop() || "";
         chain = chain.then(async () => {
@@ -125,6 +198,13 @@ export class VercelProvider implements RuntimeProvider {
               continue;
             }
             if (event.type === "response.output_text.delta") {
+              if (event.delta && !firstDeltaAt) {
+                firstDeltaAt = Date.now();
+                await onEvent("first-delta", {
+                  at: firstDeltaAt,
+                  invokeToFirstDeltaMs: firstDeltaAt - invokeStart,
+                });
+              }
               output += event.delta || "";
               await onEvent("delta", { text: event.delta || "" });
             } else if (event.type === "response.completed") {
@@ -145,6 +225,7 @@ export class VercelProvider implements RuntimeProvider {
         );
       },
     });
+    sink.on("error", () => {}); // observed by finishOutput, not an unhandled emitter error
     const result = await sbx.runCommand({
       cmd: "node",
       args: ["/vercel/sandbox/nexus/invoke.mjs"],
@@ -157,21 +238,33 @@ export class VercelProvider implements RuntimeProvider {
       stdout: sink,
       signal: AbortSignal.timeout(650000),
     });
+    await finishOutput(sink);
     await chain;
+    await onEvent("generation-finished", {
+      at: Date.now(),
+      invokeMs: Date.now() - invokeStart,
+    });
     if (result.exitCode || !completed || !output.trim())
       throw new Error("OPENCLAW_INCOMPLETE_RESPONSE");
     // Persist session/files after EACH successful turn, before acknowledging success.
     // Snapshot on idle is additional protection, not the only durable boundary.
-    const backup = await sbx.runCommand({
-      cmd: "tar",
-      args: [
-        "-czf",
-        "/tmp/nexus-state.tgz",
-        "-C",
-        "/vercel/sandbox",
-        "agent-data",
-      ],
-    });
+    const backupStart = Date.now();
+    const backup =
+      this.config.optimizeRuntime === false
+        ? await sbx.runCommand({
+            cmd: "tar",
+            args: [
+              "-czf",
+              "/tmp/nexus-state.tgz",
+              "-C",
+              "/vercel/sandbox",
+              "agent-data",
+            ],
+          })
+        : await sbx.runCommand({
+            cmd: "node",
+            args: ["/vercel/sandbox/nexus/backup.mjs"],
+          });
     if (backup.exitCode) throw new Error("STATE_BACKUP_FAILED");
     const bytes = await sbx.readFileToBuffer({ path: "/tmp/nexus-state.tgz" });
     if (!bytes) throw new Error("STATE_BACKUP_EMPTY");
@@ -180,6 +273,21 @@ export class VercelProvider implements RuntimeProvider {
     const destination = path.join(directory, `${tenant.id}.tgz`);
     fs.writeFileSync(destination + ".tmp", bytes, { mode: 0o600 });
     fs.renameSync(destination + ".tmp", destination);
+    await onEvent("state-saved", {
+      at: Date.now(),
+      backupMs: Date.now() - backupStart,
+    });
+    const timingBytes = await sbx.readFileToBuffer({
+      path: "/tmp/nexus-model-timings.jsonl",
+    });
+    if (timingBytes)
+      for (const line of timingBytes.toString().trim().split("\n")) {
+        try {
+          const timing = JSON.parse(line);
+          if (timing.start >= invokeStart - 2000)
+            await onEvent("model-timing", timing);
+        } catch {}
+      }
     return output;
   }
   async stop(tenant: Tenant) {
@@ -193,6 +301,7 @@ export class VercelProvider implements RuntimeProvider {
     });
     if (result.exitCode !== 0)
       return { stopped: false, reason: "ACTIVE_BACKGROUND_WORK" };
+    this.handles.delete(tenant.id);
     const stopped = await sbx.stop({ signal: AbortSignal.timeout(120000) });
     if (stopped.status !== "stopped")
       throw new Error("SANDBOX_STOP_NOT_CONFIRMED");

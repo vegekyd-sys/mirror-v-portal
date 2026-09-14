@@ -1,6 +1,19 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 
+const bootStart = Date.now();
+const fingerprint = createHash("sha256")
+  .update(
+    [
+      process.env.NEXUS_MODEL_ID,
+      process.env.NEXUS_MODEL_BASE_URL,
+      process.env.NEXUS_MODEL_KEY,
+      process.env.NEXUS_OPTIMIZE,
+      "runtime-v2",
+    ].join("\0"),
+  )
+  .digest("hex");
 const base = "/vercel/sandbox/nexus";
 const data = "/vercel/sandbox/agent-data";
 const state = `${data}/state`;
@@ -20,6 +33,12 @@ const env = {
   OPENCLAW_CONFIG_PATH: `${data}/openclaw.json`,
   OPENCLAW_WORKSPACE_DIR: workspace,
   OPENCLAW_SKIP_CHANNELS: "1",
+  ...(process.env.NEXUS_OPTIMIZE === "1"
+    ? {
+        NODE_COMPILE_CACHE: `${base}/compile-cache`,
+        OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+      }
+    : {}),
 };
 // No credentials in the filesystem snapshot. Values resolve from process env.
 const cfg = {
@@ -34,7 +53,7 @@ const cfg = {
     mode: "merge",
     providers: {
       nexus: {
-        baseUrl: process.env.NEXUS_MODEL_BASE_URL,
+        baseUrl: "http://127.0.0.1:18791/v1",
         api: "openai-completions",
         apiKey: "${NEXUS_MODEL_KEY}",
         models: [
@@ -52,6 +71,7 @@ const cfg = {
   agents: {
     defaults: {
       workspace,
+      thinkingDefault: "off",
       model: { primary: `nexus/${process.env.NEXUS_MODEL_ID}` },
       timeoutSeconds: 600,
       maxConcurrent: 1,
@@ -75,14 +95,41 @@ try {
     signal: AbortSignal.timeout(1000),
   });
   if (r.ok) {
-    console.log("NEXUS_RUNTIME_READY");
+    if (
+      !fs.existsSync("/tmp/nexus-runtime-fingerprint") ||
+      fs.readFileSync("/tmp/nexus-runtime-fingerprint", "utf8") !== fingerprint
+    )
+      throw new Error("RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED");
+    console.log(
+      JSON.stringify({
+        marker: "NEXUS_RUNTIME_READY",
+        processReused: true,
+        openclawBootMs: 0,
+        bootScriptMs: Date.now() - bootStart,
+      }),
+    );
     process.exit(0);
   }
-} catch {}
+} catch (error) {
+  if (error?.message === "RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED")
+    throw error;
+}
 const log = fs.openSync("/tmp/nexus-gateway.log", "a");
+const proxy = spawn("node", [`${base}/model-proxy.mjs`], {
+  env,
+  detached: true,
+  stdio: ["ignore", log, log],
+});
+proxy.unref();
+fs.writeFileSync("/tmp/nexus-model-proxy.pid", String(proxy.pid));
+fs.writeFileSync("/tmp/nexus-runtime-fingerprint", fingerprint);
+const gatewayStart = Date.now();
 const child = spawn(
   "node",
   [
+    ...(process.env.NEXUS_CPU_PROFILE === "1"
+      ? ["--cpu-prof", "--cpu-prof-dir=/tmp"]
+      : []),
     `${base}/runtime/node_modules/openclaw/openclaw.mjs`,
     "gateway",
     "run",
@@ -108,7 +155,14 @@ for (let i = 0; i < 180; i++) {
         "/tmp/nexus-baseline-pids",
         execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" }),
       );
-      console.log("NEXUS_RUNTIME_READY");
+      console.log(
+        JSON.stringify({
+          marker: "NEXUS_RUNTIME_READY",
+          processReused: false,
+          openclawBootMs: Date.now() - gatewayStart,
+          bootScriptMs: Date.now() - bootStart,
+        }),
+      );
       process.exit(0);
     }
   } catch {}

@@ -10,8 +10,12 @@ const config = loadConfig(),
   store = new Store(config);
 await store.init();
 await store.createTenant(config.trialTenantId, "DealClaw 试用");
-const manager = new RuntimeManager(store, new VercelProvider(config)),
-  edge = new FeishuEdge(store);
+const edge = new FeishuEdge(store);
+const manager = new RuntimeManager(
+  store,
+  new VercelProvider(config),
+  (run, text) => edge.delta(run, text),
+);
 await edge.start();
 await manager.start();
 const app = express();
@@ -107,10 +111,11 @@ app.put("/v1/tenants/:id/credentials", async (req, res, next) => {
 app.get("/api/state", async (_req, res, next) => {
   try {
     const tenants = await store.pool.query(
-      "SELECT id,name,app_id,state,sandbox_name,idle_seconds,last_error,last_wake_ms,wake_count FROM elastic_tenants ORDER BY created_at",
+      "SELECT id,name,app_id,state,sandbox_name,idle_seconds,last_error,last_wake_ms,wake_count FROM elastic_tenants WHERE app_id IS NOT NULL OR id=$1 ORDER BY created_at",
+      [config.trialTenantId],
     );
     const runs = await store.pool.query(
-      "SELECT id,tenant_id,text,status,output,error,delivery FROM elastic_runs ORDER BY created_at DESC LIMIT 50",
+      "SELECT id,tenant_id,text,status,CASE WHEN status='running' THEN coalesce((SELECT string_agg(data->>'text','' ORDER BY seq) FROM elastic_events WHERE run_id=elastic_runs.id AND kind='delta'),output) ELSE output END AS output,error,delivery FROM elastic_runs WHERE channel <> 'profile' ORDER BY created_at DESC LIMIT 50",
     );
     const events = await store.pool.query(
       "SELECT kind,data,created_at,tenant_id FROM elastic_events WHERE kind NOT IN ($1,$2) ORDER BY seq DESC LIMIT 30",
