@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { isResendProxyEmail } from './lib/email-routing.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,19 +25,13 @@ function loadRegistry() {
 }
 
 // ── Resend proxy domains (fallback only, registry wins) ──────
-const RESEND_PROXY_DOMAIN_SUFFIX = '.dealclaw.io';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_4BU…Myx1';
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
 function isResendProxy(email) {
-  // 1. Registry first (authoritative)
-  const registry = loadRegistry();
-  const record = registry[email];
-  if (record && record.protocol === 'resend') return true;
-  if (record && record.protocol === 'smtp') return false;
-  // 2. Fallback: any subdomain under dealclaw.io is treated as Resend proxy
-  const domain = email.split('@')[1]?.toLowerCase();
-  return Boolean(domain && domain.endsWith(RESEND_PROXY_DOMAIN_SUFFIX));
+  // 唯一真源：lib/email-routing.mjs
+  // 代理域（dealclaw.io 及其任意子域）恒为 resend；注册表里的旧 smtp 记录不再生效
+  return isResendProxyEmail(email, loadRegistry());
 }
 
 async function sendViaResend(from, to, subject, text, html, cc, bcc) {
