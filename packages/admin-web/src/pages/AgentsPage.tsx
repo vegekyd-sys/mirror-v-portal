@@ -5,7 +5,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
-import type { Tenant } from '../lib/types';
+import type {
+  CreateTenantResponse,
+  MioSupplierCreateResponse,
+  MioSupplierOption,
+  MioSupplierSearchResponse,
+  Tenant,
+} from '../lib/types';
 import { fmtNum, fmtTime } from '../components/badges';
 import Modal from '../components/Modal';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
@@ -24,6 +30,8 @@ const emptyAdd = {
   companyName: '',
   contactEmail: '',
   contactPhone: '',
+  /** 国际区号（与手机号拼成 contactPhone 提交）。 */
+  contactPhoneCode: '+86',
   planTier: 'starter',
   quotaAgents: '1',
   quotaCreditsMonthly: '1000000',
@@ -49,6 +57,19 @@ export default function AgentsPage() {
   const [showScan, setShowScan] = useState(false);
   // 选择已有企业（tenantId）为空 = 新建企业
   const [pickTenant, setPickTenant] = useState('');
+
+  // 米奥（Mio）供应商：搜索结果下拉 + 新建供应商入口。
+  // 绑定的值是米奥返回的 `id`（12 位数字），不是 `code`。
+  const [mioItems, setMioItems] = useState<MioSupplierOption[]>([]);
+  const [mioTotal, setMioTotal] = useState(0);
+  const [mioBusy, setMioBusy] = useState(false);
+  const [mioSearched, setMioSearched] = useState(false);
+  const [mioErr, setMioErr] = useState('');
+  const [mioSelected, setMioSelected] = useState<MioSupplierOption | null>(null);
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [newSupplier, setNewSupplier] = useState({ companyName: '', mobile: '', intDialingCode: '+86' });
+  const [newSupplierBusy, setNewSupplierBusy] = useState(false);
+  const [newSupplierErr, setNewSupplierErr] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -134,11 +155,115 @@ export default function AgentsPage() {
     }
   };
 
+  /** 打开「添加 Agent」弹窗，重置上一轮遗留的米奥搜索状态。 */
+  const openAddModal = () => {
+    setShowAdd(true);
+    setPickTenant('');
+    setAddErr('');
+    setMioItems([]);
+    setMioTotal(0);
+    setMioSearched(false);
+    setMioErr('');
+    setMioSelected(null);
+    setShowNewSupplier(false);
+    setNewSupplierErr('');
+  };
+
+  const closeAddModal = () => {
+    setShowAdd(false);
+    setShowNewSupplier(false);
+  };
+
+  /** 米奥供应商模糊搜索（结果可能 0 条，也可能多条）。 */
+  const searchMioSuppliers = async () => {
+    const kw = addForm.companyName.trim();
+    if (!kw) {
+      setMioErr('请先填写公司名称，再搜索米奥供应商');
+      return;
+    }
+    setMioBusy(true);
+    setMioErr('');
+    setMioItems([]);
+    setMioSearched(false);
+    setShowNewSupplier(false);
+    try {
+      const r = await api<MioSupplierSearchResponse>(
+        `/v1/admin/mio-suppliers?search=${encodeURIComponent(kw)}&page=0`,
+      );
+      setMioItems(r.items || []);
+      setMioTotal(r.total ?? 0);
+      setMioSearched(true);
+    } catch (e) {
+      setMioErr(errMsg(e));
+    } finally {
+      setMioBusy(false);
+    }
+  };
+
+  /** 选中下拉项 → 把米奥 `id` 作为 mioSupplierId 提交。 */
+  const pickMioSupplier = (id: string) => {
+    setMioErr('');
+    setAddForm((f) => ({ ...f, mioSupplierId: id }));
+    setMioSelected(mioItems.find((i) => i.id === id) || null);
+  };
+
+  /** 打开「新建供应商」子表单，默认沿用当前公司名 + 手机号。 */
+  const openNewSupplier = () => {
+    setNewSupplier({
+      companyName: addForm.companyName.trim(),
+      mobile: addForm.contactPhone.replace(/[^0-9]/g, ''),
+      intDialingCode: addForm.contactPhoneCode.trim() || '+86',
+    });
+    setNewSupplierErr('');
+    setShowNewSupplier(true);
+  };
+
+  /** 调 POST /v1/admin/mio-suppliers 快速创建；米奥错误原文展示。 */
+  const createMioSupplier = async () => {
+    const companyName = (newSupplier.companyName || addForm.companyName).trim();
+    const mobile = newSupplier.mobile.trim();
+    const intDialingCode = newSupplier.intDialingCode.trim() || '+86';
+    if (!companyName) {
+      setNewSupplierErr('请填写公司名称');
+      return;
+    }
+    if (!mobile) {
+      setNewSupplierErr('请填写联系人手机号');
+      return;
+    }
+    setNewSupplierBusy(true);
+    setNewSupplierErr('');
+    try {
+      const r = await api<MioSupplierCreateResponse>('/v1/admin/mio-suppliers', {
+        method: 'POST',
+        body: { companyName, mobile, intDialingCode },
+      });
+      setAddForm((f) => ({
+        ...f,
+        companyName: f.companyName.trim() || companyName,
+        mioSupplierId: r.supplierId,
+      }));
+      setMioSelected({ id: r.supplierId, code: null, name: r.name ?? companyName });
+      setMioItems([]);
+      setMioSearched(false);
+      setShowNewSupplier(false);
+      window.alert(
+        `已新建米奥供应商：${r.name || companyName}\n供应商 ID：${r.supplierId}\n已自动填入表单，点「添加并开通」即完成绑定。`,
+      );
+    } catch (e) {
+      // 同名重复等业务错误：直接展示米奥返回的原始信息。
+      setNewSupplierErr(errMsg(e));
+    } finally {
+      setNewSupplierBusy(false);
+    }
+  };
+
   const addAgent = async () => {
+    const phoneDigits = addForm.contactPhone.replace(/[^0-9]/g, '');
     const body = {
       companyName: addForm.companyName.trim(),
       contactEmail: addForm.contactEmail.trim(),
-      contactPhone: addForm.contactPhone.trim(),
+      contactPhone: `${addForm.contactPhoneCode.trim() || '+86'}${phoneDigits}`,
       planTier: addForm.planTier,
       quotaAgents: Number(addForm.quotaAgents) || 1,
       quotaCreditsMonthly: Number(addForm.quotaCreditsMonthly) || 1000000,
@@ -148,6 +273,11 @@ export default function AgentsPage() {
     };
     if (!body.companyName) {
       setAddErr('请填写公司名称（企业标识）');
+      return;
+    }
+    // 联系人手机必填：米奥侧新建供应商 / 后续对接都需要真实联系方式。
+    if (!phoneDigits) {
+      setAddErr('请填写联系人手机号（含国际区号）');
       return;
     }
     // Requirement (2026-08-27): creating an Agent REQUIRES Feishu bot
@@ -167,16 +297,21 @@ export default function AgentsPage() {
     setAdding(true);
     setAddErr('');
     try {
-      const r = await api<{ tenant?: Tenant; provisioning?: { dryRun?: boolean } }>('/v1/tenants', {
+      const r = await api<CreateTenantResponse>('/v1/tenants', {
         method: 'POST',
         body,
       });
-      setShowAdd(false);
+      closeAddModal();
       setAddForm({ ...emptyAdd });
       setPickTenant('');
+      setMioItems([]);
+      setMioSearched(false);
+      setMioSelected(null);
       const tid = r.tenant?.tenantId || '';
+      // mioSupplier=null → 本次未绑定米奥供应商（不阻塞创建），提示后续绑定。
+      const mioNote = r.mioSupplier ? '' : '\n注意：本次未绑定米奥供应商 ID，可在 Agent 详情页或重开表单补绑。';
       window.alert(
-        `Agent 开通成功：${tid}${r.provisioning?.dryRun ? '（dry-run 模式）' : ''}。初始状态 provisioning，数十秒后自动就绪。`,
+        `Agent 开通成功：${tid}${r.provisioning?.dryRun ? '（dry-run 模式）' : ''}。初始状态 provisioning，数十秒后自动就绪。${mioNote}`,
       );
       await load().then(loadCredits);
       if (tid) navigate(`/agents/${encodeURIComponent(tid)}`);
@@ -200,11 +335,7 @@ export default function AgentsPage() {
           </button>
           <button
             className="btn-primary"
-            onClick={() => {
-              setShowAdd(true);
-              setPickTenant('');
-              setAddErr('');
-            }}
+            onClick={openAddModal}
           >
             <IconPlus /> 添加 Agent
           </button>
@@ -365,7 +496,7 @@ export default function AgentsPage() {
       </div>
 
       {/* ── 添加 Agent ── */}
-      <Modal title="添加 Agent" open={showAdd} onClose={() => setShowAdd(false)}>
+      <Modal title="添加 Agent" open={showAdd} onClose={closeAddModal}>
         {addErr && <div className="msg msg-err">{addErr}</div>}
         <div className="form-row">
           <label className="field-label">选择企业</label>
@@ -412,7 +543,87 @@ export default function AgentsPage() {
                 onChange={(e) => setAddForm({ ...addForm, companyName: e.target.value })}
                 placeholder="如：示例科技有限公司"
               />
+              <button
+                className="btn-secondary"
+                style={{ flex: '0 0 auto' }}
+                disabled={mioBusy}
+                onClick={() => void searchMioSuppliers()}
+              >
+                {mioBusy ? '搜索中…' : '搜索供应商'}
+              </button>
             </div>
+            {mioErr && <div className="msg msg-err">米奥供应商搜索失败：{mioErr}</div>}
+            {mioItems.length > 0 && (
+              <div className="form-row">
+                <label className="field-label">匹配供应商</label>
+                <select value={addForm.mioSupplierId} onChange={(e) => pickMioSupplier(e.target.value)}>
+                  <option value="">请选择（名称 / 编码 / ID）…</option>
+                  {mioItems.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name || '(未命名)'} / {i.code || '无编码'} / {i.id}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint" style={{ margin: 0 }}>
+                  模糊命中 {mioTotal} 条，选中即用其 id 绑定
+                </span>
+              </div>
+            )}
+            {mioSearched && mioItems.length === 0 && !mioErr && (
+              <div className="msg msg-warn">
+                米奥未找到「{addForm.companyName.trim()}」的供应商，可在米奥侧新建后自动绑定。
+                <button className="btn-secondary btn-sm" style={{ marginLeft: 8 }} onClick={openNewSupplier}>
+                  新建供应商
+                </button>
+              </div>
+            )}
+            {showNewSupplier && (
+              <div className="form-row" style={{ marginBottom: 4 }}>
+                <label className="field-label">新建供应商 · 公司名</label>
+                <input
+                  type="text"
+                  value={newSupplier.companyName}
+                  onChange={(e) => setNewSupplier({ ...newSupplier, companyName: e.target.value })}
+                  placeholder="米奥侧将以此名称注册"
+                />
+              </div>
+            )}
+            {showNewSupplier && (
+              <div className="form-row">
+                <label className="field-label">联系人手机</label>
+                <input
+                  type="text"
+                  style={{ flex: '0 0 90px', minWidth: 0 }}
+                  value={newSupplier.intDialingCode}
+                  onChange={(e) => setNewSupplier({ ...newSupplier, intDialingCode: e.target.value })}
+                  placeholder="+86"
+                />
+                <input
+                  type="text"
+                  value={newSupplier.mobile}
+                  onChange={(e) => setNewSupplier({ ...newSupplier, mobile: e.target.value })}
+                  placeholder="如 13800000000"
+                />
+                <button
+                  className="btn-primary"
+                  style={{ flex: '0 0 auto' }}
+                  disabled={newSupplierBusy}
+                  onClick={() => void createMioSupplier()}
+                >
+                  {newSupplierBusy ? '创建中…' : '创建供应商'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  style={{ flex: '0 0 auto' }}
+                  onClick={() => setShowNewSupplier(false)}
+                >
+                  取消
+                </button>
+              </div>
+            )}
+            {showNewSupplier && newSupplierErr && (
+              <div className="msg msg-err">米奥返回：{newSupplierErr}</div>
+            )}
             <div className="form-row">
               <label className="field-label">联系邮箱</label>
               <input
@@ -421,14 +632,21 @@ export default function AgentsPage() {
                 onChange={(e) => setAddForm({ ...addForm, contactEmail: e.target.value })}
                 placeholder="可选，缺失时系统生成占位邮箱"
               />
-              <label className="field-label" style={{ minWidth: 60 }}>
-                电话
-              </label>
+            </div>
+            <div className="form-row">
+              <label className="field-label">联系人手机</label>
+              <input
+                type="text"
+                style={{ flex: '0 0 90px', minWidth: 0 }}
+                value={addForm.contactPhoneCode}
+                onChange={(e) => setAddForm({ ...addForm, contactPhoneCode: e.target.value })}
+                placeholder="+86"
+              />
               <input
                 type="text"
                 value={addForm.contactPhone}
                 onChange={(e) => setAddForm({ ...addForm, contactPhone: e.target.value })}
-                placeholder="可选"
+                placeholder="必填，如 13800000000"
               />
             </div>
             <div className="form-row">
@@ -493,21 +711,33 @@ export default function AgentsPage() {
                 type="text"
                 className="mono"
                 value={addForm.mioSupplierId}
-                onChange={(e) => setAddForm({ ...addForm, mioSupplierId: e.target.value })}
-                placeholder="可选，如 SUP12345；注入 agent 环境变量 MIO_CDP_SUPPLIER_ID"
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setAddForm({ ...addForm, mioSupplierId: v });
+                  if (mioSelected && mioSelected.id !== v) setMioSelected(null);
+                }}
+                placeholder="用上方「搜索供应商」选择，或手填 12 位数字 ID"
               />
+              {mioSelected && (
+                <span className="hint" style={{ margin: 0 }}>
+                  已选：{mioSelected.name || '(未命名)'}
+                  {mioSelected.code ? ` · ${mioSelected.code}` : ''}
+                </span>
+              )}
             </div>
             <div className="hint">
               添加即真实开通——写客户记录、建 credits 账户、在独立 namespace 创建
               Deployment/Secret/PVC，飞书消息走 openclaw 直连平面（agent 内 @openclaw/feishu
               插件）。<b>飞书 App ID / Secret 必填</b>：未提供凭据将只创建客户记录、不创建
               Agent。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
+              米奥供应商 ID 可选：不选也能建租户（不阻塞、不自动绑定），但建议在上方搜索并选中，
+              选中后该 ID 会注入 agent 的 MIO_CDP_SUPPLIER_ID。
             </div>
             <div className="form-row" style={{ marginTop: 12 }}>
               <button className="btn-primary" onClick={() => void addAgent()} disabled={adding}>
                 {adding ? '开通中…' : '添加并开通'}
               </button>
-              <button className="btn-secondary" onClick={() => setShowAdd(false)}>
+              <button className="btn-secondary" onClick={closeAddModal}>
                 取消
               </button>
             </div>

@@ -215,6 +215,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.status(201).json({
           ok: true,
           provisioned: false,
+          // null = 本次创建未绑定米奥供应商（不阻塞、不自动绑定），
+          // 前端据此提示操作者后续绑定（POST /v1/admin/tenants/:id/mio-supplier）。
+          mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
           tenant: {
             tenantId,
             companyName: safeName,
@@ -299,6 +302,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       res.status(201).json({
         ok: true,
         provisioned: true,
+        // 同 provisioned:false 分支：null 表示本次未绑定米奥供应商。
+        mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
         tenant: {
           tenantId,
           companyName: safeName,

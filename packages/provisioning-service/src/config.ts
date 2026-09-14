@@ -13,6 +13,12 @@ function required(name: string): string {
  */
 export const DEFAULT_RUNTIME_NAMESPACE = 'dealclaw-test';
 
+/**
+ * 米奥（Mio）API 默认域名。供应商搜索 / 快速创建都走这个 host 下的
+ * /blade-supplier 与 /blade-agent-adapter 路径。可用 MIO_API_BASE_URL 覆盖。
+ */
+export const DEFAULT_MIO_API_BASE_URL = 'https://micro.tradechina.com';
+
 export interface ProvisioningConfig {
   port: number;
   databaseUrl: string;
@@ -63,6 +69,17 @@ export interface ProvisioningConfig {
   rolloutBatchWorkerIntervalMs?: number;
   /** Rollout batch 任务租约 TTL（秒）——覆盖单租户 recreate ~6s */
   rolloutBatchLeaseSeconds?: number;
+  /**
+   * 米奥 API base URL（env MIO_API_BASE_URL，默认
+   * DEFAULT_MIO_API_BASE_URL）。只有 host，不含 /blade-* 路径。
+   */
+  mioApiBaseUrl?: string;
+  /**
+   * 米奥 Blade-Auth bearer token（env MIO_BLADE_AUTH）。**只从 env 读**，
+   * 任何情况下都不得写进代码、测试、日志或响应体。为空时米奥客户端会报
+   * 明确错误（503 MIO_AUTH_NOT_CONFIGURED），不会静默降级成无鉴权调用。
+   */
+  mioBladeAuth?: string;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -91,5 +108,9 @@ export function loadConfig(): ProvisioningConfig {
     llmPushLeaseSeconds: Number(process.env.LLM_PUSH_LEASE_SECONDS ?? 600),
     rolloutBatchWorkerIntervalMs: Number(process.env.ROLLOUT_BATCH_WORKER_INTERVAL_MS ?? 500),
     rolloutBatchLeaseSeconds: Number(process.env.ROLLOUT_BATCH_LEASE_SECONDS ?? 600),
+    mioApiBaseUrl: process.env.MIO_API_BASE_URL || DEFAULT_MIO_API_BASE_URL,
+    // 空字符串代表“未配置”——由 mio-supplier-client 在真正调用时抛明确错误。
+    // 这里绝不打印、绝不给默认值。
+    mioBladeAuth: process.env.MIO_BLADE_AUTH || '',
   };
 }
