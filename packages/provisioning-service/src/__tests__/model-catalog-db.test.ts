@@ -293,5 +293,92 @@ describe.skipIf(!process.env.DATABASE_URL)('model catalog PostgreSQL integration
       "SELECT COUNT(*) AS count FROM llm_model_param_evidence WHERE layer='discovered'",
     );
     expect(Number(evidence.rows[0].count)).toBeGreaterThan(0);
+
+    const repository = new CatalogRepository(pool);
+    const appliedCatalog = await repository.listRuntimeCatalog();
+    const appliedModel = appliedCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(appliedModel?.snapshotApproved).toBe(true);
+
+    await pool.query(
+      "UPDATE llm_model_discovery_runs SET status='previewed' WHERE id=$1",
+      [preview.runId],
+    );
+    const previewedRunCatalog = await repository.listRuntimeCatalog();
+    const previewedRunModel = previewedRunCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(previewedRunModel?.snapshotApproved).toBe(false);
+
+    await pool.query(
+      "UPDATE llm_model_discovery_runs SET status='applied' WHERE id=$1",
+      [preview.runId],
+    );
+    await pool.query(
+      `UPDATE llm_model_param_evidence
+          SET value_json='999'::jsonb
+        WHERE run_id=$1 AND layer='discovered' AND field_name='contextWindow'`,
+      [preview.runId],
+    );
+    const mismatchedEvidenceCatalog = await repository.listRuntimeCatalog();
+    const mismatchedEvidenceModel = mismatchedEvidenceCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(mismatchedEvidenceModel?.snapshotApproved).toBe(false);
+    await pool.query(
+      `UPDATE llm_model_param_evidence
+          SET value_json='1000000'::jsonb
+        WHERE run_id=$1 AND layer='discovered' AND field_name='contextWindow'`,
+      [preview.runId],
+    );
+
+    await pool.query(
+      "UPDATE llm_model_discovery_runs SET status='applied' WHERE id=$1",
+      [preview.runId],
+    );
+    await pool.query(
+      "UPDATE llm_model_param_evidence SET layer='override' WHERE run_id=$1 AND layer='discovered'",
+      [preview.runId],
+    );
+    const overrideOnlyCatalog = await repository.listRuntimeCatalog();
+    const overrideOnlyModel = overrideOnlyCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(overrideOnlyModel?.snapshotApproved).toBe(false);
+
+    await pool.query(
+      "UPDATE llm_model_param_evidence SET layer='discovered' WHERE run_id=$1 AND layer='override'",
+      [preview.runId],
+    );
+    const restoredCatalog = await repository.listRuntimeCatalog();
+    const restoredModel = restoredCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(restoredModel?.snapshotApproved).toBe(true);
+
+    await pool.query(
+      "UPDATE llm_provider_models SET override_params='{\"reasoning\":true}'::jsonb WHERE id=$1",
+      [preview.models[0].modelRowId],
+    );
+    const unauditedOverrideCatalog = await repository.listRuntimeCatalog();
+    const unauditedOverrideModel = unauditedOverrideCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(unauditedOverrideModel?.snapshotApproved).toBe(false);
+
+    await pool.query(
+      `INSERT INTO llm_model_param_evidence
+         (id,model_row_id,run_id,layer,field_name,value_json,source_kind,observed_at,
+          raw_sha256,confidence,created_by)
+       VALUES (gen_random_uuid(),$1,NULL,'override','reasoning','true'::jsonb,
+               'manual-contract',NOW(),$2,'high','integration-test')`,
+      [preview.models[0].modelRowId, '1'.repeat(64)],
+    );
+    const auditedOverrideCatalog = await repository.listRuntimeCatalog();
+    const auditedOverrideModel = auditedOverrideCatalog
+      .flatMap((item) => item.models)
+      .find((model) => model.id === preview.models[0].modelRowId);
+    expect(auditedOverrideModel?.snapshotApproved).toBe(true);
   });
 });

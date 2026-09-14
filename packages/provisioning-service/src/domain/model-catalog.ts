@@ -104,7 +104,7 @@ function params(value: unknown): ModelRuntimeParamsV1 {
   return result;
 }
 export const ModelRuntimeParamsV1Schema = schema<ModelRuntimeParamsV1>(params);
-export interface ProviderModelRecord { id:string; providerInstanceId:string; modelId:string; displayName?:string; modelType:ModelType; runtimeEnabled:boolean; discoveredParams?:ModelRuntimeParamsV1; overrideParams?:ModelRuntimeParamsV1; effectiveParams:ModelRuntimeParamsV1; paramsStatus:ParamsStatus; schemaVersion:1 }
+export interface ProviderModelRecord { id:string; providerInstanceId:string; modelId:string; displayName?:string; modelType:ModelType; runtimeEnabled:boolean; discoveredParams?:ModelRuntimeParamsV1; overrideParams?:ModelRuntimeParamsV1; effectiveParams:ModelRuntimeParamsV1; paramsStatus:ParamsStatus; snapshotApproved?:boolean; schemaVersion:1 }
 export interface EffectiveParamsResult { effectiveParams:ModelRuntimeParamsV1; status:ParamsStatus; fallbackFields:string[] }
 const SAFE_FALLBACK: ModelRuntimeParamsV1 = { inputModalities:['text'], outputModalities:['text'] };
 function isPlain(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }

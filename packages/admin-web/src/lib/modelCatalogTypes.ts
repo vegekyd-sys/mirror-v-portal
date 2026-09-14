@@ -91,6 +91,8 @@ export interface SnapshotDiff {
   addedModels: string[];
   removedModels: string[];
   changedModels: string[];
+  affectedProviders: string[];
+  fallbackWarnings: Array<{ providerName: string; modelId: string; fallbackFields: string[] }>;
   changedReferences: Array<{
     reference: 'defaultModel' | 'imageModel' | 'compactionModel' | 'fallbackModels';
     before: string | string[] | null;

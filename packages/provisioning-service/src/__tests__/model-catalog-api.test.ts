@@ -216,7 +216,10 @@ describe('model catalog status API', () => {
     process.env.RUNTIME_CONFIG_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     let catalogReads = 0;
     const query = async (sql: string) => {
-      if (sql.includes('runtime_configs')) return { rows: [] };
+      if (sql.includes('runtime_configs')) return { rows: [{ encrypted_value: encryptValue(JSON.stringify({
+        providers: [{ name: 'provider', baseUrl: 'https://example.invalid', apiKey: 'secret', models: [{ id: 'chat-model' }] }],
+        defaultModel: 'provider/chat-model', imageModel: null, compactionModel: null, fallbackModels: [],
+      })) }] };
       if (sql.includes('llm_provider_instances')) {
         catalogReads += 1;
         return { rows: [{
@@ -227,7 +230,7 @@ describe('model catalog status API', () => {
             id: 'model-id', provider_instance_id: 'provider-id', model_id: 'chat-model',
             model_type: 'chat', runtime_enabled: true, effective_params: {
               contextWindow: 4096, maxOutputTokens: 1024, inputModalities: ['text'],
-            }, params_status: 'complete',
+            }, params_status: 'fallback', snapshot_approved: false,
           }],
         }] };
       }
@@ -246,7 +249,14 @@ describe('model catalog status API', () => {
       })),
     };
     expect(response.body.fingerprint).toBe(snapshotFingerprint(unredactedShape));
-    expect(response.body.diff.addedProviders).toEqual(['provider']);
-    expect(response.body.diff.addedModels).toEqual(['provider/chat-model']);
+    expect(response.body.diff.addedProviders).toEqual([]);
+    expect(response.body.diff.removedProviders).toEqual([]);
+    expect(response.body.diff.changedProviders).toEqual([]);
+    expect(response.body.diff.addedModels).toEqual([]);
+    expect(response.body.diff.removedModels).toEqual([]);
+    expect(response.body.diff.changedModels).toEqual([]);
+    expect(response.body.diff.fallbackWarnings).toEqual([{
+      providerName: 'provider', modelId: 'chat-model', fallbackFields: ['inputModalities', 'outputModalities'],
+    }]);
   });
 });

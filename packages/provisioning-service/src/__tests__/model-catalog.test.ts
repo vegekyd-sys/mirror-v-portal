@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { ModelMutationSchema, ModelRuntimeParamsV1Schema, mergeModelRuntimeParams } from '../domain/model-catalog.js';
-import { encryptValue } from '../services/crypto.js';
 import {
   CatalogRepository, CatalogService, snapshotFingerprint, stableProviderInstanceId, stableProviderModelId,
 } from '../services/model-catalog.js';
@@ -123,35 +122,137 @@ describe('model catalog domain', () => {
     expect(snapshotFingerprint(first)).toBe(snapshotFingerprint(reordered));
   });
 
-  it('reports provider, model, and reference preview differences', async () => {
-    process.env.RUNTIME_CONFIG_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  it('overlays only approved complete model runtime fields and preserves legacy structure', async () => {
+    const legacyModel = {
+      id: 'qwen3.7-plus', displayName: 'Qwen rolling alias', customCapability: 'keep-me',
+      compat: { zeta: true, alpha: 'legacy' },
+    };
+    const fallbackModels = Array.from({ length: 8 }, (_, index) => ({
+      id: index === 0 ? 'gpt-5.2' : `proxy-model-${index + 1}`,
+      inputModalities: ['image', 'text'] as Array<'image' | 'text'>,
+      reasoning: true,
+      customCapability: { passthrough: true, index },
+    }));
     const repository = {
       listRuntimeCatalog: async () => [{
-      provider: {
-        id: 'p1', legacyProviderName: 'new-provider', templateKey: 'custom-openai',
-        protocol: 'openai-completions', baseUrl: 'https://example.invalid', encryptedApiKey: encryptValue('secret'),
-        source: 'manual', enabled: true,
-      },
-      models: [{
-        id: 'm1', providerInstanceId: 'p1', modelId: 'new-model', modelType: 'chat',
-        runtimeEnabled: true, effectiveParams: { inputModalities: ['text'], outputModalities: ['text'] },
-        paramsStatus: 'fallback', schemaVersion: 1,
+        provider: {
+          id: 'p1', legacyProviderName: 'aochi-aliyun', templateKey: 'custom-openai',
+          protocol: 'openai-completions', baseUrl: 'https://catalog.invalid', encryptedApiKey: 'unused-catalog-ciphertext',
+          source: 'manual', enabled: true,
+        },
+        models: [
+          {
+            id: 'm1', providerInstanceId: 'p1', modelId: 'qwen3.7-plus', modelType: 'chat',
+            runtimeEnabled: true, discoveredParams: {
+              contextWindow: 1_000_000, maxInputTokens: 991_808, maxOutputTokens: 131_072,
+              maxReasoningTokens: 262_144, inputModalities: ['text', 'image', 'video'],
+              outputModalities: ['text'], reasoning: true, vision: true, toolCalling: true,
+              structuredOutput: true,
+            },
+            effectiveParams: {
+              contextWindow: 8_192, maxOutputTokens: 1_024,
+              inputModalities: ['text'], outputModalities: ['text'],
+            },
+            paramsStatus: 'complete', snapshotApproved: true, schemaVersion: 1,
+          },
+          ...fallbackModels.map((model, index) => ({
+            id: `m${index + 2}`,
+            providerInstanceId: 'p1',
+            modelId: model.id,
+            modelType: 'chat' as const,
+            runtimeEnabled: true,
+            effectiveParams: { inputModalities: ['text'] as const, outputModalities: ['text'] as const },
+            paramsStatus: 'fallback' as const,
+            snapshotApproved: false,
+            schemaVersion: 1 as const,
+          })),
+        ],
       }],
-    }],
     } as unknown as CatalogRepository;
     const service = new CatalogService(repository);
     const legacy = {
-      providers: [{ name: 'old-provider', baseUrl: 'https://old.invalid', apiKey: 'secret', models: [{ id: 'old-model' }] }],
-      defaultModel: 'old-provider/old-model', imageModel: null, compactionModel: null,
-      fallbackModels: ['old-provider/old-model'],
-    };
+      providers: [{
+        name: 'aochi-aliyun', label: 'Production', baseUrl: 'https://legacy.invalid', apiKey: 'legacy-secret',
+        models: [legacyModel, ...fallbackModels],
+      }],
+      defaultModel: 'aochi-aliyun/gpt-5.2', imageModel: 'aochi-aliyun/gpt-5.2',
+      compactionModel: 'aochi-aliyun/gpt-5.2', fallbackModels: ['aochi-aliyun/qwen3.7-plus'],
+    } as unknown as import('../services/llm-providers.js').LlmProvidersConfig;
+
     const snapshot = await service.buildCompatibilitySnapshot(legacy);
+    expect(snapshot.providers[0]).toMatchObject({
+      name: 'aochi-aliyun', label: 'Production', baseUrl: 'https://legacy.invalid', apiKey: 'legacy-secret',
+    });
+    expect(snapshot.providers[0].models.slice(1)).toEqual(fallbackModels);
+    expect(snapshot.providers[0].models[0]).toMatchObject({
+      id: 'qwen3.7-plus', displayName: 'Qwen rolling alias', customCapability: 'keep-me',
+      contextWindow: 1_000_000, maxOutputTokens: 131_072,
+      inputModalities: ['text', 'image', 'video'], reasoning: true, vision: true,
+      compat: { zeta: true, alpha: 'legacy' },
+    });
+    expect(snapshot.providers[0].models[0]).not.toHaveProperty('maxInputTokens');
+    expect(snapshot.providers[0].models[0]).not.toHaveProperty('maxReasoningTokens');
+    expect(snapshot.providers[0].models[0]).not.toHaveProperty('outputModalities');
+    expect(snapshot.providers[0].models[0]).not.toHaveProperty('toolCalling');
+    expect(snapshot.providers[0].models[0]).not.toHaveProperty('structuredOutput');
+    expect(snapshot.defaultModel).toBe(legacy.defaultModel);
+    expect(snapshot.imageModel).toBe(legacy.imageModel);
+    expect(snapshot.compactionModel).toBe(legacy.compactionModel);
+    expect(snapshot.fallbackModels).toEqual(legacy.fallbackModels);
+
     const diff = service.diffCompatibilitySnapshot(legacy, snapshot);
-    expect(diff.addedProviders).toEqual(['new-provider']);
-    expect(diff.removedProviders).toEqual(['old-provider']);
-    expect(diff.addedModels).toEqual(['new-provider/new-model']);
-    expect(diff.removedModels).toEqual(['old-provider/old-model']);
-    expect(diff.changedReferences.map((item) => item.reference)).toEqual(['defaultModel', 'fallbackModels']);
+    expect(diff).toMatchObject({
+      addedProviders: [], removedProviders: [], changedProviders: [],
+      addedModels: [], removedModels: [], changedModels: ['aochi-aliyun/qwen3.7-plus'],
+      affectedProviders: ['aochi-aliyun'], changedReferences: [],
+    });
+    expect(diff.fallbackWarnings).toHaveLength(8);
+    expect(diff.fallbackWarnings[0]).toEqual({
+      providerName: 'aochi-aliyun', modelId: 'gpt-5.2', fallbackFields: ['inputModalities', 'outputModalities'],
+    });
+    expect(diff.fallbackWarnings.map((warning) => warning.modelId)).toEqual(
+      fallbackModels.map((model) => model.id),
+    );
     expect(diff.fingerprint).toBe(snapshotFingerprint(snapshot));
+  });
+
+  it('fails closed when a legacy provider or model is absent from the catalog', async () => {
+    const repository = { listRuntimeCatalog: async () => [] } as unknown as CatalogRepository;
+    const service = new CatalogService(repository);
+    const legacy = {
+      providers: [{ name: 'legacy', baseUrl: 'https://legacy.invalid', apiKey: 'secret', models: [{ id: 'model' }] }],
+      defaultModel: 'legacy/model', imageModel: null, compactionModel: null, fallbackModels: [],
+    };
+    await expect(service.buildCompatibilitySnapshot(legacy)).rejects.toThrow('Catalog provider missing');
+  });
+
+  it('uses semantic model comparison without changing payload fingerprints', () => {
+    const repository = {} as CatalogRepository;
+    const service = new CatalogService(repository);
+    const before = {
+      providers: [{
+        name: 'provider', baseUrl: 'https://example.invalid', apiKey: 'secret',
+        models: [{ id: 'model', inputModalities: ['video', 'text', 'text'], compat: { z: true, a: 1 } }],
+      }],
+      defaultModel: 'provider/model', imageModel: null, compactionModel: null, fallbackModels: [],
+    } as import('../services/llm-providers.js').LlmProvidersConfig;
+    const reordered: import('../services/llm-providers.js').LlmProvidersConfig = {
+      ...before,
+      providers: [{
+        ...before.providers[0],
+        models: [{
+          id: 'model', modelType: 'chat', protocol: 'openai-completions',
+          inputModalities: ['text', 'video'], compat: { a: 1, z: true },
+        }],
+      }],
+    };
+    const semanticDiff = service.diffCompatibilitySnapshot(before, reordered);
+    expect(semanticDiff.changedProviders).toEqual([]);
+    expect(semanticDiff.changedModels).toEqual([]);
+    expect(snapshotFingerprint(before)).not.toBe(snapshotFingerprint(reordered));
+
+    const capabilityChange = structuredClone(reordered);
+    capabilityChange.providers[0].models[0].contextWindow = 128_000;
+    expect(service.diffCompatibilitySnapshot(before, capabilityChange).changedModels).toEqual(['provider/model']);
   });
 });
