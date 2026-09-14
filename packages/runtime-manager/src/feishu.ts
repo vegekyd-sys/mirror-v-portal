@@ -6,6 +6,10 @@ import type { Run, Store, Tenant } from "./store.js";
 export class FeishuEdge {
   clients = new Map<string, { ws: lark.WSClient; api: lark.Client }>();
   streams = new Map<string, StreamingReply>();
+  private connectionTimer?: NodeJS.Timeout;
+  private connectionStates = new Map<string,string>();
+  private lastTick = Date.now();
+  private lastLoopLagMs = 0;
   readonly typing: TypingReaction;
   constructor(readonly store: Store) { this.typing = new TypingReaction(store); }
   private stream(run: Run) {
@@ -45,6 +49,20 @@ export class FeishuEdge {
       "SELECT * FROM elastic_tenants WHERE app_id IS NOT NULL AND secret IS NOT NULL",
     );
     for (const tenant of rows) this.connect(tenant);
+    this.lastTick = Date.now();
+    this.connectionTimer = setInterval(() => {
+      const now=Date.now();
+      this.lastLoopLagMs=Math.max(0,now-this.lastTick-5000);
+      this.lastTick=now;
+      for(const [id,{ws}] of this.clients) {
+        const status=ws.getConnectionStatus();
+        const key=JSON.stringify(status);
+        if(this.connectionStates.get(id)!==key || this.lastLoopLagMs>1000) {
+          this.connectionStates.set(id,key);
+          void this.store.event(id,"feishu-connection",{...status,eventLoopLagMs:this.lastLoopLagMs,at:now}).catch(()=>{});
+        }
+      }
+    },5000);
     const stale = await this.store.pool.query<Run>("SELECT r.* FROM elastic_runs r WHERE r.delivery='sent' AND EXISTS (SELECT 1 FROM elastic_events e WHERE e.run_id=r.id AND e.kind='typing-added') AND NOT EXISTS (SELECT 1 FROM elastic_events e WHERE e.run_id=r.id AND e.kind='typing-removed')");
     for(const run of stale.rows) {
       const api=this.clients.get(run.tenant_id)?.api;
@@ -114,6 +132,7 @@ export class FeishuEdge {
       ws = new lark.WSClient(opts);
     const dispatcher = new lark.EventDispatcher({}).register({
       "im.message.receive_v1": async (data: any) => {
+        const receivedAt = Date.now();
         const m = data.message;
         if (!m?.message_id || data.sender?.sender_type === "app") return;
         let text = "";
@@ -131,12 +150,23 @@ export class FeishuEdge {
           m.message_id,
         );
         if (run.delivery !== "sent") this.typing.start(run,api);
+        const createdAt = Number(m.create_time);
+        await this.store.event(tenant.id,"feishu-ingress",{
+          messageCreatedAt:Number.isFinite(createdAt)?createdAt:null,
+          handlerReceivedAt:receivedAt,
+          committedAt:Date.now(),
+          transportMs:Number.isFinite(createdAt)?receivedAt-createdAt:null,
+          enqueueMs:Date.now()-receivedAt,
+          eventLoopLagMs:this.lastLoopLagMs,
+          connection:ws.getConnectionStatus(),
+        },run.id);
       },
     });
     this.clients.set(tenant.id, { ws, api });
     void ws.start({ eventDispatcher: dispatcher });
   }
   close() {
+    if(this.connectionTimer) clearInterval(this.connectionTimer);
     for (const { ws } of this.clients.values()) ws.close();
   }
 }
