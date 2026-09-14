@@ -57,6 +57,36 @@ Stage5  销售跟进 — 人工接管，DC-IQ 退出
 | 📅 预约会议 | call / meeting / schedule / visit | 通知 + Stage3→Stage4 |
 | ❌ 退订/拒绝 | not interested / stop / unsubscribe | 通知 + 记录退订事件 + 线索标「停止触达」 |
 
+## 四之二、买家附件（回复带附件时必读）
+
+买家回信里的报价单、规格书、logo、产品图**已经自动落盘**，不要当它不存在——
+不读附件就判断意图，等于只看了半封信。
+
+**怎么知道有附件**：案卷（`dc_thread_dossier.py`）里每封信下面会列「**附件**」段；
+事实层记录的 `attachments[]` 字段同样带着。飞书提醒卡片也会列出文件名和大小。
+
+**怎么拿到路径**：
+
+```bash
+# 按邮件 message_id 查（最常用：卡片刚提醒的那封）
+python3 work/mio-api/dc_resend_attachments.py --find --company-id <sid> --message-id "<xxx>"
+# 或按文件名子串
+python3 work/mio-api/dc_resend_attachments.py --find --company-id <sid> --name quote
+# 案卷里直接带路径（仅自用，交付给客户的案卷不要开这个开关）
+python3 work/mio-api/dc_thread_dossier.py --company-id <sid> --buyer <email> --with-paths
+```
+
+**怎么读**：拿到 `path` 后直接喂一等工具——PDF/规格书用 `pdf`，图片/logo/产品照用 `image`，
+Excel 用 `python3` + openpyxl。读到的内容并入意图判断（例如对方发来的是询价单，
+意图就不是「一般回复」而是「表达兴趣」甚至「索要资料」的下一步）。
+
+**读不了的时候照实说**：
+- `image` 工具不存在 → 该租户没配视觉模型，**只报文件名，不猜图里是什么**
+- 行里 `stored: false` → 附件没存下来（超限/下载失败），说明原因，别假装看过
+- docx 目前镜像里没有解析库，同样只报文件名
+
+不编、不猜——REDLINES 一「不假装看过」在附件上同样适用。
+
 ## 五、退订追踪
 
 退订/拒绝发生时：

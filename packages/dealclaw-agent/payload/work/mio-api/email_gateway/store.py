@@ -422,6 +422,9 @@ class MarkdownEmailStore:
             "text": message.get("text") or message.get("text_preview", "") or "",
             "html": message.get("html", "") or "",
             "company_id": message.get("company_id", ""),
+            # 附件索引行（[{filename, content_type, size, path, sha256}]）。_normalize 是
+            # 白名单：不在这里列出的字段会被静默丢弃，入站附件正是这样丢了很久。
+            "attachments": message.get("attachments") or [],
             "campaign_id": message.get("campaign_id", ""),
             "lead_id": message.get("lead_id", ""),
             "contact_id": message.get("contact_id", ""),

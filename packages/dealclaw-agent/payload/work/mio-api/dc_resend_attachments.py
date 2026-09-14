@@ -70,9 +70,130 @@ def download(url: str, dest: Path, *, timeout: int = 60) -> int:
     return len(data)
 
 
+# ── 统一附件库（Resend 与 IMAP 两条入站通道共用同一套落盘约定）──────────
+# 目录：<data>/email-facts/attachments/<company_id>/<YYYY-MM>/<message_id>/<filename>
+# 索引：同月目录下 _index.jsonl，一行一个附件，供案卷/知识库按 message_id 反查。
+# company_id 为空时落 "_unmatched"，与 EmailStore._company_dir 的兜底口径一致。
+
+MAX_BYTES = int(os.environ.get("DC_ATTACHMENT_MAX_BYTES") or 25 * 1024 * 1024)
+
+
+def _month(ts: str = "") -> str:
+    """附件按邮件时间分月；解析不出来就按当前 UTC 月，保证永远有个落点。"""
+    if ts:
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).strftime("%Y-%m")
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _company_slug(company_id: str) -> str:
+    """空 company_id 要落 _unmatched，不能交给 _safe——_safe("") 返回的是 "attachment"，
+    会凭空造出一个假企业目录（测试 test_blank_company_falls_back_to_unmatched 守这条）。"""
+    cid = str(company_id or "").strip()
+    return _safe(cid) if cid else "_unmatched"
+
+
+def attachment_dir(company_id: str, message_id: str, *, ym: str = "", data_dir=None) -> Path:
+    return (_data_dir(data_dir) / "email-facts" / "attachments"
+            / _company_slug(company_id) / (ym or _month()) / _safe(message_id))
+
+
+def append_index(rows: list, *, company_id: str, ym: str = "", data_dir=None) -> str:
+    """把附件行追加进当月 _index.jsonl，按 path 去重。返回索引文件路径。"""
+    if not rows:
+        return ""
+    idx = (_data_dir(data_dir) / "email-facts" / "attachments"
+           / _company_slug(company_id) / (ym or _month()) / "_index.jsonl")
+    idx.parent.mkdir(parents=True, exist_ok=True)
+    existing = set()
+    if idx.exists():
+        for line in idx.read_text(encoding="utf-8").splitlines():
+            try:
+                existing.add(json.loads(line).get("path"))
+            except json.JSONDecodeError:
+                pass
+    with idx.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            if row.get("path") and row.get("path") not in existing:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                existing.add(row["path"])
+    return str(idx)
+
+
+def store_bytes(*, company_id: str, message_id: str, filename: str, content_type: str = "",
+                data: bytes = b"", ym: str = "", data_dir=None) -> dict:
+    """把一段附件二进制落盘，返回索引行。
+
+    幂等：目标文件已存在则不重写，只补 sha256 回索引行（Resend 重放 / IMAP 重投都安全）。
+    超过 MAX_BYTES 的不落盘，返回 skipped 行——宁可记一笔「有这个附件但太大」，
+    也不让单封邮件把 PVC 撑爆或静默丢失线索。
+    """
+    ym = ym or _month()
+    dest = attachment_dir(company_id, message_id, ym=ym, data_dir=data_dir) / _safe(filename)
+    row = {"message_id": message_id, "filename": _safe(filename),
+           "content_type": content_type or "", "size": len(data), "path": str(dest)}
+    if dest.exists():
+        row["sha256"] = _sha256(dest)
+        row["stored"] = True
+        return row
+    if len(data) > MAX_BYTES:
+        row.update({"stored": False, "skipped": "too_large", "limit": MAX_BYTES})
+        return row
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    row["sha256"] = _sha256(dest)
+    row["stored"] = True
+    return row
+
+
+def pull_for_message(*, company_id: str, message_id: str, attachments: list,
+                     ym: str = "", data_dir=None) -> list:
+    """Resend 入站单封邮件的附件拉取：详情里的 attachments[] → 下载 → 落盘 → 索引。
+
+    逐条 best-effort：单个附件失败只记一行 error，不影响同封其它附件，更不影响回复主链路。
+    """
+    rows = []
+    ym = ym or _month()
+    for att in attachments or []:
+        if not isinstance(att, dict):
+            continue
+        att_id = att.get("id") or ""
+        meta = att
+        if att_id and message_id:
+            try:
+                meta = _api(f"/emails/receiving/{message_id}/attachments/{att_id}") or att
+            except Exception as e:
+                rows.append({"message_id": message_id, "attachment_id": att_id,
+                             "filename": _safe(att.get("filename")), "stored": False,
+                             "error": f"meta: {str(e)[:120]}"})
+                continue
+        fname = meta.get("filename") or att.get("filename") or "attachment"
+        url = meta.get("download_url") or ""
+        if not url:
+            rows.append({"message_id": message_id, "attachment_id": att_id, "filename": _safe(fname),
+                         "stored": False, "error": "no download_url"})
+            continue
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                blob = r.read()
+        except Exception as e:
+            rows.append({"message_id": message_id, "attachment_id": att_id, "filename": _safe(fname),
+                         "stored": False, "error": f"download: {str(e)[:120]}"})
+            continue
+        row = store_bytes(company_id=company_id, message_id=message_id, filename=fname,
+                          content_type=meta.get("content_type") or att.get("content_type") or "",
+                          data=blob, ym=ym, data_dir=data_dir)
+        row["attachment_id"] = att_id
+        rows.append(row)
+    append_index(rows, company_id=company_id, ym=ym, data_dir=data_dir)
+    return rows
+
+
 def pull(*, company_id: str, limit: int = 30, apply: bool = False,
          data_dir=None, side: str = "received") -> dict:
-    base = _data_dir(data_dir)
     if not _key():
         return {"ok": False, "error": "缺少 RESEND_API_KEY_READ / RESEND_API_KEY"}
     path = "/emails/receiving?limit=" + str(int(limit)) if side == "received" \
@@ -92,8 +213,7 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
         pass
     report = {"ok": True, "scanned": len(items), "messages_with_att": 0,
               "attachments": 0, "downloaded": 0, "skipped": 0, "failed": [], "apply": apply}
-    root = base / "email-facts" / "attachments" / company_id
-    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    ym = _month()
     index_lines: list[dict] = []
     for it in items:
         mid = it.get("id") or ""
@@ -115,7 +235,7 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
                 report["failed"].append({"message": mid, "att": att.get("id"), "error": str(e)[:120]})
                 continue
             fname = _safe(meta.get("filename") or att.get("filename"))
-            dest = root / ym / mid / fname
+            dest = attachment_dir(company_id, mid, ym=ym, data_dir=data_dir) / fname
             row = {"message_id": mid, "attachment_id": att.get("id"), "filename": fname,
                    "content_type": meta.get("content_type") or att.get("content_type"),
                    "size": meta.get("size") or att.get("size"), "path": str(dest),
@@ -134,25 +254,50 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
             except Exception as e:
                 report["failed"].append({"message": mid, "file": fname, "error": str(e)[:120]})
     if apply and index_lines:
-        idx = root / ym / "_index.jsonl"
-        idx.parent.mkdir(parents=True, exist_ok=True)
-        existing = set()
-        if idx.exists():
-            for line in idx.read_text(encoding="utf-8").splitlines():
-                try:
-                    existing.add(json.loads(line).get("path"))
-                except json.JSONDecodeError:
-                    pass
-        with idx.open("a", encoding="utf-8") as fh:
-            for row in index_lines:
-                if row.get("path") not in existing:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        report["index"] = str(idx)
+        report["index"] = append_index(index_lines, company_id=company_id, ym=ym,
+                                       data_dir=data_dir)
     return report
 
 
+def find(*, company_id: str, message_id: str = "", name: str = "",
+         limit: int = 20, data_dir=None) -> dict:
+    """按 message_id / 文件名查已落盘的附件，供 agent 应「看附件」这类请求。
+
+    扫该企业所有月份的 _index.jsonl，新月在前、同月内后写的在前（追加顺序即时间序）。
+    只读，不下载、不外发——把文件交到用户手上是调用方的事，这里只负责「在哪」。
+    """
+    root = (_data_dir(data_dir) / "email-facts" / "attachments" / _company_slug(company_id))
+    if not root.is_dir():
+        return {"ok": True, "count": 0, "rows": [], "note": "该企业还没有任何附件记录"}
+    rows = []
+    for month_dir in sorted((d for d in root.iterdir() if d.is_dir()), reverse=True):
+        idx = month_dir / "_index.jsonl"
+        if not idx.is_file():
+            continue
+        month_rows = []
+        for line in idx.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message_id and row.get("message_id") != message_id:
+                continue
+            if name and name.lower() not in str(row.get("filename") or "").lower():
+                continue
+            row["exists"] = bool(row.get("path") and Path(row["path"]).is_file())
+            month_rows.append(row)
+        rows.extend(reversed(month_rows))
+        if len(rows) >= limit:
+            break
+    return {"ok": True, "count": len(rows[:limit]), "rows": rows[:limit]}
+
+
 def main(argv=None) -> int:  # pragma: no cover
-    ap = argparse.ArgumentParser(description="拉取 Resend 邮件附件")
+    ap = argparse.ArgumentParser(description="拉取 / 查询邮件附件")
+    ap.add_argument("--find", action="store_true",
+                    help="只查已落盘的附件（不联网），配合 --message-id / --name")
+    ap.add_argument("--message-id", default="", help="--find：按邮件 message_id 精确匹配")
+    ap.add_argument("--name", default="", help="--find：按文件名子串匹配")
     ap.add_argument("--company-id", default=os.environ.get("MIO_CDP_SUPPLIER_ID", ""))
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--side", default="received", choices=["received", "sent"])
@@ -160,6 +305,11 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    if args.find:
+        r = find(company_id=args.company_id, message_id=args.message_id, name=args.name,
+                 limit=args.limit, data_dir=args.data_dir or None)
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        return 0
     r = pull(company_id=args.company_id, limit=args.limit, apply=args.apply,
              data_dir=args.data_dir or None, side=args.side)
     print(json.dumps(r, ensure_ascii=False, indent=2))

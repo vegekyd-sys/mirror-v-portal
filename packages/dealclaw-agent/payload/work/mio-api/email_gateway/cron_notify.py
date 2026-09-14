@@ -110,6 +110,46 @@ def _resolve_mention(owner_open_id: str, chat_id: str = "") -> str:
     return _fetch_group_digital_agent(chat_id)
 
 
+def _human_size(n: object) -> str:
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    for unit in ("B", "KB", "MB"):
+        if n < 1024 or unit == "MB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return ""
+
+
+def _attachment_line(rows: object) -> str:
+    """把附件索引行渲染成卡片里的一行清单。
+
+    只列「有什么」，不内嵌图——自定义机器人 webhook 没有 app token，发不了
+    image_key，内嵌得走应用机器人（见第 2/3 层方案）。没落盘成功的也照列并标原因，
+    「静默丢附件」正是这次要修的病。
+    """
+    if not isinstance(rows, list) or not rows:
+        return ""
+    parts = []
+    for row in rows[:10]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("filename") or "attachment")
+        size = _human_size(row.get("size"))
+        item = f"{name}（{size}）" if size else name
+        if not row.get("stored"):
+            reason = row.get("skipped") or row.get("error") or "未保存"
+            item += f" ⚠️{str(reason)[:30]}"
+        parts.append(item)
+    if not parts:
+        return ""
+    more = f" 等 {len(rows)} 个" if len(rows) > 10 else ""
+    return "📎 **附件**\n" + "、".join(parts) + more
+
+
 def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
     elements: list[dict] = []
     mention_ids: set[str] = set()
@@ -130,6 +170,9 @@ def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
         elements.append(
             {"tag": "div", "text": {"content": f"邮件内容\n{preview}", "tag": "lark_md"}}
         )
+        att_line = _attachment_line(event.get("attachments"))
+        if att_line:
+            elements.append({"tag": "div", "text": {"content": att_line, "tag": "lark_md"}})
         mention_id = _resolve_mention(event.get("owner_open_id", ""), chat_id)
         if mention_id:
             mention_ids.add(mention_id)

@@ -425,6 +425,24 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
     # 修复点：此前 handle_inbound_event 只做「信号 / 通知 / 草稿」，不写事实层 →
     # Resend 邮箱的回复进不了 EmailStore：早晚报「实际回复」数不到、买家案卷查不到原文。
     # 幂等：store 按 message_id 取键（同 message_id 只落一份）；失败 best-effort，不影响信号与通知。
+    _company_id = outbound.get("company_id", "") or account.get("enterprise_id", "")
+
+    # 附件：Receiving API 的详情里带 attachments[]，逐条拉元数据 + 下载到统一附件库。
+    # 之前整条链路没人碰这个字段，买家发来的 logo / 报价单 / 证书全部静默丢弃。
+    # best-effort：附件失败不影响回复落库、信号与通知。
+    _attachments = []
+    try:
+        if full.get("attachments"):
+            from dc_resend_attachments import pull_for_message
+            _attachments = pull_for_message(
+                company_id=_company_id,
+                message_id=email_id,
+                attachments=full.get("attachments") or [],
+            )
+            result["attachments"] = len(_attachments)
+    except Exception as e:  # pragma: no cover - 网络/权限类异常
+        result["attachments_error"] = str(e)[:120]
+
     try:
         from email_gateway.store import utc_now
         store.insert_message({
@@ -432,6 +450,7 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
             "direction": "inbound",
             "message_id": message_id,
             "resend_received_id": email_id,
+            "attachments": _attachments,
             "in_reply_to": in_reply_to,
             "references": reference_candidates,
             "sender": from_email,
@@ -441,7 +460,7 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
             "received_at": utc_now(),
             "created_at": utc_now(),
             "related": True,
-            "company_id": outbound.get("company_id", "") or account.get("enterprise_id", ""),
+            "company_id": _company_id,
             "campaign_id": outbound.get("campaign_id", ""),
             "lead_id": outbound.get("lead_id", ""),
             "contact_id": outbound.get("contact_id", ""),

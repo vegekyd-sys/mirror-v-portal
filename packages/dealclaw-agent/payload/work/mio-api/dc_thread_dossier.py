@@ -142,7 +142,47 @@ def find_by_buyer(facts: list[dict], buyer: str) -> list[str]:
     return keys
 
 
-def render_dossier(key: str, records: list[dict], *, analysis: str = "") -> str:
+def _human_size(n: object) -> str:
+    try:
+        n = float(n or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    for unit in ("B", "KB", "MB"):
+        if n < 1024 or unit == "MB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return ""
+
+
+def attachment_lines(rec: dict, *, with_paths: bool = False) -> list[str]:
+    """案卷里的附件段。
+
+    默认只给文件名/大小/类型——案卷会作为飞书文档交付给客户，本地盘路径属于
+    后台实现，不对外露（REDLINES 四·4）。Agent 需要真路径去喂 pdf/image 工具时，
+    用 --with-paths（或直接读事实层记录的 attachments[].path）。
+    """
+    rows = rec.get("attachments")
+    if not isinstance(rows, list) or not rows:
+        return []
+    out = ["**附件**"]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("filename") or "attachment")
+        bits = [b for b in (_human_size(row.get("size")), str(row.get("content_type") or "")) if b]
+        line = f"- {name}" + (f"（{' · '.join(bits)}）" if bits else "")
+        if not row.get("stored"):
+            line += f" ⚠️未保存：{str(row.get('skipped') or row.get('error') or '原因未知')[:40]}"
+        elif with_paths and row.get("path"):
+            line += f"\n  - 本地路径：`{row['path']}`"
+        out.append(line)
+    return out + [""] if len(out) > 1 else []
+
+
+def render_dossier(key: str, records: list[dict], *, analysis: str = "",
+                   with_paths: bool = False) -> str:
     people = sorted({e for r in records for e in participants(r)
                      if "@" not in e or True})
     subjects = sorted({str(r.get("subject") or "") for r in records})
@@ -152,7 +192,12 @@ def render_dossier(key: str, records: list[dict], *, analysis: str = "") -> str:
          "- 参与人：" + ", ".join(people),
          "- 邮件数：出站 " + str(sum(1 for r in records if r["_direction"] == "outbound"))
          + " / 入站 " + str(sum(1 for r in records if r["_direction"] == "inbound")),
-         "", "## 沟通记录 · 原文（时间正序，两侧合并）", ""]
+         ]
+    n_att = sum(len(r.get("attachments") or []) for r in records
+                if isinstance(r.get("attachments"), list))
+    if n_att:
+        L.append("- 附件：" + str(n_att) + " 个")
+    L += ["", "## 沟通记录 · 原文（时间正序，两侧合并）", ""]
     for r in records:
         tag = "邮件(出)" if r["_direction"] == "outbound" else "邮件(入)"
         L += [f"### [{_rec_time(r)[:16]}] {tag} · {str(r.get('subject') or '(无主题)')}", "",
@@ -162,6 +207,7 @@ def render_dossier(key: str, records: list[dict], *, analysis: str = "") -> str:
         if r["_direction"] == "inbound":
             body = strip_quoted(body)
         L += [body[:2000] if body else "(正文为空)", "```", ""]
+        L += attachment_lines(r, with_paths=with_paths)
     L += ["## 我的分析", "", analysis or "- （待生成）", ""]
     return "\n".join(L)
 
@@ -175,6 +221,8 @@ def main(argv=None) -> int:  # pragma: no cover
     ap.add_argument("--key", default="", help="直接给线程键")
     ap.add_argument("--out", default="")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--with-paths", action="store_true",
+                    help="附件附带本地盘路径（供 agent 喂 pdf/image 工具；对客户交付时勿开）")
     args = ap.parse_args(argv)
 
     facts = load_facts(args.data_dir or None, args.company_id)
@@ -194,7 +242,8 @@ def main(argv=None) -> int:  # pragma: no cover
     if not picked:
         print("没有匹配的线程")
         return 1
-    md = "\n\n---\n\n".join(render_dossier(k, threads[k]) for k in picked)
+    md = "\n\n---\n\n".join(
+        render_dossier(k, threads[k], with_paths=args.with_paths) for k in picked)
     if args.out:
         Path(args.out).write_text(md, encoding="utf-8")
         print("已写出:", args.out, "| 线程数:", len(picked))

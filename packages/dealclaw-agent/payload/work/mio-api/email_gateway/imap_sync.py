@@ -79,6 +79,64 @@ def _body_preview(msg: Message, limit: int = 1000) -> str:
     return text[:limit]
 
 
+def _extract_attachments(msg: Message) -> list[tuple[str, str, bytes]]:
+    """从 MIME 里取出附件 (filename, content_type, bytes)。
+
+    判定口径：Content-Disposition 为 attachment，或任何带 filename 的 part（很多客户端
+    把图片发成 inline + filename，买家的 logo/产品图常走这条）。正文 part（无 filename
+    的 text/plain、text/html）不算附件。
+    """
+    out: list[tuple[str, str, bytes]] = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        disp = (part.get("Content-Disposition") or "").lower()
+        filename = part.get_filename()
+        if "attachment" not in disp and not filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001 - 单个坏 part 不该中断整封信
+            continue
+        if not payload:
+            continue
+        try:
+            filename = str(make_header(decode_header(filename))) if filename else ""
+        except Exception:  # noqa: BLE001
+            filename = filename or ""
+        out.append((filename or "attachment", part.get_content_type() or "", payload))
+    return out
+
+
+def _store_attachments(msg: Message, *, message_id: str, company_id: str,
+                       received_at: str = "") -> list[dict]:
+    """落盘到统一附件库（与 Resend 入站同一套目录/索引约定）。失败不中断收信。"""
+    items = _extract_attachments(msg)
+    if not items:
+        return []
+    try:
+        from dc_resend_attachments import store_bytes, append_index, _month
+    except Exception:  # noqa: BLE001 - 根目录不在 sys.path 时降级为不存附件
+        return []
+    ym = _month(received_at)
+    rows = []
+    for filename, content_type, blob in items:
+        try:
+            rows.append(store_bytes(company_id=company_id, message_id=message_id or "no-message-id",
+                                    filename=filename, content_type=content_type,
+                                    data=blob, ym=ym))
+        except Exception as e:  # noqa: BLE001
+            rows.append({"message_id": message_id, "filename": filename,
+                         "stored": False, "error": str(e)[:120]})
+    try:
+        append_index(rows, company_id=company_id, ym=ym)
+    except Exception:  # noqa: BLE001
+        pass
+    return rows
+
+
 def _parse_uidvalidity(client: imaplib.IMAP4_SSL, select_data: list[bytes] | None) -> int:
     response = client.response("UIDVALIDITY")
     values: list[Any] = []
@@ -295,10 +353,25 @@ class ImapSynchronizer:
                     continue
 
                 related = self.store.has_outbound_reference(account_id, reference_candidates)
+                outbound_row = None
                 if not related:
                     # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
-                    related = self.store.find_outbound_by_contact(account_id, first_from) is not None
+                    outbound_row = self.store.find_outbound_by_contact(account_id, first_from)
+                    related = outbound_row is not None
                 stored_preview = _body_preview(msg) if related else ""
+
+                # 附件只对「关联到已知 outbound」的邮件落盘：与正文保留口径一致，
+                # 不囤积用户私人邮件的附件（REDLINES 七·数据主权）。
+                attachments = []
+                if related:
+                    if outbound_row is None:
+                        outbound_row = self.store.find_outbound_by_reference(
+                            account_id, reference_candidates) or {}
+                    attachments = _store_attachments(
+                        msg, message_id=message_id,
+                        company_id=outbound_row.get("company_id", "") if outbound_row else "",
+                        received_at=sent_at or "",
+                    )
                 notification_preview = (
                     stored_preview[:200]
                     if related
@@ -322,6 +395,7 @@ class ImapSynchronizer:
                         # Bodies are retained only for messages tied to a known
                         # DealClaw outbound reference.
                         "text_preview": stored_preview,
+                        "attachments": attachments,
                         "related": related,
                         "status": "received" if (related or emit_all) else "filtered",
                         "created_at": utc_now(),
@@ -355,6 +429,7 @@ class ImapSynchronizer:
                                 "from": sender,
                                 "subject": _decode(msg.get("Subject")),
                                 "preview": notification_preview,
+                                "attachments": attachments,
                                 "related": related,
                             }
                         )
