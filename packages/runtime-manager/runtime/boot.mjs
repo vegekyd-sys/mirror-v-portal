@@ -11,7 +11,7 @@ const fingerprint = createHash("sha256")
       process.env.NEXUS_MODEL_BASE_URL,
       process.env.NEXUS_MODEL_KEY,
       process.env.NEXUS_OPTIMIZE,
-      "runtime-v3-progress",
+      "runtime-v4-scheduler",
     ].join("\0"),
   )
   .digest("hex");
@@ -43,6 +43,20 @@ const env = {
 };
 // No credentials in the filesystem snapshot. Values resolve from process env.
 installProgress(`${base}/runtime/node_modules/openclaw`);
+const pluginDir = base + "/scheduler-plugin";
+fs.mkdirSync(pluginDir, { recursive: true });
+fs.copyFileSync(base + "/scheduler-plugin.mjs", pluginDir + "/index.mjs");
+fs.writeFileSync(
+  pluginDir + "/openclaw.plugin.json",
+  JSON.stringify({
+    id: "nexus-scheduler",
+    name: "Nexus schedules",
+    version: "1.0.0",
+    contracts: { tools: ["nexus_schedule"] },
+    activation: { onStartup: true },
+    configSchema: { type: "object", additionalProperties: false },
+  }),
+);
 const cfg = {
   gateway: {
     mode: "local",
@@ -85,10 +99,16 @@ const cfg = {
   },
   tools: {
     profile: "coding",
+    alsoAllow: ["nexus_schedule"],
     deny: ["cron", "gateway", "sessions_spawn", "sessions_send"],
     elevated: { enabled: false },
   },
-  plugins: { enabled: false },
+  plugins: {
+    enabled: true,
+    allow: ["nexus-scheduler"],
+    load: { paths: [pluginDir] },
+    entries: { "nexus-scheduler": { enabled: true } },
+  },
 };
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 // A repeated ensure call must reuse the healthy process within this VM boot.

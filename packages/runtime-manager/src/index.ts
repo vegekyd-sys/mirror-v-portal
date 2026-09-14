@@ -1,3 +1,4 @@
+import { Scheduler } from './scheduler.js';
 import express from "express";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
@@ -9,6 +10,7 @@ import { FeishuEdge } from "./feishu.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
+const scheduler=new Scheduler(store);await scheduler.init();
 await store.createTenant(config.trialTenantId, "DealClaw 试用");
 const edge = new FeishuEdge(store);
 const manager = new RuntimeManager(
@@ -19,6 +21,7 @@ const manager = new RuntimeManager(
 );
 await edge.start();
 await manager.start();
+scheduler.start();
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "64kb" }));
@@ -149,6 +152,7 @@ const server = app.listen(config.port, "127.0.0.1", () =>
 );
 async function close() {
   manager.stopTimer();
+  await scheduler.close();
   edge.close();
   server.close();
   await manager.drainCollector();

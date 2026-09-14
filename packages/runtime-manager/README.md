@@ -62,3 +62,9 @@ NEXUS_PROFILE_TENANT_ID=<目标租户ID> pnpm --filter @dealclaw/runtime-manager
 ```
 
 脚本需私有 `.elastic/profile/config.json` 的 `model` 配置。`profile-diagnostics.ts` 必须显式指定 `NEXUS_DIAGNOSTIC_TENANT_ID`，仅接受没有 Bot 且已休眠的隔离测试租户。`recover-completed-profile.ts` 是本次流输出收尾竞态的证据校验恢复工具：要求明确 run ID、唯一完成事件及已写入的验收文件，不重做工具操作；不要用它清除普通不确定状态。
+
+## Cron 与 heartbeat
+
+已支持 OpenClaw 的 `nexus_schedule` 工具登记持久化计划，由 Nexus 在 Sandbox 释放后到点唤醒。支持一次性、固定周期、五字段 Cron 和静默 heartbeat。用户可在飞书聊天中创建、查询、修改和取消。详见 [弹性调度说明](../../docs/nexus-elastic-scheduling.md)。
+
+控制服务目前运行在本机；准时无人值守依赖控制服务和数据库持续在线。

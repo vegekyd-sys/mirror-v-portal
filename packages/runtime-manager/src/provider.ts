@@ -91,6 +91,7 @@ export class VercelProvider implements RuntimeProvider {
         "model-proxy.mjs",
         "backup.mjs",
         "progress-patch.mjs",
+        "scheduler-plugin.mjs",
       ].map((file) => ({
         path: `/vercel/sandbox/nexus/${file}`,
         content: fs.readFileSync(
@@ -198,7 +199,11 @@ export class VercelProvider implements RuntimeProvider {
             } catch {
               continue;
             }
-            if (event.type === "response.output_text.delta") {
+            if(event.type === "nexus.schedule.request") {
+              if(!/^[a-f0-9-]{36}$/.test(event.id))throw Error("INVALID_SCHEDULE_REQUEST_ID");
+              await onEvent("schedule-request",event);
+              await sbx.writeFiles([{path:`/tmp/nexus-schedule-rpc/${event.id}.response`,content:Buffer.from(JSON.stringify(event.result||{error:"SCHEDULER_UNAVAILABLE"}))}]);
+            } else if (event.type === "response.output_text.delta") {
               if (event.delta && !firstDeltaAt) {
                 firstDeltaAt = Date.now();
                 await onEvent("first-delta", {

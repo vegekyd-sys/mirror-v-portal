@@ -33,7 +33,7 @@ export class FeishuEdge {
   progress(run: Run, kind: string, data: any) {
     if (kind === "waking") {
       const api=this.clients.get(run.tenant_id)?.api;
-      if(api && run.channel === "feishu") this.typing.start(run,api);
+      if(api && run.channel === "feishu" && run.message_id) this.typing.start(run,api);
       // Typing acknowledges receipt; do not count a placeholder as model first text.
       return;
     }
@@ -77,6 +77,20 @@ export class FeishuEdge {
           if (run.delivery === "sent") continue;
           const client = this.clients.get(run.tenant_id);
           if (!client) throw new Error("FEISHU_NOT_CONNECTED");
+          if(run.schedule_id && run.chat_id) {
+            const quiet=run.status==='succeeded' && run.schedule_kind==='heartbeat' && /^(HEARTBEAT_OK|NO_REPLY)[.!。\s]*$/.test(run.output.trim());
+            if(!quiet) {
+              const text=run.status==='succeeded'?run.output:'定时任务未能完成，请检查 Nexus 任务状态。';
+              const chars=Array.from(text);
+              for(let offset=0;offset<chars.length;offset+=5000){
+                const result=await client.api.im.message.create({params:{receive_id_type:'chat_id'},data:{receive_id:run.chat_id,msg_type:'text',content:JSON.stringify({text:chars.slice(offset,offset+5000).join('')}),uuid:createHash('sha256').update(`${run.id}:${offset}`).digest('hex').slice(0,40)}});
+                if(result.code!==0)throw Error(`FEISHU_SCHEDULE_REPLY_${result.code}`);
+              }
+            }
+            await this.store.pool.query("UPDATE elastic_runs SET delivery='sent' WHERE id=$1",[run.id]);
+            await this.store.event(run.tenant_id,quiet?'heartbeat-quiet':'feishu-delivered',{scheduleId:run.schedule_id},run.id);
+            continue;
+          }
           const text =
             run.output ||
             "本次执行未能安全完成，请在 Nexus 试用页查看状态。为避免重复操作，系统没有自动重做。";

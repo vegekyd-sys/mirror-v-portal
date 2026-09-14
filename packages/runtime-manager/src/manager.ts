@@ -1,3 +1,4 @@
+import { Scheduler } from './scheduler.js';
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider } from "./provider.js";
 
@@ -120,6 +121,12 @@ export class RuntimeManager {
           current.session_key,
           current.text,
           async (kind, data) => {
+            if(kind === "schedule-request") {
+              try {data.result=await new Scheduler(this.store).command(current,data.id,data.args);}
+              catch(e){data.result={error:e instanceof Error?e.message:"SCHEDULE_ERROR"};}
+              await this.store.event(tenant.id,"schedule-command",{action:data.args?.action,ok:!data.result.error},runId);
+              return;
+            }
             await this.store.event(tenant.id, kind, data, runId);
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);

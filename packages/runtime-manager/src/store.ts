@@ -23,6 +23,9 @@ export interface Tenant {
   snapshot_id: string | null;
 }
 export interface Run {
+  schedule_id?: string;
+  schedule_kind?: string;
+  chat_id?: string;
   id: string;
   tenant_id: string;
   request_key: string;
