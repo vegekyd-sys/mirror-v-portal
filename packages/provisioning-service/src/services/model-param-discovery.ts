@@ -147,26 +147,42 @@ function validateModelIds(modelIds: unknown): string[] | undefined {
   return [...new Set(modelIds as string[])].sort();
 }
 
-function validateEvidence(input: OverrideEvidenceInput): void {
-  if (!ALLOWED_OVERRIDE_SOURCES.has(input.sourceKind)) {
+function validateEvidence(input: unknown): asserts input is OverrideEvidenceInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence is required', 400);
+  }
+  const evidence = input as Record<string, unknown>;
+  const allowedFields = new Set([
+    'sourceKind', 'sourceUrl', 'sourceVersion', 'observedAt', 'rawSha256', 'notes',
+  ]);
+  if (Object.keys(evidence).some((key) => !allowedFields.has(key))) {
+    throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'Unknown evidence field', 400);
+  }
+  if (typeof evidence.sourceKind !== 'string' ||
+      !ALLOWED_OVERRIDE_SOURCES.has(evidence.sourceKind as EvidenceSourceKind)) {
     throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'Unsupported override evidence source', 400);
   }
-  if (Number.isNaN(Date.parse(input.observedAt))) {
+  if (typeof evidence.observedAt !== 'string' || Number.isNaN(Date.parse(evidence.observedAt))) {
     throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence.observedAt must be ISO datetime', 400);
   }
-  if (input.sourceUrl) {
+  for (const field of ['sourceUrl', 'sourceVersion', 'rawSha256', 'notes'] as const) {
+    if (evidence[field] !== undefined && typeof evidence[field] !== 'string') {
+      throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', `evidence.${field} must be a string`, 400);
+    }
+  }
+  if (evidence.sourceUrl) {
     let parsed: URL;
-    try { parsed = new URL(input.sourceUrl); } catch {
+    try { parsed = new URL(evidence.sourceUrl as string); } catch {
       throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence.sourceUrl is invalid', 400);
     }
     if (parsed.protocol !== 'https:') {
       throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence.sourceUrl must use HTTPS', 400);
     }
   }
-  if (!input.sourceUrl && !input.rawSha256 && !input.notes) {
+  if (!evidence.sourceUrl && !evidence.rawSha256 && !evidence.notes) {
     throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence requires sourceUrl, rawSha256, or notes', 400);
   }
-  if (input.rawSha256 && !/^[a-f0-9]{64}$/i.test(input.rawSha256)) {
+  if (evidence.rawSha256 && !/^[a-f0-9]{64}$/i.test(evidence.rawSha256 as string)) {
     throw new ModelParamDiscoveryError('MODEL_CATALOG_VALIDATION', 'evidence.rawSha256 must be SHA-256 hex', 400);
   }
 }

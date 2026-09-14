@@ -146,6 +146,72 @@ describe('model catalog status API', () => {
     expect(response.body.code).toBe('MODEL_CATALOG_VALIDATION');
   });
 
+  it('requires valid override evidence without reaching the database', async () => {
+    const pool = { connect: async () => { throw new Error('must not connect'); } } as unknown as pg.Pool;
+    const missingEvidence = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({ expectedUpdatedAt: new Date(0).toISOString(), overrideParams: {} });
+    expect(missingEvidence.status).toBe(400);
+    expect(missingEvidence.body).toMatchObject({
+      code: 'MODEL_CATALOG_VALIDATION',
+      message: 'evidence is required',
+    });
+
+    const invalidEvidence = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({
+        expectedUpdatedAt: new Date(0).toISOString(),
+        overrideParams: {},
+        evidence: { sourceKind: 'manual-contract', observedAt: 'not-a-date', notes: 'test' },
+      });
+    expect(invalidEvidence.status).toBe(400);
+    expect(invalidEvidence.body).toMatchObject({
+      code: 'MODEL_CATALOG_VALIDATION',
+      message: 'evidence.observedAt must be ISO datetime',
+    });
+  });
+
+  it('keeps the write flag check before override evidence validation', async () => {
+    const pool = { connect: async () => { throw new Error('must not connect'); } } as unknown as pg.Pool;
+    const response = await request(createApp(pool, true, false))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({ expectedUpdatedAt: new Date(0).toISOString(), overrideParams: {} });
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('MODEL_CATALOG_PARAM_WRITE_DISABLED');
+  });
+
+  it('accepts valid override evidence and proceeds to model CAS validation', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('SELECT id,provider_instance_id')) return { rows: [{
+          id: 'model-id', provider_instance_id: 'provider-id', model_id: 'qwen3.7-plus',
+          discovered_params: {}, override_params: {}, effective_params: { inputModalities: ['text'] },
+          params_status: 'fallback', revision: '0', updated_at: new Date(0),
+        }] };
+        return { rows: [] };
+      },
+      release: () => undefined,
+    };
+    const pool = { connect: async () => client } as unknown as pg.Pool;
+    const response = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({
+        expectedUpdatedAt: new Date(1).toISOString(),
+        overrideParams: {},
+        evidence: {
+          sourceKind: 'manual-contract',
+          observedAt: new Date(0).toISOString(),
+          notes: 'approved test override',
+        },
+      });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('MODEL_CATALOG_REVISION_CONFLICT');
+    expect(queries.some((sql) => sql.includes('FOR UPDATE'))).toBe(true);
+    expect(queries).toContain('ROLLBACK');
+  });
+
   it('builds preview once and returns a diff and fingerprint for that snapshot', async () => {
     process.env.RUNTIME_CONFIG_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     let catalogReads = 0;
