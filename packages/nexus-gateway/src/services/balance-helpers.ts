@@ -19,9 +19,11 @@ export interface BalanceInfo {
 /** Check if the message is asking about balance/credits */
 export function isBalanceQuery(text: string): boolean {
   const patterns = [
-    /^查余额$/, /^余额$/, /^我的余额$/, /^credit/i, /^credits/i,
-    /查.*余额/, /看.*余额/, /还剩/, /剩余.*credit/i, /剩余.*额度/,
-    /有多少.*credit/i, /用量/, /消耗/, /my balance/i,
+    /^查余额$/, /^余额$/, /^我的余额$/, /^credit$/i, /^credits$/i,
+    /查.*余额/, /看.*余额/, /还剩.*(多少|余额|credit|额度)/i,
+    /剩余.*credit/i, /剩余.*额度/,
+    /有多少.*credit/i, /用量.*(多少|明细|情况)/, /消耗.*(多少|明细|情况|本月|账单)/i,
+    /my balance/i,
   ];
   return patterns.some(p => p.test(text));
 }

@@ -147,8 +147,12 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       });
 
       // ── interception 1: balance keyword (chat calls only) ──
+      // Length guard: real balance queries are short; sub-agent/system contexts
+      // can be hundreds of chars and must never trip the keyword regex (e.g.
+      // "不消耗 Apollo" contains "消耗" and previously triggered a false
+      // synthesized balance reply).
       const lastUserText = extractLastUserText(parsed);
-      if (isChatCall && lastUserText && isBalanceQuery(lastUserText)) {
+      if (isChatCall && lastUserText && lastUserText.length <= 40 && isBalanceQuery(lastUserText)) {
         const info = await fetchCustomerBalance(
           config.creditsLedgerUrl, config.keyConfig.creditsAccountId, config.creditsLedgerToken, fetchImpl,
         );
