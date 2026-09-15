@@ -80,6 +80,15 @@ def adapt_outbound(record: dict, now: str | None = None) -> dict:
     now = now or _now_iso()
     provider_message_id = _first(record.get(S.F_PROVIDER_MESSAGE_ID),
                                  record.get("resend_id"))
+    smtp_message_id = _first(record.get(S.F_SMTP_MESSAGE_ID), record.get("smtp_message_id"), "")
+    # SMTP 直发（个人邮箱）永远没有 provider id，只有回查到的 RFC Message-ID。
+    # 2026-09-15 修复：此前直接判 legacy_unverified、不生成 accepted、不计 sent，
+    # 导致 email-quality 对个人邮箱恒为 0。兜底用 smtp_message_id，并用独立 source 标注
+    # 「乐观推断」，不冒充 provider 原始事件。
+    smtp_optimistic = False
+    if not provider_message_id and smtp_message_id:
+        provider_message_id = smtp_message_id
+        smtp_optimistic = True
     occurred_at = _first(record.get("sent_at"), record.get("created_at"))
 
     if not provider_message_id:
@@ -102,7 +111,9 @@ def adapt_outbound(record: dict, now: str | None = None) -> dict:
     base = _base_event(event_type=S.EV_ACCEPTED, occurred_at=occurred_at,
                        direction=S.DIRECTION_OUTBOUND, record=record, now=now)
     base[S.F_PROVIDER_MESSAGE_ID] = provider_message_id
-    base[S.F_SMTP_MESSAGE_ID] = _first(record.get(S.F_SMTP_MESSAGE_ID), "")
+    base[S.F_SMTP_MESSAGE_ID] = smtp_message_id
+    if smtp_optimistic:
+        base[S.F_SOURCE] = S.SOURCE_SMTP_OPTIMISTIC
     base[S.F_EVENT_ID] = _event_id(S.EV_ACCEPTED, provider_message_id)
     events = [base]
 
@@ -111,7 +122,9 @@ def adapt_outbound(record: dict, now: str | None = None) -> dict:
         terminal = _base_event(event_type=status, occurred_at=occurred_at,
                                direction=S.DIRECTION_OUTBOUND, record=record, now=now)
         terminal[S.F_PROVIDER_MESSAGE_ID] = provider_message_id
-        terminal[S.F_SMTP_MESSAGE_ID] = _first(record.get(S.F_SMTP_MESSAGE_ID), "")
+        terminal[S.F_SMTP_MESSAGE_ID] = smtp_message_id
+        if smtp_optimistic:
+            terminal[S.F_SOURCE] = S.SOURCE_SMTP_OPTIMISTIC
         # 旧记录只有单一 updated_at，退化为同一时间点；靠 event_id 定序（确定性）
         terminal[S.F_EVENT_ID] = _event_id(status, provider_message_id)
         events.append(terminal)

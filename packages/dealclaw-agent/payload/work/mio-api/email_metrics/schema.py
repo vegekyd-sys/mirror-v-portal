@@ -93,3 +93,4 @@ EVENT_FIELDS = (
 SOURCE_LEGACY_PROXY = "legacy_proxy"   # 旧数据推断的时间戳/状态，非 provider 原始事件
 SOURCE_PROVIDER = "provider"
 SOURCE_SYNTHETIC = "synthetic"         # 合成样本（仅测试/对账用）
+SOURCE_SMTP_OPTIMISTIC = "smtp_optimistic"  # SMTP 直发无投递回执：乐观 accepted，非 provider 原始事件

@@ -275,6 +275,10 @@ class SmtpSender:
                         pass
                 if refused:
                     raise RuntimeError("SMTP server refused one or more recipients")
+                # SMTP 没有投递回执：走到这里（含 refused 检查）就是服务器已接收。
+                # 2026-09-15 修复：此前只有 resend 分支置位，SMTP 恒 False → provider_status 恒 ''，
+                # 下游 dc_followup / dc_email_signals / growth_dashboard / email_provider 全部跳过。
+                provider_accepted = True
 
             # 回查真实 Message-ID（Resend 走 API，SMTP 退回本地 make_msgid）
             smtp_message_id = self._query_smtp_message_id(account, resend_id, message_id)
@@ -329,7 +333,9 @@ class SmtpSender:
             except Exception:
                 # Resend already accepted → do NOT re-send. Save recovery evidence for a
                 # status-only retry; then re-raise so callers don't report a false success.
-                if provider_accepted and resend_id:
+                if provider_accepted:
+                    # SMTP 也要写：本地持久化失败时避免重发
+                    # （原来只认 resend_id → SMTP 恒不写，重发风险）
                     self._write_recovery_evidence(outbound)
                 raise
 

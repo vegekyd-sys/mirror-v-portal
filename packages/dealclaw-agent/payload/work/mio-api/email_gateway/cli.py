@@ -122,6 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
     send = sub.add_parser("send")
     send.add_argument("--account-id", required=True)
     send.add_argument("--confirmed-by", required=True)
+    # 归属信息：不传 --enterprise 时从 account 的 enterprise_id 兜底（用户/agent 不必知道企业号）
+    send.add_argument("--enterprise", default="", help="企业号；缺省取 account 的 enterprise_id")
+    send.add_argument("--campaign-id", default="")
+    send.add_argument("--lead-id", default="")
+    send.add_argument("--contact-id", default="")
+    send.add_argument("--origin-notify-target", default="",
+                      help="发信会话（oc_ 群 / ou_ 私聊）：买家回信默认投递回这里")
     send.add_argument("--to", required=True, help="comma-separated recipients")
     send.add_argument("--cc", default="")
     send.add_argument("--bcc", default="")
@@ -305,6 +312,13 @@ def main(argv: list[str] | None = None) -> int:
             html = args.html
         if not text and not html:
             raise ValueError("provide at least one of --text/--text-file or --html/--html-file")
+        # 归属：优先显式 --enterprise，其次 account 的 enterprise_id（不必让用户填）
+        acct = {}
+        try:
+            acct = store.get_account(args.account_id) or {}
+        except Exception:  # noqa: BLE001
+            acct = {}
+        company_id = (args.enterprise or acct.get("enterprise_id", "") or "").strip()
         send_result = SmtpSender(store).send(
             account_id=args.account_id,
             confirmed_by=args.confirmed_by,
@@ -316,25 +330,29 @@ def main(argv: list[str] | None = None) -> int:
             html=html or None,
             reply_to=args.reply_to,
             dry_run=args.dry_run,
+            company_id=company_id,
+            campaign_id=args.campaign_id or "",
+            lead_id=args.lead_id or "",
+            contact_id=args.contact_id or "",
         )
         # 发信成功后落 outbound 事实：收信匹配的唯一依据，漏落 → 回信静默匹配不到。
         # best-effort：失败只在结果里标出，不影响发送结果。2026-09-15 修复。
         fact = {"ok": False, "error": "skipped"}
-        if not args.dry_run and isinstance(send_result, dict) and send_result.get("resend_id"):
+        # 闸门不能只看 resend_id：SMTP 直发（个人邮箱）永远没有 resend_id，只有真实 RFC Message-ID。
+        # 2026-09-15 修复：此前 SMTP 发信永不落事实 → 回信匹配不到、邮件日志/案卷查不到。
+        if not args.dry_run and isinstance(send_result, dict) and (
+            send_result.get("resend_id") or send_result.get("message_id")
+        ):
             from email_gateway.outbound_facts import land_outbound_fact
 
-            acct = {}
-            try:
-                acct = store.get_account(args.account_id) or {}
-            except Exception:  # noqa: BLE001
-                acct = {}
             fact = land_outbound_fact(
                 from_addr=acct.get("email_address") or acct.get("email") or "",
                 to_list=_csv(args.to),
                 subject=args.subject,
                 resend_id=send_result.get("resend_id", ""),
                 message_id=send_result.get("message_id", ""),
-                enterprise=acct.get("enterprise_id", ""),
+                enterprise=company_id or acct.get("enterprise_id", ""),
+                origin_notify_target=args.origin_notify_target or "",
                 store=store,
             )
         if isinstance(send_result, dict):

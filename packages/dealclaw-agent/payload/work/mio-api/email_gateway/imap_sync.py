@@ -79,6 +79,23 @@ def _body_preview(msg: Message, limit: int = 1000) -> str:
     return text[:limit]
 
 
+def _canonical_company(account: dict) -> str:
+    """入站事实的 company_id：canonical(enterprise_id)，与 Resend webhook 链路口径一致。
+
+    2026-09-15 修复：两个 insert_message 都没带 company_id → 个人邮箱（SMTP/IMAP）的
+    收发记录全落到 inbound 的 `_unmatched/` 目录，按企业过滤的查询（邮件日志/案卷/
+    dashboard/email-quality）一条都看不到。
+    """
+    raw = str((account or {}).get("enterprise_id", "") or "").strip()
+    if not raw:
+        return ""
+    try:
+        from enterprise_ids import canonical_company_id
+        return canonical_company_id(raw) or raw
+    except Exception:  # noqa: BLE001 - 根目录不在 sys.path 时退回原值，不阻断收信
+        return raw
+
+
 def _extract_attachments(msg: Message) -> list[tuple[str, str, bytes]]:
     """从 MIME 里取出附件 (filename, content_type, bytes)。
 
@@ -337,6 +354,7 @@ class ImapSynchronizer:
                         self.store.mark_bounced_by_contact(account_id, bounced_email, category)
                     self.store.insert_message({
                         "account_id": account_id, "direction": "inbound",
+                        "company_id": _canonical_company(account),
                         "folder": folder, "uidvalidity": uidvalidity, "uid": uid,
                         "message_id": message_id, "in_reply_to": in_reply_to,
                         "references": references, "sender": sender,
@@ -377,10 +395,17 @@ class ImapSynchronizer:
                     if related
                     else (_body_preview(msg, limit=200) if emit_all else "")
                 )
+                # 归属：关联到 outbound 就用它的身份（回信必须落回买家所在企业），
+                # 否则退回账号的 enterprise_id。两条链路（Resend/IMAP）口径必须一致。
+                _ident = outbound_row or {}
                 stored = self.store.insert_message(
                     {
                         "account_id": account_id,
                         "direction": "inbound",
+                        "company_id": _ident.get("company_id") or _canonical_company(account),
+                        "campaign_id": _ident.get("campaign_id", ""),
+                        "lead_id": _ident.get("lead_id", ""),
+                        "contact_id": _ident.get("contact_id", ""),
                         "folder": folder,
                         "uidvalidity": uidvalidity,
                         "uid": uid,
