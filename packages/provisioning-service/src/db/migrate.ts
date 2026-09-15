@@ -455,6 +455,50 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON wechat_bindings(tenant_id, status);
     `);
 
+    // ── WeCom (企业微信) bot bindings — credential-based direct connection ─
+    // One tenant ↔ one WeCom bot. `bot_id` is a non-sensitive identifier kept
+    // for display only; the bot `secret` is materialized as the
+    // `dealclaw-wecom-<tenantId>` Secret and is NEVER written to the DB.
+    // UNIQUE(tenant_id) enforces single-binding. The channel only exists on
+    // the OpenClaw message plane (fail-closed in write-config.mjs).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wecom_bindings (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        tenant_id       TEXT NOT NULL UNIQUE REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        bot_id          TEXT,
+        status          TEXT NOT NULL DEFAULT 'unbound'
+                        CHECK (status IN ('unbound','bound','disabling','disabled')),
+        bound_at        TIMESTAMPTZ,
+        unbound_at      TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_wecom_bindings_tenant
+        ON wecom_bindings(tenant_id, status);
+    `);
+
+    // ── DingTalk (钉钉) bot bindings — credential-based direct connection ─
+    // One tenant ↔ one DingTalk bot. `client_id` is a non-sensitive identifier
+    // kept for display only; the `client_secret` is materialized as the
+    // `dealclaw-dingtalk-<tenantId>` Secret and is NEVER written to the DB.
+    // UNIQUE(tenant_id) enforces single-binding. The channel only exists on
+    // the OpenClaw message plane (fail-closed in write-config.mjs).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dingtalk_bindings (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        tenant_id       TEXT NOT NULL UNIQUE REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        client_id       TEXT,
+        status          TEXT NOT NULL DEFAULT 'unbound'
+                        CHECK (status IN ('unbound','bound','disabling','disabled')),
+        bound_at        TIMESTAMPTZ,
+        unbound_at      TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_dingtalk_bindings_tenant
+        ON dingtalk_bindings(tenant_id, status);
+    `);
+
     // ── Shared DM session (v0.9) — per-tenant toggle that merges Feishu and
     // WeChat DM conversations into a single session (agent:dealclaw:main),
     // enabling cross-channel conversation continuity. Suitable for single-user
@@ -641,6 +685,26 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'full';
       ALTER TABLE llm_push_tasks
         ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+    `);
+
+    // ── Global Model Policy (P0-1 Catalog Authority) ──────────────────────
+    // Singleton row (id='current') holding the catalog-only model reference
+    // policy: defaultModel / imageModel / compactionModel / fallbackModels.
+    // These are stable model row IDs (lpm_...) that resolve into the catalog
+    // at snapshot-build time — no legacy JSON skeleton required.
+    // revision enables optimistic CAS so concurrent admin edits don't clobber.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_global_model_policy (
+        id               TEXT PRIMARY KEY DEFAULT 'current',
+        default_model    TEXT,
+        image_model      TEXT,
+        compaction_model TEXT,
+        fallback_models  TEXT[] NOT NULL DEFAULT '{}',
+        revision         BIGINT NOT NULL DEFAULT 0,
+        updated_by       TEXT,
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      INSERT INTO llm_global_model_policy (id) VALUES ('current') ON CONFLICT DO NOTHING;
     `);
 
     console.log(JSON.stringify({

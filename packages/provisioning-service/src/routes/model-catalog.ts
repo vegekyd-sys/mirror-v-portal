@@ -1,18 +1,30 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
-import { actorFromRequest } from '../services/audit.js';
-import { decryptValue } from '../services/crypto.js';
+import { actorFromRequest, writeAuditLog } from '../services/audit.js';
+import { decryptValue, maskValue } from '../services/crypto.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
 import {
   ModelParamDiscoveryError,
   ModelParamDiscoveryService,
 } from '../services/model-param-discovery.js';
-import { CatalogRepository, CatalogService, snapshotFingerprint } from '../services/model-catalog.js';
+import {
+  CatalogRepository, CatalogService, snapshotFingerprint,
+  modelRowIdToLegacyRef, legacyRefToModelRowId,
+  type ProviderInstanceRecord,
+} from '../services/model-catalog.js';
 import { CatalogReleaseService } from '../services/catalog-release-service.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
 import { validateConfigValue } from '../services/runtime-config.js';
 import type { CatalogReleaseRecord, CatalogReleaseView } from '../domain/catalog-release.js';
+import {
+  GlobalModelPolicyInputSchema,
+  ModelMutationSchema,
+  ProviderInstanceInputSchema,
+  ProviderMutationSchema,
+  MODEL_TYPES,
+  type ModelType,
+} from '../domain/model-catalog.js';
 
 function disabled(res: Response): void {
   res.status(503).json({ code: 'DISABLED', message: 'Model catalog feature is disabled' });
@@ -64,6 +76,38 @@ function recordToView(record: CatalogReleaseRecord): CatalogReleaseView {
     status: record.status,
     createdAt: record.createdAt.toISOString(),
   };
+}
+
+/** Strip encrypted API key from a provider record, adding hasApiKey + apiKeyMask. */
+function redactProvider(provider: ProviderInstanceRecord) {
+  const { encryptedApiKey, ...rest } = provider
+  let apiKeyMask = '••••••••'
+  if (encryptedApiKey) {
+    try { apiKeyMask = maskValue(decryptValue(encryptedApiKey)) } catch { /* keep default mask */ }
+  }
+  return { ...rest, hasApiKey: Boolean(encryptedApiKey), apiKeyMask }
+}
+
+/** Parse expectedRevision from query param or body field. Returns NaN if absent. */
+function parseExpectedRevision(req: Request): number {
+  const raw = req.query.expectedRevision ?? req.body?.expectedRevision
+  const num = Number(raw)
+  return Number.isSafeInteger(num) && num >= 0 ? num : NaN
+}
+
+/** Send a CAS conflict response. */
+function staleRevision(res: Response): void {
+  res.status(409).json({ code: 'STALE_REVISION', message: 'Revision mismatch — refresh and retry' })
+}
+
+/** Send a validation error response. */
+function validationError(res: Response, message: string): void {
+  res.status(400).json({ code: 'MODEL_CATALOG_VALIDATION', message })
+}
+
+/** Send a conflict error response. */
+function conflictError(res: Response, code: string, message: string): void {
+  res.status(409).json({ code, message })
 }
 
 /** Admin routes for the P0 shadow catalog and explicit compatibility publishing. */
@@ -343,6 +387,327 @@ export function createModelCatalogRoutes(
     } catch (error) {
       console.error('model catalog tenant release status failed:', error);
       internalError(res);
+    }
+  });
+
+  // ── Provider CRUD (modelCatalogParamWrite) ──────────────────────────────
+
+  router.get('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const provider = await repository.findProvider(req.params.id);
+      if (!provider) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      res.json({ provider: redactProvider(provider) });
+    } catch (error) {
+      console.error('model catalog provider detail failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.post('/v1/admin/model-catalog/providers', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const parsed = ProviderInstanceInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const provider = await repository.createProvider(parsed.data);
+      const redacted = redactProvider(provider);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.create',
+        method: 'POST', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: provider.id, newValue: redacted,
+      });
+      res.status(201).json({ provider: redacted });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('already exists')) {
+        conflictError(res, 'DUPLICATE_PROVIDER', msg);
+        return;
+      }
+      console.error('model catalog provider create failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.patch('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const parsed = ProviderMutationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.findProvider(req.params.id);
+      if (!before) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      const provider = await repository.updateProvider(req.params.id, parsed.data, expectedRevision);
+      const redacted = redactProvider(provider);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.update',
+        method: 'PATCH', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: provider.id,
+        oldValue: redactProvider(before), newValue: redacted,
+      });
+      res.json({ provider: redacted });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog provider update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.delete('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.findProvider(req.params.id);
+      if (!before) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      await repository.deleteProvider(req.params.id);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.delete',
+        method: 'DELETE', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: req.params.id,
+        oldValue: redactProvider(before),
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('PROVIDER_HAS_RUNTIME_MODELS')) {
+        conflictError(res, 'PROVIDER_HAS_RUNTIME_MODELS', msg);
+        return;
+      }
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog provider delete failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Model CRUD (modelCatalogParamWrite) ─────────────────────────────────
+
+  router.post('/v1/admin/model-catalog/providers/:id/models', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId.trim() : '';
+    if (!modelId || modelId.length > 100) {
+      validationError(res, 'modelId must be 1-100 chars');
+      return;
+    }
+    if (!MODEL_TYPES.includes(req.body?.modelType as ModelType)) {
+      validationError(res, 'invalid modelType');
+      return;
+    }
+    if (typeof req.body?.runtimeEnabled !== 'boolean') {
+      validationError(res, 'runtimeEnabled must be boolean');
+      return;
+    }
+    const displayName = typeof req.body.displayName === 'string' && req.body.displayName.trim()
+      ? req.body.displayName.trim().slice(0, 128) : undefined;
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const model = await repository.createModel(req.params.id, {
+        modelId, ...(displayName ? { displayName } : {}),
+        modelType: req.body.modelType as ModelType,
+        runtimeEnabled: req.body.runtimeEnabled as boolean,
+      });
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.create',
+        method: 'POST', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: model.id, newValue: { ...model, effectiveParams: undefined },
+      });
+      res.status(201).json({ model });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('already exists')) {
+        conflictError(res, 'DUPLICATE_MODEL', msg);
+        return;
+      }
+      console.error('model catalog model create failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.patch('/v1/admin/model-catalog/models/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const mutation: { displayName?: string; modelType?: ModelType; runtimeEnabled?: boolean } = {};
+    if (req.body?.displayName !== undefined) {
+      if (typeof req.body.displayName !== 'string' || req.body.displayName.length > 128) {
+        validationError(res, 'displayName must be string <= 128 chars');
+        return;
+      }
+      mutation.displayName = req.body.displayName.trim() || undefined;
+    }
+    if (req.body?.modelType !== undefined) {
+      if (!MODEL_TYPES.includes(req.body.modelType as ModelType)) {
+        validationError(res, 'invalid modelType');
+        return;
+      }
+      mutation.modelType = req.body.modelType as ModelType;
+    }
+    if (req.body?.runtimeEnabled !== undefined) {
+      if (typeof req.body.runtimeEnabled !== 'boolean') {
+        validationError(res, 'runtimeEnabled must be boolean');
+        return;
+      }
+      mutation.runtimeEnabled = req.body.runtimeEnabled;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const model = await repository.updateModel(req.params.id, mutation, expectedRevision);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.update',
+        method: 'PATCH', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: model.id, newValue: { ...model, effectiveParams: undefined },
+      });
+      res.json({ model });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog model update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.delete('/v1/admin/model-catalog/models/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      // Check if model is referenced in Global Model Policy before deleting.
+      const policy = await repository.getGlobalModelPolicy();
+      if (policy) {
+        const refs = [
+          policy.defaultModel, policy.imageModel, policy.compactionModel,
+          ...policy.fallbackModels,
+        ].filter((r): r is string => r !== null)
+        if (refs.includes(req.params.id)) {
+          conflictError(res, 'MODEL_REFERENCED_BY_POLICY',
+            'Model is referenced by the global model policy — remove the reference first');
+          return;
+        }
+      }
+      await repository.deleteModel(req.params.id);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.delete',
+        method: 'DELETE', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: req.params.id,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog model delete failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Global Model Policy (read = modelCatalogRead, write = modelCatalogSnapshotWrite) ──
+
+  router.get('/v1/admin/model-catalog/global-policy', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const policy = await repository.getGlobalModelPolicy();
+      res.json({ policy });
+    } catch (error) {
+      console.error('model catalog global policy get failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.put('/v1/admin/model-catalog/global-policy', async (req, res) => {
+    if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const parsed = GlobalModelPolicyInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.getGlobalModelPolicy();
+      const policy = await repository.updateGlobalModelPolicy(
+        parsed.data, expectedRevision,
+        actorType === 'external' ? 'service-token' : actor,
+      );
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.global-policy.update',
+        method: 'PUT', path: req.path, resourceType: 'llm_global_model_policy',
+        resourceId: 'current', oldValue: before, newValue: policy,
+      });
+      res.json({ policy });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('DANGLING_MODEL_REFERENCE')) {
+        res.status(400).json({ code: 'DANGLING_MODEL_REFERENCE', message: msg });
+        return;
+      }
+      console.error('model catalog global policy update failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Pure Catalog Snapshot Preview (modelCatalogRead) ───────────────────
+
+  router.get('/v1/admin/model-catalog/catalog-preview', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const snapshot = await service.buildCatalogSnapshot();
+      const fingerprint = snapshotFingerprint(snapshot);
+      res.json({
+        snapshot: redactSnapshot(snapshot),
+        fingerprint,
+      });
+    } catch (error) {
+      console.error('model catalog catalog preview failed:', error);
+      internalError(res, 'SNAPSHOT_INVALID', 422);
     }
   });
 
