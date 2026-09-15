@@ -39,6 +39,7 @@ openclaw cron add \
   --command-cwd "$MIO_DIR" \
   --command-env "DC_DATA_DIR=$MIO_DIR/data" \
   --no-deliver \
+  --timeout-seconds 240 \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-email-reply-poll" \
   --description "DealClaw 个人邮箱回复轮询（*/5 @ $TZ）"

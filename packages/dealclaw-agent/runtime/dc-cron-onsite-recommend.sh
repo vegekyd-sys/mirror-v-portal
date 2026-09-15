@@ -113,6 +113,7 @@ for slot in 10 14 16; do
     --command-env "MIO_V_OPEN_ID=$OPEN_ID" \
     --command-env "OPENCLAW_WORKSPACE_DIR=$WORKSPACE_DIR" \
     --no-deliver \
+    --timeout-seconds 900 \
     --declaration-key "$decl_key" \
     --name "dealclaw-onsite-recommend-${slot}h" \
     --description "DealClaw 现场推荐（展会当地时间 ${slot}:00 @ ${TZ}，北京时间 ${H}:${M}）"

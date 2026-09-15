@@ -46,6 +46,7 @@ openclaw cron add \
   --command-env "MIO_V_OPEN_ID=$OPEN_ID" \
   --command-env "OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR:-/data/workspace}" \
   --no-deliver \
+  --timeout-seconds 240 \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-buyer-onsite-monitor" \
   --description "DealClaw 买家到场监控（*/5 @ $TZ）"

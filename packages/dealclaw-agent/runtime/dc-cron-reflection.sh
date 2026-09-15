@@ -92,6 +92,7 @@ openclaw cron add \
   --command-cwd "$WS" \
   --command-env "DEALCLAW_WORKSPACE=$WS" \
   --no-deliver \
+  --timeout-seconds 900 \
   --declaration-key "$DECL_KEY" \
   --description "DealClaw reflection heartbeat（${SCHED_DESC}）"
 

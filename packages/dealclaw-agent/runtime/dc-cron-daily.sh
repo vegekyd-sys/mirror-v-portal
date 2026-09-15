@@ -49,6 +49,7 @@ ensure() {
     --command-env "DC_NOTIFY_ALLOWED_COMPANIES=$SUPPLIER_ID" \
     --command-env "DC_DATA_DIR=$MIO_DIR/data" \
     --no-deliver \
+    --timeout-seconds 1800 \
     --declaration-key "$decl_key" \
     --name "$name" \
     --description "DealClaw ${slot} 报（${cron_expr} @ ${TZ}）"
