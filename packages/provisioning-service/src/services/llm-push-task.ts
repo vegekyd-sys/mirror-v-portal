@@ -29,6 +29,7 @@ import {
 import type { ProvisioningConfig } from '../config.js';
 import type { SseBroker } from './sse-broker.js';
 import type {
+  AutoPauseThresholds,
   LlmPushItemRecord,
   LlmPushItemStatus,
   LlmPushTaskRecord,
@@ -52,6 +53,14 @@ export interface EnqueueLlmPushInput {
   scopeType?: 'full' | 'allowlist' | 'single' | 'affected' | 'canary' | 'batch';
   /** Idempotency key for de-duplication of identical push tasks. */
   idempotencyKey?: string;
+  /** Batch size — 0 (default) means unbatched (all tenants at once). */
+  batchSize?: number;
+  /** Total number of batches (computed by the caller; 0 = unbatched). */
+  batchTotal?: number;
+  /** Observation window between batches in ms (0 = no wait). */
+  batchIntervalMs?: number;
+  /** Auto-pause thresholds; when omitted, worker uses defaults. */
+  autoPauseThresholds?: AutoPauseThresholds;
 }
 
 /** Public (脱敏) task view returned by the REST API — never exposes libraries. */
@@ -110,8 +119,9 @@ export async function enqueueLlmPush(
   await pool.query(
     `INSERT INTO llm_push_tasks
        (id, kind, scope, trigger, prev_library, next_library, actor, actor_type,
-        release_id, scope_type, idempotency_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        release_id, scope_type, idempotency_key,
+        batch_size, batch_total, batch_interval_ms, auto_pause_thresholds)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
     [
       taskId,
       input.kind,
@@ -124,6 +134,10 @@ export async function enqueueLlmPush(
       input.releaseId ?? null,
       input.scopeType ?? 'full',
       input.idempotencyKey ?? null,
+      input.batchSize ?? 0,
+      input.batchTotal ?? 0,
+      input.batchIntervalMs ?? 0,
+      input.autoPauseThresholds ? JSON.stringify(input.autoPauseThresholds) : null,
     ],
   );
   return { taskId, status: 'pending' };
@@ -202,7 +216,7 @@ async function claimNextItem(
   const { rows } = await pool.query<LlmPushItemRecord>(
     `WITH next AS (
        SELECT id FROM llm_push_task_items
-       WHERE task_id = $1 AND status = 'pending'
+       WHERE task_id = $1 AND status = 'pending' AND batch_status = 'pending'
        ORDER BY id
        FOR UPDATE SKIP LOCKED
        LIMIT 1
@@ -313,6 +327,175 @@ async function finishTask(
   return getTaskById(pool, taskId);
 }
 
+// ── Batch control helpers ──
+
+interface BatchStats {
+  succeeded: number;
+  failed: number;
+  skipped: number;
+}
+
+/** Recount item outcomes for a single batch (used by auto-pause logic). */
+export async function recountBatchStats(
+  pool: pg.Pool,
+  taskId: string,
+  batchIndex: number,
+): Promise<BatchStats> {
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_count,
+       COUNT(*) FILTER (WHERE status = 'failed')    AS failed_count,
+       COUNT(*) FILTER (WHERE status = 'skipped')   AS skipped_count
+     FROM llm_push_task_items
+     WHERE task_id = $1 AND batch_index = $2`,
+    [taskId, batchIndex],
+  );
+  const r = rows[0];
+  return {
+    succeeded: Number(r?.succeeded_count ?? 0),
+    failed: Number(r?.failed_count ?? 0),
+    skipped: Number(r?.skipped_count ?? 0),
+  };
+}
+
+interface BatchPromoteResult {
+  /** True when the next batch was promoted from 'paused' to 'pending'. */
+  promoted: boolean;
+  /** True when the auto-pause threshold was exceeded; task set to 'partial'. */
+  autoPaused: boolean;
+}
+
+/**
+ * After the current batch's items are all in terminal status, check whether
+ * the next paused batch should be promoted to 'pending' or held back due to
+ * auto-pause thresholds. Returns a descriptor telling the worker whether to
+ * continue processing or stop.
+ */
+export async function maybePromoteNextBatch(
+  pool: pg.Pool,
+  task: LlmPushTaskRecord,
+): Promise<BatchPromoteResult> {
+  const taskId = task.id;
+
+  // 1. Find the latest fully-completed batch index.
+  const { rows: batchRows } = await pool.query(
+    `SELECT batch_index,
+            COUNT(*) FILTER (WHERE status IN ('succeeded','skipped','failed')) AS done_count,
+            COUNT(*) AS total_count
+       FROM llm_push_task_items
+      WHERE task_id = $1 AND batch_index IS NOT NULL
+      GROUP BY batch_index
+      ORDER BY batch_index`,
+    [taskId],
+  );
+  let currentBatchIndex = -1;
+  for (const row of batchRows) {
+    if (Number(row.done_count) === Number(row.total_count)) {
+      currentBatchIndex = Number(row.batch_index);
+    }
+  }
+  if (currentBatchIndex < 0) return { promoted: false, autoPaused: false };
+
+  // 2. Check if there is a next paused batch to promote.
+  const nextBatchIndex = currentBatchIndex + 1;
+  const { rows: nextRows } = await pool.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM llm_push_task_items
+      WHERE task_id = $1 AND batch_index = $2 AND batch_status = 'paused'`,
+    [taskId, nextBatchIndex],
+  );
+  if ((nextRows[0]?.n ?? 0) === 0) return { promoted: false, autoPaused: false };
+
+  // 3. Evaluate auto-pause thresholds against the just-completed batch.
+  const stats = await recountBatchStats(pool, taskId, currentBatchIndex);
+  const thresholds: Required<AutoPauseThresholds> = {
+    maxFailureRate: 0.3,
+    maxErrorRate: 0.2,
+    minSuccessCount: 3,
+    ...(task.auto_pause_thresholds ?? {}),
+  };
+  const totalAttempted = stats.succeeded + stats.failed;
+  const failureRate = totalAttempted > 0 ? stats.failed / totalAttempted : 0;
+
+  if (totalAttempted >= thresholds.minSuccessCount) {
+    if (failureRate > thresholds.maxFailureRate) {
+      // Threshold exceeded — hold all remaining paused batches and mark
+      // the task as 'partial' with an explanatory error.
+      await pool.query(
+        `UPDATE llm_push_task_items SET batch_status = 'paused'
+         WHERE task_id = $1 AND batch_index > $2 AND batch_status = 'pending'`,
+        [taskId, currentBatchIndex],
+      );
+      await pool.query(
+        `UPDATE llm_push_tasks
+         SET error = $1, status = 'partial'
+         WHERE id = $2`,
+        [`AUTO_PAUSED: failure rate ${failureRate.toFixed(2)} exceeded threshold`, taskId],
+      );
+      return { promoted: false, autoPaused: true };
+    }
+  }
+
+  // 4. Thresholds OK — promote the next batch from 'paused' to 'pending'.
+  await pool.query(
+    `UPDATE llm_push_task_items SET batch_status = 'pending'
+     WHERE task_id = $1 AND batch_index = $2 AND batch_status = 'paused'`,
+    [taskId, nextBatchIndex],
+  );
+
+  // 5. Observe the inter-batch window if configured.
+  if (task.batch_interval_ms > 0) {
+    await new Promise((resolve) => setTimeout(resolve, task.batch_interval_ms));
+  }
+
+  return { promoted: true, autoPaused: false };
+}
+
+/**
+ * Manually pause all claimable items in a rollout task. Items that are
+ * already running continue to completion; only items with batch_status =
+ * 'pending' and status = 'pending' (not yet claimed) are held back.
+ */
+export async function pauseRolloutBatch(
+  pool: pg.Pool,
+  taskId: string,
+): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE llm_push_task_items
+     SET batch_status = 'paused'
+     WHERE task_id = $1 AND batch_status = 'pending' AND status = 'pending'`,
+    [taskId],
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * Resume the next paused batch for a rollout task. Finds the lowest
+ * batch_index whose items are still 'paused' and promotes them to
+ * 'pending' so the worker can claim them.
+ */
+export async function resumeRolloutBatch(
+  pool: pg.Pool,
+  taskId: string,
+): Promise<number> {
+  const { rows } = await pool.query<{ batch_index: number }>(
+    `SELECT DISTINCT batch_index
+       FROM llm_push_task_items
+      WHERE task_id = $1 AND batch_status = 'paused'
+      ORDER BY batch_index
+      LIMIT 1`,
+    [taskId],
+  );
+  if (rows.length === 0) return 0;
+  const nextBatch = rows[0].batch_index;
+  const { rowCount } = await pool.query(
+    `UPDATE llm_push_task_items
+     SET batch_status = 'pending'
+     WHERE task_id = $1 AND batch_index = $2 AND batch_status = 'paused'`,
+    [taskId, nextBatch],
+  );
+  return rowCount ?? 0;
+}
+
 /** Full run of one claimed task. Publishes snapshot/item/task/done to SSE. */
 export async function executeTask(
   pool: pg.Pool,
@@ -321,6 +504,7 @@ export async function executeTask(
   task: LlmPushTaskRecord,
 ): Promise<void> {
   const taskId = task.id;
+  let autoPaused = false;
   try {
     const prevLibrary = decryptLibraryOrThrow(task.prev_library);
     const nextLibrary = decryptLibraryOrThrow(task.next_library);
@@ -345,7 +529,21 @@ export async function executeTask(
         break;
       }
       const item = await claimNextItem(pool, taskId);
-      if (!item) break; // no pending items left
+      if (!item) {
+        // No more claimable items in the current batch. If this is a batched
+        // task, check whether the next paused batch can be promoted.
+        if (current.batch_total > 1) {
+          const promoteResult = await maybePromoteNextBatch(pool, current);
+          if (promoteResult.promoted) {
+            continue; // next batch is now 'pending' — keep processing
+          }
+          if (promoteResult.autoPaused) {
+            autoPaused = true;
+            break;
+          }
+        }
+        break; // no more items to process
+      }
 
       const outcome = await applyTenantLlmConfig(
         pool,
@@ -372,13 +570,25 @@ export async function executeTask(
     const finished = await getTaskById(pool, taskId);
     if (finished && finished.status !== 'cancelled') {
       const counts = await recount(pool, taskId);
-      const finalStatus: LlmPushTaskStatus =
-        counts.failed_count === 0
-          ? 'succeeded'
-          : counts.succeeded_count + counts.skipped_count === 0
-            ? 'failed'
-            : 'partial';
-      await finishTask(pool, taskId, finalStatus, null);
+      const processedCount = counts.succeeded_count + counts.failed_count + counts.skipped_count;
+      const hasUnprocessed = processedCount < finished.total_count;
+      let finalStatus: LlmPushTaskStatus;
+      let finalError: string | null = null;
+      if (autoPaused) {
+        finalStatus = 'partial';
+        finalError = finished.error;
+      } else if (hasUnprocessed && counts.failed_count === 0) {
+        // Some items were not processed (manual pause) — not a clean success.
+        finalStatus = 'partial';
+      } else {
+        finalStatus =
+          counts.failed_count === 0
+            ? 'succeeded'
+            : counts.succeeded_count + counts.skipped_count === 0
+              ? 'failed'
+              : 'partial';
+      }
+      await finishTask(pool, taskId, finalStatus, finalError);
     }
 
     const done = await getTaskById(pool, taskId);

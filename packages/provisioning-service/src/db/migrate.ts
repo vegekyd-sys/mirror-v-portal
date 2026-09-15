@@ -738,6 +738,34 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
     `);
 
+    // ── Batch control for scoped rollout (P0-3 remaining) ────────────────
+    // Adds per-batch metadata to push task items so the worker can process
+    // tenants in controlled waves with an observation window between batches.
+    //   - batch_index: 0-based position within the task's batch sequence
+    //   - batch_total: total number of batches for this task (0 = unbatched)
+    //   - batch_status: 'pending' (claimable) | 'paused' (held back) | 'completed'
+    // Non-batched tasks leave these NULL/0/default and the worker's existing
+    // enumerateTargets path is unaffected.
+    await client.query(`
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_index INTEGER;
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_total INTEGER;
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_status TEXT NOT NULL DEFAULT 'pending';
+      CREATE INDEX IF NOT EXISTS idx_llm_push_items_batch
+        ON llm_push_task_items(task_id, batch_index, batch_status);
+
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_interval_ms INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS auto_pause_thresholds JSONB;
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

@@ -18,8 +18,16 @@ import type pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
 import { actorFromRequest } from '../services/audit.js';
 import { CatalogRepository, CatalogService } from '../services/model-catalog.js';
-import { CatalogRolloutService, type ScopeType } from '../services/catalog-rollout-service.js';
+import {
+  CatalogRolloutService,
+  type ScopeType,
+  type ScopedRolloutParams,
+} from '../services/catalog-rollout-service.js';
 import { getGlobalLlmProviders } from '../services/llm-providers.js';
+import {
+  pauseRolloutBatch,
+  resumeRolloutBatch,
+} from '../services/llm-push-task.js';
 
 function disabled(res: Response): void {
   res.status(503).json({ code: 'DISABLED', message: 'Model catalog feature is disabled' });
@@ -68,6 +76,15 @@ export function createCatalogRolloutRoutes(
     const tenantIds = Array.isArray(req.body?.tenantIds) ? req.body.tenantIds : undefined;
     const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey : undefined;
 
+    // Batch control options (optional).
+    const batchSizeRaw = req.body?.batchSize;
+    const batchSize = typeof batchSizeRaw === 'number' && batchSizeRaw > 0 ? batchSizeRaw : undefined;
+    const batchIntervalMs = typeof req.body?.batchIntervalMs === 'number' && req.body.batchIntervalMs > 0
+      ? req.body.batchIntervalMs : undefined;
+    const autoPauseThresholds = req.body?.autoPauseThresholds && typeof req.body.autoPauseThresholds === 'object'
+      ? req.body.autoPauseThresholds as ScopedRolloutParams['autoPauseThresholds']
+      : undefined;
+
     if (!releaseId) {
       res.status(400).json({ code: 'VALIDATION', message: 'releaseId is required' });
       return;
@@ -92,6 +109,9 @@ export function createCatalogRolloutRoutes(
         actor,
         actorType: actorType === 'external' ? 'service' : actorType,
         idempotencyKey,
+        batchSize,
+        batchIntervalMs,
+        autoPauseThresholds,
       });
       res.json({
         ...result,
@@ -108,6 +128,42 @@ export function createCatalogRolloutRoutes(
         res.status(400).json({ code: 'VALIDATION', message });
         return;
       }
+      internalError(res);
+    }
+  });
+
+  // ── POST /v1/admin/model-catalog/rollout/:taskId/pause ──
+  // Manually pause all unclaimed items in the current batch.
+  router.post('/v1/admin/model-catalog/rollout/:taskId/pause', async (req, res) => {
+    if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    const taskId = req.params.taskId;
+    if (!taskId) {
+      res.status(400).json({ code: 'VALIDATION', message: 'taskId is required' });
+      return;
+    }
+    try {
+      const pausedCount = await pauseRolloutBatch(pool, taskId);
+      res.json({ taskId, pausedCount });
+    } catch (error) {
+      console.error('catalog rollout pause failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── POST /v1/admin/model-catalog/rollout/:taskId/resume ──
+  // Resume the next paused batch for a rollout task.
+  router.post('/v1/admin/model-catalog/rollout/:taskId/resume', async (req, res) => {
+    if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    const taskId = req.params.taskId;
+    if (!taskId) {
+      res.status(400).json({ code: 'VALIDATION', message: 'taskId is required' });
+      return;
+    }
+    try {
+      const resumedCount = await resumeRolloutBatch(pool, taskId);
+      res.json({ taskId, resumedCount });
+    } catch (error) {
+      console.error('catalog rollout resume failed:', error);
       internalError(res);
     }
   });

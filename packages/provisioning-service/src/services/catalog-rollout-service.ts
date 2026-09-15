@@ -20,6 +20,7 @@
 import type pg from 'pg';
 import { decryptValue } from './crypto.js';
 import { enqueueLlmPush } from './llm-push-task.js';
+import type { AutoPauseThresholds } from './llm-push-types.js';
 import {
   analyzeTenantLlmRestart,
   effectiveCompactionRefIn,
@@ -79,6 +80,22 @@ export interface ImpactManifest {
 /** Scope granularity for a scoped rollout. */
 export type ScopeType = 'full' | 'allowlist' | 'single' | 'affected' | 'canary';
 
+/** Parameters for enqueueing a scoped rollout task. */
+export interface ScopedRolloutParams {
+  releaseId: string;
+  scopeType: ScopeType;
+  tenantIds?: string[];
+  actor: string | null;
+  actorType: 'admin' | 'service';
+  idempotencyKey?: string;
+  /** Per-batch tenant count; 0 (default) = no batching (all at once). */
+  batchSize?: number;
+  /** Observation window between batches in ms; 0 = no wait. */
+  batchIntervalMs?: number;
+  /** Auto-pause thresholds evaluated after each batch completes. */
+  autoPauseThresholds?: AutoPauseThresholds;
+}
+
 // ── Internal row types ──
 
 interface TenantRow {
@@ -116,11 +133,12 @@ export class CatalogRolloutService {
     next: LlmProvidersConfig,
     releaseId: string | null,
   ): Promise<ImpactManifest> {
-    // 1. Query all active tenants with a k8s namespace.
+    // 1. Query all active tenants (including External Agents with no k8s
+    //    namespace — they are listed in the manifest but marked unsupported).
     const { rows: tenantRows } = await this.pool.query<TenantRow>(
       `SELECT tenant_id, company_name, k8s_namespace, agent_endpoint
          FROM tenants
-        WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL
+        WHERE status NOT IN ('destroyed')
         ORDER BY created_at`,
     );
 
@@ -149,7 +167,11 @@ export class CatalogRolloutService {
       const pinned = agentOverrides.has(tenantId) || gatewayOverrides.has(tenantId);
       const status = releaseStatusMap.get(tenantId);
 
-      entries.push({
+      // External Agent — has a custom agent_endpoint and no per-tenant K8s
+      // Deployment, so there is nothing for the push task to roll out.
+      const isExternal = row.agent_endpoint !== null && row.k8s_namespace === null;
+
+      const baseFields = {
         tenantId,
         tenantName: row.company_name ?? null,
         internal: !hasAgent,
@@ -165,14 +187,29 @@ export class CatalogRolloutService {
           effectiveCompactionRefIn(next, selection?.compactionModel ?? null)
           ?? effectiveRefIn(next, selection?.defaultModel ?? null),
         desiredFallbackModels: effectiveFallbacksFor(next, selection ?? null),
-        affected,
-        affectedReasons: analysis.reasons,
-        agentRestart: affected,
-        gatewayRestart: affected,
         currentAppliedReleaseId: status?.applied_release_id ?? null,
         desiredReleaseId,
-        deliveryStatus: status?.delivery_status ?? null,
-      });
+      };
+
+      if (isExternal) {
+        entries.push({
+          ...baseFields,
+          affected: false,
+          affectedReasons: ['external_agent: no k8s deployment to rollout'],
+          agentRestart: false,
+          gatewayRestart: false,
+          deliveryStatus: 'unsupported',
+        });
+      } else {
+        entries.push({
+          ...baseFields,
+          affected,
+          affectedReasons: analysis.reasons,
+          agentRestart: affected,
+          gatewayRestart: affected,
+          deliveryStatus: status?.delivery_status ?? null,
+        });
+      }
     }
 
     const affectedCount = entries.filter((e) => e.affected).length;
@@ -194,16 +231,14 @@ export class CatalogRolloutService {
   /**
    * Enqueue a scoped rollout task after a Release has been published.
    * Creates an LLM push task linked to the Release and initialises per-tenant
-   * desired release status rows.
+   * desired release status rows. When batchSize > 0, target tenants are split
+   * into batches: the first batch is immediately claimable ('pending') while
+   * subsequent batches are held as 'paused' until the worker promotes them
+   * after evaluating auto-pause thresholds.
    */
-  async enqueueScopedRollout(params: {
-    releaseId: string;
-    scopeType: ScopeType;
-    tenantIds?: string[];
-    actor: string | null;
-    actorType: 'admin' | 'service';
-    idempotencyKey?: string;
-  }): Promise<{ taskId: string; status: string; total: number }> {
+  async enqueueScopedRollout(
+    params: ScopedRolloutParams,
+  ): Promise<{ taskId: string; status: string; total: number }> {
     // 1. Load the Release record to get the fingerprint + compat payload.
     const { rows: releaseRows } = await this.pool.query<ReleaseRow>(
       `SELECT fingerprint, compat_payload FROM llm_catalog_releases
@@ -229,7 +264,13 @@ export class CatalogRolloutService {
       nextLibrary,
     );
 
-    // 4. Enqueue the LLM push task.
+    // 4. Compute batch metadata.
+    const batchSize = params.batchSize ?? 0;
+    const batchTotal = batchSize > 0
+      ? Math.ceil(targetTenantIds.length / batchSize)
+      : 0;
+
+    // 5. Enqueue the LLM push task with batch metadata.
     const pushResult = await enqueueLlmPush(this.pool, {
       kind: params.scopeType === 'single' ? 'tenant_push' : 'global_push',
       scope: params.scopeType === 'single' ? targetTenantIds[0] ?? null : null,
@@ -241,9 +282,30 @@ export class CatalogRolloutService {
       releaseId: params.releaseId,
       scopeType: params.scopeType,
       idempotencyKey: params.idempotencyKey,
+      batchSize,
+      batchTotal,
+      batchIntervalMs: params.batchIntervalMs ?? 0,
+      autoPauseThresholds: params.autoPauseThresholds,
     });
 
-    // 5. Initialise per-tenant desired release status.
+    // 6. Pre-enumerate items with batch metadata when batching is enabled.
+    //    This bypasses the worker's default enumerateTargets (which would
+    //    insert all items as a single unbatched wave).
+    if (batchSize > 0 && targetTenantIds.length > 0) {
+      await this.enqueueBatchedItems(
+        pushResult.taskId,
+        targetTenantIds,
+        batchSize,
+      );
+      // Set total_count since we pre-enumerated (worker won't re-enumerate
+      // because countItems > 0).
+      await this.pool.query(
+        `UPDATE llm_push_tasks SET total_count = $1 WHERE id = $2`,
+        [targetTenantIds.length, pushResult.taskId],
+      );
+    }
+
+    // 7. Initialise per-tenant desired release status.
     if (targetTenantIds.length > 0) {
       await this.initTenantReleaseStatus(params.releaseId, targetTenantIds);
     }
@@ -317,6 +379,43 @@ export class CatalogRolloutService {
          updated_at = NOW()`,
       [releaseId, ...tenantIds],
     );
+  }
+
+  /**
+   * Pre-enumerate push task items with per-batch metadata. The first batch is
+   * inserted with batch_status='pending' (immediately claimable by the
+   * worker); subsequent batches are 'paused' and promoted one at a time after
+   * auto-pause threshold evaluation. Bypasses the worker's default
+   * enumerateTargets.
+   */
+  private async enqueueBatchedItems(
+    taskId: string,
+    tenantIds: string[],
+    batchSize: number,
+  ): Promise<void> {
+    // Split tenant list into batches.
+    const batches: string[][] = [];
+    for (let i = 0; i < tenantIds.length; i += batchSize) {
+      batches.push(tenantIds.slice(i, i + batchSize));
+    }
+    const batchTotal = batches.length;
+
+    for (let batchIndex = 0; batchIndex < batchTotal; batchIndex++) {
+      const batchTenants = batches[batchIndex];
+      const batchStatus = batchIndex === 0 ? 'pending' : 'paused';
+      const n = batchTenants.length;
+      // Param layout: $1=task_id, $2..$(n+1)=tenant_ids,
+      //               $(n+2)=batch_index, $(n+3)=batch_total, $(n+4)=batch_status
+      const values = batchTenants
+        .map((_, i) => `($1, $${i + 2}, $${n + 2}, $${n + 3}, $${n + 4})`)
+        .join(', ');
+      await this.pool.query(
+        `INSERT INTO llm_push_task_items
+           (task_id, tenant_id, batch_index, batch_total, batch_status)
+         VALUES ${values}`,
+        [taskId, ...batchTenants, batchIndex, batchTotal, batchStatus],
+      );
+    }
   }
 
   /**
