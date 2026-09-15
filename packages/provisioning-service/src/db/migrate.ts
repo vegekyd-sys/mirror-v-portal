@@ -348,6 +348,9 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         started_at            TIMESTAMPTZ,
         finished_at           TIMESTAMPTZ
       );
+      -- 存量库回填：rollout_batch_tasks 若先于 scope 列建表（旧版本），须先补列——
+      -- 必须放在下方唯一索引引用 scope 之前执行，否则存量库会报 column "scope" does not exist。
+      ALTER TABLE rollout_batch_tasks ADD COLUMN IF NOT EXISTS scope TEXT;
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_status ON rollout_batch_tasks(status, created_at);
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_created ON rollout_batch_tasks(created_at DESC);
       -- 幂等入队去重：一个 service+image（全量，scope IS NULL）同一时刻只允许
@@ -356,9 +359,6 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS rollout_batch_tasks_active_uq
         ON rollout_batch_tasks(service, image)
         WHERE status IN ('pending','running') AND scope IS NULL;
-      -- 存量库回填：rollout_batch_tasks 若先于 scope 列建表，需补列并重建上面
-      -- 那个唯一索引（旧定义缺 scope IS NULL，会错误地去重单租户 pin）。
-      ALTER TABLE rollout_batch_tasks ADD COLUMN IF NOT EXISTS scope TEXT;
       DO $$ 
       DECLARE v_def TEXT;
       BEGIN
