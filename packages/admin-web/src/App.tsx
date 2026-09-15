@@ -16,6 +16,7 @@ import LlmProvidersPage from './pages/LlmProvidersPage';
 import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import LlmPushTasksPage from './pages/LlmPushTasksPage';
 import RolloutTasksPage from './pages/RolloutTasksPage';
+import CatalogPage from './pages/CatalogPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ChatApiKeysPage from './pages/ChatApiKeysPage';
@@ -55,6 +56,7 @@ export default function App() {
             <Route path="nexus-manager" element={<SystemAgentPage />} />
             <Route path="agents/:tenantId" element={<AgentDetailPage />} />
             <Route path="llm-providers" element={<LlmProvidersPage />} />
+            <Route path="catalog" element={<CatalogPage />} />
             <Route path="llm-token-pricing" element={<LlmTokenPricingPage />} />
             <Route path="llm-push-tasks" element={<LlmPushTasksPage />} />
             <Route path="rollout-tasks" element={<RolloutTasksPage />} />

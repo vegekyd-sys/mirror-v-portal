@@ -6,6 +6,7 @@
 // 附「LLM 用量汇总」卡片：/v1/admin/llm-usage（credits-ledger 聚合，
 // nexus-gateway LLM 出口代理上报的 token 记账）。
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import { IconAlert, IconRefresh } from '../components/icons';
 import LlmPushProgressModal from '../components/LlmPushProgressModal';
@@ -441,6 +442,13 @@ export default function LlmProvidersPage() {
             <IconRefresh /> 刷新
           </button>
         </div>
+      </div>
+      {/* ── 迁移横幅：新管理入口已可用 ── */}
+      <div className="msg msg-warn" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span>新管理入口已可用 — 结构化「模型目录」页面支持 Provider/Model/Policy/Release/Rollout 全流程管理（CAS 并发控制、Release 历史、灰度发布）。</span>
+        <Link to="/catalog" style={{ color: '#b45309', fontWeight: 700, textDecoration: 'underline', whiteSpace: 'nowrap' }}>
+          点击前往 →
+        </Link>
       </div>
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className={`msg ${msgErr ? 'msg-err' : 'msg-ok'}`}>{msg}</div>}
