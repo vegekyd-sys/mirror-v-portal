@@ -76,16 +76,34 @@ python3 work/mio-api/dc_resend_attachments.py --find --company-id <sid> --name q
 python3 work/mio-api/dc_thread_dossier.py --company-id <sid> --buyer <email> --with-paths
 ```
 
-**没落盘 / 对不上时现拉**（提醒卡片只说「有附件」，卡片里不带邮件 id）：
+**现拉前必须先分清是哪条链路**（代理邮箱走 Resend API，个人邮箱走 IMAP，**混用必失败**）：
+
+| 链路 | 怎么认 | 附件在哪 / 怎么取 |
+|------|--------|------------------|
+| **resend 代理邮箱** | 域名是 `dealclaw.io` 及其子域（`mail.` / `bde.` / `send.` …），账号 `provider=resend` / `mailbox_kind=dealclaw_proxy` | 现拉：`--pull --message-id "<邮件id>"`，或用 `--pull --latest` |
+| **个人邮箱** | 163 / QQ / 腾讯企业邮 / gmail / 企业自建域名等，账号 `mailbox_kind=personal` | **收信时 imap_sync 已落盘** → `--find` 查；没有就重收该账号再查 |
+
+拿不准先探一下（不联网）：
 
 ```bash
-# 最近一封带附件的入站（用户说「附件发我」时最常用）
+python3 work/mio-api/dc_resend_attachments.py --route --message-id "<邮件id>"
+```
+
+**现拉 / 取附件**：
+
+```bash
+# 代理邮箱：最近一封带附件的入站（用户说「附件发我」时最常用）
 python3 work/mio-api/dc_resend_attachments.py --pull --latest
-# 知道邮件 id 就拉那一封
+# 代理邮箱：知道邮件 id 就拉那一封
 python3 work/mio-api/dc_resend_attachments.py --pull --message-id "<邮件id>"
+# 个人邮箱：先查已落盘
+python3 work/mio-api/dc_resend_attachments.py --find --message-id "<邮件id>"
+# 个人邮箱：查不到就重收该账号（IMAP），再 --find
+cd work/mio-api && python3 -m email_gateway.cli sync --account-id <账号id>
 ```
 
 `--pull` 只下载 + 落盘 + 写索引，**不外发**；用户要文件时，用当前会话把 `path` 那个文件发出去。
+对个人邮箱用 `--pull` 是错的（Resend 里没有这封）——命令会直接告诉你改走 `sync`，别反复重试。
 
 **怎么读**：拿到 `path` 后直接喂一等工具——PDF/规格书用 `pdf`，图片/logo/产品照用 `image`，
 Excel 用 `python3` + openpyxl。读到的内容并入意图判断（例如对方发来的是询价单，
