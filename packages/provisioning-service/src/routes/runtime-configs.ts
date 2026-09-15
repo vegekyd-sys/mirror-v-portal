@@ -25,6 +25,9 @@ import {
   modelExistsIn,
   visionModelExistsIn,
 } from '../services/llm-providers.js';
+import { TenantSelectionV2Service } from '../services/tenant-selection-v2.js';
+import { legacyRefToModelRowId } from '../services/model-catalog.js';
+import { CatalogRepository } from '../services/model-catalog.js';
 import type { ProvisioningConfig } from '../config.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import { enqueueLlmPush } from '../services/llm-push-task.js';
@@ -698,6 +701,32 @@ export function createRuntimeConfigRoutes(
         },
         statusCode: 200,
       });
+
+      // Selection V2 dual-write: convert legacy refs to stable IDs and write
+      // the V2 row. Non-fatal during the transition period — legacy write has
+      // already succeeded.
+      try {
+        const v2Service = new TenantSelectionV2Service(pool);
+        const currentV2 = await v2Service.getSelection(tenantId);
+        const expectedRev = currentV2?.revision ?? 0;
+        const catalog = await new CatalogRepository(pool).listRuntimeCatalog();
+        await v2Service.updateSelection(
+          tenantId,
+          {
+            defaultModelId: nextDefault ? legacyRefToModelRowId(catalog, nextDefault) : null,
+            imageModelId: nextImage ? legacyRefToModelRowId(catalog, nextImage) : null,
+            compactionModelId: nextCompaction ? legacyRefToModelRowId(catalog, nextCompaction) : null,
+            fallbackModelIds: (nextFallbacks ?? [])
+              .map((ref) => legacyRefToModelRowId(catalog, ref))
+              .filter((id): id is string => id !== null),
+            directMode: nextDirect,
+          },
+          expectedRev,
+          actorFromRequest(req).actor ?? null,
+        );
+      } catch (err) {
+        console.warn('Selection V2 dual-write failed (non-fatal):', err);
+      }
 
       res.json({
         ok: true,

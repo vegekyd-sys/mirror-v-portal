@@ -15,6 +15,7 @@ import {
 } from '../services/model-catalog.js';
 import { CatalogReleaseService } from '../services/catalog-release-service.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
+import { TenantSelectionV2Service } from '../services/tenant-selection-v2.js';
 import { validateConfigValue } from '../services/runtime-config.js';
 import { checkCatalogDrift } from '../services/catalog-drift-detector.js';
 import type { CatalogReleaseRecord, CatalogReleaseView } from '../domain/catalog-release.js';
@@ -124,6 +125,12 @@ export function createModelCatalogRoutes(
   const service = new CatalogService(repository);
   const paramDiscovery = new ModelParamDiscoveryService(pool);
   const releases = releaseService ?? new CatalogReleaseService(pool);
+  // Inject feature flags into the release service for P1-2 catalog projection.
+  if ('setConfig' in releases && typeof (releases as any).setConfig === 'function') {
+    (releases as CatalogReleaseService).setConfig({
+      catalogProjectionFromAuthority: config.catalogProjectionFromAuthority,
+    });
+  }
 
   router.post('/v1/admin/model-catalog/import', async (req, res) => {
     if (config.modelCatalogShadowImport !== true) return disabled(res);
@@ -734,6 +741,131 @@ export function createModelCatalogRoutes(
     } catch (err) {
       console.error('drift-check failed:', err);
       res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // ── Selection V2 endpoints ────────────────────────────────────────────
+  // Stable model row ID selection. GET is controlled by modelCatalogRead;
+  // PUT/POST by modelCatalogParamWrite. These coexist with the legacy
+  // /v1/admin/llm-providers/selection endpoint during the dual-write transition.
+
+  router.get('/v1/admin/model-catalog/tenants/:id/selection', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const v2Service = new TenantSelectionV2Service(pool);
+      const selection = await v2Service.getSelection(req.params.id);
+      if (!selection) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No V2 selection for this tenant' });
+        return;
+      }
+      res.json({ selection });
+    } catch (error) {
+      console.error('selection v2 get failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.put('/v1/admin/model-catalog/tenants/:id/selection', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const input: {
+      defaultModelId?: string | null;
+      imageModelId?: string | null;
+      compactionModelId?: string | null;
+      fallbackModelIds?: string[];
+      directMode?: boolean;
+    } = {};
+    if ('defaultModelId' in body) {
+      input.defaultModelId = typeof body.defaultModelId === 'string' && body.defaultModelId.trim()
+        ? body.defaultModelId.trim() : null;
+    }
+    if ('imageModelId' in body) {
+      input.imageModelId = typeof body.imageModelId === 'string' && body.imageModelId.trim()
+        ? body.imageModelId.trim() : null;
+    }
+    if ('compactionModelId' in body) {
+      input.compactionModelId = typeof body.compactionModelId === 'string' && body.compactionModelId.trim()
+        ? body.compactionModelId.trim() : null;
+    }
+    if ('fallbackModelIds' in body) {
+      if (!Array.isArray(body.fallbackModelIds)) {
+        validationError(res, 'fallbackModelIds must be an array');
+        return;
+      }
+      input.fallbackModelIds = body.fallbackModelIds
+        .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+        .map((id) => id.trim());
+    }
+    if ('directMode' in body) {
+      input.directMode = body.directMode === true;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const v2Service = new TenantSelectionV2Service(pool);
+      const selection = await v2Service.updateSelection(
+        req.params.id,
+        input,
+        expectedRevision,
+        actorType === 'external' ? 'service-token' : actor,
+      );
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.selection-v2.update',
+        method: 'PUT', path: req.path, resourceType: 'llm_tenant_selection_v2',
+        resourceId: req.params.id, tenantId: req.params.id, newValue: selection,
+      });
+      res.json({ selection });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      console.error('selection v2 update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.post('/v1/admin/model-catalog/selection/backfill', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const dryRun = req.body?.dryRun === true;
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const v2Service = new TenantSelectionV2Service(pool);
+      const report = await v2Service.backfillFromLegacy({
+        dryRun,
+        actor: actorType === 'external' ? 'service-token' : actor,
+      });
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.selection-v2.backfill',
+        method: 'POST', path: req.path, resourceType: 'llm_tenant_selection_v2',
+        resourceId: 'batch',
+        newValue: {
+          dryRun,
+          totalTenants: report.totalTenants,
+          migrated: report.migrated,
+          skipped: report.skipped,
+          missing: report.missing,
+          errors: report.errors.length,
+        },
+      });
+      res.json({ report });
+    } catch (error) {
+      console.error('selection v2 backfill failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/selection/compare/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const v2Service = new TenantSelectionV2Service(pool);
+      const comparison = await v2Service.compareSelections(req.params.id);
+      res.json(comparison);
+    } catch (error) {
+      console.error('selection v2 compare failed:', error);
+      internalError(res);
     }
   });
 

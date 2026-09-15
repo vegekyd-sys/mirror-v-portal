@@ -93,6 +93,18 @@ export interface ProvisioningConfig {
    * 开启，**只能在故障应急时短期使用**。
    */
   catalogBreakGlass?: boolean;
+  /**
+   * Selection V2 dual-read：V2 为主读，legacy shadow compare。默认 false
+   * （legacy 为主读），通过 env SELECTION_V2_PRIMARY_READ=true 开启。
+   */
+  selectionV2PrimaryRead?: boolean;
+  /**
+   * Catalog Projection 从 Authority 构建：atomicPublish 在 Release 事务内
+   * 用 buildCatalogSnapshot() 独立构建 snapshot，而非依赖调用方传入。
+   * 默认 false（过渡期仍接受调用方传入的 snapshot），通过 env
+   * CATALOG_PROJECTION_FROM_AUTHORITY=true 开启。
+   */
+  catalogProjectionFromAuthority?: boolean;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -127,5 +139,7 @@ export function loadConfig(): ProvisioningConfig {
     mioBladeAuth: process.env.MIO_BLADE_AUTH || '',
     legacyLlmProvidersReadonly: process.env.LEGACY_LLM_PROVIDERS_READONLY === 'true',
     catalogBreakGlass: process.env.CATALOG_BREAK_GLASS === 'true',
+    selectionV2PrimaryRead: process.env.SELECTION_V2_PRIMARY_READ === 'true',
+    catalogProjectionFromAuthority: process.env.CATALOG_PROJECTION_FROM_AUTHORITY === 'true',
   };
 }

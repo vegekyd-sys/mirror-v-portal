@@ -719,6 +719,25 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       INSERT INTO llm_global_model_policy (id) VALUES ('current') ON CONFLICT DO NOTHING;
     `);
 
+    // ── Selection V2: stable model row IDs instead of legacy refs ────────
+    // Tenant selection stored as stable lpm_ IDs, so provider renames don't
+    // break references. Coexists with the legacy runtime_configs selection
+    // during the dual-write / dual-read transition period.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_tenant_selection_v2 (
+        tenant_id           TEXT NOT NULL,
+        default_model_id    TEXT,
+        image_model_id      TEXT,
+        compaction_model_id TEXT,
+        fallback_model_ids  TEXT[] NOT NULL DEFAULT '{}',
+        direct_mode         BOOLEAN NOT NULL DEFAULT FALSE,
+        revision            BIGINT NOT NULL DEFAULT 0,
+        updated_by          TEXT,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id)
+      );
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

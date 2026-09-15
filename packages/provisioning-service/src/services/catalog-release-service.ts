@@ -23,8 +23,9 @@ import { encryptValue, decryptValue } from './crypto.js';
 import { enqueueLlmPush } from './llm-push-task.js';
 import { upsertRuntimeConfig, validateConfigValue } from './runtime-config.js';
 import { getGlobalLlmProviders, validateLlmProviders, LLM_PROVIDERS_KEY } from './llm-providers.js';
-import { snapshotFingerprint } from './model-catalog.js';
+import { snapshotFingerprint, CatalogRepository, CatalogService } from './model-catalog.js';
 import type { LlmProvidersConfig } from './llm-providers.js';
+import type { ProvisioningConfig } from '../config.js';
 import type {
   CatalogReleaseRecord,
   CatalogReleaseView,
@@ -91,7 +92,19 @@ function rowToTenantStatus(row: Record<string, unknown>): TenantReleaseStatusRec
 }
 
 export class CatalogReleaseService {
+  private config: Pick<ProvisioningConfig, 'catalogProjectionFromAuthority'> | null = null;
+
   constructor(private pool: pg.Pool) {}
+
+  /**
+   * Inject provisioning config for feature-flag-gated behaviour.
+   * When catalogProjectionFromAuthority is true, atomicPublish independently
+   * builds the snapshot from the Catalog Authority rather than trusting the
+   * caller-supplied snapshot.
+   */
+  setConfig(config: Pick<ProvisioningConfig, 'catalogProjectionFromAuthority'>): void {
+    this.config = config;
+  }
 
   /** Get the release_id pointed to by the 'current' pointer. */
   async getCurrentReleaseId(): Promise<string | null> {
@@ -253,11 +266,34 @@ export class CatalogReleaseService {
         return null;
       }
 
+      // P1-2: Catalog Projection from Authority. When the feature flag is on,
+      // atomicPublish independently builds the snapshot from the Catalog
+      // (CatalogService.buildCatalogSnapshot) instead of trusting the
+      // caller-supplied snapshot. The independently-built snapshot's fingerprint
+      // is compared with the caller-supplied fingerprint; a mismatch means the
+      // catalog was edited between preview and publish → transaction rolls back.
+      let effectiveSnapshot = snapshot;
+      let effectiveFingerprint = fingerprint;
+      if (this.config?.catalogProjectionFromAuthority === true) {
+        const catalogRepo = new CatalogRepository(this.pool);
+        const catalogService = new CatalogService(catalogRepo);
+        const authoritySnapshot = await catalogService.buildCatalogSnapshot();
+        const authorityFingerprint = snapshotFingerprint(authoritySnapshot);
+        if (authorityFingerprint !== fingerprint) {
+          await client.query('ROLLBACK');
+          throw new Error(
+            `CATALOG_PROJECTION_MISMATCH: caller fingerprint ${fingerprint} does not match authority fingerprint ${authorityFingerprint}`,
+          );
+        }
+        effectiveSnapshot = authoritySnapshot;
+        effectiveFingerprint = authorityFingerprint;
+      }
+
       // Step 5: Create the immutable Release.
       const releaseId = randomUUID();
       const version = parentVersion + 1;
-      const canonicalSnapshot = encryptValue(JSON.stringify(snapshot));
-      const compatPayload = encryptValue(JSON.stringify(snapshot));
+      const canonicalSnapshot = encryptValue(JSON.stringify(effectiveSnapshot));
+      const compatPayload = encryptValue(JSON.stringify(effectiveSnapshot));
 
       try {
         await client.query(
@@ -272,7 +308,7 @@ export class CatalogReleaseService {
             currentReleaseId,
             canonicalSnapshot,
             compatPayload,
-            fingerprint,
+            effectiveFingerprint,
             parentFingerprint,
             JSON.stringify(diffSummary),
             JSON.stringify(warnings),
@@ -327,7 +363,7 @@ export class CatalogReleaseService {
       }
 
       // Step 9: Upsert runtime_config with the new snapshot.
-      const blob = JSON.stringify(snapshot);
+      const blob = JSON.stringify(effectiveSnapshot);
       validateConfigValue(blob);
       await upsertRuntimeConfig(client, {
         tenantId: null,
@@ -343,7 +379,7 @@ export class CatalogReleaseService {
         scope: null,
         trigger: 'save',
         prevLibrary: lockedPrevious,
-        nextLibrary: snapshot,
+        nextLibrary: effectiveSnapshot,
         actor: actor ?? 'service',
         actorType,
         releaseId,
@@ -359,7 +395,7 @@ export class CatalogReleaseService {
         id: releaseId,
         version,
         parentId: currentReleaseId,
-        fingerprint,
+        fingerprint: effectiveFingerprint,
         parentFingerprint,
         diffSummary,
         warnings,
