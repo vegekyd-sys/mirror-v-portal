@@ -94,3 +94,83 @@ excerpt capped at 200 Unicode characters. Longer bodies end with an ellipsis.
   enabled for a notification test, unrelated personal messages remain
   header-only metadata and never store a body preview.
 - External send requires `--confirmed-by` matching the mailbox owner.
+
+## Lazy default mailbox + send gate (T2)
+
+`email_gateway/provision.py` adds lazy default-mailbox creation and a pre-send
+readiness gate. It starts no service and adds no dependency: address math is
+`naming.py` (T1), persistence is `store.py`.
+
+The account record it writes uses `provider=resend`, `mailbox_kind=dealclaw_proxy`
+and `secret_ref=env:RESEND_API_KEY` (a reference name only, never a secret).
+`is_default` is set only when the tenant has no account yet, so an existing
+self-owned default sender is never displaced.
+
+```bash
+# 触发 A 的可调用入口（线索落池后 / 企业资料就绪后）
+python3 -m email_gateway.cli mailbox-ensure \
+  --enterprise 100000834234 --company-name 'Shenzhen Suntech Tools' \
+  --owner-open-id ou_xxx --notify-target ou_xxx --activate
+
+# 当前就绪度（只读）
+python3 -m email_gateway.cli mailbox-status --enterprise 100000834234
+
+# 触发 B 的可调用入口（发信之前）；未就绪退出码 3
+python3 -m email_gateway.cli send-gate --enterprise 100000834234 \
+  --from-address sales@mail.dealclaw.io
+```
+
+Python API:
+
+```python
+from email_gateway.provision import (
+    ensure_mailbox,         # 幂等；失败抛 ProvisionError 子类
+    try_ensure_mailbox,     # 同上，但永不抛异常（接线层用）
+    check_send_ready,       # 闸门，永不抛异常
+    assert_send_ready,      # 闸门，未就绪抛 SendNotReadyError
+)
+```
+
+`ensure_mailbox(enterprise_id, *, company_name="", brand_name_en="",
+short_name_en="", pinyin_abbr="", slug="", owner_open_id="",
+notify_target="", activate=False, data_dir=None, at=None, max_attempts=8)`
+returns:
+
+| key | meaning |
+| --- | --- |
+| `ok` | always `True` on return (errors raise) |
+| `address` / `email` / `domain` | `suntech-7k3` / `suntech-7k3@mail.dealclaw.io` |
+| `status` | `reserved` until activated, then `active` |
+| `created` / `idempotent` | whether this call reserved the address / hit an existing one |
+| `account_id` / `account_created` | empty + `False` when no owner could be resolved |
+| `notify_target` | binding target actually recorded (`oc_`/`ou_`) |
+| `send_ready` / `routing_ready` / `notify_ready` / `naming_ready` | readiness flags |
+| `blockers` / `reasons` | machine codes + human sentences, same order |
+| `needs_replace` | `True` when the tenant's only address is retired |
+
+Error codes (`ProvisionError.code`): `invalid_input`, `invalid_slug`,
+`address_unavailable`, `account_conflict`, `owner_missing`,
+`send_gate_not_ready`, `internal_error`. CLI exit codes: `0` ok, `1` error,
+`3` gate not ready.
+
+Readiness is three independent checks, all required:
+
+- `naming_ready` — the address is `active` (a `reserved` address is only a hold)
+- `routing_ready` — an enabled account exists and the address can still receive
+- `notify_ready` — a `notify_enabled` `oc_`/`ou_` binding exists on that account
+
+`check_send_ready` only judges mailboxes the naming service has reserved (a
+naming record exists for the local part) — i.e. the default mailboxes T2
+creates. Anything else returns `applicable=False, allowed=True`, so legacy
+`mail.dealclaw.io` accounts and self-owned mailboxes behave exactly as before.
+`DC_MAILBOX_GATE=warn|off` relaxes the gate during rollout; the default is
+`enforce`.
+
+Wirings (both never raise into business code):
+
+- **触发 A** — `dc_ls_store.LeadStore.save_lead` calls
+  `_ensure_default_mailbox` after the lead is persisted (return value unchanged).
+- **触发 B** — `dc_email_send.send_batch` calls the gate before running the
+  sender script; a blocked send returns `success=False, sent=False,
+  code=send_gate_not_ready` and pushes a "未发送" receipt. `dc_pending_send`
+  dispatches through `send_batch`, so the queued path is covered too.

@@ -112,6 +112,79 @@ def _land_outbound_fact(*, from_addr: str, to_list: list[str], subject: str,
               file=sys.stderr)
 
 
+_MANAGED_DOMAIN = "mail.dealclaw.io"
+
+
+def _is_managed_address(address: str) -> bool:
+    """是否 DealClaw 托管邮箱（@mail.dealclaw.io）。闸门异常时决定 fail-closed 还是放行。"""
+    try:
+        from email_gateway.provision import canonical_address
+        return canonical_address(address).endswith("@" + _MANAGED_DOMAIN)
+    except Exception:  # noqa: BLE001
+        # 连规范化都不可用：退回字符串判定，宁可保守
+        return _MANAGED_DOMAIN in str(address or "").lower()
+
+
+def _switch_blocked(enterprise: str) -> dict | None:
+    """发信刹车开关（T8）：``None`` = 放行；dict = 拒绝（平台级 / 租户级）。
+
+    平台级总开关与租户级隔离开关对**自有邮箱和托管邮箱都生效**——额度按租户切，
+    但所有租户共用同一个 ``mail.dealclaw.io`` + 同一个 Provider 账号，坏租户能拖垮
+    整个域，所以这里不按邮箱类型豁免（在发信闸门的 applicable 判定之前）。
+
+    开关读取失败：不阻断 + stderr 响亮告警（有意取舍，见 send_control.blocked_result）。
+    """
+    try:
+        from email_gateway.send_control import blocked_result
+        blocked = blocked_result(enterprise)
+        if blocked is not None:
+            print(f"[dc_email_send] 发信被刹车开关拒绝（{blocked['code']}）：{blocked['reason']}",
+                  file=sys.stderr)
+        return blocked
+    except Exception as e:  # noqa: BLE001 — 开关自身不可用时不得误伤全部发信
+        print("[dc_email_send] 发信刹车开关不可用 → 不阻断发信（保可用性）："
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
+def _preflight_gate(enterprise: str, from_addr: str) -> tuple[dict | None, dict | None]:
+    """发信前置闸门。返回 ``(gate, blocked)``；``blocked`` 非空即拒绝发送。
+
+    - 先判刹车开关（T8，平台级 / 租户级，自有邮箱与托管邮箱都判）；
+    - 正常路径：交给 ``email_gateway.provision.check_send_ready``；自有邮箱
+      ``applicable=False`` → 放行，既有发信行为不变；
+    - 闸门自身异常：**托管邮箱 fail-closed**（拒绝发送，避免回信进黑洞），
+      **自有邮箱不受影响**（放行）。
+    """
+    blocked_switch = _switch_blocked(enterprise)
+    if blocked_switch is not None:
+        return None, blocked_switch
+
+    try:
+        from email_gateway.provision import check_send_ready, gate_blocked_result
+        gate = check_send_ready(enterprise_id=enterprise, from_address=from_addr)
+        if not gate.get("allowed"):
+            return gate, gate_blocked_result(gate)
+        return gate, None
+    except Exception as e:  # noqa: BLE001
+        if _is_managed_address(from_addr):
+            print("[dc_email_send] 发信闸门异常 → 托管邮箱拒绝发送（fail-closed）："
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            return None, {
+                "success": False,
+                "sent": False,
+                "count": 0,
+                "error": ("默认邮箱就绪检查异常，已拒绝发送（托管邮箱 fail-closed）："
+                          f"{type(e).__name__}"),
+                "code": "send_gate_error",
+                "blockers": [f"gate_error:{type(e).__name__}"],
+                "gate": None,
+            }
+        print("[dc_email_send] 发信闸门异常 → 自有邮箱放行（不受影响）："
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        return None, None
+
+
 def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
                html: str = "", text: str = "", cc: list[str] | None = None,
                bcc: list[str] | None = None, receipt_target: str = "",
@@ -125,6 +198,20 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
     if not enterprise:
         # 发送必须带 enterprise，否则不落 send_log、早报查不到发送记录（裸发漏日志根因）
         return {"success": False, "error": "missing enterprise（发送必须带 --enterprise）", "count": 0}
+
+    # ── 发信前置闸门（触发 B）：进入发信流程之前 ──────────────
+    # 只对 DealClaw 托管默认邮箱（mail.dealclaw.io）判定；自有邮箱 applicable=False，
+    # 行为与改动前完全一致。默认 enforce：未就绪拒绝发送，绝不产生「邮件已发出」的假成功。
+    # 托管邮箱 fail-closed、自有邮箱不受影响（2026-09-15 定）
+    gate, blocked = _preflight_gate(enterprise, from_addr)
+    if blocked is not None:
+        if receipt_target:
+            try:
+                from dc_send_receipt import push_receipt
+                push_receipt(receipt_target, f"❌ 邮件未发送（{n} 封）：{blocked['error']}")
+            except Exception:  # noqa: BLE001
+                pass
+        return blocked
 
     script = GS_SCRIPT if channel.upper() == "GS" else FD_SCRIPT
     cmd = ["node", str(script), "--from", from_addr, "--to", ",".join(to_list),
@@ -193,7 +280,8 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
         _land_outbound_fact(from_addr=from_addr, to_list=to_list, subject=subject,
                             resend_id=resend_id, enterprise=enterprise)
 
-    return {"success": success, "count": n, "error": err, "resend_id": resend_id}
+    return {"success": success, "count": n, "error": err, "resend_id": resend_id,
+            "sent": bool(success), "gate": gate}
 
 
 def _cli() -> int:

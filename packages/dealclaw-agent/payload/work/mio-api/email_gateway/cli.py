@@ -8,6 +8,16 @@ from pathlib import Path
 
 from .imap_sync import ImapSynchronizer
 from .providers import PROVIDERS, get_provider
+from .provision import (
+    EXIT_ERROR,
+    EXIT_NOT_READY,
+    EXIT_OK,
+    GATE_MODES,
+    ProvisionError,
+    check_send_ready,
+    ensure_mailbox,
+    mailbox_readiness,
+)
 from .smtp_send import SmtpSender
 from .store import EmailStore
 from .verify import AccountVerifier
@@ -125,6 +135,60 @@ def build_parser() -> argparse.ArgumentParser:
     html_group.add_argument("--html-file")
     send.add_argument("--reply-to")
     send.add_argument("--dry-run", action="store_true")
+
+    # ── 默认邮箱懒创建 + 发信前置闸门（T2：可直接被 skill / 智能体调用）──
+    mb = sub.add_parser("mailbox-ensure", help="幂等懒创建租户默认邮箱")
+    mb.add_argument("--enterprise", default=None)
+    mb.add_argument("--company-name", default="")
+    mb.add_argument("--brand-name-en", default="")
+    mb.add_argument("--short-name-en", default="")
+    mb.add_argument("--pinyin-abbr", default="")
+    mb.add_argument("--slug", default="", help="已解析的地址短名（可选）")
+    mb.add_argument("--owner-open-id", default="")
+    mb.add_argument("--notify-target", default="", help="oc_ 群 / ou_ DM（可选）")
+    mb.add_argument("--activate", action="store_true", help="reserved → active")
+
+    ms = sub.add_parser("mailbox-status", help="默认邮箱发信就绪度")
+    ms.add_argument("--enterprise", default=None)
+    ms.add_argument("--address", default="")
+
+    sg = sub.add_parser("send-gate", help="发信前置闸门检查（未就绪退出码 3）")
+    sg.add_argument("--enterprise", default=None)
+    sg.add_argument("--from-address", required=True)
+    sg.add_argument("--gate-mode", default="", choices=["", *GATE_MODES])
+
+    # ── 发信质量与用量（T7：只读指标入口，人工查看用）──
+    q = sub.add_parser("email-quality", help="发信质量与用量指标（只读：6 指标分渠道 + 退信/投诉率 + 两套账）")
+    q.add_argument("--enterprise", required=True, help="企业 id / slug（必填，租户隔离）")
+    q.add_argument("--start", default="", help="业务日起（YYYY-MM-DD，租户时区，含）")
+    q.add_argument("--end", default="", help="业务日止（YYYY-MM-DD，租户时区，含）")
+    q.add_argument("--tenant", default=None, help="租户 slug（口径/时区解析用）")
+    q.add_argument("--line", action="store_true", help="只打印一行人读摘要")
+    q.add_argument("--provider-cost", action="store_true", help="只打印 Provider 成本账")
+
+    # ── 发信刹车开关 + 阈值告警（T8：平台总开关 / 租户隔离 / 阈值可见）──
+    sws = sub.add_parser("send-switch-status", help="查看发信刹车开关状态（平台 + 各租户）")
+    sws.add_argument("--enterprise", default="", help="只判定该租户（可选）")
+
+    swp = sub.add_parser("send-switch-platform", help="平台级总开关：一键停/恢复全部对外发信")
+    swp.add_argument("--action", required=True, choices=["pause", "resume"])
+    swp.add_argument("--reason", default="", help="停机原因（会写入状态并回显给被拒发信方）")
+    swp.add_argument("--by", default="", help="操作人（谁停的/谁恢复的）")
+
+    swt = sub.add_parser("send-switch-tenant", help="单租户隔离开关：只停/恢复一个 enterprise_id")
+    swt.add_argument("--enterprise", required=True, help="企业 id / slug")
+    swt.add_argument("--action", required=True, choices=["pause", "resume"])
+    swt.add_argument("--reason", default="")
+    swt.add_argument("--by", default="")
+
+    sa = sub.add_parser("send-alerts", help="阈值告警（只告警不熔断；带最小样本量门槛）")
+    sa.add_argument("--enterprise", required=True, help="企业 id / slug（必填，租户隔离）")
+    sa.add_argument("--start", default="", help="业务日起（YYYY-MM-DD，租户时区，含）")
+    sa.add_argument("--end", default="", help="业务日止（YYYY-MM-DD，租户时区，含）")
+    sa.add_argument("--tenant", default=None, help="租户 slug（口径/时区解析用）")
+    sa.add_argument("--line", action="store_true", help="只打印一行人读摘要")
+    sa.add_argument("--notify-target", default="", help="把告警推到 oc_ 群 / ou_ DM（可选）")
+
     return parser
 
 
@@ -212,6 +276,32 @@ def main(argv: list[str] | None = None) -> int:
             print(format_notifications(results))
         else:
             emit(results)
+    elif args.command == "mailbox-ensure":
+        try:
+            emit(ensure_mailbox(
+                args.enterprise or "",
+                company_name=args.company_name,
+                brand_name_en=args.brand_name_en,
+                short_name_en=args.short_name_en,
+                pinyin_abbr=args.pinyin_abbr,
+                slug=args.slug,
+                owner_open_id=args.owner_open_id,
+                notify_target=args.notify_target,
+                activate=args.activate,
+                data_dir=args.data_dir,
+            ))
+        except ProvisionError as exc:
+            emit(exc.as_dict())
+            return EXIT_ERROR
+    elif args.command == "mailbox-status":
+        emit(mailbox_readiness(enterprise_id=args.enterprise or "",
+                               address=args.address, data_dir=args.data_dir))
+    elif args.command == "send-gate":
+        gate = check_send_ready(enterprise_id=args.enterprise or "",
+                                from_address=args.from_address,
+                                mode=args.gate_mode, data_dir=args.data_dir)
+        emit(gate)
+        return EXIT_OK if gate["allowed"] else EXIT_NOT_READY
     elif args.command == "send":
         text = ""
         if args.text_file:
@@ -239,6 +329,48 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
             )
         )
+    elif args.command == "email-quality":
+        from email_metrics.quality_metrics import format_quality_line, metrics_view
+        view = metrics_view(args.enterprise, start=args.start or None, end=args.end or None,
+                            tenant=args.tenant, store=store)
+        if args.provider_cost:
+            emit(view["provider_cost"])
+        elif args.line:
+            print(format_quality_line(view))
+        else:
+            emit(view)
+    elif args.command == "send-switch-status":
+        from email_gateway.send_control import switch_overview
+        emit(switch_overview(args.enterprise, data_dir=args.data_dir))
+    elif args.command == "send-switch-platform":
+        from email_gateway.send_control import set_platform_paused
+        state = set_platform_paused(args.action == "pause", reason=args.reason,
+                                    by=args.by, data_dir=args.data_dir)
+        emit({"ok": True, "scope": "platform", "action": args.action,
+              "paused": bool(state["platform"]["paused"]), "platform": state["platform"],
+              "updated_at": state.get("updated_at", "")})
+    elif args.command == "send-switch-tenant":
+        from email_gateway.send_control import normalize_tenant_id, set_tenant_paused
+        tenant = normalize_tenant_id(args.enterprise)
+        state = set_tenant_paused(args.enterprise, args.action == "pause",
+                                  reason=args.reason, by=args.by, data_dir=args.data_dir)
+        emit({"ok": True, "scope": "tenant", "action": args.action,
+              "enterprise_id": args.enterprise, "tenant_id": tenant,
+              "paused": bool((state.get("tenants") or {}).get(tenant, {}).get("paused")),
+              "tenants": state.get("tenants") or {},
+              "updated_at": state.get("updated_at", "")})
+    elif args.command == "send-alerts":
+        from email_gateway.send_control import alerts_for_tenant, format_alerts_line
+        result = alerts_for_tenant(args.enterprise, start=args.start or None,
+                                   end=args.end or None, tenant=args.tenant,
+                                   data_dir=args.data_dir, store=store)
+        if args.notify_target:
+            from dc_send_receipt import push_receipt
+            result["notify"] = push_receipt(args.notify_target, format_alerts_line(result))
+        if args.line:
+            print(format_alerts_line(result))
+        else:
+            emit(result)
     return 0
 
 
