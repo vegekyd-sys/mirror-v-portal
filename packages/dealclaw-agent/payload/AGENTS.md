@@ -57,7 +57,7 @@ MEMORY.md                # 长期记忆索引
 | 用户意图 | Skill | 做什么 |
 |---------|-------|--------|
 | 发 URL / PDF /「分析这个公司」 | dealclaw-analyze-company | 企业画像 + KB 播种 |
-| 「找买家」/「搜下游」 | dealclaw-find-buyers | 按画像搜买家，质检去重自动入线索池（≤5逐条/>5总结，触发 review 回写）；同行搜→peer-search，通用导入→lead-import |
+| 「找买家」/「搜下游」 | dealclaw-find-buyers | 按画像搜买家，质检去重自动入线索池（交付分批≤10逐条全明细，>10先汇总再补齐，触发 review 回写）；同行搜→peer-search，通用导入→lead-import |
 | 搜索/解锁买家联系方式、询盘商机/商机定时推送、AI猎客权益/点数余额、套餐包订购、定制询盘、企业画像/目标买家画像、启动 AI猎客服务 | dealclaw-ai-hunter | 双源搜买家+服务推介，画像确认硬闸门后启动服务，每日推荐匹配买家商机，解锁联系方式/订包定向投放 |
 | 「看市场」/调研/选品 | dealclaw-market-report | 行业大盘 + 竞争 + 机会 / 选品评分 |
 | 画像纠偏 / 标注 ✅❌ | dealclaw-review | 画像确认/纠偏/偏好晋升（双写 KB） |

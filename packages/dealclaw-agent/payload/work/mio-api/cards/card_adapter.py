@@ -63,6 +63,12 @@ _METRIC_ICON = {
     "找到买家": "🎯",
 }
 
+# 卡片内买家明细的渲染上限。
+# 2026-09-15：原为硬编码 `buyers[:10]`，超过 10 家时**静默丢明细**（现场 49 家事故的同源问题）。
+# 现改为：默认对齐红线「单次交付上限 50 家」，可由 DSL `max_buyers` 覆盖；
+# 万一仍超出上限，也必须显式告知剩余条数，不再静默丢弃。
+MAX_CARD_BUYERS = 50
+
 
 def _step_number(step: str) -> int:
     """从「步骤 2/4」这类文案里解析当前步骤序号，解析不到返回 0。"""
@@ -144,6 +150,8 @@ def render_card(dsl: dict) -> dict:
       links           open_url 按钮 [{text, url}]
       buyers          买家明细列表（可选，终态卡用）：[{name, website, country, need, reason}]，
                       reason 必须是用户可理解的短解释，不含内部评分/权重（红线）
+      max_buyers      卡片内买家明细的渲染上限（可选，默认 MAX_CARD_BUYERS=50，对齐单次交付上限）；
+                      超出上限会显式告知剩余条数，不再静默丢弃明细
       subtitle        顶部灰字（可选，如「出海精灵小元 · 展后线索整理与报告」）
       progress        进度百分比 0-100（可选，渲染进度条）
       actions         通用按钮 [{text, type, url | callback}]：url → open_url，callback → callback
@@ -214,8 +222,12 @@ def render_card(dsl: dict) -> dict:
     # 买家明细（仅终态卡用；reason 必须是用户可理解的短解释，不含内部评分/权重）
     buyers = [b for b in (dsl.get("buyers") or []) if isinstance(b, dict)]
     if buyers:
+        cap = dsl.get("max_buyers")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+            cap = MAX_CARD_BUYERS
+        shown = buyers[:cap]
         elements.append({"tag": "hr"})
-        for i, b in enumerate(buyers[:10], 1):
+        for i, b in enumerate(shown, 1):
             name = str(b.get("name") or "").strip()
             website = str(b.get("website") or "").strip()
             country = str(b.get("country") or "").strip()
@@ -233,6 +245,15 @@ def render_card(dsl: dict) -> dict:
             if reason:
                 lines.append(f"🟢 {reason}")
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}})
+        if len(buyers) > len(shown):
+            # 不再静默丢明细：显式告知剩余条数与去向。
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"… 另有 {len(buyers) - len(shown)} 家未在卡片展开（超出卡片长度上限），完整名单见企业线索池。",
+                },
+            })
 
     # open_url 按钮（links，向后兼容）
     links = [l for l in (dsl.get("links") or []) if isinstance(l, dict) and l.get("url")]

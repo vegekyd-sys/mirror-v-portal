@@ -34,6 +34,9 @@ class CardRenderError(RuntimeError):
 
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+# 单条消息最多渲染的家数（保持既有每条 batch 的卡片体量与校验口径）。
+# 2026-09-15：超过上限不再抛错，改为在渲染器内部切批，产出多条 message，明细不丢。
+MAX_LEADS_PER_MESSAGE = 5
 MAX_FIELD_LENGTHS = {
     "买家公司名称": 120,
     "需求意向": 500,
@@ -203,6 +206,11 @@ def validate_score_consistency(record: dict[str, Any]) -> None:
         raise CardRenderError("匹配动作 is inconsistent with the approved score and core gate")
 
 
+def rank_marker(rank: int) -> str:
+    """序号徽标：前 5 名用奖牌，其余用「N.」——批量交付时序号可能远超 5。"""
+    return MEDALS[rank] if 0 <= rank < len(MEDALS) else f"{rank + 1}."
+
+
 def lead_block(record: dict[str, Any], rank: int) -> dict[str, Any]:
     validate_score_consistency(record)
     company = display_text(record.get("买家公司名称"), "买家公司名称")
@@ -210,7 +218,7 @@ def lead_block(record: dict[str, Any], rank: int) -> dict[str, Any]:
         raise CardRenderError("A pushed lead has no buyer company name")
     reason = recommendation_reason(record)
     lines = [
-        f"{MEDALS[rank]} **买家公司：{escape_lark_md(company)}**    ⭐ **匹配分数：{score(record.get('AI匹配分'), 'AI匹配分')}/100**"
+        f"{rank_marker(rank)} **买家公司：{escape_lark_md(company)}**    ⭐ **匹配分数：{score(record.get('AI匹配分'), 'AI匹配分')}/100**"
     ]
     labels = (
         ("需求意向", "需求意向"),
@@ -238,8 +246,6 @@ def render(payload: Any) -> dict[str, Any]:
     selected = payload.get("selected_lead_ids")
     if not isinstance(selected, list) or not selected:
         raise CardRenderError("selected_lead_ids must be a non-empty array")
-    if len(selected) > 5:
-        raise CardRenderError("At most 5 leads may be rendered per batch")
     selected_ids = [require_text(value, "selected_lead_ids[]") for value in selected]
     if len(set(selected_ids)) != len(selected_ids):
         raise CardRenderError("selected_lead_ids contains duplicates")
@@ -278,62 +284,71 @@ def render(payload: Any) -> dict[str, Any]:
     rank_by_id = {lead_id: index for index, lead_id in enumerate(selected_ids)}
     for country in country_order:
         country_records = grouped[country]
-        elements = []
-        for index, record in enumerate(country_records):
-            if index:
-                elements.append({"tag": "hr"})
-            elements.append(lead_block(record, rank_by_id[record["线索ID"]]))
-        elements.extend(
-            [
-                {"tag": "hr"},
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            "📊 **企业线索池：**\n"
-                            f"[{base_url}]({base_url})\n\n"
-                            "💬 请在企业线索池中标记每条线索的匹配结果"
-                            "（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。\n\n"
-                            "🔓 需要买家联系方式？在企业线索池把该线索的「是否解锁」改为「已解锁」，"
-                            "或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。"
-                        ),
+        # 同一国家内再按 ≤MAX_LEADS_PER_MESSAGE 切批：明细全部发出，不抛错、不丢条。
+        # batch_id 仍是整批（delivery + 全部 selected_lead_ids + 日期）的哈希，幂等语义不变；
+        # 每条 message 的 lead_ids 只覆盖自己那一段，便于回执与幂等去重。
+        chunks = [country_records[i:i + MAX_LEADS_PER_MESSAGE]
+                  for i in range(0, len(country_records), MAX_LEADS_PER_MESSAGE)]
+        for part, chunk in enumerate(chunks, 1):
+            elements = []
+            for index, record in enumerate(chunk):
+                if index:
+                    elements.append({"tag": "hr"})
+                elements.append(lead_block(record, rank_by_id[record["线索ID"]]))
+            elements.extend(
+                [
+                    {"tag": "hr"},
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": (
+                                "📊 **企业线索池：**\n"
+                                f"[{base_url}]({base_url})\n\n"
+                                "💬 请在企业线索池中标记每条线索的匹配结果"
+                                "（待确认/✅匹配/❌不匹配），系统将根据你的反馈优化后续推送。\n\n"
+                                "🔓 需要买家联系方式？在企业线索池把该线索的「是否解锁」改为「已解锁」，"
+                                "或在本群回复「解锁线索 线索ID」，系统会把该买家的联系方式推送到本群。"
+                            ),
+                        },
+                    },
+                    {
+                        "tag": "action",
+                        "actions": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "📊 打开企业线索池"},
+                                "type": "primary",
+                                "url": base_url,
+                            }
+                        ],
+                    },
+                ]
+            )
+            title = f"AI猎客｜来自{country}买家的采购机会"
+            if len(chunks) > 1:
+                title += f"（{part}/{len(chunks)}）"
+            card = {
+                "config": {"wide_screen_mode": True, "enable_forward": False},
+                "header": {
+                    "template": "blue",
+                    "title": {
+                        "tag": "plain_text",
+                        "content": title,
                     },
                 },
-                {
-                    "tag": "action",
-                    "actions": [
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "📊 打开企业线索池"},
-                            "type": "primary",
-                            "url": base_url,
-                        }
-                    ],
-                },
-            ]
-        )
-        card = {
-            "config": {"wide_screen_mode": True, "enable_forward": False},
-            "header": {
-                "template": "blue",
-                "title": {
-                    "tag": "plain_text",
-                    "content": f"AI猎客｜来自{country}买家的采购机会",
-                },
-            },
-            "elements": elements,
-        }
-        messages.append(
-            {
-                "receive_id_type": "chat_id",
-                "receive_id": proof["chat_id"],
-                "msg_type": "interactive",
-                "card": card,
-                "lead_ids": [record["线索ID"] for record in country_records],
-                "batch_id": batch_id,
+                "elements": elements,
             }
-        )
+            messages.append(
+                {
+                    "receive_id_type": "chat_id",
+                    "receive_id": proof["chat_id"],
+                    "msg_type": "interactive",
+                    "card": card,
+                    "lead_ids": [record["线索ID"] for record in chunk],
+                    "batch_id": batch_id,
+                }
+            )
     return {
         "chat_id": proof["chat_id"],
         "delivery_id": proof["delivery_id"],
@@ -380,6 +395,25 @@ def fixture() -> dict[str, Any]:
     }
 
 
+def many_leads_fixture(count: int) -> dict[str, Any]:
+    """N 家（同一国家）的合法交付输入：用于验证批量切批不丢明细。"""
+    if count < 1:
+        raise ValueError("count must be >= 1")
+    payload = fixture()
+    records = payload["delivery"]["pipeline_result"]["records"]
+    base = records[0]
+    selected_ids = []
+    for index in range(1, count + 1):
+        record = json.loads(json.dumps(base, ensure_ascii=False)) if index > 1 else base
+        record["线索ID"] = f"lead-{index}"
+        record["买家公司名称"] = f"批量买家{index}"
+        if index > 1:
+            records.append(record)
+        selected_ids.append(record["线索ID"])
+    payload["selected_lead_ids"] = selected_ids
+    return payload
+
+
 def self_test() -> None:
     result = render(fixture())
     assert result["message_count"] == 1 and result["lead_count"] == 1
@@ -420,6 +454,29 @@ def self_test() -> None:
     only_second = json.loads(json.dumps(two_leads, ensure_ascii=False))
     only_second["selected_lead_ids"] = ["lead-2"]
     assert render(only_second)["batch_id"] != result["batch_id"]
+
+    # ── 批量切批：>5 家不再抛错，内部按 ≤MAX_LEADS_PER_MESSAGE 产出多条 message，明细不丢 ──
+    for count, expected_messages in ((5, 1), (6, 2), (10, 2), (12, 3), (49, 10)):
+        batch = render(many_leads_fixture(count))
+        assert batch["lead_count"] == count, count
+        assert batch["message_count"] == expected_messages, (count, batch["message_count"])
+        delivered = [lead_id for message in batch["messages"] for lead_id in message["lead_ids"]]
+        assert delivered == [f"lead-{index}" for index in range(1, count + 1)], count
+        assert all(len(message["lead_ids"]) <= MAX_LEADS_PER_MESSAGE for message in batch["messages"])
+        assert all(message["batch_id"] == batch["batch_id"] for message in batch["messages"])
+        encoded_batch = json.dumps(batch, ensure_ascii=False)
+        for index in range(1, count + 1):
+            assert f"批量买家{index}" in encoded_batch, (count, index)
+        assert "未逐条" not in encoded_batch and "其余" not in encoded_batch
+    twelve = render(many_leads_fixture(12))
+    assert "12." in json.dumps(twelve["messages"][-1]["card"], ensure_ascii=False)
+    assert "🥇" in json.dumps(twelve["messages"][0]["card"], ensure_ascii=False)
+    single_country_parts = [m["card"]["header"]["title"]["content"] for m in twelve["messages"]]
+    assert single_country_parts == [
+        "AI猎客｜来自巴西买家的采购机会（1/3）",
+        "AI猎客｜来自巴西买家的采购机会（2/3）",
+        "AI猎客｜来自巴西买家的采购机会（3/3）",
+    ]
 
     unsafe = []
     wrong_url = fixture()

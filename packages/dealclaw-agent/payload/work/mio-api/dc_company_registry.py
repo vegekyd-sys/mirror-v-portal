@@ -42,10 +42,12 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "来源",     "type": "select", "multiple": False, "options": [
         {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
-        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"}]},
+        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"},
+        {"name": "展中推荐"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [
         {"name": "待触达"}, {"name": "已触达"}, {"name": "已回复"},
-        {"name": "报价中"}, {"name": "成交"}, {"name": "停止触达"}]},
+        {"name": "报价中"}, {"name": "成交"}, {"name": "停止触达"},
+        {"name": "现场对接中"}]},
     {"name": "跟进优先级", "type": "select", "multiple": False, "options": [
         {"name": "优先跟进"}, {"name": "普通跟进"}, {"name": "长期培育"}]},
     {"name": "优先级理由", "type": "text"},
@@ -71,6 +73,12 @@ EXPECTED_FIELD_NAMES = {
 
 # 搜索程序拥有的字段（update 时只允许写这些）；其余为用户手工维护，禁止覆盖。
 SEARCH_OWNED_FIELDS = ("公司名", "官网", "公司CDPID", "国家", "来源")
+
+# 展会维度线索池（每届展会一个独立池，与企业主池分开）
+EXHIBITION_POOL_SCOPE = "exhibition"
+EXHIBITION_POOL_NAME_SUFFIX = "｜展中推荐"
+EXHIBITION_POOL_SOURCE = "展中推荐"
+EXHIBITION_POOL_STAGE = "现场对接中"
 
 
 def _now():
@@ -222,6 +230,95 @@ def _get_field_map(app_token: str, table_id: str) -> Dict[str, str]:
     return field_map
 
 
+def _extract_field(result: dict) -> Optional[dict]:
+    """从 +field-get 响应里取出字段定义（兼容 field / fields[] / items[] 三种包法）。"""
+    data = result.get("data") or {}
+    for key in ("field", "fields", "items"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            return value[0]
+    return None
+
+
+def _field_options(field: dict):
+    """取字段的选项列表（兼容 options 直给与 property.options 两种形态）。"""
+    prop = field.get("property") if isinstance(field.get("property"), dict) else {}
+    options = field.get("options")
+    if options is None:
+        options = prop.get("options")
+    return options if isinstance(options, list) else None
+
+
+def ensure_select_options(
+    app_token: str,
+    table_id: str,
+    field_name: str,
+    options: list,
+) -> Dict:
+    """确保 select 字段包含给定选项，缺则补齐；已全有则**不做任何写操作**。
+
+    为什么要它：来源/阶段是 select 字段，选项之外的值写不进飞书。
+    「展中推荐」「现场对接中」是新增口径，老池/按标题找回的池可能没有这两个选项，
+    不补就会在写记录时失败（而失败不能变成静默丢线索）。
+
+    读到的字段定义无法识别（非 select / 结构变化）→ 抛 BitableResponseParseError，
+    绝不拿残缺定义去 PUT 覆盖字段（那会把既有选项删掉）。
+    返回 {"added": [...], "updated": bool}
+    """
+    wanted = [str(o).strip() for o in (options or []) if str(o).strip()]
+    if not wanted:
+        return {"added": [], "updated": False}
+
+    result = _run_lark(
+        "base", "+field-get",
+        "--base-token", app_token,
+        "--table-id", table_id,
+        "--field-id", field_name,
+        "--as", "bot",
+    )
+    field = _extract_field(result)
+    if field is None:
+        raise BitableResponseParseError(
+            f"field-get 响应无法识别: {_sanitize_response(result)}")
+
+    existing_options = _field_options(field)
+    if existing_options is None:
+        raise BitableResponseParseError(
+            f"字段 {field_name} 的选项无法识别（非 select / 结构变化）: "
+            f"{_sanitize_response(field)}")
+
+    names = []
+    for option in existing_options:
+        name = option.get("name") if isinstance(option, dict) else str(option)
+        names.append(str(name or "").strip())
+    missing = [o for o in wanted if o not in names]
+    if not missing:
+        return {"added": [], "updated": False}
+
+    prop = field.get("property") if isinstance(field.get("property"), dict) else {}
+    multiple = field.get("multiple")
+    if multiple is None:
+        multiple = prop.get("multiple", False)
+    definition = {
+        "name": field.get("name") or field_name,
+        "type": field.get("type") or "select",
+        "multiple": bool(multiple),
+        "options": list(existing_options) + [{"name": o} for o in missing],
+    }
+    _run_lark(
+        "base", "+field-update",
+        "--base-token", app_token,
+        "--table-id", table_id,
+        "--field-id", field_name,
+        "--json", json.dumps(definition, ensure_ascii=False),
+        "--yes",
+        "--as", "bot",
+    )
+    return {"added": missing, "updated": True}
+
+
 # ── 本地注册表（企业 → Bitable 映射）──
 
 class CompanyRegistry:
@@ -239,25 +336,25 @@ class CompanyRegistry:
     def _save(self):
         REGISTRY_FILE.write_text(json.dumps(self._entries, ensure_ascii=False, indent=2))
 
-    def get(self, company_id: str) -> Optional[Dict]:
+    def get(self, company_id: str, *, canonical: bool = True) -> Optional[Dict]:
         raw = (company_id or "").strip()
-        canonical = canonical_company_id(raw)
-        return self._entries.get(canonical) or self._entries.get(raw)
+        canonical_key = canonical_company_id(raw) if canonical else raw
+        return self._entries.get(canonical_key) or self._entries.get(raw)
 
-    def set(self, company_id: str, info: Dict):
-        company_id = canonical_company_id(company_id)
-        if not company_id:
+    def set(self, company_id: str, info: Dict, *, canonical: bool = True):
+        key = canonical_company_id(company_id) if canonical else (company_id or "").strip()
+        if not key:
             raise ValueError("company_id 不能为空")
-        self._entries[company_id] = info
+        self._entries[key] = info
         self._save()
 
     def list_all(self):
         return dict(self._entries)
 
-    def remove(self, company_id: str):
+    def remove(self, company_id: str, *, canonical: bool = True):
         raw = (company_id or "").strip()
-        canonical = canonical_company_id(raw)
-        keys = [k for k in {raw, canonical} if k and k in self._entries]
+        key = canonical_company_id(raw) if canonical else raw
+        keys = [k for k in {raw, key} if k and k in self._entries]
         if keys:
             for key in keys:
                 del self._entries[key]
@@ -309,14 +406,19 @@ def ensure_company_lead_pool(
     company_id: str,
     company_name: str,
     chat_id: Optional[str] = None,
+    *,
+    canonicalize_id: bool = True,
 ) -> Dict:
     """
     确保企业线索池存在。新建时可选授权群成员。
 
     参数:
       company_id:   企业唯一标识
-      company_name: 企业展示名
+      company_name: 企业展示名（Base 标题 = 本名 + 「线索池」）
       chat_id:      可选，飞书群 chat_id。新建 base 后自动给群成员授权
+      canonicalize_id: 是否把 company_id 经 canonical_company_id 归一。
+                   展会维度池（`company_id::exhibition::<id>`）必须传 False，
+                   否则会被折叠成租户 supplier_id，与企业主池撞键。
 
     返回格式与 v1 完全兼容:
       {
@@ -335,7 +437,7 @@ def ensure_company_lead_pool(
     registry = CompanyRegistry()
 
     # 1. 查注册表
-    existing = registry.get(company_id)
+    existing = registry.get(company_id, canonical=canonicalize_id)
     if existing:
         fm = existing.get("field_map", {})
         if EXPECTED_FIELD_NAMES.issubset(set(fm.keys())):
@@ -352,7 +454,7 @@ def ensure_company_lead_pool(
         try:
             fresh_map = _get_field_map(existing["app_token"], existing["table_id"])
             existing["field_map"] = fresh_map
-            registry.set(company_id, existing)
+            registry.set(company_id, existing, canonical=canonicalize_id)
             return {
                 "app_token": existing["app_token"],
                 "table_id": existing["table_id"],
@@ -379,7 +481,7 @@ def ensure_company_lead_pool(
             "created_at": _now(),
             "updated_at": _now(),
         }
-        registry.set(company_id, entry)
+        registry.set(company_id, entry, canonical=canonicalize_id)
         return {**entry, "created": False, "recovered": True}
 
     # 2. 创建新线索池（lark-cli base 一步搞定：建 base + 建表 + 建全部字段）
@@ -400,7 +502,7 @@ def ensure_company_lead_pool(
         "updated_at": _now(),
         "bitable_url": f"https://versa-ai.feishu.cn/base/{app_token}?table={table_id}",
     }
-    registry.set(company_id, entry)
+    registry.set(company_id, entry, canonical=canonicalize_id)
 
     result = {
         "app_token": app_token,
@@ -416,6 +518,58 @@ def ensure_company_lead_pool(
         result["group_access"] = access
 
     return result
+
+
+# ── 展会维度线索池（每届展会一个独立池）──
+
+def exhibition_pool_key(company_id: str, exhibition_id: str) -> str:
+    """展会线索池的注册表键：绝不与企业主池共用键。
+
+    不用裸 company_id 的原因：CompanyRegistry 会把非数字键经 canonical_company_id
+    归一到当前租户 supplier_id；裸 company_id 会让「展会池」与企业主池撞成同一个键，
+    展中推荐就会被写进企业主池（客户明确要求分开）。
+    """
+    cid = str(company_id or "").strip()
+    eid = str(exhibition_id or "").strip()
+    if not cid or not eid:
+        raise ValueError("exhibition_pool_key 需要 company_id 与 exhibition_id")
+    return f"{cid}::{EXHIBITION_POOL_SCOPE}::{eid}"
+
+
+def exhibition_pool_name(exhibition_name: str, exhibition_id: str = "") -> str:
+    """展会线索池展示名；Base 标题 = 本名 + 「线索池」（沿用 _create_bitable 约定）。"""
+    name = str(exhibition_name or "").strip() or str(exhibition_id or "").strip()
+    if not name:
+        raise ValueError("exhibition_pool_name 需要展会名或展会 ID")
+    return f"{name}{EXHIBITION_POOL_NAME_SUFFIX}"
+
+
+def exhibition_pool_title(exhibition_name: str, exhibition_id: str = "") -> str:
+    """Base 标题（与 _create_bitable / _discover_existing_lead_pool 的拼法保持一致）。"""
+    return f"{exhibition_pool_name(exhibition_name, exhibition_id)}线索池"
+
+
+def ensure_exhibition_lead_pool(
+    company_id: str,
+    exhibition_id: str,
+    exhibition_name: str = "",
+    chat_id: Optional[str] = None,
+) -> Dict:
+    """确保「本届展会」的独立线索池存在（幂等）。不复用企业主池。
+
+    - 注册表键：`<company_id>::exhibition::<exhibition_id>`（绕过 canonical 折叠）
+    - Base 标题：`<展会名>｜展中推荐线索池`
+    - 表结构：沿用企业线索池 v4 schema（字段一致，两张表互不影响）
+    - 幂等：注册表命中就直接复用；注册表被清后按标题回查恢复，不另建空池
+    """
+    key = exhibition_pool_key(company_id, exhibition_id)
+    name = exhibition_pool_name(exhibition_name, exhibition_id)
+    pool = ensure_company_lead_pool(key, name, chat_id=chat_id, canonicalize_id=False)
+    pool["scope"] = EXHIBITION_POOL_SCOPE
+    pool["exhibition_id"] = str(exhibition_id or "").strip()
+    pool["exhibition_name"] = str(exhibition_name or "").strip()
+    pool["title"] = exhibition_pool_title(exhibition_name, exhibition_id)
+    return pool
 
 
 def _normalize_key(value: str) -> str:
@@ -569,16 +723,28 @@ def parse_record_list(response: dict) -> list:
 
 
 def _record_fields(record: dict, source: str) -> dict:
-    """把搜索结果映射为线索池 v4 字段。"""
-    company = record.get("companyName") or record.get("company_name") or record.get("name") or ""
-    website = record.get("website") or record.get("domain") or record.get("url") or ""
-    cdp_id = record.get("companyCdpId") or record.get("company_cdp_id") or record.get("cdpId") or ""
-    country = record.get("countryCnName") or record.get("country") or ""
+    """把搜索结果 / 池原生记录映射为线索池 v4 字段。
+
+    两种入参都支持：
+      1. 搜索/接口原始字段（companyName/website/companyCdpId/...）；
+      2. 已是线索池字段名的记录（公司名/官网/公司CDPID/...，如展中推荐落池）。
+    池原生字段只在原始字段缺失时兑底，不改动既有映射优先级。
+    """
+    company = (record.get("companyName") or record.get("company_name")
+               or record.get("name") or record.get("公司名") or "")
+    website = (record.get("website") or record.get("domain") or record.get("url")
+               or record.get("官网") or "")
+    cdp_id = (record.get("companyCdpId") or record.get("company_cdp_id")
+              or record.get("cdpId") or record.get("companyCdpid")
+              or record.get("公司CDPID") or "")
+    country = (record.get("countryCnName") or record.get("country")
+               or record.get("国家") or "")
     profile = (
         record.get("companyProfile")
         or record.get("briefInfo")
         or record.get("买家公司简介")
         or record.get("company_profile")
+        or record.get("公司简介")
         or ""
     )
 
@@ -604,6 +770,9 @@ def _record_fields(record: dict, source: str) -> dict:
             buyer_type = "经销商"; break
         if any(k in text for k in ("工程", "安装", "project", "installer")):
             buyer_type = "工程商"; break
+    if not buyer_type:
+        # 池原生入参：调用方已按池枚举（品牌商/制造商/经销商/工程商）映射好
+        buyer_type = str(record.get("买家类型") or "").strip()
 
     # 匹配产品：字段名兜底
     tags = (
@@ -612,6 +781,7 @@ def _record_fields(record: dict, source: str) -> dict:
         or record.get("products")
         or record.get("productList")
         or record.get("关注产品")
+        or record.get("匹配产品")
         or []
     )
     if isinstance(tags, str):
@@ -626,6 +796,7 @@ def _record_fields(record: dict, source: str) -> dict:
         record.get("recommendation")
         or record.get("recommendation_reason")
         or record.get("ai_match_reason")
+        or record.get("推荐理由")
         or ""
     )
 
@@ -644,6 +815,11 @@ def _record_fields(record: dict, source: str) -> dict:
         fields["买家类型"] = buyer_type
     if products:
         fields["匹配产品"] = products[:20]
+    # 阶段：调用方显式给了就照用（如展中推荐「现场对接中」）；没给由 sync 默认「待触达」。
+    # 注：阶段不在 SEARCH_OWNED_FIELDS 里 → 后续 update 不会覆盖用户在表里手改的阶段。
+    stage = str(record.get("阶段") or "").strip()
+    if stage:
+        fields["阶段"] = stage
     # 字段缺失时标空原因，避免静默跳过（全局可观测）
     _missing = []
     if not buyer_type:
@@ -723,15 +899,17 @@ def _existing_record_index(app_token: str, table_id: str) -> dict:
     return index
 
 
-def sync_leads_to_pool(
-    company_id: str,
-    company_name: str,
+def sync_records_to_pool(
+    app_token: str,
+    table_id: str,
     records: list,
     *,
     source: str = "引擎搜索",
-    chat_id: Optional[str] = None,
+    ensure_select_values: Optional[Dict[str, list]] = None,
 ) -> Dict:
-    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。
+    """把最终展示的线索幂等写入**已存在的**线索池表；返回写入统计与池坐标。
+
+    企业主池与展会池共用这一条写路径（避免两套写入逻辑各自漂移）。
 
     幂等键优先级：公司CDPID > normalized_domain；公司名仅辅助，不单独覆盖。
     created > 0 但解析不到 record_id 时，先按稳定唯一键只读回查恢复；
@@ -739,10 +917,16 @@ def sync_leads_to_pool(
 
     关键字段（公司CDPID / 官网 / 公司名）全缺的记录**报错不静默丢**：
     静默 skip 会让「抓到了但没落库」变成不可观测的数据丢失，必须先修上游。
+
+    ensure_select_values: {字段名: [选项...]}；写记录前先确保这些 select 选项存在
+    （缺则补，已全有则零写操作）。
+
+    返回：created / updated / skipped / duplicates（同批重复只落第一条，计数不静默）+ 池坐标。
     """
-    pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
-    app_token = pool["app_token"]
-    table_id = pool["table_id"]
+    if ensure_select_values:
+        # select 字段的选项必须先存在，否则选项外的值写不进飞书（老池/找回的池尤其要注意）
+        for field_name, options in ensure_select_values.items():
+            ensure_select_options(app_token, table_id, field_name, options)
 
     # 单次读表：建匹配索引 + 保留现有字段（用于 diff）
     index = {}
@@ -766,7 +950,9 @@ def sync_leads_to_pool(
     creates = []
     updates = []   # (record_id, 仅变化字段) — 最小字段更新
     skipped = 0
+    duplicates = 0
     unique_keys = []
+    seen_in_batch: dict = {}   # 同批已见键（cdp/域名）——同批重复只落第一条
     for idx, record in enumerate(records or []):
         fields = _record_fields(record, source)
         cdp_key = _normalize_key(fields.get("公司CDPID", ""))
@@ -781,6 +967,17 @@ def sync_leads_to_pool(
             raise ValueError(
                 "线索记录缺少全部关键字段（公司CDPID / 官网 / 公司名），拒绝静默丢弃："
                 f"records[{idx}] 可用字段={sorted(k for k in (record or {}))}")
+        # 同一批内重复（同 CDPID / 同域名）只落第一条：不重复建同一条线索。
+        # 公司名不作为同批去重键（与全局幂等键优先级一致）。
+        seen_keys = [k for k in (
+            f"cdp:{cdp_key}" if cdp_key else "",
+            f"website:{website_key}" if website_key else "",
+        ) if k]
+        if any(k in seen_in_batch for k in seen_keys):
+            duplicates += 1
+            continue
+        for k in seen_keys:
+            seen_in_batch[k] = idx
         # 仅用 cdp / domain 判断是否 upsert；公司名不作为覆盖依据
         record_id = (index.get(f"cdp:{cdp_key}")
                      or index.get(f"website:{website_key}"))
@@ -836,14 +1033,68 @@ def sync_leads_to_pool(
         "created": len(creates),
         "updated": len(updates),
         "skipped": skipped,
+        "duplicates": duplicates,
         "record_ids": [x for x in created_ids if x],
         "updated_record_ids": [rid for rid, _ in updates],
         "unique_keys": unique_keys,
         "response_schema_version": "lark-cli-1.0.85-columnar",
         "app_token": app_token,
         "table_id": table_id,
-        "bitable_url": pool["bitable_url"],
     }
+
+
+def sync_leads_to_pool(
+    company_id: str,
+    company_name: str,
+    records: list,
+    *,
+    source: str = "引擎搜索",
+    chat_id: Optional[str] = None,
+) -> Dict:
+    """确保企业线索池存在，将最终展示的搜索结果幂等写入，并返回链接。
+
+    幂等键优先级：公司CDPID > normalized_domain；公司名仅辅助，不单独覆盖。
+    写路径复用 sync_records_to_pool。
+    """
+    pool = ensure_company_lead_pool(company_id, company_name, chat_id=chat_id)
+    out = sync_records_to_pool(pool["app_token"], pool["table_id"], records, source=source)
+    out["bitable_url"] = pool["bitable_url"]
+    return out
+
+
+def sync_exhibition_leads_to_pool(
+    company_id: str,
+    exhibition_id: str,
+    records: list,
+    *,
+    exhibition_name: str = "",
+    source: str = EXHIBITION_POOL_SOURCE,
+    stage: str = EXHIBITION_POOL_STAGE,
+    chat_id: Optional[str] = None,
+) -> Dict:
+    """展中推荐落池：**每届展会一个独立池**，来源默认「展中推荐」、阶段默认「现场对接中」。
+
+    - 池：ensure_exhibition_lead_pool（与企业主池分开，幂等）
+    - 写：sync_records_to_pool（同样的公司名/官网幂等去重，不重复建、不重复写）
+    - 选项自愈：来源/阶段这两个 select 值先确保在字段选项里（老池可能没有）
+    - 返回额外带 scope/exhibition_id/exhibition_name/title/bitable_url 供汇总气泡给入口
+    """
+    pool = ensure_exhibition_lead_pool(
+        company_id, exhibition_id, exhibition_name=exhibition_name, chat_id=chat_id
+    )
+    out = sync_records_to_pool(
+        pool["app_token"], pool["table_id"], records,
+        source=source,
+        ensure_select_values={"来源": [source], "阶段": [stage]},
+    )
+    out.update({
+        "bitable_url": pool["bitable_url"],
+        "scope": pool["scope"],
+        "exhibition_id": pool["exhibition_id"],
+        "exhibition_name": pool["exhibition_name"],
+        "title": pool["title"],
+    })
+    return out
 
 
 def _recover_created_record_ids(app_token: str, table_id: str, creates: list) -> list:
