@@ -290,6 +290,35 @@ describe("shared WABA routing (two suppliers, one WABA)", { concurrency: false }
     assert.equal(phones.length, 2, "补认领应真的写出归属行");
   });
 
+  it("cannot fabricate ownership when the WABA genuinely has no phone number", async () => {
+    // 区别于「认领踩空」：这里 YCloud 上该 WABA 确实一个号都没有（客户还没在 Meta 接号）。
+    // 没有号可写，补认领无从谈起 —— 必须报 PHONE_REQUIRED 指向 Meta/YCloud 侧，
+    // 而不是报 BINDING_REQUIRED 让用户去绑一个不存在的号。
+    phones = [];
+    onboardings = [
+      {
+        id: "onb-c",
+        wabaId: WABA,
+        partnerCustomerId: "tenant-c",
+        status: "CONNECTED",
+        updatedAt: new Date(),
+      },
+    ];
+    const restore = globalThis.fetch;
+    globalThis.fetch = async () => {
+      fetchCalls += 1;
+      return Response.json({ items: [] });
+    };
+    try {
+      await assert.rejects(() => listTenantBusinessPhones("tenant-c"), {
+        code: "WHATSAPP_PHONE_REQUIRED",
+      });
+    } finally {
+      globalThis.fetch = restore;
+    }
+    assert.deepEqual(phones, [], "没有号可认领时不得写出任何归属行");
+  });
+
   it("self-heals inbound routing after a missed claim", async () => {
     phones = [];
     onboardings = [
