@@ -22,6 +22,7 @@ import { createAuditMiddleware } from './services/audit.js';
 import { createTenantMachineAssertionRoutes } from './routes/tenant-machine-assertions.js';
 import { createSystemAgentRoutes } from './routes/system-agent.js';
 import { createModelCatalogRoutes } from './routes/model-catalog.js';
+import { createCatalogRolloutRoutes } from './routes/catalog-rollout.js';
 import { CatalogReleaseService } from './services/catalog-release-service.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: SseBroker = new SseBroker()) {
@@ -77,6 +78,7 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
   app.use(createModelCatalogRoutes(pool, config, authAndAudit, new CatalogReleaseService(pool)));
+  app.use(createCatalogRolloutRoutes(pool, config, authAndAudit));
   // LLM push async task (SSE + REST) — worker publishes progress to the same
   // broker instance injected here from index.ts.
   app.use(createLlmPushRoutes(pool, broker, authAndAudit));

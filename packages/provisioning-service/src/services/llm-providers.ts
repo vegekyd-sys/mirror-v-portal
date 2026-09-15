@@ -445,80 +445,135 @@ export function modelSpecSignature(
   });
 }
 
+/** Detailed restart analysis with human/machine-readable reason codes. */
+export interface RestartAnalysis {
+  restart: boolean;
+  reasons: string[];
+}
+
+/**
+ * Detailed version of tenantNeedsLlmRestart that also returns the list of
+ * reason codes explaining WHY a restart is needed. The reason codes are
+ * stable identifiers (not user-facing strings) suitable for the impact
+ * manifest:
+ *
+ *   default_model_ref_changed        — effective primary model ref changed
+ *   default_model_credential_changed — same ref, provider baseUrl/apiKey changed
+ *   default_model_spec_changed       — same ref, in-place model spec edited
+ *   image_model_ref_changed          — effective image model ref changed
+ *   image_model_spec_changed         — same ref, in-place model spec edited
+ *   image_model_credential_changed   — same ref, provider credentials changed
+ *   compaction_model_ref_changed     — effective compaction model ref changed
+ *   compaction_model_spec_changed    — same ref, in-place model spec edited
+ *   compaction_model_credential_changed — same ref, provider credentials changed
+ *   fallback_chain_changed           — fallback chain membership/order changed
+ *   fallback_model_credential_changed — credential behind a fallback model changed
+ *   fallback_model_spec_changed      — in-place spec of a fallback model changed
+ */
+export function analyzeTenantLlmRestart(
+  prev: LlmProvidersConfig | null,
+  now: LlmProvidersConfig | null,
+  selection: TenantModelSelection | null,
+): RestartAnalysis {
+  const reasons: string[] = [];
+  const selDefault = selection?.defaultModel ?? null;
+  const selImage = selection?.imageModel ?? null;
+  const selCompaction = selection?.compactionModel ?? null;
+
+  // ── Default (primary) model ──
+  const beforeRef = effectiveRefIn(prev, selDefault);
+  const afterRef = effectiveRefIn(now, selDefault);
+  if (beforeRef !== afterRef) {
+    reasons.push('default_model_ref_changed');
+  } else {
+    if (
+      providerCredentialSignature(prev, beforeRef) !==
+      providerCredentialSignature(now, afterRef)
+    ) {
+      reasons.push('default_model_credential_changed');
+    }
+    if (modelSpecSignature(prev, beforeRef) !== modelSpecSignature(now, afterRef)) {
+      reasons.push('default_model_spec_changed');
+    }
+  }
+
+  // ── Image (vision) model ──
+  const beforeImage = effectiveImageRefIn(prev, selImage);
+  const afterImage = effectiveImageRefIn(now, selImage);
+  if (beforeImage !== afterImage) {
+    reasons.push('image_model_ref_changed');
+  } else {
+    if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
+      reasons.push('image_model_spec_changed');
+    }
+    if (
+      providerCredentialSignature(prev, beforeImage) !==
+      providerCredentialSignature(now, afterImage)
+    ) {
+      reasons.push('image_model_credential_changed');
+    }
+  }
+
+  // ── Compaction model (tenant override → global → primary fallback) ──
+  const beforeCompaction = effectiveCompactionRefIn(prev, selCompaction)
+    ?? effectiveRefIn(prev, selDefault);
+  const afterCompaction = effectiveCompactionRefIn(now, selCompaction)
+    ?? effectiveRefIn(now, selDefault);
+  if (beforeCompaction !== afterCompaction) {
+    reasons.push('compaction_model_ref_changed');
+  } else {
+    if (
+      modelSpecSignature(prev, beforeCompaction) !==
+      modelSpecSignature(now, afterCompaction)
+    ) {
+      reasons.push('compaction_model_spec_changed');
+    }
+    if (
+      providerCredentialSignature(prev, beforeCompaction) !==
+      providerCredentialSignature(now, afterCompaction)
+    ) {
+      reasons.push('compaction_model_credential_changed');
+    }
+  }
+
+  // ── Fallback chain (tenant override-aware) ──
+  const beforeFallbacks = effectiveFallbacksFor(prev, selection);
+  const afterFallbacks = effectiveFallbacksFor(now, selection);
+  if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) {
+    reasons.push('fallback_chain_changed');
+  } else {
+    for (const ref of afterFallbacks) {
+      if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
+        reasons.push('fallback_model_credential_changed');
+        break;
+      }
+      if (modelSpecSignature(now, ref) !== modelSpecSignature(prev, ref)) {
+        reasons.push('fallback_model_spec_changed');
+        break;
+      }
+    }
+  }
+
+  return { restart: reasons.length > 0, reasons };
+}
+
 /**
  * True when a library change actually affects a tenant: its effective model
  * changed (selection no longer resolves / default switched / provider removed),
  * its effective image model changed, or the credentials behind either model
  * changed. Adding an unrelated provider or model does NOT require a restart —
  * the tenant's live config is untouched.
+ *
+ * This is a thin wrapper around {@link analyzeTenantLlmRestart} that preserves
+ * the original boolean return type for backward compatibility with existing
+ * callers (e.g. applyTenantLlmConfig).
  */
 export function tenantNeedsLlmRestart(
   prev: LlmProvidersConfig | null,
   now: LlmProvidersConfig | null,
   selection: TenantModelSelection | null,
 ): boolean {
-  const selDefault = selection?.defaultModel ?? null;
-  const selImage = selection?.imageModel ?? null;
-  const selCompaction = selection?.compactionModel ?? null;
-
-  const beforeRef = effectiveRefIn(prev, selDefault);
-  const afterRef = effectiveRefIn(now, selDefault);
-  if (beforeRef !== afterRef) return true;
-  if (
-    providerCredentialSignature(prev, beforeRef) !==
-    providerCredentialSignature(now, afterRef)
-  ) {
-    return true;
-  }
-  // In-place model edits (reasoning/vision flags) also require a restart.
-  if (modelSpecSignature(prev, beforeRef) !== modelSpecSignature(now, afterRef)) {
-    return true;
-  }
-
-  const beforeImage = effectiveImageRefIn(prev, selImage);
-  const afterImage = effectiveImageRefIn(now, selImage);
-  if (beforeImage !== afterImage) return true;
-  if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
-    return true;
-  }
-  if (
-    providerCredentialSignature(prev, beforeImage) !==
-    providerCredentialSignature(now, afterImage)
-  ) {
-    return true;
-  }
-
-  // Compaction model (tenant override → global → primary fallback chain).
-  const beforeCompaction = effectiveCompactionRefIn(prev, selCompaction)
-    ?? effectiveRefIn(prev, selDefault);
-  const afterCompaction = effectiveCompactionRefIn(now, selCompaction)
-    ?? effectiveRefIn(now, selDefault);
-  if (beforeCompaction !== afterCompaction) return true;
-  if (modelSpecSignature(prev, beforeCompaction) !== modelSpecSignature(now, afterCompaction)) {
-    return true;
-  }
-  if (
-    providerCredentialSignature(prev, beforeCompaction) !==
-    providerCredentialSignature(now, afterCompaction)
-  ) {
-    return true;
-  }
-
-  // Fallback chain (tenant override-aware): a changed chain (or changed
-  // credentials behind any of its models) must re-materialise the agent's
-  // fallbacks at boot.
-  const beforeFallbacks = effectiveFallbacksFor(prev, selection);
-  const afterFallbacks = effectiveFallbacksFor(now, selection);
-  if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) return true;
-  for (const ref of afterFallbacks) {
-    if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
-      return true;
-    }
-    if (modelSpecSignature(now, ref) !== modelSpecSignature(prev, ref)) {
-      return true;
-    }
-  }
-  return false;
+  return analyzeTenantLlmRestart(prev, now, selection).restart;
 }
 
 /**
