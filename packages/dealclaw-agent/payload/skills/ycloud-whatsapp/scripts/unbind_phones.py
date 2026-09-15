@@ -10,6 +10,10 @@ Usage:
     python3 unbind_phones.py --phones +8615895553765,+8615895553766
 """
 
+# PEP 604 注解（int | None）在 3.10 以下会在 def 求值时抛 TypeError，
+# 让整个脚本连结构化失败都来不及输出。延迟注解求值，保持向下兼容。
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -46,7 +50,9 @@ def main() -> int:
     args = parser.parse_args()
 
     supplier_id = os.environ.get("MIO_CDP_SUPPLIER_ID", "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", supplier_id):
+    # 与桥接的租户 ID 校验保持一致（^[A-Za-z0-9][A-Za-z0-9._:-]*$，<=128）——
+    # 这里收得更窄会把带 . 或 : 的合法租户在客户端就挡掉。
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", supplier_id):
         return fail("TENANT_MACHINE_SUPPLIER_MISSING")
 
     phones: list[str] = []

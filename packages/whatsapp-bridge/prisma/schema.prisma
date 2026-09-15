@@ -162,8 +162,9 @@ model WabaPhone {
   id          String   @id @default(cuid())
   wabaId      String
   phoneNumber String
-  /** 拥有该手机号的租户（= partnerCustomerId）。手机号在全局唯一 → 一个号只能归一家。 */
-  supplierId  String
+  /** 拥有该手机号的租户（= partnerCustomerId）。手机号在全局唯一 → 一个号只能归一家。
+   *  默认空串 = 无主（仅迁移遗留行会是这个状态），下一次绑定/PARTNER_ADDED 会认领它。 */
+  supplierId  String   @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

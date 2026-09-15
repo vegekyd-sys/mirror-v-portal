@@ -212,8 +212,9 @@ export type TenantBusinessPhone = {
 
 /**
  * Resolve every eligible business phone for a supplier from its CONNECTED onboarding rows.
- * YCloud is queried per WABA (with a short cache), and the WabaPhone table is refreshed as a
- * side effect so webhook and Feishu-reply routing keep using the same mapping.
+ * YCloud is queried per WABA (with a short cache) to learn which numbers exist, then the result is
+ * narrowed to the numbers this tenant actually owns in WabaPhone. Ownership is never created here —
+ * it comes from the explicit bind (adminWabaImport) or from PARTNER_ADDED (claimWabaPhonesForTenant).
  */
 export async function listTenantBusinessPhones(supplierId: string): Promise<TenantBusinessPhone[]> {
   const connected = await prisma.wabaOnboarding.findMany({
@@ -316,27 +317,65 @@ export async function resolveTenantBusinessPhone(
 }
 
 /**
- * WABA 账号更新（PARTNER_ADDED）后的企业号回查。
+ * PARTNER_ADDED 之后建立手机号归属，并回一个**本租户自己的**企业号供通知文案使用。
  *
- * 共享 WABA 下不能取「该 WABA 的第一个号」—— 那可能是别家的号，
- * 会出现在给本租户的通知文案里（跨租户信息泄露）。只回本租户拥有的号。
+ * 为什么必须在这里写归属：`upsertWabaPhones` 已经不再 create（读取时的副作用回填会破坏归属），
+ * 而 `adminWabaImport` 是运营手工通道。如果嵌入式注册这条路不写 `WabaPhone`，
+ * 租户虽然是 CONNECTED 却一行归属都没有 —— 入站 `resolveSupplierIdByBusinessPhone` 反查不到租户，
+ * 出站 `listTenantBusinessPhones` 会被归属过滤清空并抛 WHATSAPP_BINDING_REQUIRED，整条自助链路是断的。
+ *
+ * 认领规则（共享 WABA 下的安全边界）：
+ *   · 只认领**无主**的号 —— DB 里没有该号，或有行但 supplierId 为空（迁移遗留）；
+ *   · 别家已拥有的号一律不碰，也不报错（共享 WABA 上有别人的号是正常状态）；
+ *   · 通知文案只用本租户拥有的号，避免把别家的号回显给这一家。
  */
-async function syncWabaPhoneBinding(
+async function claimWabaPhonesForTenant(
   wabaId: string,
   supplierId: string,
 ): Promise<string | undefined> {
   try {
+    if (!supplierId) return undefined;
     invalidateWabaPhoneCache(wabaId);
     const phones = await listCurrentWabaPhoneNumbers(wabaId);
-    if (!phones.length || !supplierId) return undefined;
-    const owned = await prisma.wabaPhone.findMany({
-      where: { wabaId, supplierId, phoneNumber: { in: phones } },
-      select: { phoneNumber: true },
-    });
-    const ownedSet = new Set(owned.map((row) => row.phoneNumber));
-    return phones.find((phone) => ownedSet.has(phone));
+    if (!phones.length) return undefined;
+
+    return await prisma.$transaction(
+      async (tx) => {
+        // 加锁顺序固定为 phone → waba（见 wabaOwnershipLock），与 import/unbind 对齐。
+        await lockWabaOwnershipKeys(tx, wabaId, [...phones].sort());
+
+        const existing = await tx.wabaPhone.findMany({
+          where: { phoneNumber: { in: phones } },
+          select: { phoneNumber: true, supplierId: true },
+        });
+        const byPhone = new Map(existing.map((row) => [row.phoneNumber, row]));
+
+        for (const phoneNumber of phones) {
+          const row = byPhone.get(phoneNumber);
+          if (!row) {
+            await tx.wabaPhone.create({ data: { wabaId, phoneNumber, supplierId } });
+            continue;
+          }
+          // 无主行（迁移遗留的空 supplierId）归给本次接入方；别家的号原样保留。
+          if (!row.supplierId) {
+            await tx.wabaPhone.updateMany({
+              where: { phoneNumber, supplierId: "" },
+              data: { wabaId, supplierId, updatedAt: new Date() },
+            });
+          }
+        }
+
+        const owned = await tx.wabaPhone.findMany({
+          where: { wabaId, supplierId, phoneNumber: { in: phones } },
+          select: { phoneNumber: true },
+        });
+        const ownedSet = new Set(owned.map((row) => row.phoneNumber));
+        return phones.find((phone) => ownedSet.has(phone));
+      },
+      { isolationLevel: "Serializable" },
+    );
   } catch (error) {
-    console.error("sync WABA phone binding after PARTNER_ADDED failed", error);
+    console.error("claim WABA phone ownership after PARTNER_ADDED failed", error);
     return undefined;
   }
 }
@@ -426,16 +465,10 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   const row = await prisma.$transaction(
     async (tx) => {
       if (partnerAdded && update.wabaId) {
+        // 共享 WABA（2026-09-15）：一个 WABA 可以有多个 CONNECTED owner，
+        // 所以这里**不再**因「该 WABA 已被别家连接」而拒绝 —— 那会让第二家永远接不进来。
+        // 独占性只落在手机号上，由 claimWabaPhonesForTenant / adminWabaImport 保证。
         await lockWabaOwnershipKeys(tx, update.wabaId, []);
-        if (update.partnerCustomerId) {
-          const existingOwners = await tx.wabaOnboarding.findMany({
-            where: { wabaId: update.wabaId, status: "CONNECTED" },
-            select: { partnerCustomerId: true },
-          });
-          if (existingOwners.some((owner) => owner.partnerCustomerId !== update.partnerCustomerId)) {
-            throw new Error("PARTNER_ADDED WABA is already connected to another tenant");
-          }
-        }
       }
 
       let current =
@@ -482,7 +515,7 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   );
 
   if (row && partnerAdded && row.wabaId) {
-    const businessPhone = await syncWabaPhoneBinding(row.wabaId, row.partnerCustomerId);
+    const businessPhone = await claimWabaPhonesForTenant(row.wabaId, row.partnerCustomerId);
     try {
       await notifyWabaConnected(row, businessPhone);
     } catch (error) {
