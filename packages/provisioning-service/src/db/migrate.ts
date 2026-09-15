@@ -447,7 +447,20 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
     // DEALCLAW_SHARED_DM_SESSION env var on the agent Deployment; write-config
     // .mjs checks it with priority over DEALCLAW_SESSION_DM_SCOPE.
     await client.query(`
-      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    // v0.10 — shared DM session is now DEFAULT ON. For environments where the
+    // column already exists (v0.9 created it with DEFAULT FALSE), align the
+    // column default and backfill existing rows so the admin console reflects
+    // "enabled" consistently with the runtime. NOTE: write-config.mjs treats
+    // an unset DEALCLAW_SHARED_DM_SESSION as enabled, but a tenant whose
+    // Deployment env was explicitly set to '0' (manually disabled) keeps
+    // DEALCLAW_SHARED_DM_SESSION=0 — the runtime stays "disabled" for those;
+    // only the DB flag is realigned here.
+    await client.query(`
+      ALTER TABLE tenants ALTER COLUMN shared_dm_session SET DEFAULT TRUE;
+      UPDATE tenants SET shared_dm_session = TRUE WHERE shared_dm_session = FALSE;
     `);
 
     // P0 structured model catalog is expand-only and remains shadow data until

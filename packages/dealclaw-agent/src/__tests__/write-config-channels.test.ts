@@ -107,12 +107,12 @@ describe('write-config channels.feishu (P2)', () => {
 });
 
 describe('write-config runtime tuning (queue / pruning / compaction / session)', () => {
-  it('emits steer message queue, per-peer sessions and context safeguards by default', () => {
+  it('emits steer message queue, merged sessions and context safeguards by default', () => {
     const { config } = runWriteConfig({ LLM_PROVIDERS: PROVIDERS });
     expect(config.messages?.queue).toEqual({
       mode: 'steer', debounceMs: 1000, cap: 20, drop: 'summarize',
     });
-    expect(config.session?.dmScope).toBe('per-channel-peer');
+    expect(config.session?.dmScope).toBe('main');
     expect(config.session?.maintenance?.pruneAfter).toBe('14d');
     const d = config.agents.defaults;
     expect(d.contextPruning?.mode).toBe('cache-ttl');
@@ -178,13 +178,14 @@ describe('write-config shared DM session (DEALCLAW_SHARED_DM_SESSION)', () => {
     expect(config.session?.dmScope).toBe('main');
   });
 
-  it('wechatBound default applies when shared session is not enabled', () => {
+  it('default-on shared session wins over wechatBound when env is unset', () => {
     const { config } = runWriteConfig({
       LLM_PROVIDERS: PROVIDERS,
       DEALCLAW_MESSAGE_PLANE: 'openclaw',
       DEALCLAW_WECHAT_BOUND: '1',
     });
-    expect(config.session?.dmScope).toBe('per-account-channel-peer');
+    // shared session is DEFAULT ON (env unset), so it overrides wechatBound
+    expect(config.session?.dmScope).toBe('main');
   });
 
   it('escape-hatch DEALCLAW_SESSION_DM_SCOPE still works when shared=0', () => {

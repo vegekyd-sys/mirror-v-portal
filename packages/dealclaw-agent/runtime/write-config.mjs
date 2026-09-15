@@ -232,12 +232,14 @@ const feishuDirect =
 const wechatBound = process.env.DEALCLAW_WECHAT_BOUND === '1' && messagePlane === 'openclaw';
 
 // ── Shared DM session (Feishu + WeChat cross-channel merge) ──────────
-// DEALCLAW_SHARED_DM_SESSION=1 merges all DM conversations (Feishu + WeChat)
-// into a single session (agent:dealclaw:main), so the same user can continue a
-// conversation across channels. Set per-tenant by the admin console toggle
-// (tenants.shared_dm_session → env patch + restart). This takes priority over
-// the DEALCLAW_SESSION_DM_SCOPE escape-hatch and the wechatBound default.
-const sharedDmSession = process.env.DEALCLAW_SHARED_DM_SESSION === '1';
+// Three-state, DEFAULT ON (v0.10): DEALCLAW_SHARED_DM_SESSION
+//   '1'        → explicitly enabled  → dmScope 'main'
+//   '0'        → explicitly disabled → falls through to wechatBound /
+//                escape-hatch / per-channel-peer
+//   <unset>    → DEFAULT enabled     → dmScope 'main'
+// The per-tenant admin toggle materialises '1'/'0'; a tenant that has never
+// touched the toggle leaves the env unset and therefore defaults to merged.
+const sharedDmSession = process.env.DEALCLAW_SHARED_DM_SESSION !== '0';
 
 if (messagePlane === 'openclaw' && !feishuDirect && !wechatBound) {
   console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but no channel credentials — feishu/weixin channels NOT enabled');
@@ -495,12 +497,13 @@ const config = {
         }
       : {}),
   },
-  // DM session scope:
-  //   1. sharedDmSession (DEALCLAW_SHARED_DM_SESSION=1) → 'main': all Feishu
-  //      and WeChat DMs share one session (cross-channel continuity for
-  //      single-user tenants). Highest priority.
+  // DM session scope (priority order):
+  //   1. sharedDmSession → 'main': all Feishu + WeChat DMs merge into one
+  //      session (agent:dealclaw:main). DEFAULT ON unless
+  //      DEALCLAW_SHARED_DM_SESSION is explicitly '0'. Highest priority.
   //   2. wechatBound → 'per-account-channel-peer': WeChat multi-account
-  //      isolates DM sessions by account + channel + peer.
+  //      isolates DM sessions by account + channel + peer (reached only when
+  //      the shared session is explicitly disabled).
   //   3. DEALCLAW_SESSION_DM_SCOPE escape-hatch → overrides the Feishu-only
   //      default (e.g. 'main' for legacy single-session behaviour).
   //   4. Default → 'per-channel-peer': each Feishu user gets an independent
