@@ -4,8 +4,10 @@ import helmet from 'helmet';
 import pg from 'pg';
 import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
+import { createGlobalDefaultRoutes } from './routes/global-defaults.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
+import { createOnboardingRoutes } from './routes/onboarding.js';
 import { createWeChatBindingRoutes } from './routes/wechat-binding.js';
 import { createWeComBindingRoutes } from './routes/wecom-binding.js';
 import { createDingTalkBindingRoutes } from './routes/dingtalk-binding.js';
@@ -26,6 +28,7 @@ import { createSystemAgentRoutes } from './routes/system-agent.js';
 import { createModelCatalogRoutes } from './routes/model-catalog.js';
 import { createCatalogRolloutRoutes } from './routes/catalog-rollout.js';
 import { CatalogReleaseService } from './services/catalog-release-service.js';
+import { FeishuAppScanStore } from './services/feishu-app-scan.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: SseBroker = new SseBroker()) {
   const app = express();
@@ -79,6 +82,8 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   app.use('/v1/admin/system-agent', createSystemAgentRoutes(authAndAudit));
   app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
+  // 全局默认配置（「默认配置」页）—— authAndAudit 之后额外要求超管。
+  app.use(createGlobalDefaultRoutes(pool, config, authAndAudit));
   app.use(createModelCatalogRoutes(pool, config, authAndAudit, new CatalogReleaseService(pool)));
   app.use(createCatalogRolloutRoutes(pool, config, authAndAudit));
   // LLM push async task (SSE + REST) — worker publishes progress to the same
@@ -98,7 +103,12 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   app.use(createChatMessageRoutes(pool, config, authAndAudit));
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
-  app.use(createFeishuAppScanRoutes(authAndAudit));
+  // 同一个 store 实例同时交给「一键开通」流水线：quick-start 启动的扫码会话
+  // 必须能被 /v1/admin/feishu-app/scan/status/:deviceCode 查到。
+  const feishuScanStore = new FeishuAppScanStore();
+  app.use(createFeishuAppScanRoutes(authAndAudit, feishuScanStore));
+  // 一键开通流水线（FDE 版）：查/建米奥供应商 → 建租户 → 出二维码。
+  app.use(createOnboardingRoutes(pool, config, authAndAudit, feishuScanStore));
   // WeChat (personal WeChat) binding — QR-login direct connection.
   app.use(createWeChatBindingRoutes(pool, config, authAndAudit));
   // WeCom (企业微信) bot binding — credential-based direct connection.

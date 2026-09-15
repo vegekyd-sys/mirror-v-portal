@@ -1,6 +1,8 @@
 // App shell: dark sidebar navigation + light content area (phase 3 redesign).
+import { useMemo } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { hasAnyRole, SUPER_ADMIN_ROLES } from '../lib/roles';
 import { IconLogout, IconNexus } from './icons';
 
 interface NavItem {
@@ -8,6 +10,8 @@ interface NavItem {
   icon: string;
   label: string;
   end?: boolean;
+  /** 仅这些角色可见（未设置 = 所有已登录账号可见）。 */
+  roles?: string[];
 }
 
 const WORKBENCH: NavItem[] = [
@@ -28,6 +32,8 @@ const SYSTEM: NavItem[] = [
   { to: '/image-releases', icon: '镜', label: '镜像版本' },
   { to: '/rollout-tasks', icon: '发', label: '发布进度' },
   { to: '/runtime-configs', icon: '配', label: '运行时配置' },
+  // 全局默认配置：仅超管可见（后端接口同样仅超管，见 createSuperAdminMiddleware）。
+  { to: '/global-defaults', icon: '默', label: '默认配置', roles: SUPER_ADMIN_ROLES },
   { to: '/audit-logs', icon: '审', label: '审计日志' },
   { to: '/users', icon: '户', label: '用户管理' },
   { to: '/external-api-keys', icon: '钥', label: '外部 API Key' },
@@ -55,6 +61,10 @@ function SideNav({ items }: { items: NavItem[] }) {
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const systemItems = useMemo(
+    () => SYSTEM.filter((it) => !it.roles || hasAnyRole(user, it.roles)),
+    [user],
+  );
 
   return (
     <div className="app-shell">
@@ -72,7 +82,7 @@ export default function Layout() {
           <div className="side-section">工 作 台</div>
           <SideNav items={WORKBENCH} />
           <div className="side-section">系 统</div>
-          <SideNav items={SYSTEM} />
+          <SideNav items={systemItems} />
         </nav>
         <div className="side-foot">
           <div className="side-status">
