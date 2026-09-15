@@ -1,6 +1,7 @@
 // LLM Token 定价 — 按 provider + model 配置 token 单价（元/百万 token，峰/闲分档）。
 // Data: credits-ledger /v1/billing/llm-token-pricing（GET / PUT）。
 // 用途：llm-usage/range 成本核算按此表折算，provider|model 精确匹配，缺价格则 cost=0。
+// Provider/Model 下拉：优先从 model-catalog API 获取，降级回退到旧 llm-providers API。
 import { useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { IconAlert, IconRefresh } from '../components/icons';
@@ -18,7 +19,7 @@ interface PricingRow {
   updatedAt: string;
 }
 
-/** 供应商库（用于「供应商/模型」下拉，避免手填错误）— /v1/admin/llm-providers */
+/** 供应商库（用于「供应商/模型」下拉）— model-catalog 优先，降级回退 llm-providers */
 interface LlmProviderOpt {
   name: string;
   models: { id: string }[];
@@ -72,6 +73,31 @@ export default function LlmTokenPricingPage() {
   }, []);
 
   const loadProviders = useCallback(async () => {
+    // P1-3: 优先从 model-catalog API 获取供应商和模型列表
+    try {
+      const catalogRes = await api<{ providers: Array<{ id: string; legacyProviderName: string; displayName?: string }> }>('/v1/admin/model-catalog/providers');
+      const providers = catalogRes.providers ?? [];
+      if (providers.length > 0) {
+        const loaded: LlmProviderOpt[] = await Promise.all(
+          providers.map(async (p) => {
+            try {
+              const modelsRes = await api<{ models: Array<{ modelId: string }> }>(`/v1/admin/model-catalog/providers/${encodeURIComponent(p.id)}/models`);
+              return {
+                name: p.legacyProviderName,
+                models: (modelsRes.models ?? []).map((m) => ({ id: m.modelId })),
+              };
+            } catch {
+              return { name: p.legacyProviderName, models: [] };
+            }
+          }),
+        );
+        setProviderLib(loaded);
+        return;
+      }
+    } catch {
+      // Catalog API 不可用（flag 关闭或服务未部署），降级到旧 API
+    }
+    // 降级：从旧 /v1/admin/llm-providers API 获取
     try {
       const r = await api<{ config: { providers: LlmProviderOpt[] } | null }>('/v1/admin/llm-providers');
       setProviderLib(r.config?.providers ?? []);
