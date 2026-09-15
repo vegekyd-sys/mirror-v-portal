@@ -214,6 +214,8 @@ if (llmDoc && llmDoc.providers.length > 0) {
 // env id, never inlined into the config file.
 const FEISHU_PLUGIN_DIR = '/opt/dealclaw/plugins/feishu/node_modules/@openclaw/feishu';
 const WECHAT_PLUGIN_DIR = '/opt/dealclaw/plugins/weixin/node_modules/@tencent-weixin/openclaw-weixin';
+const WECOM_PLUGIN_DIR = '/opt/dealclaw/plugins/wecom/node_modules/@wecom/wecom-openclaw-plugin';
+const DINGTALK_PLUGIN_DIR = '/opt/dealclaw/plugins/dingtalk/node_modules/@dingtalk-real-ai/dingtalk-connector';
 const messagePlane = process.env.DEALCLAW_MESSAGE_PLANE || 'gateway';
 const feishuAppId = (process.env.DEALCLAW_APP_ID || '').trim();
 const feishuAppSecret = (process.env.DEALCLAW_APP_SECRET || '').trim();
@@ -231,6 +233,23 @@ const feishuDirect =
 // account files from $OPENCLAW_STATE_DIR/openclaw-weixin/accounts.json.
 const wechatBound = process.env.DEALCLAW_WECHAT_BOUND === '1' && messagePlane === 'openclaw';
 
+// Enterprise channel credentials originate from Kubernetes Secrets. DingTalk
+// supports an env SecretRef; WeCom 2026.7.2 only accepts a string, so its secret
+// is materialized into the 0600 openclaw.json. A BOUND flag without complete
+// credentials is treated as disabled to avoid a half-configured channel.
+const wecomBotId = (process.env.DEALCLAW_WECOM_BOT_ID || '').trim();
+const wecomSecret = (process.env.DEALCLAW_WECOM_SECRET || '').trim();
+const wecomBound =
+  process.env.DEALCLAW_WECOM_BOUND === '1' &&
+  messagePlane === 'openclaw' &&
+  Boolean(wecomBotId && wecomSecret);
+const dingtalkClientId = (process.env.DEALCLAW_DINGTALK_CLIENT_ID || '').trim();
+const dingtalkClientSecret = (process.env.DEALCLAW_DINGTALK_CLIENT_SECRET || '').trim();
+const dingtalkBound =
+  process.env.DEALCLAW_DINGTALK_BOUND === '1' &&
+  messagePlane === 'openclaw' &&
+  Boolean(dingtalkClientId && dingtalkClientSecret);
+
 // ── Shared DM session (Feishu + WeChat cross-channel merge) ──────────
 // Three-state, DEFAULT ON (v0.10): DEALCLAW_SHARED_DM_SESSION
 //   '1'        → explicitly enabled  → dmScope 'main'
@@ -241,8 +260,8 @@ const wechatBound = process.env.DEALCLAW_WECHAT_BOUND === '1' && messagePlane ==
 // touched the toggle leaves the env unset and therefore defaults to merged.
 const sharedDmSession = process.env.DEALCLAW_SHARED_DM_SESSION !== '0';
 
-if (messagePlane === 'openclaw' && !feishuDirect && !wechatBound) {
-  console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but no channel credentials — feishu/weixin channels NOT enabled');
+if (messagePlane === 'openclaw' && !feishuDirect && !wechatBound && !wecomBound && !dingtalkBound) {
+  console.warn('[dealclaw-runtime] DEALCLAW_MESSAGE_PLANE=openclaw but no channel credentials — channels NOT enabled');
 }
 
 const pluginLoadPaths = [
@@ -252,6 +271,8 @@ const pluginLoadPaths = [
 ];
 if (feishuDirect && process.env.DEALCLAW_FEISHU_TRUSTED !== '1') pluginLoadPaths.push(FEISHU_PLUGIN_DIR);
 if (wechatBound && process.env.DEALCLAW_WECHAT_TRUSTED !== '1') pluginLoadPaths.push(WECHAT_PLUGIN_DIR);
+if (wecomBound && process.env.DEALCLAW_WECOM_TRUSTED !== '1') pluginLoadPaths.push(WECOM_PLUGIN_DIR);
+if (dingtalkBound && process.env.DEALCLAW_DINGTALK_TRUSTED !== '1') pluginLoadPaths.push(DINGTALK_PLUGIN_DIR);
 
 const deniedTools = [
   'message',
@@ -416,9 +437,14 @@ const config = {
     elevated: { enabled: false },
   },
   plugins: {
-    // 放行 feishu 和 openclaw-weixin 非内置插件自动加载（PVC trusted 副本），
-    // 其余 npm projects 里发现的可插拔组件一律不自动加载。
-    allow: ['feishu', 'openclaw-weixin'],
+    // Preserve the existing allow-list behavior for Feishu and personal Weixin;
+    // append enterprise channel plugin IDs only when the tenant enables them.
+    allow: [
+      'feishu',
+      'openclaw-weixin',
+      ...(wecomBound ? ['wecom-openclaw-plugin'] : []),
+      ...(dingtalkBound ? ['dingtalk-connector'] : []),
+    ],
     load: {
       paths: pluginLoadPaths,
     },
@@ -438,9 +464,11 @@ const config = {
       },
       ...(feishuDirect ? { feishu: { enabled: true } } : {}),
       ...(wechatBound ? { 'openclaw-weixin': { enabled: true } } : {}),
+      ...(wecomBound ? { 'wecom-openclaw-plugin': { enabled: true } } : {}),
+      ...(dingtalkBound ? { 'dingtalk-connector': { enabled: true } } : {}),
     },
   },
-  ...(feishuDirect || wechatBound
+  ...(feishuDirect || wechatBound || wecomBound || dingtalkBound
     ? {
         channels: {
           ...(feishuDirect ? {
@@ -470,6 +498,29 @@ const config = {
               enabled: true,
               // Account list comes from PVC state dir (accounts.json);
               // no appId/appSecret here — plugin manages credentials via QR login.
+            },
+          } : {}),
+          ...(wecomBound ? {
+            wecom: {
+              enabled: true,
+              connectionMode: 'websocket',
+              botId: wecomBotId,
+              // Plugin 2026.7.2 only accepts a string here; OpenClaw SecretRef is
+              // not supported by this plugin version. openclaw.json is written 0600.
+              secret: wecomSecret,
+              dmPolicy: 'open',
+              allowFrom: ['*'],
+              groupPolicy: 'open',
+            },
+          } : {}),
+          ...(dingtalkBound ? {
+            'dingtalk-connector': {
+              enabled: true,
+              clientId: dingtalkClientId,
+              clientSecret: { source: 'env', provider: 'default', id: 'DEALCLAW_DINGTALK_CLIENT_SECRET' },
+              dmPolicy: 'open',
+              allowFrom: ['*'],
+              groupPolicy: 'open',
             },
           } : {}),
         },
@@ -529,4 +580,8 @@ const config = {
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+// writeFileSync's mode only applies when creating a file. Enforce owner-only
+// permissions after every rewrite because WeCom's plugin schema requires its
+// secret to be materialized as a string in this file.
+fs.chmodSync(configPath, 0o600);
 console.log(`[dealclaw-runtime] wrote OpenClaw config: ${configPath}`);

@@ -186,6 +186,84 @@ if wechat_bound && ensure_wechat_trusted; then
   export DEALCLAW_WECHAT_TRUSTED=1
 fi
 
+# ── enterprise channel plugins trusted 安装（幂等）──────────────────
+# OpenClaw 2026.7.1 尚不支持 --accept-capabilities；两个固定版本都使用
+# 该宿主支持的 plugins install 参数。
+WECOM_PLUGIN_VERSION="2026.7.2"
+DINGTALK_PLUGIN_VERSION="0.8.25"
+export DEALCLAW_WECOM_TRUSTED=0
+export DEALCLAW_DINGTALK_TRUSTED=0
+
+wecom_bound() {
+  [[ "${DEALCLAW_WECOM_BOUND:-0}" == "1" \
+     && "${DEALCLAW_MESSAGE_PLANE:-gateway}" == "openclaw" ]]
+}
+
+dingtalk_bound() {
+  [[ "${DEALCLAW_DINGTALK_BOUND:-0}" == "1" \
+     && "${DEALCLAW_MESSAGE_PLANE:-gateway}" == "openclaw" ]]
+}
+
+ensure_enterprise_plugin_trusted() {
+  local channel="$1"
+  local package_spec="$2"
+  local version="$3"
+  local project_glob="$4"
+  local accept_capabilities="$5"
+  local marker="${OPENCLAW_STATE_DIR}/npm/.dealclaw-${channel}-version"
+  local project_pattern="${OPENCLAW_STATE_DIR}/npm/projects/${project_glob}"
+  local trusted_project_present=0
+  if compgen -G "$project_pattern" >/dev/null; then
+    trusted_project_present=1
+  fi
+
+  # A marker alone is insufficient: the PVC may have been partially restored or
+  # manually cleaned. Skip only when the matching trusted project still exists.
+  if [[ "$trusted_project_present" == "1" \
+      && -f "$marker" \
+      && "$(cat "$marker" 2>/dev/null || true)" == "$version" ]]; then
+    return 0
+  fi
+
+  local force=""
+  if [[ "$trusted_project_present" == "1" ]]; then
+    force="--force"
+  fi
+
+  local install_args=(plugins install "npm:${package_spec}@${version}")
+  if [[ "$accept_capabilities" == "1" ]]; then
+    install_args+=(--accept-capabilities)
+  fi
+  if [[ -n "$force" ]]; then
+    install_args+=("$force")
+  fi
+
+  if openclaw "${install_args[@]}" >/dev/null 2>&1; then
+    mkdir -p "${OPENCLAW_STATE_DIR}/npm"
+    printf '%s' "$version" > "$marker"
+    echo "[dealclaw-runtime] ${channel} 插件 trusted 安装完成（v${version}）"
+    return 0
+  fi
+  if [[ -n "$force" ]]; then
+    echo "[dealclaw-runtime] ${channel} 插件升级到 v${version} 失败，保留旧 trusted 安装" >&2
+    return 0
+  fi
+  echo "[dealclaw-runtime] ${channel} 插件 trusted 安装失败（无出网？），回退镜像内 sideload 副本" >&2
+  return 1
+}
+
+if wecom_bound && ensure_enterprise_plugin_trusted \
+    wecom '@wecom/wecom-openclaw-plugin' "$WECOM_PLUGIN_VERSION" \
+    '*wecom-openclaw-plugin-*' 0; then
+  export DEALCLAW_WECOM_TRUSTED=1
+fi
+
+if dingtalk_bound && ensure_enterprise_plugin_trusted \
+    dingtalk '@dingtalk-real-ai/dingtalk-connector' "$DINGTALK_PLUGIN_VERSION" \
+    '*dingtalk-connector-*' 0; then
+  export DEALCLAW_DINGTALK_TRUSTED=1
+fi
+
 # ── weixin 账户ID normalize 迁移（幂等）──────────────────────────────
 # 历史 bug：wechat-login-bridge 的 normalizeAccountId 只替换 @ 不替换 .，
 # 导致 ilink_bot_id "1670eb1f7d67@im.bot" 被存成 "1670eb1f7d67-im.bot"
