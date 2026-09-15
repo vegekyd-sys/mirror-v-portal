@@ -118,7 +118,7 @@ function makeFakePool(opts: {
       // Validate model refs
       if (lower.includes('select id from llm_provider_models') && lower.includes('runtime_enabled=true')) {
         const refIds = (params?.[0] as string[]) ?? [];
-        const found = models.filter((m) => refIds.includes(m.id) && m.runtime_enabled).map((m) => ({ id: m.id }));
+        const found = models.filter((m) => refIds.includes(m.id as string) && m.runtime_enabled).map((m) => ({ id: m.id }));
         return { rows: found, rowCount: found.length };
       }
       // UPDATE global policy with CAS
