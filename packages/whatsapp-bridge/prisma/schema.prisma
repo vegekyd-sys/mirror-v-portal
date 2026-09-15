@@ -155,17 +155,23 @@ model WabaOnboarding {
   @@index([wabaId])
 }
 
-/** 企业号 ↔ WABA 映射，用于 inbound 消息按 businessPhone 反查租户。 */
+/** 企业号 ↔ WABA 映射（**手机号级归属**）：inbound 按 businessPhone 反查租户，
+ * 并作为「一个 WABA 可被多个 supplier 共享、但手机号互斥」的唯一性约束来源。
+ */
 model WabaPhone {
   id          String   @id @default(cuid())
   wabaId      String
   phoneNumber String
+  /** 拥有该手机号的租户（= partnerCustomerId）。手机号在全局唯一 → 一个号只能归一家。 */
+  supplierId  String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@unique([phoneNumber])
   @@unique([wabaId, phoneNumber])
   @@index([phoneNumber])
   @@index([wabaId])
+  @@index([supplierId])
 }
 
 
