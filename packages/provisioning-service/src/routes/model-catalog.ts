@@ -9,9 +9,10 @@ import {
   ModelParamDiscoveryService,
 } from '../services/model-param-discovery.js';
 import { CatalogRepository, CatalogService, snapshotFingerprint } from '../services/model-catalog.js';
-import { enqueueLlmPush } from '../services/llm-push-task.js';
+import { CatalogReleaseService } from '../services/catalog-release-service.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
-import { upsertRuntimeConfig, validateConfigValue } from '../services/runtime-config.js';
+import { validateConfigValue } from '../services/runtime-config.js';
+import type { CatalogReleaseRecord, CatalogReleaseView } from '../domain/catalog-release.js';
 
 function disabled(res: Response): void {
   res.status(503).json({ code: 'DISABLED', message: 'Model catalog feature is disabled' });
@@ -48,17 +49,36 @@ function redactSnapshot(snapshot: Awaited<ReturnType<CatalogService['buildCompat
   };
 }
 
+/** Convert a CatalogReleaseRecord (with encrypted fields) to a public view. */
+function recordToView(record: CatalogReleaseRecord): CatalogReleaseView {
+  return {
+    id: record.id,
+    version: record.version,
+    parentId: record.parentId,
+    fingerprint: record.fingerprint,
+    parentFingerprint: record.parentFingerprint,
+    diffSummary: record.diffSummary,
+    warnings: record.warnings,
+    actor: record.actor,
+    actorType: record.actorType,
+    status: record.status,
+    createdAt: record.createdAt.toISOString(),
+  };
+}
+
 /** Admin routes for the P0 shadow catalog and explicit compatibility publishing. */
 export function createModelCatalogRoutes(
   pool: pg.Pool,
   config: ProvisioningConfig,
   authMiddleware?: (req: Request, res: Response, next: NextFunction) => void,
+  releaseService?: CatalogReleaseService,
 ) {
   const router = Router();
   if (authMiddleware) router.use(authMiddleware);
   const repository = new CatalogRepository(pool);
   const service = new CatalogService(repository);
   const paramDiscovery = new ModelParamDiscoveryService(pool);
+  const releases = releaseService ?? new CatalogReleaseService(pool);
 
   router.post('/v1/admin/model-catalog/import', async (req, res) => {
     if (config.modelCatalogShadowImport !== true) return disabled(res);
@@ -182,35 +202,22 @@ export function createModelCatalogRoutes(
       return;
     }
     try {
-      const backup = await pool.query('SELECT encrypted_value FROM llm_catalog_snapshot_backups WHERE id=$1', [backupId]);
-      if (!backup.rows[0]) {
+      const { actor, actorType } = actorFromRequest(req);
+      const result = await releases.atomicRestore({
+        backupId,
+        actor,
+        actorType: actorType === 'external' ? 'service' : actorType,
+      });
+      if (!result) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Snapshot backup not found' });
         return;
       }
-      const previous = await getGlobalLlmProviders(pool);
-      const restored = validateLlmProviders(JSON.parse(decryptValue(backup.rows[0].encrypted_value)));
-      const blob = JSON.stringify(restored);
-      validateConfigValue(blob);
-      const { actor, actorType } = actorFromRequest(req);
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const current = await client.query(
-          `SELECT id,encrypted_value FROM runtime_configs WHERE tenant_id IS NULL AND config_key=$1 FOR UPDATE`,
-          [LLM_PROVIDERS_KEY],
-        );
-        if (current.rows[0]) await client.query(
-          `INSERT INTO llm_catalog_snapshot_backups
-             (id,runtime_config_id,encrypted_value,source_fingerprint,actor)
-           VALUES (gen_random_uuid(),$1,$2,$3,$4)`,
-          [current.rows[0].id,current.rows[0].encrypted_value,snapshotFingerprint(previous ?? { providers:[],defaultModel:null,imageModel:null,compactionModel:null,fallbackModels:[] }),actor],
-        );
-        await upsertRuntimeConfig(client,{tenantId:null,key:LLM_PROVIDERS_KEY,value:blob,isSecret:true,description:'模型目录快照恢复'});
-        await client.query('COMMIT');
-      } catch (error) { await client.query('ROLLBACK'); throw error; }
-      finally { client.release(); }
-      const task=await enqueueLlmPush(pool,{kind:'global_push',scope:null,trigger:'retry',prevLibrary:previous,nextLibrary:restored,actor,actorType:actorType==='external'?'service':actorType});
-      res.json({ok:true,...task,streamUrl:`/v1/admin/llm-push-tasks/${task.taskId}/stream`});
+      res.json({
+        ok: true,
+        release: result.release,
+        taskId: result.taskId,
+        streamUrl: `/v1/admin/llm-push-tasks/${result.taskId}/stream`,
+      });
     } catch (error) {
       console.error('model catalog snapshot restore failed:', error);
       internalError(res);
@@ -225,6 +232,7 @@ export function createModelCatalogRoutes(
       return;
     }
     try {
+      // Read-only: build the snapshot and compute its fingerprint (outside tx).
       const previous = await getGlobalLlmProviders(pool);
       const next = validateLlmProviders(await service.buildCompatibilitySnapshot(previous));
       const actualFingerprint = snapshotFingerprint(next);
@@ -234,44 +242,107 @@ export function createModelCatalogRoutes(
       }
       const blob = JSON.stringify(next);
       validateConfigValue(blob);
+      const diff = service.diffCompatibilitySnapshot(
+        previous ?? { providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [] },
+        next,
+      );
       const { actor, actorType } = actorFromRequest(req);
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const current = await client.query(
-          `SELECT id, encrypted_value FROM runtime_configs
-            WHERE tenant_id IS NULL AND config_key=$1 FOR UPDATE`,
-          [LLM_PROVIDERS_KEY],
-        );
-        if (current.rows[0]) {
-          await client.query(
-            `INSERT INTO llm_catalog_snapshot_backups
-               (id,runtime_config_id,encrypted_value,source_fingerprint,actor)
-             VALUES (gen_random_uuid(),$1,$2,$3,$4)`,
-            [current.rows[0].id, current.rows[0].encrypted_value, actualFingerprint, actor],
-          );
-        }
-        await upsertRuntimeConfig(client, {
-          tenantId: null, key: LLM_PROVIDERS_KEY, value: blob, isSecret: true,
-          description: '模型目录显式发布的兼容快照',
-        });
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
-      }
-      const task = await enqueueLlmPush(pool, {
-        kind: 'global_push', scope: null, trigger: 'save',
-        prevLibrary: previous, nextLibrary: next, actor,
+
+      // Resolve the current release's fingerprint for CAS.
+      const currentReleaseId = await releases.getCurrentReleaseId();
+      const currentRelease = currentReleaseId ? await releases.getRelease(currentReleaseId) : null;
+      const expectedParentFingerprint = currentRelease?.fingerprint ?? null;
+
+      // Atomic publish: Release + runtime_config + push task in one tx.
+      const result = await releases.atomicPublish({
+        expectedParentFingerprint,
+        snapshot: next,
+        fingerprint: actualFingerprint,
+        diffSummary: diff as unknown as Record<string, unknown>,
+        warnings: diff.fallbackWarnings ?? [],
+        actor,
         actorType: actorType === 'external' ? 'service' : actorType,
       });
-      res.json({ ok: true, ...task, streamUrl: `/v1/admin/llm-push-tasks/${task.taskId}/stream` });
+
+      if (!result) {
+        // CAS failure — someone else published between preview and publish.
+        res.status(409).json({ code: 'STALE_FINGERPRINT', message: 'A newer release was published since preview' });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        release: result.release,
+        taskId: result.taskId,
+        streamUrl: `/v1/admin/llm-push-tasks/${result.taskId}/stream`,
+      });
     } catch (error) {
       const tooLarge = error instanceof Error && error.message.includes('too long');
       console.error('model catalog snapshot publish failed:', error);
       internalError(res, tooLarge ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', tooLarge ? 422 : 500);
+    }
+  });
+
+  // ── Release query endpoints (read-only, controlled by modelCatalogRead) ──
+
+  router.get('/v1/admin/model-catalog/releases', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const list = await releases.listReleases(20);
+      res.json({ releases: list });
+    } catch (error) {
+      console.error('model catalog releases list failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/releases/current', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const releaseId = await releases.getCurrentReleaseId();
+      if (!releaseId) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No current release' });
+        return;
+      }
+      const release = await releases.getRelease(releaseId);
+      if (!release) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Current release not found' });
+        return;
+      }
+      res.json({ release: recordToView(release) });
+    } catch (error) {
+      console.error('model catalog current release failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/releases/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const release = await releases.getRelease(req.params.id);
+      if (!release) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Release not found' });
+        return;
+      }
+      res.json({ release: recordToView(release) });
+    } catch (error) {
+      console.error('model catalog release detail failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/tenants/:id/release-status', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const status = await releases.getTenantReleaseStatus(req.params.id);
+      if (!status) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant release status not found' });
+        return;
+      }
+      res.json({ status });
+    } catch (error) {
+      console.error('model catalog tenant release status failed:', error);
+      internalError(res);
     }
   });
 
