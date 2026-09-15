@@ -315,20 +315,41 @@ def main(argv: list[str] | None = None) -> int:
             html = args.html
         if not text and not html:
             raise ValueError("provide at least one of --text/--text-file or --html/--html-file")
-        emit(
-            SmtpSender(store).send(
-                account_id=args.account_id,
-                confirmed_by=args.confirmed_by,
-                to=_csv(args.to),
-                cc=_csv(args.cc),
-                bcc=_csv(args.bcc),
-                subject=args.subject,
-                text=text,
-                html=html or None,
-                reply_to=args.reply_to,
-                dry_run=args.dry_run,
-            )
+        send_result = SmtpSender(store).send(
+            account_id=args.account_id,
+            confirmed_by=args.confirmed_by,
+            to=_csv(args.to),
+            cc=_csv(args.cc),
+            bcc=_csv(args.bcc),
+            subject=args.subject,
+            text=text,
+            html=html or None,
+            reply_to=args.reply_to,
+            dry_run=args.dry_run,
         )
+        # 发信成功后落 outbound 事实：收信匹配的唯一依据，漏落 → 回信静默匹配不到。
+        # best-effort：失败只在结果里标出，不影响发送结果。2026-09-15 修复。
+        fact = {"ok": False, "error": "skipped"}
+        if not args.dry_run and isinstance(send_result, dict) and send_result.get("resend_id"):
+            from email_gateway.outbound_facts import land_outbound_fact
+
+            acct = {}
+            try:
+                acct = store.get_account(args.account_id) or {}
+            except Exception:  # noqa: BLE001
+                acct = {}
+            fact = land_outbound_fact(
+                from_addr=acct.get("email_address") or acct.get("email") or "",
+                to_list=_csv(args.to),
+                subject=args.subject,
+                resend_id=send_result.get("resend_id", ""),
+                message_id=send_result.get("message_id", ""),
+                enterprise=acct.get("enterprise_id", ""),
+                store=store,
+            )
+        if isinstance(send_result, dict):
+            send_result["outbound_fact"] = fact
+        emit(send_result)
     elif args.command == "email-quality":
         from email_metrics.quality_metrics import format_quality_line, metrics_view
         view = metrics_view(args.enterprise, start=args.start or None, end=args.end or None,

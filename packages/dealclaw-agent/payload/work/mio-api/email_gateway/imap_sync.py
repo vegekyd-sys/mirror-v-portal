@@ -403,6 +403,7 @@ class ImapSynchronizer:
                 )
                 if stored:
                     result.fetched += 1
+                    bound = None
                     if related:
                         result.related += 1
                         # 绑定原 outbound（In-Reply-To / References），复制 company/campaign/lead/contact 身份，写 log_reply
@@ -416,6 +417,14 @@ class ImapSynchronizer:
                     if not related and not emit_all:
                         result.filtered += 1
                     if related or emit_all:
+                        # 通知目标：发信会话优先（与 Resend 取信链路同一口径），
+                        # account 级绑定作为回退；去重后发信会话排最前。
+                        explicit = str(
+                            ((bound or outbound_row) or {}).get("origin_notify_target") or ""
+                        ).strip()
+                        chat_ids = [row["chat_id"] for row in bindings]
+                        if explicit and explicit not in chat_ids:
+                            chat_ids = [explicit, *chat_ids]
                         result.events.append(
                             {
                                 "type": "mail.received",
@@ -423,7 +432,7 @@ class ImapSynchronizer:
                                 "enterprise_id": account["enterprise_id"],
                                 "owner_open_id": account["owner_open_id"],
                                 "email_address": account["email_address"],
-                                "chat_ids": [row["chat_id"] for row in bindings],
+                                "chat_ids": chat_ids,
                                 "uid": uid,
                                 "message_id": message_id,
                                 "from": sender,

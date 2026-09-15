@@ -174,3 +174,34 @@ Wirings (both never raise into business code):
   sender script; a blocked send returns `success=False, sent=False,
   code=send_gate_not_ready` and pushes a "未发送" receipt. `dc_pending_send`
   dispatches through `send_batch`, so the queued path is covered too.
+
+## Send stop switches (T8)
+
+No rate limiting — the quota is already 30/day per tenant. What T8 adds is a
+blast-radius brake plus visibility, both in `send_control.py`:
+
+```bash
+python3 -m email_gateway.cli send-switch-status [--enterprise ID]
+python3 -m email_gateway.cli send-switch-platform --action pause|resume \
+    [--reason "..."] [--by WHO]
+python3 -m email_gateway.cli send-switch-tenant --enterprise ID \
+    --action pause|resume [--reason "..."] [--by WHO]
+python3 -m email_gateway.cli send-alerts --enterprise ID [--start D --end D] \
+    [--line] [--notify-target oc_xxx|ou_xxx]
+```
+
+- State lives in `<data_dir>/send-control/state.json` (no new service, no new
+dependency, no SQLite). Tenant keys are canonicalised the same way as
+`quality_metrics`.
+- Platform switch stops **every** sender — self-owned and managed mailboxes
+alike — because all tenants share one `mail.dealclaw.io` and one Provider
+account. The tenant switch stops every sending identity of that tenant.
+- A blocked send returns `success=False, sent=False, count=0`, `code`
+`send_blocked_platform` / `send_blocked_tenant`, a human `reason`, and a
+`next_action` naming who can resume. The sender script is never invoked.
+- Switch state read failure → **does not block**, loud stderr warning. The
+switch is a brake, not a security boundary; a broken state file must not stop
+every tenant's mail.
+- Thresholds (default `accepted >= 20`, complaint rate > 0.5%, bounce rate >
+5%) only **alert** — never auto-cut. Below 20 accepted no ratio alert is
+raised, so one complaint in a 30-send day can't be reported as 3.3%.

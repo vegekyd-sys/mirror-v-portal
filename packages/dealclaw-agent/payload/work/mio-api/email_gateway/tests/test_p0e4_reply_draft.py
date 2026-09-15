@@ -136,15 +136,37 @@ class P0E4ReplyDraftTests(unittest.TestCase):
         self.assertEqual(d2.get("next_action"), "retry_after_review")
 
     # ── 10 ───────────────────────────────────────────────
-    def test_10_multiple_same_contact_no_auto_bind(self):
+    def test_10_multiple_same_contact_converges_low_confidence_not_silent(self):
+        """同一联系人多封 outbound：不再一律 ambiguous（实测归属 0 matched），
+        而是按「最近一封未回复」收敛一条，但必须标低置信 + need_user，候选列表保留。
+        """
         account = self.add_account(provider="resend")
-        self.insert_outbound(account_id=account["account_id"], resend_id="re_1", message_id="<out-1@example.com>", recipients=["buyer@x.com"])
-        self.insert_outbound(account_id=account["account_id"], resend_id="re_2", message_id="<out-2@example.com>", recipients=["buyer@x.com"])
+        self.insert_outbound(account_id=account["account_id"], resend_id="re_1", message_id="<out-1@example.com>", recipients=["buyer@x.com"], sent_at="2026-09-10T00:00:00+00:00")
+        self.insert_outbound(account_id=account["account_id"], resend_id="re_2", message_id="<out-2@example.com>", recipients=["buyer@x.com"], sent_at="2026-09-12T00:00:00+00:00")
         from dc_email_controller.dc_webhook_handler import _fallback_match_by_contact
-        fb = _fallback_match_by_contact(self.store, account["account_id"], "buyer@x.com", "thia@mail.dealclaw.io")
+        with patch("dc_email_controller.dc_email_signals.replied_thread_ids",
+                   return_value=set()):
+            fb = _fallback_match_by_contact(self.store, account["account_id"], "buyer@x.com", "thia@mail.dealclaw.io")
+        self.assertEqual(fb["status"], "matched")
+        self.assertEqual(fb["binding_method"], "contact_recent")
+        self.assertEqual(fb["binding_confidence"], "low")   # 不确定就不假装确定
+        self.assertTrue(fb["need_user"])
+        self.assertEqual(fb["outbound"]["resend_id"], "re_2")  # 最近一封
+        self.assertEqual(len(fb["candidate_outbound_ids"]), 2)  # 候选列表留给人工复核
+
+    # ── 10b ──────────────────────────────────────────────
+    def test_10b_all_candidates_outside_window_is_ambiguous(self):
+        """时间窗内没有候选 → 不猜（宁可不绑，也不把陈年群发当成这次回复的母邮件）。"""
+        account = self.add_account(provider="resend")
+        self.insert_outbound(account_id=account["account_id"], resend_id="re_1", message_id="<out-1@example.com>", recipients=["buyer@x.com"], sent_at="2025-01-01T00:00:00+00:00")
+        self.insert_outbound(account_id=account["account_id"], resend_id="re_2", message_id="<out-2@example.com>", recipients=["buyer@x.com"], sent_at="2025-02-01T00:00:00+00:00")
+        from dc_email_controller.dc_webhook_handler import _fallback_match_by_contact
+        with patch("dc_email_controller.dc_email_signals.replied_thread_ids",
+                   return_value=set()):
+            fb = _fallback_match_by_contact(self.store, account["account_id"], "buyer@x.com", "thia@mail.dealclaw.io")
         self.assertEqual(fb["status"], "ambiguous")
         self.assertTrue(fb["need_user"])
-        self.assertEqual(len(fb["candidate_outbound_ids"]), 2)
+        self.assertNotIn("outbound", fb)
 
     # ── 11 ───────────────────────────────────────────────
     def test_11_repeat_confirm_no_duplicate_send(self):

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 
 # 配置（运行时读取）
@@ -179,17 +180,51 @@ def extract_resend_id(data: dict) -> str:
     return data.get("email_id") or data.get("id") or ""
 
 
+def _header_pairs(headers) -> list[tuple[str, str]]:
+    """把邮件头归一化成 ``[(name, value)]``，name 一律小写。
+
+    为什么需要这层：Resend Receiving API 返回的 ``headers`` 是 **对象**
+    （``{"in-reply-to": "<...>"}``），而历史 webhook payload / 测试夹具用的是
+    ``[{"name": ..., "value": ...}]`` 数组。只认数组会让 In-Reply-To / References
+    被静默丢弃 —— 表现为买家回信永远匹配不上母邮件，只能退到 contact fallback 猜。
+    """
+    out: list[tuple[str, str]] = []
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            name = str(key).strip().lower()
+            if not name:
+                continue
+            if isinstance(value, (list, tuple)):
+                out.extend((name, str(v)) for v in value if v)
+            elif value is not None and value != "":
+                out.append((name, str(value)))
+        return out
+    for h in headers or []:
+        if isinstance(h, dict):
+            name = str(h.get("name") or h.get("key") or "").strip().lower()
+            if not name:
+                continue
+            value = h.get("value")
+            if isinstance(value, (list, tuple)):
+                out.extend((name, str(v)) for v in value if v)
+            else:
+                out.append((name, "" if value is None else str(value)))
+        elif isinstance(h, str) and ":" in h:
+            name, _, value = h.partition(":")
+            out.append((name.strip().lower(), value.strip()))
+    return out
+
+
 def _parse_email_headers(headers, full: dict = None) -> tuple[str, str, list[str]]:
-    """从 Receiving API 返回的 headers 数组解析 Message-ID / In-Reply-To / References。"""
+    """从 Receiving API 返回的 headers 解析 Message-ID / In-Reply-To / References。
+
+    兼容 ``headers`` 的对象形态与数组形态，见 :func:`_header_pairs`。
+    """
     full = full or {}
     message_id = full.get("message_id") or ""
     in_reply_to = full.get("in_reply_to") or ""
     references = full.get("references") or []
-    for h in headers or []:
-        if not isinstance(h, dict):
-            continue
-        name = (h.get("name") or h.get("key") or "").lower()
-        value = h.get("value", "")
+    for name, value in _header_pairs(headers):
         if name == "message-id" and not message_id:
             message_id = value
         elif name == "in-reply-to" and not in_reply_to:
@@ -395,6 +430,12 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
             outbound = fb["outbound"]
             result["binding_method"] = fb.get("binding_method", "")
             result["binding_confidence"] = fb.get("binding_confidence", "")
+            if fb.get("need_user"):
+                # 多候选收敛出的低置信绑定：链继续跑（不阻断信号/推送），
+                # 但 need_user + 候选列表必须一路带出去，人工可复核。
+                result["need_user"] = True
+                result["binding_reason"] = fb.get("reason", "")
+                result["candidate_outbound_ids"] = fb.get("candidate_outbound_ids", [])
         elif fb.get("status") == "ambiguous":
             # company 级降级：候选 outbound 都属同一企业时，按企业绑定产生回复信号
             # （漏斗/早晚报只需企业级事实）；lead 级精确归属仍 need_user，留给人工。
@@ -520,6 +561,9 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
         "lead_id": outbound.get("lead_id", ""),
         "contact_id": outbound.get("contact_id", ""),
         "thread_id": outbound.get("thread_id") or outbound.get("local_message_id", ""),
+        # 发这封邮件的会话（oc_ 群 / ou_ 私聊）：投递层优先把回信通知发到这里，
+        # 而不是 account 级人工绑定。为空/旧记录缺字段 → 投递层自动回退到绑定。
+        "origin_notify_target": outbound.get("origin_notify_target", "") or "",
     }
 
 
@@ -532,11 +576,46 @@ def _account_for_to(to_email: str):
     return None
 
 
-def _fallback_match_by_contact(store, account_id: str, from_email: str, to_email: str) -> dict:
-    """contact fallback 匹配（P0-E4 歧义保护）。返回 {status, outbound?, ...}。
+# contact fallback 时间窗（天）：只在「同一联系人 + 最近时间窗」内收敛出一条候选，
+# 超窗一律不猜（宁可 need_user，也不把几年前的群发当成这次回复的母邮件）。
+FALLBACK_WINDOW_DAYS = 90
 
-    - 唯一匹配一个 outbound → 自动绑定。
-    - 多个匹配 → 只保留「未完成」（无回复信号）的 outbound；仍多个 → ambiguous，不猜测。
+
+def _recency_key(rec: dict) -> str:
+    """outbound 的真实时间排序键（发信时间优先，绝不用文件 mtime）。"""
+    return str(rec.get("sent_at") or rec.get("created_at") or "")
+
+
+def _within_window(rec: dict, *, now: datetime, window_days: int) -> bool:
+    """该 outbound 是否在时间窗内。无/无法解析时间戳 → 不算（保守）。"""
+    key = _recency_key(rec)
+    if not key:
+        return False
+    try:
+        ts = datetime.fromisoformat(key.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (now - ts).days <= window_days
+
+
+def _fallback_match_by_contact(store, account_id: str, from_email: str, to_email: str,
+                               *, window_days: int | None = None,
+                               now: datetime | None = None) -> dict:
+    """contact fallback 匹配（P0-E4 歧义保护 + 2026-09-15 收敛口径）。
+
+    返回 ``{status, outbound?, binding_method, binding_confidence, need_user, candidates}``。
+
+    收敛口径（为什么改）：实测同一联系人名下 16 条 outbound 时一律返回 ``ambiguous``，
+    结果归属 0 matched、信号不生成、回信“拉到了却没人知道”。新口径按
+    「同一联系人 → 优先未被回复的 → 时间窗内 → 取最近一封」挑一条：
+
+    - 唯一匹配 → matched / medium（不变）；
+    - 多封命中但**只有一条未回复且在窗口内** → matched / medium（与旧行为一致）；
+    - 多封未回复都在窗口内 → 挑最近一封，绑上但标 ``binding_confidence=low`` +
+      ``need_user=True``：可以继续走信号/推送链，但绝不假装确定（人工可复核候选列表）；
+    - 时间窗内无候选（全已回复且超窗/无时间戳）→ ``ambiguous``，不猜。
     """
     if not from_email or "@" not in from_email:
         return {"status": "no_match"}
@@ -551,13 +630,25 @@ def _fallback_match_by_contact(store, account_id: str, from_email: str, to_email
     try:
         from .dc_email_signals import replied_thread_ids
         replied = replied_thread_ids()
-        incomplete = [m for m in matches if (m.get("local_message_id") or "") not in replied]
+        unreplied = [m for m in matches if (m.get("local_message_id") or "") not in replied]
     except Exception:
-        incomplete = matches
-    if len(incomplete) == 1:
-        return {"status": "matched", "outbound": incomplete[0],
+        unreplied = list(matches)
+    days = FALLBACK_WINDOW_DAYS if window_days is None else int(window_days)
+    now_dt = now or datetime.now(timezone.utc)
+    in_window = [m for m in (unreplied or matches)
+                 if _within_window(m, now=now_dt, window_days=days)]
+    candidates = [m.get("resend_id", "") for m in matches]
+    if not in_window:
+        return {"status": "ambiguous", "binding_status": "ambiguous", "auto_fixed": False,
+                "need_user": True, "candidate_outbound_ids": candidates,
+                "reason": "no_recent_candidate"}
+    if len(in_window) == 1 and unreplied:
+        # 只有一条未回复且在窗口内：旧行为（medium），不必惊动人工
+        return {"status": "matched", "outbound": in_window[0],
                 "binding_method": "contact_fallback", "binding_confidence": "medium",
-                "candidate_outbound_ids": [m.get("resend_id", "") for m in matches]}
-    return {"status": "ambiguous", "binding_status": "ambiguous", "auto_fixed": False,
-            "need_user": True,
-            "candidate_outbound_ids": [m.get("resend_id", "") for m in matches]}
+                "candidate_outbound_ids": candidates}
+    latest = max(in_window, key=_recency_key)
+    return {"status": "matched", "outbound": latest,
+            "binding_method": "contact_recent", "binding_confidence": "low",
+            "need_user": True, "candidate_outbound_ids": candidates,
+            "reason": "multiple_same_contact"}

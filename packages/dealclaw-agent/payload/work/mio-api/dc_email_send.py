@@ -7,6 +7,10 @@
   3. best-effort 落 dc_send_log（enterprise 提供时）
   4. 带 --country 时做窗口路由：不在买家工作日 8-18 窗口 → 转待发队列（除非 --now 强发）
 
+``--receipt-target`` 是**发信会话**（群 ``oc_`` / 私聊 ``ou_``）：除了批次回执，它还会被
+落到 outbound 事实的 ``origin_notify_target``，作为买家回信时的默认通知投递目标；
+未指定时回信回退到 account 级绑定。
+
 用法：
   python3 dc_email_send.py send --channel GS --from 'V <v@mail.dealclaw.io>' \
       --to a@x.com,b@y.com --subject '...' [--html ...] [--text ...] \
@@ -66,50 +70,54 @@ def in_window(country: str, city: str | None = None) -> bool:
 
 
 def _land_outbound_fact(*, from_addr: str, to_list: list[str], subject: str,
-                        resend_id: str, enterprise: str) -> None:
+                        resend_id: str, enterprise: str, message_id: str = "",
+                        origin_notify_target: str = "") -> None:
     """发信成功后 best-effort 落 outbound 事实（收信匹配的唯一依据）。
 
+    实现已统一到 ``email_gateway.outbound_facts.land_outbound_fact``（单一实现，不再各处重复）。
     为什么必须有：收信侧靠 outbound 事实判断「这封回复回的是哪封邮件」。
     直发通道只写 sent-log 不落事实时，匹配不到（no_matching_outbound），
     信号永远不生成、通知永远不弹——而且不报错。事实层少写一条 → 下游静默失效。
+
+    ``message_id`` 必须是**发送服务商真实分配的 RFC Message-ID**（不是本地占位 id）：
+    买家回信的 ``In-Reply-To`` 引用的就是它，只有落它才能按头部精确配上。
+    ``origin_notify_target`` 是发起这次发送的会话（群 ``oc_`` / 私聊 ``ou_``），
+    回信默认投递回那里；为空则回退 account 级绑定。
     这里失败只记日志，不影响发送结果本身。
     """
     try:
-        from email_gateway.store import EmailStore
-        store = EmailStore()
-        accounts: list = []
-        try:
-            accounts = store.list_accounts(enterprise_id=enterprise) or []
-        except Exception:  # noqa: BLE001
-            accounts = []
-        addr = (from_addr or "").split("<")[-1].strip(" <>").lower()
-        account_id = ""
-        for a in accounts:
-            if str(a.get("email_address", "")).lower() == addr:
-                account_id = str(a.get("account_id", ""))
-                break
-        if not account_id:
-            # 匹配不到发件账号 → 不落事实。account_id 是回复挂回原发件的唯一依据，
-            # 兜底取 accounts[0] 会串账号，比漏写更糟。
-            return
-        now = datetime.now(timezone.utc).isoformat()
-        store.insert_message({
-            "account_id": account_id,
-            "direction": "outbound",
-            "message_id": f"local_{uuid.uuid4().hex[:16]}",
-            "sender": from_addr,
-            "recipients": list(to_list),
-            "subject": subject,
-            "company_id": enterprise,
-            "resend_id": resend_id,
-            "local_message_id": resend_id or "",
-            "provider_status": "accepted",
-            "sent_at": now,
-            "created_at": now,
-        })
+        from email_gateway.outbound_facts import land_outbound_fact
+
+        r = land_outbound_fact(from_addr=from_addr, to_list=list(to_list or []),
+                               subject=subject, resend_id=resend_id,
+                               message_id=message_id,
+                               origin_notify_target=origin_notify_target,
+                               enterprise=enterprise)
+        if not r.get("ok"):
+            print(f"[dc_email_send] 落 outbound 事实失败（不影响发送结果）：{r.get('error')}",
+                  file=sys.stderr)
     except Exception as e:  # noqa: BLE001
         print(f"[dc_email_send] 落 outbound 事实失败（不影响发送结果）：{type(e).__name__}: {e}",
               file=sys.stderr)
+
+
+def _attach_origin_notify_target(*, resend_id: str, notify_target: str) -> None:
+    """给**已落库**的 outbound 事实补上「发信会话」（GS 通道专用）。
+
+    GS 的事实由 ``send.mjs`` → ``dc_record_outbound.py`` 在 node 侧落库，入口拿到
+    ``--receipt-target`` 时事实已存在，只能定点更新（重新 insert 会多出一条事实）。
+    best-effort：失败只记日志，不影响发送结果。
+    """
+    try:
+        from email_gateway.outbound_facts import set_origin_notify_target
+
+        r = set_origin_notify_target(resend_id=resend_id, notify_target=notify_target)
+        if not r.get("ok"):
+            print("[dc_email_send] 回信目标未落到 outbound 事实（不影响发送结果）："
+                  f"{r.get('error')}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print("[dc_email_send] 回信目标未落到 outbound 事实（不影响发送结果）："
+              f"{type(e).__name__}: {e}", file=sys.stderr)
 
 
 _MANAGED_DOMAIN = "mail.dealclaw.io"
@@ -241,12 +249,16 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
     except Exception as e:  # noqa: BLE001
         success, err = False, f"{type(e).__name__}: {e}"
 
-    # 解析底层发送脚本返回的 resend_id（GS send.mjs → data.id；FD send-direct.mjs → resendId）
+    # 解析底层发送脚本返回：resend_id（GS send.mjs → data.id；FD send-direct.mjs → resendId）
+    # 与 provider 真实 Message-ID（FD SMTP 通道 nodemailer 的 info.messageId）。
+    # 为什么要真实 Message-ID：买家回信的 In-Reply-To 引用的就是它，落本地占位 id 永远配不上。
     resend_id = ""
+    provider_message_id = ""
     if success:
         try:
             out = json.loads(r.stdout.strip())
             resend_id = out.get("id") or out.get("resendId") or ""
+            provider_message_id = out.get("messageId") or out.get("message_id") or ""
         except Exception:  # noqa: BLE001
             pass
 
@@ -275,13 +287,23 @@ def send_batch(channel: str, from_addr: str, to_list: list[str], subject: str,
         except Exception:  # noqa: BLE001
             pass
 
-    # 只有 FD 通道才补落：GS 通道 send.mjs 已通过 dc_record_outbound.py 落过，再落会重复
-    if success and resend_id and enterprise and channel.upper() == "FD":
-        _land_outbound_fact(from_addr=from_addr, to_list=to_list, subject=subject,
-                            resend_id=resend_id, enterprise=enterprise)
+    # best-effort 落 outbound 事实（收信匹配 + 回信投递目标的唯一依据）
+    # 只有 FD 通道才补落：GS 通道 send.mjs 已通过 dc_record_outbound.py 落过，再落会重复；
+    # GS 只补「发信会话」字段（定点更新，不新增事实）。
+    # FD/SMTP 通道没有 resend_id（provider 只回 messageId），所以判定必须是
+    # 「resend_id 或真实 Message-ID 任一存在」——否则 SMTP 直发永远不落事实，
+    # 回信就永远 matching 不到（这正是“拉到了却认不出”的根因之一）。
+    if success and enterprise:
+        if channel.upper() == "FD" and (resend_id or provider_message_id):
+            _land_outbound_fact(from_addr=from_addr, to_list=to_list, subject=subject,
+                                resend_id=resend_id, enterprise=enterprise,
+                                message_id=provider_message_id,
+                                origin_notify_target=receipt_target)
+        elif channel.upper() == "GS" and resend_id and receipt_target:
+            _attach_origin_notify_target(resend_id=resend_id, notify_target=receipt_target)
 
     return {"success": success, "count": n, "error": err, "resend_id": resend_id,
-            "sent": bool(success), "gate": gate}
+            "message_id": provider_message_id, "sent": bool(success), "gate": gate}
 
 
 def _cli() -> int:
@@ -299,7 +321,8 @@ def _cli() -> int:
     s.add_argument("--bcc", default="")
     s.add_argument("--country", default="")
     s.add_argument("--city", default="")
-    s.add_argument("--receipt-target", default="")
+    s.add_argument("--receipt-target", default="",
+                   help="发信会话（oc_ 群 / ou_ 私聊）：批次回执目标，同时落为回信默认投递目标")
     s.add_argument("--enterprise", required=True, help="企业 key（必填，用于落 send_log）")
     s.add_argument("--now", action="store_true", help="跳过窗口检查，当场发")
 

@@ -439,6 +439,11 @@ class MarkdownEmailStore:
                 # 不是本地 make_msgid 生成的占位 ID；多供应商时再抽象为 provider_message_id（本轮不改字段名）。
                 "smtp_message_id": message.get("smtp_message_id", "") or "",
                 "thread_id": message.get("thread_id", "") or "",
+                # origin_notify_target：「发这封邮件的会话」（oc_ 群 / ou_ 私聊）。
+                # 回信默认投递回这里，account 级人工绑定只作回退（2026-09-15 起）。
+                # _normalize 是白名单：不在此列出的字段会被静默丢弃；旧记录缺该字段
+                # 读到的是空串，不报错。
+                "origin_notify_target": message.get("origin_notify_target", "") or "",
                 "sent_at": message.get("sent_at") or message.get("created_at", utc_now()),
                 "status": message.get("status", "sent"),
                 "provider_status": message.get("provider_status", "") or "",
@@ -705,6 +710,31 @@ class MarkdownEmailStore:
             path = self.root / rel
             _write_snapshot(path, rec)
             self._write_index("message-id", smtp_message_id, rel)
+            return True
+
+    def set_outbound_notify_target(self, resend_id: str, notify_target: str) -> bool:
+        """把「发信会话」补写到**已落库**的 outbound 事实（回信默认投递目标）。
+
+        与 :meth:`backfill_smtp_message_id` 同构：按 resend_id 定位 + 定点更新 + 幂等。
+        为什么必须定点更新而不是重新 insert：GS 直发的 outbound 事实是在 node 侧由
+        ``dc_record_outbound.py`` 落的，发信入口拿到 ``--receipt-target`` 时事实已经存在，
+        再 insert 会写出第二条 outbound 事实（回信匹配出现两个候选）。
+
+        返回是否发生变更；找不到事实返回 False（调用方按 best-effort 处理，不得回滚发送）。
+        """
+        if not resend_id or not notify_target:
+            return False
+        with self._record_lock(f"notifytarget:{resend_id}"):
+            outbound = self.find_outbound_by_resend_id(resend_id)
+            if outbound is None:
+                return False
+            if outbound.get("origin_notify_target") == notify_target:
+                return False
+            rec = dict(outbound)
+            rec["origin_notify_target"] = notify_target
+            rec["updated_at"] = utc_now()
+            rel = self._locate_outbound_path(rec)
+            _write_snapshot(self.root / rel, rec)
             return True
 
     def remove_outbound(self, resend_id: str) -> dict:
