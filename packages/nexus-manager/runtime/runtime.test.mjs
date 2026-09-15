@@ -10,7 +10,7 @@ import { createEmbedProxy, embedHeaders } from './embed-proxy.mjs';
 test('restart preserves native configuration, work and identity; secrets remain references', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-manager-'));
   try {
-    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://manager.example.com',
+    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://admin.example.com',
       OPENCLAW_GATEWAY_TOKEN: 'a'.repeat(40), NEXUS_MODEL_API_KEY: 'private-model-key',
       OPENCLAW_HOME: `${root}/home`, OPENCLAW_STATE_DIR: `${root}/state`, OPENCLAW_CONFIG_PATH: `${root}/state/openclaw.json`,
       OPENCLAW_WORKSPACE_DIR: `${root}/workspace`, NEXUS_MODEL_BASE_URL: 'https://models.example.com/v1', NEXUS_MODEL_ID: 'model', NEXUS_UI_BASE_PATH: '/nexus-manager/openclaw/' };
@@ -18,7 +18,7 @@ test('restart preserves native configuration, work and identity; secrets remain 
     bootstrap(env, payload);
     const initial = fs.readFileSync(env.OPENCLAW_CONFIG_PATH, 'utf8');
     assert.equal(JSON.parse(initial).gateway.controlUi.basePath, '/nexus-manager/openclaw');
-    assert.deepEqual(JSON.parse(initial).gateway.controlUi.allowedOrigins, ['https://manager.example.com']);
+    assert.deepEqual(JSON.parse(initial).gateway.controlUi.allowedOrigins, ['https://admin.example.com']);
     assert.deepEqual(JSON.parse(initial).gateway.trustedProxies, ['127.0.0.1', '::1']);
     assert.equal(JSON.parse(initial).memory.search.enabled, false);
     assert.equal(JSON.parse(initial).agents.defaults.memorySearch, undefined);
@@ -30,14 +30,14 @@ test('restart preserves native configuration, work and identity; secrets remain 
     assert.equal(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, 'utf8'), '{"native":"edited"}');
     assert.equal(fs.readFileSync(`${root}/workspace/IDENTITY.md`, 'utf8'), 'updated identity');
     assert.equal(fs.readFileSync(`${root}/workspace/progress.txt`, 'utf8'), 'work');
-    assert.throws(() => bootstrap({ ...env, NEXUS_UI_ORIGIN: env.NEXUS_ADMIN_ORIGIN }, payload));
+    assert.doesNotThrow(() => bootstrap(env, payload));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('first boot is available before a model credential is configured', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-manager-empty-'));
   try {
-    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://manager.example.com',
+    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://admin.example.com',
       OPENCLAW_GATEWAY_TOKEN: 'a'.repeat(40), OPENCLAW_HOME: `${root}/home`, OPENCLAW_STATE_DIR: `${root}/state`,
       OPENCLAW_CONFIG_PATH: `${root}/state/openclaw.json`, OPENCLAW_WORKSPACE_DIR: `${root}/workspace`,
       NEXUS_MODEL_BASE_URL: 'https://models.example.com/v1', NEXUS_MODEL_ID: 'model', NEXUS_UI_BASE_PATH: '/nexus-manager/openclaw' };
@@ -45,6 +45,29 @@ test('first boot is available before a model credential is configured', () => {
     const config = fs.readFileSync(env.OPENCLAW_CONFIG_PATH, 'utf8');
     assert.ok(config.includes('${NEXUS_MODEL_API_KEY}'));
     assert.equal(JSON.parse(config).agents.defaults.model.primary, 'nexus/model');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('startup migrates only deployment-owned UI routing for existing state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-manager-routing-'));
+  try {
+    const state = `${root}/state`;
+    fs.mkdirSync(state, { recursive: true });
+    const configPath = `${state}/openclaw.json`;
+    fs.writeFileSync(configPath, JSON.stringify({
+      gateway: { controlUi: { allowedOrigins: ['https://manager.example.com'], basePath: '/old', theme: 'dark' } },
+      channels: { feishu: { enabled: true } },
+    }));
+    const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://admin.example.com',
+      OPENCLAW_GATEWAY_TOKEN: 'a'.repeat(40), OPENCLAW_HOME: `${root}/home`, OPENCLAW_STATE_DIR: state,
+      OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: `${root}/workspace`,
+      NEXUS_MODEL_BASE_URL: 'https://models.example.com/v1', NEXUS_MODEL_ID: 'model', NEXUS_UI_BASE_PATH: '/nexus-manager/openclaw' };
+    bootstrap(env, path.resolve(import.meta.dirname, '../payload'));
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.deepEqual(config.gateway.controlUi.allowedOrigins, ['https://admin.example.com']);
+    assert.equal(config.gateway.controlUi.basePath, '/nexus-manager/openclaw');
+    assert.equal(config.gateway.controlUi.theme, 'dark');
+    assert.deepEqual(config.channels, { feishu: { enabled: true } });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

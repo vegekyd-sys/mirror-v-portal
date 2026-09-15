@@ -48,9 +48,8 @@ flowchart TD
     A[现有管理控制台：项目智能体] --> P[现有 Provisioning Service\n新增 system-agent 管理接口]
     P --> K[Kubernetes API：状态 / 日志 / 重启]
     A --> I[iframe：原生配置 / 通道 / 对话]
-    U[独立窗口备用入口] --> I
-    I --> G[HTTPS Ingress]
-    G --> S[ClusterIP Service]
+    I --> W[admin-web 同源反向代理]
+    W --> S[ClusterIP Service]
     S --> O[嵌入代理 / OpenClaw Gateway]
     F[飞书等消息通道] <--> O
     O --> N[专用 PVC / PV\n独立 NAS 性能型文件系统]
@@ -63,7 +62,7 @@ flowchart TD
 | Namespace | `dealclaw-system`，和业务服务同集群，便于限定管理身份 |
 | Deployment | `nexus-manager`，replicas=1，strategy=Recreate，不启用 HPA |
 | Service | `nexus-manager`，ClusterIP，18789 指向嵌入适配代理，原生 Gateway 使用 loopback:18790 |
-| Ingress | 专用域名、HTTPS，同时转发 HTTP 和 WebSocket |
+| UI 路由 | admin-web 的 `/nexus-manager/openclaw/` 同源反向代理，同时转发 HTTP 和 WebSocket |
 | Secret | 模型密钥、通道凭据、Gateway 凭据、项目工具凭据，按用途拆分 |
 | ConfigMap | 首次初始化模板，不持续覆盖用户配置 |
 | PV / PVC | 静态绑定指定 NAS 文件系统；PV reclaimPolicy=Retain |
@@ -115,9 +114,9 @@ NAS 上保存权威状态；依赖缓存和可重建索引优先放临时存储�
 
 ## 6. 控制台内嵌原生 UI
 
-新增 `/nexus-manager` 页面及导航。上方为外层管理栏，下方 iframe 加载独立 HTTPS 子域名的原生 UI，不移植或重写 OpenClaw 前端。
+新增 `/nexus-manager` 页面及导航。上方为外层管理栏，下方 iframe 加载 admin-web 同源路径 `/nexus-manager/openclaw/` 的原生 UI，不移植或重写 OpenClaw 前端。
 
-- 外层管理栏：Pod 状态、启动/停止、重启、模型凭据切换/回退、当前/上一容器日志、刷新原生界面、独立窗口打开。
+- 外层管理栏：Pod 状态、启动/停止、重启、模型凭据切换/回退、当前/上一容器日志、刷新原生界面。
 - 原生 UI：对话、会话、模型与通道设置、定时任务等该固定版本支持的功能。
 - Gateway 不可用时外层管理接口仍能读取 K8s 状态、日志并重启实例。
 - 不加入客户套餐、积分、欠费销毁和批量发布流程。
@@ -125,7 +124,7 @@ NAS 上保存权威状态；依赖缓存和可重建索引优先放临时存储�
 
 ## 7. 配置和凭据如何生效
 
-NAS 上的原生配置是运行配置唯一权威来源，启动只做首次初始化，不覆盖原生 UI 保存的修改。首版不再新增第二套模型/通道配置表单或 Gateway 配置 RPC adapter，直接使用嵌入的原生界面。
+NAS 上的原生配置是运行配置唯一权威来源，启动只做首次初始化，不覆盖原生 UI 保存的模型、通道和智能体配置。UI origin 与 basePath 属于部署路由配置，启动时会定向校准这两个字段，确保域名或路径迁移后 WebSocket 能建立连接。首版不再新增第二套模型/通道配置表单或 Gateway 配置 RPC adapter，直接使用嵌入的原生界面。
 
 模型 API Key 是例外：首启无需预置 Key，外层凭据表单会创建并更新 `${NEXUS_MODEL_API_KEY}` 对应的版本化 Kubernetes Secret，然后滚动重启 Pod；初始化的 `nexus` 供应商引用它。新增供应商需在原生 UI 配置其凭据；只有明确引用该变量的供应商才使用外层更新的 Key。
 
@@ -137,15 +136,15 @@ NAS 上的原生配置是运行配置唯一权威来源，启动只做首次初�
 
 ## 8. iframe、认证与网络
 
-原生 UI 独立域名，例如 `nexus-manager.<现有域名>`；禁止与 admin-web 同源，防止原生页面访问控制台 localStorage 中的管理员 JWT。
+原生 UI 仅通过 admin-web 同源路径 `/nexus-manager/openclaw/` 暴露。admin-web Nginx 将该路径代理到 `nexus-manager.dealclaw-system.svc.cluster.local:18789`，不再创建 Nexus Manager Ingress、独立域名或 TLS Secret。
 
-链路：浏览器 iframe → HTTPS Ingress → ClusterIP:18789 → 轻量 HTTP/WS 代理 → loopback:18790 OpenClaw Gateway。代理和 Gateway 在同一个容器由启动进程管理，不增加独立部署服务。
+链路：浏览器 iframe → admin-web HTTPS → admin-web Nginx → ClusterIP:18789 → 轻量 HTTP/WS 代理 → loopback:18790 OpenClaw Gateway。代理和 Gateway 在同一个容器由启动进程管理，不增加独立部署服务。
 
-代理仅针对 UI HTML 调整 `frame-ancestors` 为 admin-web 的精确 HTTPS origin，并处理冲突的 X-Frame-Options；保留其他 CSP 指令以及 canvas/widget 的 sandbox 策略。代理不注入 Gateway 凭据，不启用 trusted-proxy 身份认证，移除外部身份伪造头。WS Origin 只允许原生 UI 自身域名。OpenClaw allowedOrigins 同样配置原生 UI origin，与允许嵌入的父页面 origin 分开。
+代理仅针对 UI HTML 调整 `frame-ancestors` 为 admin-web 的精确 HTTPS origin，并处理冲突的 X-Frame-Options；保留其他 CSP 指令以及 canvas/widget 的 sandbox 策略。代理不注入 Gateway 凭据，不启用 trusted-proxy 身份认证，移除外部身份伪造头。WS Origin 和 OpenClaw allowedOrigins 均只允许 admin-web 的 HTTPS origin。
 
-第一版保留原生认证和设备配对，不做自动登录，不在 URL 传 token。需要时可独立窗口登录；浏览器跨站限制、弹窗或某些原生能力不兼容 iframe 时独立窗口作为备用入口。宿主 iframe 不允许顶层跳转。
+第一版保留原生认证和设备配对，不做自动登录，不在 URL 传 token，也不提供独立窗口入口。宿主 iframe 不允许顶层跳转。由于原生 UI 与管理控制台同源，固定版本的 OpenClaw 前端与 admin-web 处于同一浏览器信任边界；镜像升级需审查原生 UI 变更，并按管理端代码同等级保护。
 
-Ingress 需支持 WebSocket 和长连接；模板按 ingress-nginx 提供，真实集群若使用 ALB 等控制器需适配后验证。
+admin-web Nginx 需支持 WebSocket 和长连接；现有 admin-web Ingress 的根路径继续承载外部 HTTPS。
 
 ## 9. 最小管理 API 与权限
 
@@ -183,7 +182,7 @@ k8s/nexus-manager/                              工作负载、网络、NAS 静�
 顺序：
 
 1. 核实集群、CSI、域名及固定 OpenClaw 版本；验证原生 UI、消息插件和 NAS 文件语义。
-2. 创建独立 NAS，部署独立镜像和 Gateway，接通 HTTPS 原生 UI。
+2. 创建独立 NAS，部署独立镜像和 Gateway，接通 admin-web 同源原生 UI 路径。
 3. 接入控制台管理栏及原生 UI，验证模型、飞书、日志与重启。
 4. 注入项目说明、仓库和操作权限，配置巡检与日报，做一轮真实任务验收。
 
@@ -198,7 +197,7 @@ k8s/nexus-manager/                              工作负载、网络、NAS 静�
 - 重启时不存在两个活跃 Gateway；节点故障恢复不会双写。
 - 普通任务、日志与报表不泄露凭据；通道只接受授权管理员指令。
 
-待实施时补齐的部署参数：集群实际 namespace 与 CSI 情况、NAS 地域/VPC/性能型规格、原生 UI 域名、默认模型及飞书应用。技术设计不依赖先提供这些凭据。
+待实施时补齐的部署参数：集群实际 namespace 与 CSI 情况、NAS 地域/VPC/性能型规格、默认模型及飞书应用。技术设计不依赖先提供这些凭据。
 
 ## 12. 官方依据与版本边界
 
@@ -210,7 +209,7 @@ k8s/nexus-manager/                              工作负载、网络、NAS 静�
 
 ## 13. 首版实施记录
 
-已实现：控制台 iframe 页面和外层管理栏、受认证保护的状态/启动/停止/重启/凭据版本切换与回退/日志 API、独立固定镜像、首次初始化人设与工作区、HTTP/WS 嵌入适配、专用 NAS 和同集群部署模板。
+已实现：控制台 iframe 页面和外层管理栏、受认证保护的状态/启动/停止/重启/凭据版本切换与回退/日志 API、独立固定镜像、首次初始化人设与工作区、admin-web 同源 HTTP/WS 嵌入适配、专用 NAS 和同集群部署模板。
 
 本地验证：
 

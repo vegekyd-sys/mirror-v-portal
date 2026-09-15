@@ -50,7 +50,13 @@ export default function SystemAgentPage() {
     catch (e) { setLogs(errMsg(e)); }
   };
   const uiUrl = (() => {
-    try { const u = new URL(status?.uiUrl || ''); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash && u.origin !== window.location.origin ? u.href : null; }
+    try {
+      const u = new URL(status?.uiUrl || '');
+      const expectedPath = '/nexus-manager/openclaw';
+      return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash
+        && u.origin === window.location.origin
+        && (u.pathname === expectedPath || u.pathname.startsWith(`${expectedPath}/`)) ? u.href : null;
+    }
     catch { return null; }
   })();
   return <div>
@@ -65,7 +71,6 @@ export default function SystemAgentPage() {
         <button className="btn" disabled={!status || Boolean(error)} onClick={() => setCredentials(v => !v)}>模型凭据</button>
         <button className="btn" disabled={!pod} onClick={() => void readLogs()}>Pod 日志</button>
         <button className="btn" onClick={() => setFrame(v => v + 1)}>刷新原生界面</button>
-        {uiUrl && <a className="btn" href={uiUrl} target="_blank" rel="noopener noreferrer">独立窗口打开</a>}
       </div>
       {status && <p style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{status.namespace} · {status.image}</p>}
       {credentials && <form onSubmit={e => { e.preventDefault(); void saveKey(); }}>
@@ -84,10 +89,10 @@ export default function SystemAgentPage() {
         <small>最近 300 行；跨 Pod 历史请使用日志平台。</small>
       </div>}
     </section>
-    <p>首次连接需使用 OpenClaw 独立凭据并完成设备配对。如浏览器限制嵌入登录，请使用“独立窗口打开”。</p>
+    <p>原生界面仅通过管理控制台内嵌访问；首次连接需使用 OpenClaw 凭据并完成设备配对。</p>
     {uiUrl ? <iframe key={frame} src={uiUrl} title="Nexus Manager 原生 OpenClaw 控制台"
       referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
       style={{ width: '100%', height: 'calc(100vh - 300px)', minHeight: 560, border: '1px solid #dbe2ea', borderRadius: 12, background: '#fff' }} />
-      : <section className="card" style={{ padding: 32 }}>配置独立 HTTPS 原生 UI 地址后，这里将显示 OpenClaw。嵌入地址不能与控制台同源。</section>}
+      : <section className="card" style={{ padding: 32 }}>配置管理控制台同源的 OpenClaw UI 路径后，这里将显示原生界面。</section>}
   </div>;
 }

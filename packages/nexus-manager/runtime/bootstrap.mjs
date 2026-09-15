@@ -13,11 +13,28 @@ export function normalizeUiBasePath(value = '') {
   return value.replace(/\/$/, '');
 }
 
+function reconcileUiRouting(configPath, uiOrigin, uiBasePath) {
+  let config;
+  try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
+  catch { return; }
+  const controlUi = config?.gateway?.controlUi;
+  if (!controlUi || typeof controlUi !== 'object' || Array.isArray(controlUi)) return;
+  const expectedOrigins = [uiOrigin];
+  const originsChanged = JSON.stringify(controlUi.allowedOrigins) !== JSON.stringify(expectedOrigins);
+  const pathChanged = uiBasePath ? controlUi.basePath !== uiBasePath : Object.hasOwn(controlUi, 'basePath');
+  if (!originsChanged && !pathChanged) return;
+  controlUi.allowedOrigins = expectedOrigins;
+  if (uiBasePath) controlUi.basePath = uiBasePath;
+  else delete controlUi.basePath;
+  const temporaryPath = `${configPath}.routing-${process.pid}`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(temporaryPath, configPath);
+}
+
 export function bootstrap(env = process.env, payload = '/opt/nexus-manager/payload') {
   const adminOrigin = httpsOrigin(env.NEXUS_ADMIN_ORIGIN);
   const uiOrigin = httpsOrigin(env.NEXUS_UI_ORIGIN);
   const uiBasePath = normalizeUiBasePath(env.NEXUS_UI_BASE_PATH);
-  if (adminOrigin === uiOrigin) throw new Error('Admin and Gateway must use separate origins');
   if (!env.OPENCLAW_GATEWAY_TOKEN || env.OPENCLAW_GATEWAY_TOKEN.length < 32) throw new Error('Gateway token must contain at least 32 characters');
   const state = env.OPENCLAW_STATE_DIR;
   const workspace = env.OPENCLAW_WORKSPACE_DIR;
@@ -49,5 +66,8 @@ export function bootstrap(env = process.env, payload = '/opt/nexus-manager/paylo
     };
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   }
+  // Routing is deployment-owned and may change independently of native UI
+  // configuration. Reconcile only these fields for existing NAS state.
+  reconcileUiRouting(configPath, uiOrigin, uiBasePath);
   return { adminOrigin, uiOrigin, uiBasePath };
 }

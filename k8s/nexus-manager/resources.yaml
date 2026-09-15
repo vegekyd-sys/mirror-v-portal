@@ -106,7 +106,7 @@ spec:
             - name: NEXUS_ADMIN_ORIGIN
               value: https://ADMIN_HOST
             - name: NEXUS_UI_ORIGIN
-              value: https://NEXUS_UI_HOST
+              value: https://ADMIN_HOST
             - name: NEXUS_UI_BASE_PATH
               value: /nexus-manager/openclaw
             - name: NEXUS_MODEL_BASE_URL
@@ -147,29 +147,6 @@ spec:
     app.kubernetes.io/name: nexus-manager
   ports:
     - { name: http, port: 18789, targetPort: http }
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: nexus-manager
-  namespace: dealclaw-system
-  annotations:
-    alb.ingress.kubernetes.io/backend-protocol: "http"
-spec:
-  ingressClassName: alb
-  tls:
-    - hosts: [NEXUS_UI_HOST]
-      secretName: datathink-tls
-  rules:
-    - host: NEXUS_UI_HOST
-      http:
-        paths:
-          - path: /nexus-manager/openclaw
-            pathType: Prefix
-            backend:
-              service:
-                name: nexus-manager
-                port: { number: 18789 }
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

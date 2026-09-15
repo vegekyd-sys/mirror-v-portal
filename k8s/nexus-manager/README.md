@@ -4,10 +4,10 @@
 
 ## 前置条件
 
-1. 确认实际集群、NAS CSI、Ingress 实现及 provisioning-service 的 namespace / ServiceAccount。
+1. 确认实际集群、NAS CSI 及 provisioning-service 的 namespace / ServiceAccount。
 2. 确认 ACK CNFS 控制器可创建独立 NAS 通用型性能型文件系统；模板使用 NFS v3，与集群现有高性能 NAS 配置一致。
 3. NAS 首发仅用于配置、JSON 会话和工作文件。内存索引默认禁用；在实际版本验证 SQLite/文件锁后再启用依赖本地数据库的功能。
-4. 准备独立 UI 域名与通配 TLS 证书；Ingress 已按 ACK ALB 的数字 Service 端口约束配置。
+4. admin-web 通过 `/nexus-manager/openclaw/` 反向代理集群内 `nexus-manager.dealclaw-system.svc.cluster.local:18789`，并支持 WebSocket 长连接。
 
 ## 构建
 
@@ -21,7 +21,7 @@ docker build --platform linux/amd64 -t <registry>/nexus-manager:<固定版本> p
 
 ## 参数与凭据
 
-设置 render.py 要求的七个非敏感环境变量，然后：
+设置 render.py 要求的五个非敏感环境变量，然后：
 
 ```sh
 python3 k8s/nexus-manager/render.py > /tmp/nexus-manager.yaml
@@ -32,7 +32,6 @@ kubectl apply --dry-run=server -f /tmp/nexus-manager.yaml
 
 - `nexus-manager-gateway`：`OPENCLAW_GATEWAY_TOKEN`，至少 32 字符随机值。
 - `registry-secret-vpc`：复用现有 ACR 拉取凭据，并复制到独立 namespace。
-- `datathink-tls`：复用现有 `*.datathink.com` TLS Secret，并复制到独立 namespace。
 
 密钥禁止填入 Git 模板。NAS 100Gi 是 PVC 声明，不是实际用量强制上限。
 
@@ -41,14 +40,14 @@ Provisioning Service 新版本需要三个环境变量：
 ```text
 NEXUS_MANAGER_ENABLED=true
 NEXUS_MANAGER_NAMESPACE=dealclaw-system
-NEXUS_MANAGER_UI_URL=https://<UI 域名>
+NEXUS_MANAGER_UI_URL=https://<ADMIN_HOST>/nexus-manager/openclaw
 ```
 
 确认 admin 域名上的 `/v1/admin/system-agent` 及子路径路由到 Provisioning Service；现有 ingress 若已将 `/v1/admin/*` 路由给其他服务，需增加更具体的前缀规则。路由仍使用现有 Bearer/JWT 认证。
 
 ## 运行与恢复
 
-- 控制台入口 `/nexus-manager`。外层管理栏不依赖 Gateway 启动成功；iframe 使用独立域名和原生认证。
+- 控制台入口 `/nexus-manager`。外层管理栏不依赖 Gateway 启动成功；iframe 使用 admin-web 同源路径和原生认证，不提供独立域名入口。
 - Gateway 监听容器 loopback:18790；同进程管理的轻量代理在 18789 提供 HTTP/WS，保留原生认证，只对 UI HTML 的 CSP framing 指令进行定向适配。
 - 原生 UI 首次输入 Gateway 凭据，通过运维人员执行 `openclaw devices list` / `openclaw devices approve <requestId>` 完成配对。不要把 Gateway token 放入 URL。
 - 主供应商初始化为 `nexus`，API Key 引用 `${NEXUS_MODEL_API_KEY}`。首启可不提供该变量，随后由管理控制台创建版本化 Secret 并重启 Pod；其他模型、通道、定时任务在原生 UI 配置。原生插件是否随镜像提供须在部署验证时确认，缺少时固定版本加入镜像。
@@ -62,4 +61,4 @@ NEXUS_MANAGER_UI_URL=https://<UI 域名>
 
 生产放行前验证：原生 UI/WS/设备配对、模型对话、实际需要的消息插件、重启持久化、凭据切换/回退、NAS 文件语义与独立 OSS 备份恢复。保持一个写入者，节点失联时不得强制双开。
 
-首次实施状态：代码、镜像入口和 ACK ALB/CNFS 模板已提供；真实 NAS 创建、证书复制、备份任务和项目工具权限需要在上线阶段验证。
+首次实施状态：代码、镜像入口和 CNFS 模板已提供；真实 NAS 创建、admin-web 同源代理、备份任务和项目工具权限需要在上线阶段验证。
