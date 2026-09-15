@@ -329,6 +329,7 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         service               TEXT NOT NULL CHECK (service IN ('dealclaw-agent','nexus-gateway')),
         image                 TEXT NOT NULL,                  -- 规范化后的完整镜像
         tag                   TEXT NOT NULL,                  -- 期望 tag（展示用）
+        scope                 TEXT,                            -- NULL=全量 rollout；非空=单租户（tenant_id）
         status                TEXT NOT NULL DEFAULT 'pending'
                               CHECK (status IN ('pending','running','succeeded','partial','failed','cancelled')),
         total_count           INTEGER NOT NULL DEFAULT 0,
@@ -349,10 +350,26 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_status ON rollout_batch_tasks(status, created_at);
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_created ON rollout_batch_tasks(created_at DESC);
-      -- 幂等入队去重：一个 service+image 同一时刻只允许一个进行中的任务
+      -- 幂等入队去重：一个 service+image（全量，scope IS NULL）同一时刻只允许
+      -- 一个进行中的任务，避免 rollout cron 重复触发导致任务堆积。单租户 pin
+      -- （scope 非空）不去重——pin 是明确的单租户操作，每次入队新建任务。
       CREATE UNIQUE INDEX IF NOT EXISTS rollout_batch_tasks_active_uq
         ON rollout_batch_tasks(service, image)
-        WHERE status IN ('pending','running');
+        WHERE status IN ('pending','running') AND scope IS NULL;
+      -- 存量库回填：rollout_batch_tasks 若先于 scope 列建表，需补列并重建上面
+      -- 那个唯一索引（旧定义缺 scope IS NULL，会错误地去重单租户 pin）。
+      ALTER TABLE rollout_batch_tasks ADD COLUMN IF NOT EXISTS scope TEXT;
+      DO $$ 
+      DECLARE v_def TEXT;
+      BEGIN
+        SELECT indexdef INTO v_def FROM pg_indexes WHERE indexname = 'rollout_batch_tasks_active_uq';
+        IF v_def IS NOT NULL AND v_def NOT LIKE '%scope IS NULL%' THEN
+          DROP INDEX rollout_batch_tasks_active_uq;
+          CREATE UNIQUE INDEX rollout_batch_tasks_active_uq
+            ON rollout_batch_tasks(service, image)
+            WHERE status IN ('pending','running') AND scope IS NULL;
+        END IF;
+      END $$;
 
       CREATE TABLE IF NOT EXISTS rollout_batch_task_items (
         id          BIGSERIAL PRIMARY KEY,

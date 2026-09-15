@@ -15,6 +15,7 @@ import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
 import LlmProvidersPage from './pages/LlmProvidersPage';
 import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import LlmPushTasksPage from './pages/LlmPushTasksPage';
+import RolloutTasksPage from './pages/RolloutTasksPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ChatApiKeysPage from './pages/ChatApiKeysPage';
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="llm-providers" element={<LlmProvidersPage />} />
             <Route path="llm-token-pricing" element={<LlmTokenPricingPage />} />
             <Route path="llm-push-tasks" element={<LlmPushTasksPage />} />
+            <Route path="rollout-tasks" element={<RolloutTasksPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />

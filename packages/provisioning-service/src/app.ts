@@ -13,6 +13,7 @@ import { createChatExternalRoutes } from './routes/chat-external.js';
 import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import { createLlmPushRoutes } from './routes/llm-push.js';
+import { createRolloutRoutes } from './routes/rollout.js';
 import type { ProvisioningConfig } from './config.js';
 import { SseBroker } from './services/sse-broker.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
@@ -78,6 +79,9 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // LLM push async task (SSE + REST) — worker publishes progress to the same
   // broker instance injected here from index.ts.
   app.use(createLlmPushRoutes(pool, broker, authAndAudit));
+  // Rollout batch async task (SSE + REST) — same worker/broker as LLM push;
+  // admin-facing list/detail/stream for deployment progress.
+  app.use(createRolloutRoutes(pool, broker, authAndAudit));
   app.use(createAdminOpsRoutes(pool, config, authAndAudit));
   // Pod logs (admin console) — GET /v1/tenants/:id/logs[/stream]. The pod
   // terminal (exec) is NOT here: it is a WebSocket and attaches to the HTTP

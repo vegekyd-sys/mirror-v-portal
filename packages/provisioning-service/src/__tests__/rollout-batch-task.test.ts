@@ -51,6 +51,7 @@ function makeTaskRow(overrides: Record<string, unknown> = {}) {
     service: 'dealclaw-agent',
     image: 'test-registry/dealclaw/dealclaw-agent:new',
     tag: 'new',
+    scope: null,
     status: 'pending',
     total_count: 0,
     succeeded_count: 0,
@@ -82,10 +83,12 @@ function makeRolloutPool(opts: {
   pendingItems?: Array<Record<string, unknown>>;
   existingTaskId?: string | null;
   recount?: Record<string, unknown>;
+  triggerEnumerate?: boolean;
 } = {}) {
   const queries: FakeQuery[] = [];
   const task = opts.task ?? null;
   const pending = [...(opts.pendingItems ?? [])];
+  let itemsCountCalls = 0;
   const pool = {
     queries,
     query: async (sql: string, params?: unknown[]) => {
@@ -99,14 +102,20 @@ function makeRolloutPool(opts: {
         return { rows: [{ id: params![0] }], rowCount: 1 };
       }
       if (sql.includes('SELECT COUNT(*)::int AS n FROM rollout_batch_task_items')) {
-        const n = (opts.tenants ?? []).length; // enumerate 后 = tenants 数
+        itemsCountCalls += 1;
+        // triggerEnumerate 时首帧返回 0（触发 enumerate），之后按 tenants 数。
+        const n = opts.triggerEnumerate && itemsCountCalls === 1 ? 0 : (opts.tenants ?? []).length;
         return { rows: [{ n }], rowCount: 1 };
       }
       if (sql.includes('SELECT COUNT(*)::int AS n FROM rollout_batch_tasks')) {
         return { rows: [{ n: task ? 1 : 0 }], rowCount: 1 };
       }
       if (sql.includes('SELECT tenant_id, k8s_namespace FROM tenants')) {
-        const rows = (opts.tenants ?? []).map((t) => ({ tenant_id: t.tenant_id, k8s_namespace: t.k8s_namespace }));
+        let rows = (opts.tenants ?? []).map((t) => ({ tenant_id: t.tenant_id, k8s_namespace: t.k8s_namespace }));
+        // 单租户 pin：SQL 带 tenant_id = $1 时按 scope 过滤（对齐 enumerate 逻辑）。
+        if (sql.includes('tenant_id = $1') && params && params[0]) {
+          rows = rows.filter((r) => r.tenant_id === params![0]);
+        }
         return { rows, rowCount: rows.length };
       }
       if (sql.includes('SELECT * FROM rollout_batch_tasks WHERE id = $1')) {
@@ -188,6 +197,20 @@ describe('enqueueRolloutBatch', () => {
     expect(r.taskId).toBe('existing-task');
     expect(r.reused).toBe(true);
   });
+
+  it('does NOT reuse an in-flight fleet task when tenantId is set (single-tenant pin)', async () => {
+    const pool = makeRolloutPool({ existingTaskId: 'existing-task' });
+    const r = await enqueueRolloutBatch(pool, {
+      service: 'dealclaw-agent',
+      image: 'test-registry/dealclaw/dealclaw-agent:new',
+      tag: 'new',
+      actor: 'service-token',
+      actorType: 'service',
+      tenantId: 'tenant-a',
+    });
+    expect(r.reused).toBe(false);
+    expect(r.taskId).not.toBe('existing-task');
+  });
 });
 
 describe('executeRolloutBatchTask', () => {
@@ -251,6 +274,43 @@ describe('executeRolloutBatchTask', () => {
     );
     expect(itemUpdate).toBeTruthy();
     expect(itemUpdate!.params![0]).toBe('failed');
+  });
+
+  it('single-tenant pin enumerates only that tenant, marked pending (not pinned)', async () => {
+    // 模拟该租户已有 pin override——全量 rollout 会跳过它，但单租户 pin 必须 recreate。
+    overrideMocks.getOverrideMap.mockResolvedValue(new Map([['tenant-a', 'img']]));
+    k8sMocks.getDeployment.mockResolvedValue({
+      spec: { template: { spec: { containers: [{ name: 'dealclaw-agent-tenant-a', image: 'old' }] } } },
+    });
+    k8sMocks.updateDeploymentImageRecreate.mockResolvedValue(true);
+
+    const pool = makeRolloutPool({
+      task: makeTaskRow({ status: 'running', scope: 'tenant-a' }),
+      tenants: [
+        { tenant_id: 'tenant-a', k8s_namespace: 'dealclaw-tenant-a' },
+        { tenant_id: 'tenant-b', k8s_namespace: 'dealclaw-tenant-b' },
+      ],
+      pendingItems: [],
+      triggerEnumerate: true,
+    });
+    const broker = { publish: vi.fn(), close: vi.fn() };
+    await executeRolloutBatchTask(pool, makeConfig(), broker as any, makeTaskRow({ status: 'running', scope: 'tenant-a' }) as any);
+
+    // enumerate SQL 带 scope 过滤（tenant_id = $1）
+    const enumQuery = pool.queries.find((q: FakeQuery) => q.sql.includes('SELECT tenant_id, k8s_namespace FROM tenants'));
+    expect(enumQuery).toBeTruthy();
+    expect(enumQuery!.sql).toContain('tenant_id = $1');
+    expect(enumQuery!.params).toEqual(['tenant-a']);
+
+    // INSERT item 的状态是 pending（params[4]），而非 pinned（单租户不受 override 影响）
+    const insertItem = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO rollout_batch_task_items'));
+    expect(insertItem).toBeTruthy();
+    expect(insertItem!.params![4]).toBe('pending');
+
+    // 只枚举了该租户一个 item（tenant-b 被 scope 过滤）
+    const insertItems = pool.queries.filter((q: FakeQuery) => q.sql.includes('INSERT INTO rollout_batch_task_items'));
+    expect(insertItems).toHaveLength(1);
+    expect(insertItems[0].params![1]).toBe('tenant-a');
   });
 });
 

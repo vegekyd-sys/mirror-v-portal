@@ -46,6 +46,7 @@ export interface RolloutBatchTaskRecord {
   service: RolloutBatchService;
   image: string;
   tag: string;
+  scope: string | null;
   status: RolloutBatchTaskStatus;
   total_count: number;
   succeeded_count: number;
@@ -85,6 +86,7 @@ export interface RolloutBatchTaskView {
   service: RolloutBatchService;
   image: string;
   tag: string;
+  scope: string | null;
   status: RolloutBatchTaskStatus;
   totalCount: number;
   succeededCount: number;

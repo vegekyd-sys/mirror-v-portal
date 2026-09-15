@@ -25,6 +25,7 @@ const WORKBENCH: NavItem[] = [
 const SYSTEM: NavItem[] = [
   { to: '/nexus-manager', icon: 'N', label: 'Nexus Manager' },
   { to: '/image-releases', icon: '镜', label: '镜像版本' },
+  { to: '/rollout-tasks', icon: '发', label: '发布进度' },
   { to: '/runtime-configs', icon: '配', label: '运行时配置' },
   { to: '/audit-logs', icon: '审', label: '审计日志' },
   { to: '/users', icon: '户', label: '用户管理' },
