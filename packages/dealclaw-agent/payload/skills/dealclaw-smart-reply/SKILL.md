@@ -76,6 +76,17 @@ python3 work/mio-api/dc_resend_attachments.py --find --company-id <sid> --name q
 python3 work/mio-api/dc_thread_dossier.py --company-id <sid> --buyer <email> --with-paths
 ```
 
+**没落盘 / 对不上时现拉**（提醒卡片只说「有附件」，卡片里不带邮件 id）：
+
+```bash
+# 最近一封带附件的入站（用户说「附件发我」时最常用）
+python3 work/mio-api/dc_resend_attachments.py --pull --latest
+# 知道邮件 id 就拉那一封
+python3 work/mio-api/dc_resend_attachments.py --pull --message-id "<邮件id>"
+```
+
+`--pull` 只下载 + 落盘 + 写索引，**不外发**；用户要文件时，用当前会话把 `path` 那个文件发出去。
+
 **怎么读**：拿到 `path` 后直接喂一等工具——PDF/规格书用 `pdf`，图片/logo/产品照用 `image`，
 Excel 用 `python3` + openpyxl。读到的内容并入意图判断（例如对方发来的是询价单，
 意图就不是「一般回复」而是「表达兴趣」甚至「索要资料」的下一步）。

@@ -127,9 +127,9 @@ def _human_size(n: object) -> str:
 def _attachment_line(rows: object) -> str:
     """把附件索引行渲染成卡片里的一行清单。
 
-    只列「有什么」，不内嵌图——自定义机器人 webhook 没有 app token，发不了
-    image_key，内嵌得走应用机器人（见第 2/3 层方案）。没落盘成功的也照列并标原因，
-    「静默丢附件」正是这次要修的病。
+    只列「有什么」，**不下发文件**（口径：提醒卡片只报有附件；要文件时由 agent 用
+    `dc_resend_attachments --find` / `--pull` 取，再按需发给用户）。没落盘成功的也照列
+    并标原因，「静默丢附件」正是这次要修的病。
     """
     if not isinstance(rows, list) or not rows:
         return ""
