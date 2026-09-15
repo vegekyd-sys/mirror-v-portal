@@ -116,9 +116,18 @@ export async function wabaHealth() {
 const PHONE_CACHE_MS = 60_000;
 const phoneCache = new Map<string, { numbers: string[]; at: number }>();
 
+/** 同一个 (wabaId, supplierId) 补认领失败后的冷却，避免 YCloud 一直列不出号时被反复调用。 */
+const CLAIM_RETRY_COOLDOWN_MS = 5 * 60_000;
+const claimRetryAt = new Map<string, number>();
+
+
 export function invalidateWabaPhoneCache(wabaId?: string) {
   if (wabaId) phoneCache.delete(wabaId);
-  else phoneCache.clear();
+  else {
+    phoneCache.clear();
+    // 不带参数 = 「忘掉所有关于 WABA 号码的本地状态」，补认领的重试冷却也属于这一类。
+    claimRetryAt.clear();
+  }
 }
 
 /**
@@ -167,12 +176,22 @@ export async function resolveSupplierIdByBusinessPhone(
 ): Promise<string | undefined> {
   const phone = toE164(businessPhone);
   if (!phone) return undefined;
-  const rows = await prisma.wabaPhone.findMany({
+  let rows = await prisma.wabaPhone.findMany({
     where: { phoneNumber: phone },
     select: { wabaId: true, supplierId: true },
   });
-  const owners = [...new Set(rows.map((row) => row.supplierId).filter(Boolean))];
-  if (owners.length !== 1) return undefined;
+  let owners = [...new Set(rows.map((row) => row.supplierId).filter(Boolean))];
+  if (owners.length !== 1) {
+    // 反查不到租户 → 可能是 PARTNER_ADDED 当时认领踩空。补一次再查。
+    // 闸门是纯 DB 的，没有缺归属的租户时这里不会产生任何 YCloud 调用。
+    if (!(await reconcileMissingOwnership())) return undefined;
+    rows = await prisma.wabaPhone.findMany({
+      where: { phoneNumber: phone },
+      select: { wabaId: true, supplierId: true },
+    });
+    owners = [...new Set(rows.map((row) => row.supplierId).filter(Boolean))];
+    if (owners.length !== 1) return undefined;
+  }
   const supplierId = owners[0];
   const connected = await prisma.wabaOnboarding.findMany({
     where: {
@@ -260,12 +279,20 @@ export async function listTenantBusinessPhones(supplierId: string): Promise<Tena
 
   // 只保留**归本租户所有**的号（WabaPhone.supplierId）。
   // 共享 WABA 下 YCloud 返回的号码列表包含别家的号 —— 不过滤就会跨租户泄漏/误发。
-  const owned = await prisma.wabaPhone.findMany({
-    where: { supplierId, phoneNumber: { in: candidates.map((candidate) => candidate.from) } },
-    select: { phoneNumber: true },
-  });
-  const ownedSet = new Set(owned.map((row) => row.phoneNumber));
-  const scoped = candidates.filter((candidate) => ownedSet.has(candidate.from));
+  const scopeToOwned = async () => {
+    const owned = await prisma.wabaPhone.findMany({
+      where: { supplierId, phoneNumber: { in: candidates.map((candidate) => candidate.from) } },
+      select: { phoneNumber: true },
+    });
+    const ownedSet = new Set(owned.map((row) => row.phoneNumber));
+    return candidates.filter((candidate) => ownedSet.has(candidate.from));
+  };
+
+  let scoped = await scopeToOwned();
+  if (!scoped.length) {
+    // CONNECTED 却一个号都不属于自己 → 多半是 PARTNER_ADDED 当时认领踩空，补一次再取。
+    if (await reconcileMissingOwnership(supplierId)) scoped = await scopeToOwned();
+  }
   if (!scoped.length) {
     throw new WhatsAppBindingError(
       "WHATSAPP_BINDING_REQUIRED",
@@ -325,9 +352,18 @@ export async function resolveTenantBusinessPhone(
  * 出站 `listTenantBusinessPhones` 会被归属过滤清空并抛 WHATSAPP_BINDING_REQUIRED，整条自助链路是断的。
  *
  * 认领规则（共享 WABA 下的安全边界）：
- *   · 只认领**无主**的号 —— DB 里没有该号，或有行但 supplierId 为空（迁移遗留）；
+ *   · **该 WABA 上已有其他 CONNECTED 租户时，一个号都不认领** —— 见下面的「为什么」；
+ *   · 否则只认领**无主**的号 —— DB 里没有该号，或有行但 supplierId 为空（迁移遗留）；
  *   · 别家已拥有的号一律不碰，也不报错（共享 WABA 上有别人的号是正常状态）；
  *   · 通知文案只用本租户拥有的号，避免把别家的号回显给这一家。
+ *
+ * 为什么「已有其他租户就整个跳过」：PARTNER_ADDED 的 payload 里**没有任何号码字段**
+ * （YCloud Partner Direct Link 指南 §6 的完整示例只有 WABA 维度字段），所以没有信号能告诉我们
+ * 「本次接入对应哪个号」，只能按「认领该 WABA 上所有无主号」处理。单租户自助注册时这是对的
+ * —— 指南 §4「一个链接仅用于一个客户的一次 WABA 连接」，号也是在同一个流程里选的。
+ * 但运营手工把一个 WABA 拆给多家时，这会把还没分配的号一次性全抢走。
+ * 两种模式用本地状态就能区分：该 WABA 上有没有**别的** CONNECTED 租户。
+ * 共享场景交回给运营按号 import，不在这里猜。
  */
 async function claimWabaPhonesForTenant(
   wabaId: string,
@@ -343,6 +379,28 @@ async function claimWabaPhonesForTenant(
       async (tx) => {
         // 加锁顺序固定为 phone → waba（见 wabaOwnershipLock），与 import/unbind 对齐。
         await lockWabaOwnershipKeys(tx, wabaId, [...phones].sort());
+
+        // 共享 WABA（运营手工编排）→ 不自动认领，避免把别家还没 import 的号抢走。
+        // 注意是「**其他**租户」：同一租户重新走一次注册流程仍然应该认领。
+        const otherOwner = await tx.wabaOnboarding.findFirst({
+          where: {
+            wabaId,
+            status: "CONNECTED",
+            partnerCustomerId: { not: supplierId },
+          },
+          select: { id: true },
+        });
+        if (otherOwner) {
+          console.warn(
+            "skip auto-claim on a shared WABA; operator must import phones explicitly",
+          );
+          const mine = await tx.wabaPhone.findMany({
+            where: { wabaId, supplierId, phoneNumber: { in: phones } },
+            select: { phoneNumber: true },
+          });
+          const mineSet = new Set(mine.map((row) => row.phoneNumber));
+          return phones.find((phone) => mineSet.has(phone));
+        }
 
         const existing = await tx.wabaPhone.findMany({
           where: { phoneNumber: { in: phones } },
@@ -442,6 +500,55 @@ export async function listWabaOnboardings(query: {
     partnerCustomerId: partnerCustomerId || undefined,
     wabas: rows.map((row) => publicOnboarding(row)),
   };
+}
+
+/**
+ * 补认领：给「CONNECTED 却在该 WABA 上一行归属都没有」的租户重跑一次 claim。
+ *
+ * 为什么需要：PARTNER_ADDED 是**唯一**会触发认领的事件（其它 updateEvent 只更新元数据），
+ * 而 webhook 是先回 200 再 setImmediate 异步处理的 —— 认领当时踩空（YCloud 号码列表还没同步
+ * 出来，或接口报错）之后没有任何重试，YCloud 也不会重投。租户会卡在「状态 CONNECTED 但收发全断」。
+ *
+ * 闸门是纯 DB 的两次查询：CONNECTED 的 (wabaId, supplierId) 减去已有归属的 (wabaId, supplierId)。
+ * 差集为空就直接返回，不碰 YCloud —— healthy 状态下这是常态，所以这条兜底平时零成本。
+ *
+ * @returns 是否真的补出了新的归属行（调用方据此决定要不要重查一次）
+ */
+async function reconcileMissingOwnership(supplierId?: string): Promise<boolean> {
+  const connected = await prisma.wabaOnboarding.findMany({
+    where: {
+      status: "CONNECTED",
+      wabaId: { not: null },
+      ...(supplierId ? { partnerCustomerId: supplierId } : {}),
+    },
+    select: { wabaId: true, partnerCustomerId: true },
+  });
+  if (!connected.length) return false;
+
+  const owned = await prisma.wabaPhone.findMany({
+    where: {
+      wabaId: { in: [...new Set(connected.map((row) => row.wabaId as string))] },
+      ...(supplierId ? { supplierId } : {}),
+    },
+    select: { wabaId: true, supplierId: true },
+  });
+  const ownedKeys = new Set(owned.map((row) => `${row.wabaId}\u0000${row.supplierId}`));
+
+  const now = Date.now();
+  let claimed = false;
+  for (const row of connected) {
+    const wabaId = row.wabaId as string;
+    const key = `${wabaId}\u0000${row.partnerCustomerId}`;
+    if (ownedKeys.has(key)) continue;
+    if ((claimRetryAt.get(key) ?? 0) > now) continue;
+    claimRetryAt.set(key, now + CLAIM_RETRY_COOLDOWN_MS);
+    // claim 自带共享 WABA 守卫：该 WABA 上有别家 CONNECTED 时它会整个跳过。
+    if (await claimWabaPhonesForTenant(wabaId, row.partnerCustomerId)) {
+      claimRetryAt.delete(key);
+      claimed = true;
+    }
+  }
+  return claimed;
 }
 
 export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
