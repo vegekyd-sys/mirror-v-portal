@@ -187,20 +187,45 @@ GET $BRIDGE/api/whatsapp/templates?partnerCustomerId=$SUPPLIER&from=当前企业
 查状态或换业务号都走 Direct Link，不主动索取 WABA ID。
 
 1. 从该次请求取得 WABA ID；缺失时只询问该 ID，不从历史、日志、响应或其它租户复制。
-2. `$SUPPLIER` 只能来自当前进程的 `MIO_CDP_SUPPLIER_ID`；不接受用户、模型或请求参数改写。
-3. 使用本 Skill 的 helper。把 WABA ID 通过 stdin 传入，不作为 CLI 参数，不打印输入、请求体
-   或环境变量：
+2. **必须同时取得要绑定的手机号**（E.164，如 `+8615895553765`；可多个，逗号分隔）。
+   缺失就只问手机号 —— **不带手机号的绑定一律不做**：一个 WABA 现在可被多家共享，
+   归属只能落在手机号上。
+3. `$SUPPLIER` 只能来自当前进程的 `MIO_CDP_SUPPLIER_ID`；不接受用户、模型或请求参数改写。
+4. 使用本 Skill 的 helper。WABA ID 通过 stdin 传入（不作为 CLI 参数，不打印输入、请求体
+   或环境变量）；手机号走 `--phones`：
 
 ```bash
-printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/bind_existing_waba.py
+printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/bind_existing_waba.py --phones +8615895553765
+# 多个号：--phones +8615895553765,+8615895553766
 ```
 
 helper 从当前租户进程读取 `MIO_CDP_SUPPLIER_ID`，调用 `POST $BRIDGE/api/admin/whatsapp/import-existing-waba`；
-请求仅发送当前 supplier 的 `partnerCustomerId` 和本次 WABA ID，不携带任何鉴权。归属由服务端
-YCloud 账号校验 + WABA 归属/手机号冲突检查兜底。
+请求发送当前 supplier + WABA ID + `phoneNumbers`，不携带任何鉴权。归属由服务端
+YCloud 账号校验 + **手机号级归属检查**兜底。
 
 成功输出只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要向用户回显 WABA ID。
-YCloud 校验失败、跨租户归属或手机号冲突时停止，不改绑、不绕过 Bridge。
+`PHONE_OWNED_BY_OTHER_TENANT`（该号已被其他企业绑定）、`PHONE_NOT_ON_WABA`、YCloud 校验失败时
+一律停止，不改绑、不绕过 Bridge。
+
+## 解绑手机号
+
+仅当用户明确要求「解绑手机号 / 把某个号从当前企业解绑」时进入。
+
+**语义**：只停路由（删我方归属），**不会**在 Meta/YCloud 释放号码；号码仍在该 WABA 下，
+以后可以重新绑定。
+
+**硬规则**：
+- 只能解绑**自己绑过的号** —— 桥接强制隔离，别人的号会被拒且不会有任何改动；
+- 解绑是破坏性操作，**执行前必须向用户确认要解绑的号码**；
+- 输出里 `rejected` 非空时**如实报告**（哪个号没解掉、为什么），不得谎报成功。
+
+```bash
+python3 skills/ycloud-whatsapp/scripts/unbind_phones.py --phones +8615895553765
+```
+
+结果字段：`unbound`（已解绑）、`rejected[{phoneNumber,reason}]`（未解绑，reason 如
+`not_owned_by_caller` / `not_bound`）、`disconnected`（该 WABA 已无剩余号则为 1）。
+解掉最后一个号后，该企业的 WABA 绑定会置为未连接 —— 需要重新绑号才能收发。
 
 ## 嵌入式注册 / 状态
 
