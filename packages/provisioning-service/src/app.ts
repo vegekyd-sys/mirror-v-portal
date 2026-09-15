@@ -7,6 +7,8 @@ import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
 import { createWeChatBindingRoutes } from './routes/wechat-binding.js';
+import { createWeComBindingRoutes } from './routes/wecom-binding.js';
+import { createDingTalkBindingRoutes } from './routes/dingtalk-binding.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
 import { createConversationExternalRoutes } from './routes/conversation-external.js';
 import { createChatExternalRoutes } from './routes/chat-external.js';
@@ -99,6 +101,10 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   app.use(createFeishuAppScanRoutes(authAndAudit));
   // WeChat (personal WeChat) binding — QR-login direct connection.
   app.use(createWeChatBindingRoutes(pool, config, authAndAudit));
+  // WeCom (企业微信) bot binding — credential-based direct connection.
+  app.use(createWeComBindingRoutes(pool, config, authAndAudit));
+  // DingTalk (钉钉) bot binding — credential-based direct connection.
+  app.use(createDingTalkBindingRoutes(pool, config, authAndAudit));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

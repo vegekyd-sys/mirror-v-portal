@@ -1759,6 +1759,12 @@ export default function AgentDetailPage() {
         }}
       />
 
+      {/* ── 企业微信绑定 ── */}
+      <WeComBindingSection tenantId={tenantId} onFlash={flash} />
+
+      {/* ── 钉钉绑定 ── */}
+      <DingTalkBindingSection tenantId={tenantId} onFlash={flash} />
+
       {/* ── 微信绑定 ── */}
       <WeChatBindingSection tenantId={tenantId} onFlash={flash} />
 
@@ -2061,6 +2067,248 @@ function WeChatBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash
           await loadBinding();
         }}
       />
+    </>
+  );
+}
+
+// ── 企业微信绑定区块（独立组件，自管理状态） ─────────────────────────
+interface WeComBindingInfo {
+  ok: true;
+  bound: boolean;
+  botId: string | null;
+  status: string;
+  boundAt: string | null;
+}
+
+function WeComBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash: (msg: string) => void }) {
+  const [binding, setBinding] = useState<WeComBindingInfo | null>(null);
+  const [botId, setBotId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const loadBinding = useCallback(async () => {
+    try {
+      const r = await api<WeComBindingInfo>(`/v1/admin/tenants/${tenantId}/wecom-binding`);
+      setBinding(r);
+    } catch {
+      setBinding(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { void loadBinding(); }, [loadBinding]);
+
+  const bind = useCallback(async () => {
+    if (!botId.trim() || !secret.trim()) {
+      onFlash('请填写 Bot ID 和 Secret');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenantId}/wecom-binding/bind`, {
+        method: 'POST',
+        body: { botId: botId.trim(), secret: secret.trim() },
+      });
+      onFlash('企业微信绑定已提交，Agent 重启中');
+      setSecret('');
+      await loadBinding();
+    } catch (e) {
+      onFlash(`绑定失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [tenantId, botId, secret, loadBinding, onFlash]);
+
+  const unbind = useCallback(async () => {
+    if (!confirm('确定解绑企业微信？解绑后企业微信消息将不可达，网页对话不受影响。')) return;
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenantId}/wecom-binding/unbind`, { method: 'POST' });
+      onFlash('企业微信已解绑');
+      await loadBinding();
+    } catch (e) {
+      onFlash(`解绑失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [tenantId, loadBinding, onFlash]);
+
+  const isBound = binding?.bound;
+
+  return (
+    <>
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        企业微信绑定（机器人）
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="form-row" style={{ marginBottom: 10 }}>
+            <label className="field-label">当前状态</label>
+            {binding === null ? (
+              <span className="hint" style={{ margin: 0 }}>加载中…</span>
+            ) : isBound ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-active">已绑定</span>
+                <span className="mono" style={{ fontSize: 12 }} title={binding.botId ?? ''}>
+                  {(binding.botId ?? '').slice(0, 20)}{(binding.botId?.length ?? 0) > 20 ? '…' : ''}
+                </span>
+                <button className="btn-danger" disabled={busy} onClick={() => void unbind()}>
+                  解绑
+                </button>
+              </span>
+            ) : (
+              <span className="badge badge-pending">未绑定</span>
+            )}
+          </div>
+          {!isBound && (
+            <div className="form-row">
+              <label className="field-label">凭据</label>
+              <input
+                type="text"
+                className="mono"
+                style={{ flex: '0 1 260px' }}
+                value={botId}
+                onChange={(e) => setBotId(e.target.value)}
+                placeholder="企业微信机器人 Bot ID"
+              />
+              <input
+                type="password"
+                style={{ flex: 1, minWidth: 180 }}
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                placeholder="Secret（仅提交时传输）"
+              />
+              <button className="btn-primary" disabled={busy} onClick={() => void bind()}>
+                <IconChat /> {busy ? '处理中…' : '绑定'}
+              </button>
+            </div>
+          )}
+          <div className="hint">
+            绑定后 Agent 重启并安装企业微信插件，机器人在工作台配置好 botId/secret 后私聊/群聊自动回复。
+            要求消息面为 OpenClaw 直连；凭据仅存入 K8s Secret（不落库），解绑后凭据被轮换为占位值。
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── 钉钉绑定区块（独立组件，自管理状态） ─────────────────────────────
+interface DingTalkBindingInfo {
+  ok: true;
+  bound: boolean;
+  clientId: string | null;
+  status: string;
+  boundAt: string | null;
+}
+
+function DingTalkBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash: (msg: string) => void }) {
+  const [binding, setBinding] = useState<DingTalkBindingInfo | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const loadBinding = useCallback(async () => {
+    try {
+      const r = await api<DingTalkBindingInfo>(`/v1/admin/tenants/${tenantId}/dingtalk-binding`);
+      setBinding(r);
+    } catch {
+      setBinding(null);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { void loadBinding(); }, [loadBinding]);
+
+  const bind = useCallback(async () => {
+    if (!clientId.trim() || !clientSecret.trim()) {
+      onFlash('请填写 Client ID 和 Client Secret');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenantId}/dingtalk-binding/bind`, {
+        method: 'POST',
+        body: { clientId: clientId.trim(), clientSecret: clientSecret.trim() },
+      });
+      onFlash('钉钉绑定已提交，Agent 重启中');
+      setClientSecret('');
+      await loadBinding();
+    } catch (e) {
+      onFlash(`绑定失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [tenantId, clientId, clientSecret, loadBinding, onFlash]);
+
+  const unbind = useCallback(async () => {
+    if (!confirm('确定解绑钉钉？解绑后钉钉消息将不可达，网页对话不受影响。')) return;
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenantId}/dingtalk-binding/unbind`, { method: 'POST' });
+      onFlash('钉钉已解绑');
+      await loadBinding();
+    } catch (e) {
+      onFlash(`解绑失败：${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [tenantId, loadBinding, onFlash]);
+
+  const isBound = binding?.bound;
+
+  return (
+    <>
+      <div className="section-title" style={{ fontSize: 14, marginTop: 24 }}>
+        钉钉绑定（机器人）
+      </div>
+      <div className="panel">
+        <div className="panel-body">
+          <div className="form-row" style={{ marginBottom: 10 }}>
+            <label className="field-label">当前状态</label>
+            {binding === null ? (
+              <span className="hint" style={{ margin: 0 }}>加载中…</span>
+            ) : isBound ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge badge-active">已绑定</span>
+                <span className="mono" style={{ fontSize: 12 }} title={binding.clientId ?? ''}>
+                  {(binding.clientId ?? '').slice(0, 20)}{(binding.clientId?.length ?? 0) > 20 ? '…' : ''}
+                </span>
+                <button className="btn-danger" disabled={busy} onClick={() => void unbind()}>
+                  解绑
+                </button>
+              </span>
+            ) : (
+              <span className="badge badge-pending">未绑定</span>
+            )}
+          </div>
+          {!isBound && (
+            <div className="form-row">
+              <label className="field-label">凭据</label>
+              <input
+                type="text"
+                className="mono"
+                style={{ flex: '0 1 260px' }}
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="钉钉机器人 Client ID"
+              />
+              <input
+                type="password"
+                style={{ flex: 1, minWidth: 180 }}
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="Client Secret（仅提交时传输）"
+              />
+              <button className="btn-primary" disabled={busy} onClick={() => void bind()}>
+                <IconChat /> {busy ? '处理中…' : '绑定'}
+              </button>
+            </div>
+          )}
+          <div className="hint">
+            绑定后 Agent 重启并安装钉钉插件，机器人在工作台配置好 clientId/clientSecret 后私聊/群聊自动回复。
+            要求消息面为 OpenClaw 直连；凭据仅存入 K8s Secret（不落库），解绑后凭据被轮换为占位值。
+          </div>
+        </div>
+      </div>
     </>
   );
 }

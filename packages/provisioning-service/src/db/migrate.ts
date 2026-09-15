@@ -475,6 +475,12 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_wecom_bindings_tenant
         ON wecom_bindings(tenant_id, status);
+      -- Partial unique index: the same WeCom bot can only be bound to one
+      -- tenant at a time. PG table-level UNIQUE has no WHERE clause, so this
+      -- must be a CREATE UNIQUE INDEX (NULL bot_id / non-bound rows excluded).
+      CREATE UNIQUE INDEX IF NOT EXISTS wecom_bindings_bot_id_uq
+        ON wecom_bindings(bot_id)
+        WHERE bot_id IS NOT NULL AND status = 'bound';
     `);
 
     // ── DingTalk (钉钉) bot bindings — credential-based direct connection ─
@@ -497,6 +503,12 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_dingtalk_bindings_tenant
         ON dingtalk_bindings(tenant_id, status);
+      -- Partial unique index: the same DingTalk bot can only be bound to one
+      -- tenant at a time. PG table-level UNIQUE has no WHERE clause, so this
+      -- must be a CREATE UNIQUE INDEX (NULL client_id / non-bound rows excluded).
+      CREATE UNIQUE INDEX IF NOT EXISTS dingtalk_bindings_client_id_uq
+        ON dingtalk_bindings(client_id)
+        WHERE client_id IS NOT NULL AND status = 'bound';
     `);
 
     // ── Shared DM session (v0.9) — per-tenant toggle that merges Feishu and
