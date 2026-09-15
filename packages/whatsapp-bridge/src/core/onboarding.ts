@@ -315,11 +315,26 @@ export async function resolveTenantBusinessPhone(
   return { selected: candidates[0], phones };
 }
 
-async function syncWabaPhoneBinding(wabaId: string): Promise<string | undefined> {
+/**
+ * WABA 账号更新（PARTNER_ADDED）后的企业号回查。
+ *
+ * 共享 WABA 下不能取「该 WABA 的第一个号」—— 那可能是别家的号，
+ * 会出现在给本租户的通知文案里（跨租户信息泄露）。只回本租户拥有的号。
+ */
+async function syncWabaPhoneBinding(
+  wabaId: string,
+  supplierId: string,
+): Promise<string | undefined> {
   try {
     invalidateWabaPhoneCache(wabaId);
     const phones = await listCurrentWabaPhoneNumbers(wabaId);
-    return phones[0];
+    if (!phones.length || !supplierId) return undefined;
+    const owned = await prisma.wabaPhone.findMany({
+      where: { wabaId, supplierId, phoneNumber: { in: phones } },
+      select: { phoneNumber: true },
+    });
+    const ownedSet = new Set(owned.map((row) => row.phoneNumber));
+    return phones.find((phone) => ownedSet.has(phone));
   } catch (error) {
     console.error("sync WABA phone binding after PARTNER_ADDED failed", error);
     return undefined;
@@ -467,7 +482,7 @@ export async function applyWabaAccountUpdate(update: WabaAccountUpdate) {
   );
 
   if (row && partnerAdded && row.wabaId) {
-    const businessPhone = await syncWabaPhoneBinding(row.wabaId);
+    const businessPhone = await syncWabaPhoneBinding(row.wabaId, row.partnerCustomerId);
     try {
       await notifyWabaConnected(row, businessPhone);
     } catch (error) {
