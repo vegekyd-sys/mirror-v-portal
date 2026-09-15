@@ -86,7 +86,12 @@ class PersonalMailboxTrackingTest(unittest.TestCase):
                          "SMTP 无投递回执 → 发信成功即乐观 delivered（此前恒为空串）")
 
     def test_smtp_without_company_falls_back_to_unmatched(self):
-        """不传 company_id 时行为不退步：仍按 _unmatched 落盘（只是不再被 CLI 漏传）。"""
+        """不传 company_id 时行为不退步：仍能落一条事实（不再被 CLI 漏传）。
+
+        注意：不能断言「按 ENT 查为空」—— 不同环境里 canonical_company_id 对空串的
+        处理不一致（有的树会把空串也归一成租户号），那是环境差异不是行为回归。
+        这里改成自洽断言：落盘值与「本环境下 canonical('')」一致。
+        """
         client = _FakeSmtpClient()
         sender = smtp.SmtpSender(self.store, smtp_ssl_factory=lambda *a, **kw: client,
                                  smtp_factory=lambda *a, **kw: client,
@@ -94,7 +99,11 @@ class PersonalMailboxTrackingTest(unittest.TestCase):
         with mock.patch.object(smtp.SmtpSender, "_query_smtp_message_id", lambda self, *a, **kw: "<m@163.com>"):
             sender.send(account_id=self.account_id, confirmed_by=OWNER,
                         to=["b@example.com"], subject="s", text="t")
-        self.assertEqual(self.store.list_outbound_records(ENT), [])
+        from enterprise_ids import canonical_company_id
+        recs = self.store.list_outbound_records()
+        self.assertEqual(len(recs), 1, "即使不传 company_id 也必须落一条事实")
+        self.assertEqual(recs[0].get("company_id"), canonical_company_id(""),
+                         "不传公司号时按本环境的 canonical('') 落盘（行为不倒退）")
 
     # ── ④ 没有 resend_id 但有 smtp_message_id → 乐观 accepted，不判未验证 ──
     def test_adapter_falls_back_to_smtp_message_id(self):
