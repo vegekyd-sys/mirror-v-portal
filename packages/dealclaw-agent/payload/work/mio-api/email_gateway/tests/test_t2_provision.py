@@ -36,7 +36,6 @@ from email_gateway.provision import (
     check_send_ready,
     ensure_mailbox,
     gate_blocked_result,
-    gate_mode,
     mailbox_readiness,
     try_ensure_mailbox,
 )
@@ -328,20 +327,6 @@ class SendGateTests(ProvisionTestCase):
                               from_address=email, data_dir=self.data_dir)
         self.assertEqual(ctx.exception.code, "send_gate_not_ready")
         self.assertIn("naming_not_active", ctx.exception.detail["blockers"])
-
-    def test_23_gate_modes_warn_and_off(self):
-        email = self._ensure(enterprise_id="100000834234")["email"]
-        warn = check_send_ready(enterprise_id="100000834234", from_address=email,
-                                data_dir=self.data_dir, mode="warn")
-        self.assertTrue(warn["allowed"])
-        self.assertTrue(warn["blockers"])                    # 放行但仍暴露原因
-        off = check_send_ready(enterprise_id="100000834234", from_address=email,
-                               data_dir=self.data_dir, mode="off")
-        self.assertFalse(off["applicable"])
-        self.assertTrue(off["allowed"])
-        self.assertEqual(off["reason"], "gate_disabled")
-        self.assertEqual(gate_mode("bogus"), "enforce")
-        self.assertEqual(gate_mode("warn"), "warn")
 
     def test_24_gate_blocked_result_never_claims_success(self):
         email = self._ensure(enterprise_id="100000834234")["email"]

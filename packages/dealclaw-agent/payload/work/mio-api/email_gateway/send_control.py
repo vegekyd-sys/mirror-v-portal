@@ -38,7 +38,6 @@ __all__ = [
     "STATE_FILENAME",
     "CODE_BLOCKED_PLATFORM",
     "CODE_BLOCKED_TENANT",
-    "DEFAULT_THRESHOLDS",
     "SendControlError",
     "resolve_data_dir",
     "state_path",
@@ -51,9 +50,6 @@ __all__ = [
     "blocked_result",
     "set_platform_paused",
     "set_tenant_paused",
-    "evaluate_alerts",
-    "alerts_for_tenant",
-    "format_alerts_line",
 ]
 
 SCHEMA_VERSION = 1
@@ -63,14 +59,6 @@ STATE_FILENAME = "state.json"
 #: 拒绝发送的错误码（上层按 code 分支，不看文案）。
 CODE_BLOCKED_PLATFORM = "send_blocked_platform"
 CODE_BLOCKED_TENANT = "send_blocked_tenant"
-
-#: 默认阈值。``min_accepted`` 是**最小样本量门槛**（accepted < 20 时不算比率告警）。
-#: 取值理由见 ``evaluate_alerts`` 的 docstring。
-DEFAULT_THRESHOLDS = {
-    "min_accepted": 20,
-    "complaint_rate": 0.005,   # 0.5%
-    "bounce_rate": 0.05,       # 5%
-}
 
 
 class SendControlError(Exception):
@@ -111,8 +99,7 @@ def _warn(message: str) -> None:
 def default_state() -> dict:
     return {"schema_version": SCHEMA_VERSION,
             "platform": {"paused": False, "reason": "", "by": "", "at": ""},
-            "tenants": {},
-            "thresholds": dict(DEFAULT_THRESHOLDS)}
+            "tenants": {}}
 
 
 @contextmanager
@@ -225,7 +212,6 @@ def switch_overview(enterprise_id: str = "", *, data_dir=None) -> dict:
         "platform": dict(platform),
         "tenants_paused": {k: dict(v) for k, v in sorted(tenants.items()) if v.get("paused")},
         "tenants_paused_count": sum(1 for v in tenants.values() if v.get("paused")),
-        "thresholds": dict(state.get("thresholds") or DEFAULT_THRESHOLDS),
         "state_file": str(state_path(data_dir)),
         "updated_at": state.get("updated_at", ""),
     }
@@ -298,110 +284,3 @@ def set_tenant_paused(enterprise_id: str, paused: bool, *, reason: str = "",
         else:
             tenants.pop(tenant, None)  # 恢复 = 抹掉条目，不留 paused=False 残渣
         return save_state(state, data_dir)
-
-
-# ── 阈值可见（只告警，不熔断）─────────────────────────────
-def evaluate_alerts(view: dict, *, thresholds: dict | None = None) -> dict:
-    """按 ``quality_metrics.metrics_view`` 的结果算阈值告警（纯函数，不写状态、不发消息）。
-
-    口径（与 T7 完全一致，不另立一套）：
-      - 分母统一 ``accepted``（Provider 受理数），分子 ``bounced`` / ``complained``；
-      - 计数取 ``view["provider_health"]`` 的**全渠道合计**（一个租户一个决定，
-        不再按渠道拆分，避免分渠道各报一次把人淹没）；
-      - 比率用原始计数现算（不用视图里已 round(4) 的 rate），避免四舍五入把
-        「刚好越线」判成没越线。
-
-    最小样本量门槛（``min_accepted``）：``accepted < 20`` 时**不算比率告警**，
-    状态置 ``insufficient_sample``，只记录 accepted，不产生误导性的 3.3% / 10%。
-    accepted 为 ``None``（数据源不可用）置 ``unavailable``；accepted 为 0 同样置
-    ``insufficient_sample``（不看比率，也就不存在除零）——一律不告警、不猜 0。
-
-    默认值理由：
-      - ``min_accepted = 20``：20 封时 1 个投诉即 5%（远超 0.5% 阈值），既能报警
-        又不会因为 1 封样本把比率算爆；
-      - ``complaint_rate = 0.5%``：行业红线约 0.1%，这里放到 5 倍——因为本层**只告警
-        不自动停**，宁可作为「需要人看一眼」的信号，而不是提前吓人；真要更早预警，
-        把它收到 0.3% 即可（单点改动，不改代码结构）；
-      - ``bounce_rate = 5%``：30 封里 3 个硬退信 = 10%，20~30 封区间 1 个退信 = 3.3%
-        ~5%，5% 能抓住「名单质量开始变差」的拐点。
-    """
-    th = dict(DEFAULT_THRESHOLDS)
-    th.update(thresholds or {})
-    min_accepted = int(th["min_accepted"])
-    health = (view or {}).get("provider_health") or {}
-    accepted = health.get("accepted")
-    bounced = health.get("bounced")
-    complained = health.get("complained")
-
-    out = {
-        "enterprise_id": (view or {}).get("enterprise_id", ""),
-        "range": (view or {}).get("range", {}),
-        "status": "ok",
-        "accepted": accepted,
-        "min_accepted": min_accepted,
-        "min_sample_met": False,
-        "thresholds": th,
-        "observed": {"complaint_rate": None, "bounce_rate": None},
-        "alerts": [],
-        "threshold_layer": "alert_only_no_auto_cut",
-        "read_only": True,
-    }
-
-    if accepted is None:
-        out["status"] = "unavailable"
-        out["reason"] = "数据源不可用，无法判定阈值（不告警、不猜 0）"
-        return out
-    if accepted < min_accepted or accepted <= 0:
-        out["status"] = "insufficient_sample"
-        out["reason"] = (f"样本不足（accepted={accepted}，门槛 {min_accepted}），"
-                         f"比率告警不触发，仅记录")
-        return out
-
-    out["min_sample_met"] = True
-    accepted = int(accepted)
-    complaint_rate = int(complained or 0) / accepted
-    bounce_rate = int(bounced or 0) / accepted
-    out["observed"] = {"complaint_rate": round(complaint_rate, 4),
-                       "bounce_rate": round(bounce_rate, 4)}
-
-    for metric, value, key in (("complaint_rate", complaint_rate, "complaint_rate"),
-                               ("bounce_rate", bounce_rate, "bounce_rate")):
-        limit = float(th[key])
-        if value > limit:
-            out["alerts"].append({
-                "metric": metric,
-                "value": round(value, 4),
-                "threshold": limit,
-                "level": "alert",
-                "sample": accepted,
-                "message": (f"{metric} {value * 100:.2f}% 超过阈值 {limit * 100:.2f}%"
-                            f"（accepted={accepted}）"),
-                "next_action": ("人工确认后执行：email_gateway/cli.py send-switch-tenant "
-                                f"--enterprise {out['enterprise_id']} --action pause"),
-            })
-    if out["alerts"]:
-        out["status"] = "alert"
-    return out
-
-
-def alerts_for_tenant(enterprise_id: str, *, start=None, end=None, tenant=None,
-                      data_dir=None, store=None) -> dict:
-    """取某租户的阈值结论（CLI / 定时巡检入口）。复用 T7 的 ``metrics_view``，不重算口径。"""
-    from email_metrics.quality_metrics import metrics_view
-    view = metrics_view(enterprise_id, start=start, end=end, tenant=tenant, store=store)
-    return evaluate_alerts(view, thresholds=(load_state(data_dir).get("thresholds") or None))
-
-
-def format_alerts_line(result: dict) -> str:
-    """一行摘要（供群消息 / 日报贴用）。"""
-    status = result.get("status")
-    if status == "ok":
-        return (f"[ok] {result['enterprise_id']} 无阈值告警"
-                f"（accepted={result.get('accepted')}）")
-    if status in ("insufficient_sample", "unavailable"):
-        return f"[{status}] {result['enterprise_id']} {result.get('reason', '')}"
-    lines = [f"[alert] {result['enterprise_id']} 命中 {len(result['alerts'])} 条阈值"]
-    for a in result["alerts"]:
-        lines.append(f"  · {a['message']}")
-    lines.append("  → 仅告警，未自动停发；人工确认后再决定是否停用该租户")
-    return "\n".join(lines)

@@ -12,7 +12,6 @@ from .provision import (
     EXIT_ERROR,
     EXIT_NOT_READY,
     EXIT_OK,
-    GATE_MODES,
     ProvisionError,
     check_send_ready,
     ensure_mailbox,
@@ -155,7 +154,6 @@ def build_parser() -> argparse.ArgumentParser:
     sg = sub.add_parser("send-gate", help="发信前置闸门检查（未就绪退出码 3）")
     sg.add_argument("--enterprise", default=None)
     sg.add_argument("--from-address", required=True)
-    sg.add_argument("--gate-mode", default="", choices=["", *GATE_MODES])
 
     # ── 发信质量与用量（T7：只读指标入口，人工查看用）──
     q = sub.add_parser("email-quality", help="发信质量与用量指标（只读：6 指标分渠道 + 退信/投诉率 + 两套账）")
@@ -180,14 +178,6 @@ def build_parser() -> argparse.ArgumentParser:
     swt.add_argument("--action", required=True, choices=["pause", "resume"])
     swt.add_argument("--reason", default="")
     swt.add_argument("--by", default="")
-
-    sa = sub.add_parser("send-alerts", help="阈值告警（只告警不熔断；带最小样本量门槛）")
-    sa.add_argument("--enterprise", required=True, help="企业 id / slug（必填，租户隔离）")
-    sa.add_argument("--start", default="", help="业务日起（YYYY-MM-DD，租户时区，含）")
-    sa.add_argument("--end", default="", help="业务日止（YYYY-MM-DD，租户时区，含）")
-    sa.add_argument("--tenant", default=None, help="租户 slug（口径/时区解析用）")
-    sa.add_argument("--line", action="store_true", help="只打印一行人读摘要")
-    sa.add_argument("--notify-target", default="", help="把告警推到 oc_ 群 / ou_ DM（可选）")
 
     return parser
 
@@ -299,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "send-gate":
         gate = check_send_ready(enterprise_id=args.enterprise or "",
                                 from_address=args.from_address,
-                                mode=args.gate_mode, data_dir=args.data_dir)
+                                data_dir=args.data_dir)
         emit(gate)
         return EXIT_OK if gate["allowed"] else EXIT_NOT_READY
     elif args.command == "send":
@@ -380,18 +370,6 @@ def main(argv: list[str] | None = None) -> int:
               "paused": bool((state.get("tenants") or {}).get(tenant, {}).get("paused")),
               "tenants": state.get("tenants") or {},
               "updated_at": state.get("updated_at", "")})
-    elif args.command == "send-alerts":
-        from email_gateway.send_control import alerts_for_tenant, format_alerts_line
-        result = alerts_for_tenant(args.enterprise, start=args.start or None,
-                                   end=args.end or None, tenant=args.tenant,
-                                   data_dir=args.data_dir, store=store)
-        if args.notify_target:
-            from dc_send_receipt import push_receipt
-            result["notify"] = push_receipt(args.notify_target, format_alerts_line(result))
-        if args.line:
-            print(format_alerts_line(result))
-        else:
-            emit(result)
     return 0
 
 

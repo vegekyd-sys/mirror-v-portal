@@ -460,6 +460,29 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
                         "candidate_outbound_ids": cands}
 
     if outbound is None:
+        # 修复（2026-09-15）：归属不到具体外发，但按**收件箱**已能确定企业 → 仍要落收信事实。
+        # 此前 unmatched 直接 return，事实层什么都没有 → 「按企业查全部收发件」永远缺收信侧。
+        try:
+            from email_gateway.store import utc_now
+            from enterprise_ids import canonical_company_id
+            store.insert_message({
+                "account_id": account_id,
+                "direction": "inbound",
+                "message_id": message_id,
+                "resend_received_id": email_id,
+                "sender": from_email,
+                "recipients": [to_email] if to_email else [],
+                "subject": subject,
+                "text_preview": (text or "")[:1200],
+                "in_reply_to": in_reply_to,
+                "received_at": utc_now(),
+                "created_at": utc_now(),
+                "related": False,
+                "company_id": canonical_company_id(account.get("enterprise_id", "")),
+            })
+            result["fact_persisted"] = True
+        except Exception:  # noqa: BLE001 - 落库 best-effort，不影响 unmatched 判定
+            result["fact_persisted"] = False
         return {**result, "status": "unmatched", "failure_reason": "no_matching_outbound"}
 
     # 落库：把入站邮件本体写进事实层（字段与 imap_sync.py 的 inbound 记录对齐）。

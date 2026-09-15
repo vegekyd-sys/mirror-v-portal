@@ -1,42 +1,8 @@
 """DealClaw 默认邮箱 provisioning（任务 T2）。
-
 职责边界
 --------
 只做「懒创建 + 发信就绪判定」，不调用邮件 Provider、不发信、不起后台服务：
-
-- ``ensure_mailbox``     幂等懒创建默认邮箱：命名占位 → account 记录 → 通知目标绑定
-- ``mailbox_readiness``  发信就绪判定（收信路由 + 通知目标 + 发件身份）
-- ``check_send_ready``   发信前置闸门（不抛异常，返回结构化结论）
-- ``assert_send_ready``  发信前置闸门（未就绪抛 ``SendNotReadyError``）
-
-约定
-----
-- 地址计算**完全复用** ``naming.py``（T1）：本模块不重写 slug 规则、保留词、
-  稳定短码、状态机与 tombstone 逻辑。
-- account / binding 落库**完全复用** ``store.py`` 既有表结构与调用约定，
-  不新增表、不改既有表结构、不改既有函数签名。
-- 仅标准库；不改 k8s / 部署配置 / 密钥 / 生产数据。
-
-地址优先级
-----------
-调用方传入的 ``slug`` 视为「已解析的短名」，作为取词第一优先级（``brand_name_en``
-槽位）交给 ``naming.py``。它仍是**偏好**不是强制：命中保留词或已被占用时，由
-``naming.py`` 按稳定短码兜底（``suntech-7k3``），与 T1 行为一致。
-
-错误码（``ProvisionError.code``，供 skill / 智能体判定）
--------------------------------------------------------
-``invalid_input`` / ``invalid_slug`` / ``address_unavailable`` /
-``account_conflict`` / ``owner_missing`` / ``send_gate_not_ready`` /
-``internal_error``
-
-发信就绪（``send_ready``）的三项判定
------------------------------------
-- ``routing_ready``  收信路由：地址有命名记录 + 企业匹配 + 可收信 + account 存在且启用
-- ``notify_ready``   通知目标：account 上存在 ``notify_enabled`` 且目标为 ``oc_``/``ou_`` 的绑定
-- ``naming_ready``   发件身份：命名状态为 ``active``（``reserved`` = 只占位未激活）
-
-三项全绿才 ``send_ready``。未就绪时闸门**拒绝发送并说明原因**，不产生假成功。
-"""
+- ``ensure_mailbox``     幂等懒创建默认邮箱：命名占位 → account 记录 → 通知目标绑定"""
 
 from __future__ import annotations
 
@@ -61,9 +27,6 @@ __all__ = [
     "DEFAULT_MAILBOX_KIND",
     "DEFAULT_SECRET_REF",
     "DEFAULT_DAILY_SEND_LIMIT",
-    "GATE_MODE_ENV",
-    "GATE_MODES",
-    "NOTIFY_PREFIXES",
     "EXIT_OK",
     "EXIT_ERROR",
     "EXIT_NOT_READY",
@@ -83,7 +46,6 @@ __all__ = [
     "try_ensure_mailbox",
     "check_send_ready",
     "assert_send_ready",
-    "gate_mode",
     "gate_blocked_result",
 ]
 
@@ -95,10 +57,6 @@ DEFAULT_MAILBOX_KIND = "dealclaw_proxy"
 DEFAULT_SECRET_REF = "env:RESEND_API_KEY"
 #: Free 每日额度（PRD 8.1）。真正的额度扣减不在 T2 范围内。
 DEFAULT_DAILY_SEND_LIMIT = 30
-
-#: 闸门模式：``enforce``（默认，拒绝）/ ``warn``（放行但标注）/ ``off``（不判定）。
-GATE_MODE_ENV = "DC_MAILBOX_GATE"
-GATE_MODES = ("enforce", "warn", "off")
 
 #: 通知目标前缀：``oc_`` 群 / ``ou_`` 用户 DM（与 dc_send_receipt.push_receipt 一致）。
 NOTIFY_PREFIXES = ("oc_", "ou_")
@@ -162,11 +120,7 @@ def _blocked(*codes_reasons: tuple[str, str]) -> tuple[list[str], list[str]]:
 
 # ── 租户 / owner / 地址解析 ──────────────────────────────────
 def resolve_tenant_id(explicit: str = "") -> str:
-    """租户主键解析：显式参数 → ``MIO_CDP_SUPPLIER_ID`` → ``DC_ENTERPRISE_ID``。
-
-    口径与 ``enterprise_ids.py``（唯一权威主键 = 当前租户 supplier_id）一致；
-    全部为空时返回空串，调用方必须视为「无法判定」而不是猜一个值。
-    """
+    """租户主键解析：显式参数 → ``MIO_CDP_SUPPLIER_ID`` → ``DC_ENTERPRISE_ID``。"""
     for candidate in (explicit,
                       os.environ.get("MIO_CDP_SUPPLIER_ID", ""),
                       os.environ.get("DC_ENTERPRISE_ID", "")):
@@ -177,10 +131,7 @@ def resolve_tenant_id(explicit: str = "") -> str:
 
 
 def resolve_owner_open_id(explicit: str = "") -> str:
-    """邮箱归属人解析：显式参数 → ``DC_MAILBOX_OWNER_OPEN_ID`` → ``MIO_V_OPEN_ID``。
-
-    解析不到时返回空串：地址仍可占位，但 account 记录不落（不伪造归属人）。
-    """
+    """邮箱归属人解析：显式参数 → ``DC_MAILBOX_OWNER_OPEN_ID`` → ``MIO_V_OPEN_ID``。"""
     for candidate in (explicit,
                       os.environ.get("DC_MAILBOX_OWNER_OPEN_ID", ""),
                       os.environ.get("MIO_V_OPEN_ID", "")):
@@ -208,12 +159,6 @@ def canonical_address(address: str) -> str:
     if not addr:
         return ""
     return addr if "@" in addr else f"{addr}@{MAIL_DOMAIN}"
-
-
-def gate_mode(explicit: str = "") -> str:
-    """闸门模式：显式参数 → ``DC_MAILBOX_GATE`` → ``enforce``（未知值按 enforce）。"""
-    value = str(explicit or os.environ.get(GATE_MODE_ENV, "") or "").strip().lower()
-    return value if value in GATE_MODES else "enforce"
 
 
 def engine_ready(data_dir: str | os.PathLike | None = None) -> bool:
@@ -244,12 +189,7 @@ def _find_account(store: EmailStore, *, enterprise_id: str, email: str) -> dict 
 
 def _ensure_account(store: EmailStore, *, enterprise_id: str, email: str,
                     owner_open_id: str) -> tuple[dict | None, bool]:
-    """幂等确保 account 记录存在。返回 ``(account, created)``；无归属人返回 ``(None, False)``。
-
-    并发：唯一地址已由 naming 的唯一索引保证，这里再用 store 既有的 flock
-    （``_record_lock``，按 ``enterprise_id`` 串行）保护「查-插」，避免同一邮箱
-    落下两条 account 记录。
-    """
+    """幂等确保 account 记录存在。返回 ``(account, created)``；无归属人返回 ``(None, False)``。"""
     existing = _find_account(store, enterprise_id=enterprise_id, email=email)
     if existing is not None:
         return existing, False
@@ -291,11 +231,7 @@ def _notify_bindings(store: EmailStore, account_id: str) -> list[dict]:
 
 
 def _ensure_notify_binding(store: EmailStore, *, account_id: str, target: str) -> dict | None:
-    """按用户显式给定的目标落一条通知绑定（复用 store.bind_group）。
-
-    不传目标时不落任何绑定：PRD 3.1 要求「邮箱归属和通知位置分离」，
-    不能在群里顺手把全部回信永久绑到该群。
-    """
+    """按用户显式给定的目标落一条通知绑定（复用 store.bind_group）。"""
     value = str(target or "").strip()
     if not value:
         return None
@@ -310,20 +246,14 @@ def _ensure_notify_binding(store: EmailStore, *, account_id: str, target: str) -
 # ── 就绪判定 ────────────────────────────────────────────────
 def mailbox_readiness(*, enterprise_id: str = "", address: str = "",
                       data_dir=None) -> dict:
-    """判定某租户默认邮箱的发信就绪度（只读，不抛异常）。
-
-    ``address`` 为空时取该租户当前默认地址。
-    """
+    """判定某租户默认邮箱的发信就绪度（只读，不抛异常）。"""
     eid = resolve_tenant_id(enterprise_id)
     result: dict[str, Any] = {
         "enterprise_id": eid,
         "address": local_part(address) if address else "",
         "email": canonical_address(address) if address else "",
         "domain": MAIL_DOMAIN,
-        "naming_status": "",
         "account_id": "",
-        "account_enabled": False,
-        "account_kind": "",
         "notify_target": "",
         "naming_ready": False,
         "routing_ready": False,
@@ -363,7 +293,6 @@ def mailbox_readiness(*, enterprise_id: str = "", address: str = "",
     if view is not None:
         result["address"] = view["address"]
         result["email"] = view["email"]
-        result["naming_status"] = view["status"]
         result["naming_ready"] = bool(view["can_send"])
         if view.get("is_tombstoned"):
             pairs.append(("naming_tombstoned",
@@ -391,9 +320,8 @@ def mailbox_readiness(*, enterprise_id: str = "", address: str = "",
                       "该地址还没有 account 记录（发件身份未落地）"))
     else:
         result["account_id"] = str(account.get("account_id", ""))
-        result["account_enabled"] = bool(account.get("enabled"))
-        result["account_kind"] = str(account.get("mailbox_kind", ""))
-        if not result["account_enabled"]:
+        enabled = bool(account.get("enabled"))
+        if not enabled:
             pairs.append(("account_disabled",
                           f"account {result['account_id']} 已停用"))
 
@@ -410,7 +338,7 @@ def mailbox_readiness(*, enterprise_id: str = "", address: str = "",
     result["blockers"] = [code for code, _ in pairs]
     result["reasons"] = [reason for _, reason in pairs]
     result["routing_ready"] = bool(
-        view is not None and view["can_receive"] and result["account_enabled"])
+        view is not None and view["can_receive"] and enabled)
     result["send_ready"] = not pairs
     return result
 
@@ -422,31 +350,7 @@ def ensure_mailbox(enterprise_id: str = "", *, company_name: str = "",
                    owner_open_id: str = "", notify_target: str = "",
                    activate: bool = False, data_dir=None, at=None,
                    max_attempts: int = 8) -> dict:
-    """幂等懒创建租户默认邮箱，返回该租户的默认邮箱地址与就绪度。
-
-    参数
-    ----
-    enterprise_id  租户主键（空则回退 env，见 ``resolve_tenant_id``）
-    company_name   公司名（用于拼音降级取词）
-    brand_name_en / short_name_en / pinyin_abbr  命名取词（交给 ``naming.py``）
-    slug           已解析的短名，作为取词第一优先级；仍受保留词/占用兜底
-    owner_open_id  邮箱归属人（空则回退 env，见 ``resolve_owner_open_id``）
-    notify_target  通知目标 ``oc_``群 / ``ou_``DM；显式传入才落绑定
-    activate       True 且地址为 ``reserved`` 时激活发件身份（``active``）
-    at             测试用固定时间戳
-
-    返回
-    ----
-    dict：``ok`` / ``enterprise_id`` / ``address`` / ``email`` / ``status`` /
-    ``created``（本次是否新建占位）/ ``idempotent``（命中已有占位）/
-    ``account_id`` / ``account_created`` / ``notify_target`` / ``activated`` /
-    ``send_ready`` / ``routing_ready`` / ``notify_ready`` / ``blockers`` / ``reasons``
-
-    异常
-    ----
-    ``InvalidInputError`` / ``InvalidSlugInputError`` / ``MailboxUnavailableError``
-    / ``NamingError``（naming 层错误原样抛出）。接线层请用 ``try_ensure_mailbox``。
-    """
+    """幂等懒创建租户默认邮箱，返回该租户的默认邮箱地址与就绪度。"""
     eid = resolve_tenant_id(enterprise_id)
     if not eid:
         raise InvalidInputError(
@@ -567,10 +471,7 @@ def ensure_mailbox(enterprise_id: str = "", *, company_name: str = "",
 
 
 def try_ensure_mailbox(enterprise_id: str = "", **kwargs: Any) -> dict:
-    """``ensure_mailbox`` 的不抛异常版本，供接线层（线索落池等）调用。
-
-    失败不改变调用方行为，只返回 ``{"ok": False, "code": ..., "error": ...}``。
-    """
+    """``ensure_mailbox`` 的不抛异常版本，供接线层（线索落池等）调用。"""
     try:
         return ensure_mailbox(enterprise_id, **kwargs)
     except ProvisionError as exc:
@@ -597,14 +498,7 @@ def _naming_db_path(data_dir=None) -> Path:
 
 
 def _gate_applies(*, email: str, data_dir=None) -> bool:
-    """闸门是否适用于这个发件地址。
-
-    只覆盖**经命名服务（T1/T2）预留过的 DealClaw 默认邮箱**：T2 的懒创建一定先落
-    命名占位，所以默认邮箱流程 100% 覆盖；任何未经命名服务的历史邮箱、自有邮箱
-    （包括其它 ``mail.dealclaw.io`` 地址）一律 ``applicable=False``，既有发信行为不变。
-
-    命名库文件不存在时直接返回 False，不做任何建库副作用。
-    """
+    """闸门是否适用于这个发件地址。"""
     if not email:
         return False
     if not _naming_db_path(data_dir).exists():
@@ -616,20 +510,12 @@ def _gate_applies(*, email: str, data_dir=None) -> bool:
 
 
 def check_send_ready(*, enterprise_id: str = "", from_address: str = "",
-                     data_dir=None, mode: str = "") -> dict:
-    """发信前置闸门（不抛异常）。返回 ``allowed`` 布尔与未就绪原因。
-
-    - ``applicable=False``：该地址不归命名服务管（未经 T1/T2 预留的邮箱，含自有邮箱）
-      → 放行，既有行为不变
-    - ``applicable=True`` 且 ``allowed=False``：拒绝发送，``blockers`` 给出原因
-    - ``mode``：``enforce``（默认）/``warn``/``off``，可用 ``DC_MAILBOX_GATE`` 覆盖
-    """
-    resolved_mode = gate_mode(mode)
+                     data_dir=None) -> dict:
+    """发信前置闸门（不抛异常）。返回 ``allowed`` 布尔与未就绪原因。"""
     eid = resolve_tenant_id(enterprise_id)
     email = canonical_address(from_address)
     result: dict[str, Any] = {
         "ok": True,
-        "mode": resolved_mode,
         "applicable": False,
         "allowed": True,
         "enterprise_id": eid,
@@ -637,8 +523,8 @@ def check_send_ready(*, enterprise_id: str = "", from_address: str = "",
         "blockers": [],
         "reasons": [],
     }
-    if resolved_mode == "off" or not email:
-        result["reason"] = "gate_disabled" if resolved_mode == "off" else "no_address"
+    if not email:
+        result["reason"] = "no_address"
         return result
 
     result["applicable"] = _gate_applies(email=email, data_dir=data_dir)
@@ -651,9 +537,9 @@ def check_send_ready(*, enterprise_id: str = "", from_address: str = "",
     result["address"] = readiness["address"]
     result["blockers"] = readiness["blockers"]
     result["reasons"] = readiness["reasons"]
-    result["allowed"] = bool(readiness["send_ready"]) or resolved_mode == "warn"
+    result["allowed"] = bool(readiness["send_ready"])
     if not readiness["send_ready"]:
-        result["ok"] = resolved_mode != "enforce"
+        result["ok"] = False
         result["reason"] = "; ".join(readiness["reasons"]) or "send_not_ready"
     return result
 

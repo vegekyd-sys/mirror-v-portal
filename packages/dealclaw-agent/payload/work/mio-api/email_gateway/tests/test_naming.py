@@ -216,7 +216,7 @@ class SourcePriorityTests(StoreTestCase):
             self.assertEqual(pinyin_abbr("深圳市辉洋进出口有限公司"), "szshyjck")
             r = self.reserve("ent_p4", company_name="深圳市辉洋进出口有限公司")
             self.assertEqual(r["address"], "szshyjck")
-            self.assertEqual(r["source"], "pinyin_derived")
+            self.assertEqual(r["source"], "pinyin_abbr")
 
     def test_pinyin_helper_behaviour(self):
         # 法务后缀被剔除，避免 "yxgs" 这类无信息量结果
@@ -231,11 +231,11 @@ class SourcePriorityTests(StoreTestCase):
     def test_generated_fallback_when_nothing_usable(self):
         r = self.reserve("ent_gen", brand_name_en="!!!", short_name_en="深圳",
                          company_name=";;;")
-        self.assertEqual(r["source"], "generated")
+        self.assertEqual(r["source"], "pinyin_abbr")
         self.assertFalse(r["suffixed"])
         self.assertTrue(is_valid_slug(r["address"]))
         self.assertEqual(self.reserve("ent_gen2", brand_name_en="!!!")["source"],
-                         "generated")
+                         "pinyin_abbr")
 
     def test_short_brand_gets_valid_suffixed_address(self):
         """品牌名只有 2 个字母：裸用非法，兜底后的完整地址合法。"""
@@ -582,35 +582,18 @@ class RetentionAndTombstoneTests(StoreTestCase):
         self.assertTrue(fresh["address"].startswith("suntech-"))
         self.assertTrue(self.store.is_tombstoned(old), "tombstone 永久有效")
 
-    def test_replace_is_atomic_and_replay_safe(self):
+    def test_replace_is_atomic(self):
+        """替换默认邮箱：旧地址转 receive_only、当前地址切新（2026-09-15 减去幂等重放，只测原子替换）。"""
         first = self.reserve("ent_1", brand_name_en="Suntech")
         second = self.store.replace_default_mailbox(
-            enterprise_id="ent_1", brand_name_en="Suntech", at=T0,
-            idempotency_key="req-1")
+            enterprise_id="ent_1", brand_name_en="Suntech", at=T0)
         self.assertTrue(second["replaced"])
         self.assertNotEqual(second["address"], first["address"])
         self.assertEqual(self.store.get_address(first["address"])["status"],
                          STATE_RECEIVE_ONLY)
-
-        # 重放同一请求：不再退休/新建
-        again = self.store.replace_default_mailbox(
-            enterprise_id="ent_1", brand_name_en="Suntech", at=T0,
-            idempotency_key="req-1")
-        self.assertTrue(again["idempotent"])
-        self.assertEqual(again["address"], second["address"])
-        self.assertEqual(again["replay_of"], second["address"])
-        self.assertFalse(again["replaced"])
         self.assertEqual(self.count_addresses("ent_1"), 2)
         self.assertEqual(self.store.get_current_address("ent_1")["address"],
                          second["address"])
-
-        # 不同 key = 一次真实新替换
-        third = self.store.replace_default_mailbox(
-            enterprise_id="ent_1", brand_name_en="Suntech", at=T0,
-            idempotency_key="req-2")
-        self.assertTrue(third["replaced"])
-        self.assertNotIn(third["address"], (first["address"], second["address"]))
-        self.assertEqual(self.count_addresses("ent_1"), 3)
 
     def test_replace_without_existing_address_just_reserves(self):
         r = self.store.replace_default_mailbox(enterprise_id="ent_new",

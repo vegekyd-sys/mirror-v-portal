@@ -1,30 +1,8 @@
 """DealClaw 默认邮箱命名服务（任务 T1）。
-
 职责边界（只做命名与占位，不做 provisioning）：
-
 - slug 规范化与校验（小写字母/数字/连字符，3–32，首尾字母或数字，无连续连字符）
 - 取词优先级：英文品牌名 → 英文公司简称 → 拼音简称 → 拼音降级 → 通用兜底
-- 保留词拒用（裸用被拒，走稳定短码兜底）
-- 唯一占位靠 SQLite `UNIQUE(address)` 唯一索引，不靠应用层「先查后写」
-- 生命周期状态机：``reserved → active → receive_only``，以及 ``suspended``
-- 旧地址 tombstone：立即停止发信、≥180 天收信保留、永久禁止重新分配
-- 同企业重复调用幂等（已存在即返回原地址）
-
-明确不在本模块内：SMTP/IMAP 收发、provider 配置、Resend 代理、飞书通知、
-DNS/邮箱服务商侧开通。这些属于 T2 provisioning。
-
-数据隔离
---------
-默认邮箱按 ``enterprise_id`` 归属一个企业租户，唯一性判定只看企业；
-``owner_open_id`` 只作为审计元数据随记录保存，不参与唯一性判定
-（与 ``store.py`` 的 ``enterprise_id + owner_open_id`` 账号作用域约定一致）。
-
-依赖
-----
-仅标准库（``sqlite3`` / ``hashlib`` / ``re`` / ``datetime``）。
-拼音优先尝试 ``pypinyin``（环境未安装则自动降级为内置常用字首字母表，
-见 ``pinyin_abbr``）。
-"""
+- 保留词拒用（裸用被拒，走稳定短码兜底）"""
 
 from __future__ import annotations
 
@@ -55,8 +33,6 @@ __all__ = [
     "SOURCE_BRAND",
     "SOURCE_SHORT",
     "SOURCE_PINYIN_GIVEN",
-    "SOURCE_PINYIN_DERIVED",
-    "SOURCE_GENERATED",
     "NamingError",
     "InvalidSlugError",
     "InvalidTransitionError",
@@ -102,9 +78,8 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
 
 SOURCE_BRAND = "brand_name_en"
 SOURCE_SHORT = "short_name_en"
+#: 拼音取词（含公司名派生与通用兜底，2026-09-15 收敛：不再细分来源标签）
 SOURCE_PINYIN_GIVEN = "pinyin_abbr"
-SOURCE_PINYIN_DERIVED = "pinyin_derived"
-SOURCE_GENERATED = "generated"
 
 # ── 保留词 ──────────────────────────────────────────────────
 #: 需求明确要求的必需保留词。
@@ -173,10 +148,7 @@ def _iso(value: datetime | str | None) -> str:
 
 
 def is_valid_slug(slug: Any) -> bool:
-    """严格校验（不做任何自动修补）。
-
-    规则：仅 ``[a-z0-9-]``；长度 3–32；首尾是字母或数字；不允许连续连字符。
-    """
+    """严格校验（不做任何自动修补）。"""
     if not isinstance(slug, str):
         return False
     if len(slug) < MIN_SLUG_LEN or len(slug) > MAX_SLUG_LEN:
@@ -187,10 +159,7 @@ def is_valid_slug(slug: Any) -> bool:
 
 
 def _loose_slug(raw: Any) -> str:
-    """宽容规范化：折叠非 [a-z0-9] 为连字符、去首尾连字符、截断到 32。
-
-    不强制最小长度——短基名（如 ``ab``）本身不能裸用，但可以加短码变成合法地址。
-    """
+    """宽容规范化：折叠非 [a-z0-9] 为连字符、去首尾连字符、截断到 32。"""
     if raw is None:
         return ""
     text = str(raw).strip().lower()
@@ -227,11 +196,7 @@ _CODE_LEN = 3
 
 
 def stable_short_code(seed: str, attempt: int = 0) -> str:
-    """稳定短码：同一 ``(seed, attempt)`` 永远得到同一结果（可复现）。
-
-    短码**必然含至少一个数字**，因此结构上不可能等于国家/地区/组织身份后缀
-    （``us`` / ``cn`` / ``ltd`` 之类），满足「禁止身份后缀」的要求。
-    """
+    """稳定短码：同一 ``(seed, attempt)`` 永远得到同一结果（可复现）。"""
     for extra in range(64):
         digest = hashlib.sha256(f"{seed}|{attempt}|{extra}".encode("utf-8")).digest()
         code = "".join(_CODE_ALPHABET[b % len(_CODE_ALPHABET)] for b in digest[:_CODE_LEN])
@@ -300,11 +265,7 @@ def _trim_letters(text: str) -> str:
 
 
 def pinyin_abbr(text: Any, *, module: Any = None) -> str:
-    """中文/混合文本 → 拼音首字母缩写（小写字母数字）。
-
-    优先 ``pypinyin``（``module`` 可注入，便于测试）；未安装时降级为
-    ``_BUILTIN_INITIALS`` 常用字表。ASCII 字母数字原样保留，未收录字符跳过。
-    """
+    """中文/混合文本 → 拼音首字母缩写（小写字母数字）。"""
     if not text:
         return ""
     body = _strip_legal_suffix(str(text))
@@ -361,8 +322,8 @@ def _candidate_bases(*, enterprise_id: str, brand_name_en: str = "",
     push(short_name_en, SOURCE_SHORT)
     push(pinyin_abbr_hint, SOURCE_PINYIN_GIVEN)
     if company_name:
-        push(pinyin_abbr(company_name), SOURCE_PINYIN_DERIVED)
-    push(f"co{stable_short_code(enterprise_id)}", SOURCE_GENERATED)
+        push(pinyin_abbr(company_name), SOURCE_PINYIN_GIVEN)
+    push(f"co{stable_short_code(enterprise_id)}", SOURCE_PINYIN_GIVEN)
     return out
 
 
@@ -424,16 +385,6 @@ _SCHEMA = (
         reason             TEXT NOT NULL DEFAULT ''
     )
     """,
-    # 替换请求幂等键：同一 (企业, 请求键) 重放不得再制造/退休地址。
-    """
-    CREATE TABLE IF NOT EXISTS replace_request (
-        enterprise_id   TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        address         TEXT NOT NULL,
-        created_at      TEXT NOT NULL,
-        PRIMARY KEY (enterprise_id, idempotency_key)
-    )
-    """,
 )
 
 _TX_RETRIES = 8
@@ -486,11 +437,7 @@ def _receives(status: str, until: str | None, now: datetime) -> bool:
 
 
 class MailboxNamingStore:
-    """默认邮箱命名与占位。
-
-    并发安全：每次调用使用独立 sqlite 连接 + ``BEGIN IMMEDIATE``，
-    唯一性由 ``UNIQUE(address)`` 索引兜底，冲突时自动换下一个候选。
-    """
+    """默认邮箱命名与占位。"""
 
     def __init__(self, data_dir: str | Path | None = None, *,
                  db_path: str | Path | None = None,
@@ -649,12 +596,7 @@ class MailboxNamingStore:
                           owner_open_id: str | None, bases: list[tuple[str, str]],
                           now: str, max_attempts: int,
                           intended_status: str = STATE_RESERVED) -> dict:
-        """在同一事务内挑一个可用地址占位。失败抛 AddressUnavailableError。
-
-        严格按来源优先级逐级处理：每个取词先尝试**裸用**，被占用（或本身是保留词、
-        长度不足）时再用**稳定短码兜底**；该来源彻底不可用才降级到下一个取词。
-        这样「第二个 Suntech」得到 ``suntech-7k3`` 而不是直接掉到通用兜底基名。
-        """
+        """在同一事务内挑一个可用地址占位。失败抛 AddressUnavailableError。"""
         tried: list[str] = []
 
         for raw, source in bases:
@@ -697,10 +639,7 @@ class MailboxNamingStore:
                                 company_name: str = "", owner_open_id: str | None = None,
                                 at: datetime | str | None = None,
                                 max_attempts: int = 8) -> dict:
-        """为企业预留默认邮箱；已存在则**幂等返回原地址**。
-
-        取词顺序：英文品牌名 → 英文公司简称 → 拼音简称 → 拼音降级（公司名）→ 通用兜底。
-        """
+        """为企业预留默认邮箱；已存在则**幂等返回原地址**。"""
         if not enterprise_id:
             raise NamingError("enterprise_id is required")
         now = _iso(at)
@@ -722,15 +661,8 @@ class MailboxNamingStore:
                                 at: datetime | str | None = None,
                                 retention_days: int | None = None,
                                 reason: str = "replaced_default",
-                                max_attempts: int = 8,
-                                idempotency_key: str | None = None) -> dict:
-        """替换默认邮箱（同一事务内）：旧地址立即停发 + receive_only + tombstone。
-
-        ``idempotency_key``
-            可选。同一 ``(enterprise_id, idempotency_key)`` 重放**不会**再退休/新建
-            地址，而是返回当前地址并置 ``idempotent=True``（防止 provisioning 重试
-            造成地址 churn 与 tombstone 污染）。不传键则每次调用都是一次真实替换。
-        """
+                                max_attempts: int = 8) -> dict:
+        """替换默认邮箱（同一事务内）：旧地址立即停发 + receive_only + tombstone。"""
         if not enterprise_id:
             raise NamingError("enterprise_id is required")
         days = self.default_retention_days if retention_days is None else retention_days
@@ -743,19 +675,6 @@ class MailboxNamingStore:
             short_name_en=short_name_en, pinyin_abbr_hint=pinyin_abbr,
             company_name=company_name)
         with self._write_tx() as conn:
-            if idempotency_key:
-                replay = conn.execute(
-                    "SELECT address FROM replace_request"
-                    " WHERE enterprise_id = ? AND idempotency_key = ?",
-                    (enterprise_id, idempotency_key)).fetchone()
-                current = self._current_row(conn, enterprise_id)
-                if replay is not None and current is not None:
-                    view = _record_view(current, idempotent=True)
-                    view["previous"] = None
-                    view["replaced"] = False
-                    view["replay_of"] = replay["address"]
-                    return view
-
             previous: dict | None = None
             existing = self._current_row(conn, enterprise_id)
             if existing is not None:
@@ -767,12 +686,6 @@ class MailboxNamingStore:
             view = self._allocate_in_conn(
                 conn, enterprise_id=enterprise_id, owner_open_id=owner_open_id,
                 bases=bases, now=now, max_attempts=max_attempts)
-            if idempotency_key:
-                conn.execute(
-                    "INSERT OR REPLACE INTO replace_request"
-                    " (enterprise_id, idempotency_key, address, created_at)"
-                    " VALUES (?, ?, ?, ?)",
-                    (enterprise_id, idempotency_key, view["address"], now))
             view["previous"] = previous
             view["replaced"] = previous is not None
             return view

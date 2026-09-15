@@ -24,12 +24,10 @@ if str(_MIO) not in sys.path:
 
 import dc_email_send  # noqa: E402
 from email_gateway.send_control import (CODE_BLOCKED_PLATFORM, CODE_BLOCKED_TENANT,  # noqa: E402
-                                        DEFAULT_THRESHOLDS, SendControlError,
-                                        alerts_for_tenant, blocked_result, default_state,
-                                        evaluate_alerts, format_alerts_line, load_state,
-                                        normalize_tenant_id, save_state, set_platform_paused,
-                                        set_tenant_paused, state_path, switch_overview,
-                                        switch_status)
+                                        SendControlError, blocked_result, default_state,
+                                        load_state, normalize_tenant_id, save_state,
+                                        set_platform_paused, set_tenant_paused, state_path,
+                                        switch_overview, switch_status)
 
 ENT = "152600996207"          # 纯数字 → canonical 原样返回，不受环境变量影响
 OTHER_ENT = "999888777"
@@ -66,7 +64,7 @@ class SwitchStateTests(unittest.TestCase):
         state = load_state(self.data_dir)
         self.assertFalse(state["platform"]["paused"])
         self.assertEqual(state["tenants"], {})
-        self.assertEqual(state["thresholds"], DEFAULT_THRESHOLDS)
+        self.assertTrue(state["platform"]["paused"] is False)
         status = switch_status(ENT, data_dir=self.data_dir)
         self.assertTrue(status["allowed"])
         self.assertEqual(status["code"], "")
@@ -247,106 +245,6 @@ class SendPathTests(unittest.TestCase):
         run.assert_called_once()
 
 
-class ThresholdAlertTests(unittest.TestCase):
-    """阈值可见：最小样本量门槛、投诉率/退信率、只告警不熔断、可配置。"""
-
-    def test_20_no_alert_for_single_complaint_below_min_sample(self):
-        """小样本脆弱：30 封里 1 个投诉 = 3.3%，但 accepted<20 时不算比率告警。"""
-        out = evaluate_alerts(_view(accepted=19, complained=1, bounced=3))
-        self.assertEqual(out["status"], "insufficient_sample")
-        self.assertFalse(out["min_sample_met"])
-        self.assertEqual(out["alerts"], [])
-        self.assertIn("样本不足", out["reason"])
-        self.assertEqual(out["accepted"], 19)
-
-    def test_21_complaint_rate_alerts_at_min_sample(self):
-        out = evaluate_alerts(_view(accepted=20, complained=1))
-        self.assertEqual(out["status"], "alert")
-        self.assertTrue(out["min_sample_met"])
-        self.assertEqual(len(out["alerts"]), 1)
-        alert = out["alerts"][0]
-        self.assertEqual(alert["metric"], "complaint_rate")
-        self.assertEqual(alert["value"], 0.05)
-        self.assertEqual(alert["threshold"], 0.005)
-        self.assertEqual(alert["level"], "alert")
-        self.assertEqual(alert["sample"], 20)
-        self.assertIn("5.00%", alert["message"])
-        self.assertIn("--action pause", alert["next_action"])
-
-    def test_22_bounce_rate_alerts_at_min_sample(self):
-        out = evaluate_alerts(_view(accepted=30, bounced=3))
-        self.assertEqual(out["status"], "alert")
-        self.assertEqual([a["metric"] for a in out["alerts"]], ["bounce_rate"])
-        self.assertEqual(out["alerts"][0]["value"], 0.1)
-
-    def test_23_boundary_is_strictly_greater(self):
-        # 20 封里 1 个退信 = 5%，不 > 5% → 不告警
-        self.assertEqual(evaluate_alerts(_view(accepted=20, bounced=1))["status"], "ok")
-        # 20 封里 1 个投诉 = 5%，> 0.5% → 告警
-        self.assertEqual(evaluate_alerts(_view(accepted=20, complained=1))["status"], "alert")
-
-    def test_24_healthy_sample_reports_ok(self):
-        out = evaluate_alerts(_view(accepted=200, bounced=2, complained=0))
-        self.assertEqual(out["status"], "ok")
-        self.assertTrue(out["min_sample_met"])
-        self.assertEqual(out["observed"], {"complaint_rate": 0.0, "bounce_rate": 0.01})
-
-    def test_25_unavailable_source_does_not_alert_or_guess_zero(self):
-        out = evaluate_alerts(_view(accepted=None, unavailable=True))
-        self.assertEqual(out["status"], "unavailable")
-        self.assertEqual(out["alerts"], [])
-        self.assertIsNone(out["accepted"])
-
-    def test_26_zero_accepted_is_insufficient_not_zerodivision(self):
-        out = evaluate_alerts(_view(accepted=0), thresholds={"min_accepted": 0})
-        self.assertEqual(out["status"], "insufficient_sample")
-
-    def test_27_thresholds_overridable(self):
-        out = evaluate_alerts(_view(accepted=20, complained=1),
-                              thresholds={"complaint_rate": 0.9})
-        self.assertEqual(out["status"], "ok")
-        self.assertEqual(out["thresholds"]["complaint_rate"], 0.9)
-        # 默认值不被就地污染
-        self.assertEqual(DEFAULT_THRESHOLDS["complaint_rate"], 0.005)
-
-    def test_28_double_threshold_hit_reports_both(self):
-        out = evaluate_alerts(_view(accepted=25, bounced=2, complained=1))
-        self.assertEqual(sorted(a["metric"] for a in out["alerts"]),
-                         ["bounce_rate", "complaint_rate"])
-
-    def test_29_layer_is_alert_only(self):
-        out = evaluate_alerts(_view(accepted=20, complained=1))
-        self.assertEqual(out["threshold_layer"], "alert_only_no_auto_cut")
-        self.assertTrue(out["read_only"])
-
-    def test_30_alerts_never_write_switch_state(self):
-        """可见层只读：算完告警不得动开关状态（不自动熔断）。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            set_tenant_paused(OTHER_ENT, True, reason="既有", data_dir=tmp)
-            before = state_path(tmp).read_bytes()
-            evaluate_alerts(_view(accepted=20, complained=1))
-            self.assertEqual(state_path(tmp).read_bytes(), before)
-            self.assertEqual(switch_status(ENT, data_dir=tmp)["allowed"], True)
-
-    def test_31_state_file_thresholds_reach_alerts_for_tenant(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            state = default_state()
-            state["thresholds"] = {"min_accepted": 0, "complaint_rate": 0.005,
-                                   "bounce_rate": 0.05}
-            save_state(state, tmp)
-            self.assertEqual(load_state(tmp)["thresholds"]["min_accepted"], 0)
-            out = alerts_for_tenant(ENT, data_dir=tmp)
-            self.assertEqual(out["min_accepted"], 0)
-            self.assertEqual(out["status"], "insufficient_sample")  # 空库 accepted=0
-
-    def test_32_format_line(self):
-        self.assertIn("无阈值告警", format_alerts_line(evaluate_alerts(_view(accepted=200))))
-        self.assertIn("样本不足", format_alerts_line(evaluate_alerts(_view(accepted=2))))
-        line = format_alerts_line(evaluate_alerts(_view(accepted=20, complained=1)))
-        self.assertIn("命中 1 条阈值", line)
-        self.assertIn("未自动停发", line)
-
-
 class CliTests(unittest.TestCase):
     """CLI：查看状态 / 停·恢复平台 / 停·恢复租户 / 阈值告警。"""
 
@@ -393,38 +291,10 @@ class CliTests(unittest.TestCase):
                                           "--action", "resume"])
             self.assertFalse(resumed["paused"])
 
-    def test_42_cli_alerts_line_and_json(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                self._main(tmp, ["send-alerts", "--enterprise", ENT])
-            payload = json.loads(buf.getvalue())
-            self.assertEqual(payload["status"], "insufficient_sample")
-            self.assertEqual(payload["min_accepted"], 20)
-
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                self._main(tmp, ["send-alerts", "--enterprise", ENT, "--line"])
-            self.assertIn("样本不足", buf.getvalue())
-
-    def test_43_cli_alerts_can_notify(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sent = {}
-
-            def fake_push(target, text):
-                sent.update({"target": target, "text": text})
-                return {"ok": True}
-
-            with patch("dc_send_receipt.push_receipt", fake_push), redirect_stdout(io.StringIO()):
-                self._main(tmp, ["send-alerts", "--enterprise", ENT,
-                                 "--line", "--notify-target", "oc_test"])
-            self.assertEqual(sent["target"], "oc_test")
-            self.assertIn("样本不足", sent["text"])
-
     def test_44_cli_switch_hides_nothing_when_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, out = self._json(tmp, ["send-switch-status"])
-            self.assertEqual(out["thresholds"], DEFAULT_THRESHOLDS)
+            self.assertTrue(out.get("state_file"))
             self.assertTrue(out["state_file"].endswith("send-control/state.json"))
 
 
