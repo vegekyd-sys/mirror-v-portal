@@ -217,14 +217,19 @@ YCloud 账号校验 + **手机号级归属检查**兜底。
 **硬规则**：
 - 只能解绑**自己绑过的号** —— 桥接强制隔离，别人的号会被拒且不会有任何改动；
 - 解绑是破坏性操作，**执行前必须向用户确认要解绑的号码**；
-- 输出里 `rejected` 非空时**如实报告**（哪个号没解掉、为什么），不得谎报成功。
+- 输出里 `rejected` 非空时**如实报告**（哪个号没解掉、为什么），不得谎报成功；
+  `alreadyUnbound` 不是失败，直接当作已解绑回报即可。
 
 ```bash
 python3 skills/ycloud-whatsapp/scripts/unbind_phones.py --phones +8615895553765
 ```
 
-结果字段：`unbound`（已解绑）、`rejected[{phoneNumber,reason}]`（未解绑，reason 如
-`not_owned_by_caller` / `not_bound`）、`disconnected`（该 WABA 已无剩余号则为 1）。
+结果字段：`unbound`（本次解绑掉的）、`alreadyUnbound`（本来就没绑，含重复解绑）、
+`rejected[{phoneNumber,reason}]`（未解绑，reason 为 `not_owned_by_caller`）、
+`disconnected`（该 WABA 已无剩余号则为 1）。
+
+`unbound` 和 `alreadyUnbound` 都向用户回报**已解绑**（解绑是幂等的，重复解绑不是错误）。
+只有 `rejected` 才是失败，必须如实说明哪个号没解掉、为什么。
 解掉最后一个号后，该企业的 WABA 绑定会置为未连接 —— 需要重新绑号才能收发。
 
 ## 嵌入式注册 / 状态

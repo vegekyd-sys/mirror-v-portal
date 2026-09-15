@@ -7,7 +7,9 @@ import { lockWabaOwnershipKeys } from "./wabaOwnershipLock";
  * 语义：
  *   · **只停路由** —— 删掉我方 `WabaPhone` 归属行，不调用 YCloud/Meta 释放号码（那不可逆）。
  *   · **只能解绑自己的号** —— 别人的号一律拒绝并且**不做任何改动**（隔离硬要求）。
- *   · 逐个处理：成功进 `unbound`，失败进 `rejected`（带原因），互不影响。
+ *   · **幂等**：本来就没绑的号不算失败，进 `alreadyUnbound` —— 重复解绑的终态与
+ *     首次解绑完全一致（该号不再路由给本租户），没有理由报错让调用方重试。
+ *   · 逐个处理：本次真的删掉的进 `unbound`，别家的号进 `rejected`（带原因），互不影响。
  *   · 解掉某 supplier 在该 WABA 的最后一个号后，把它的 onboarding 置 DISCONNECTED，
  *     否则 `GET /api/whatsapp/wabas` 还会显示 CONNECTED。
  */
@@ -110,12 +112,14 @@ export async function unbindWabaPhones(input: unknown) {
       const byPhone = new Map(existing.map((row) => [row.phoneNumber, row]));
 
       const unbound: string[] = [];
+      const alreadyUnbound: string[] = [];
       const rejected: Array<{ phoneNumber: string; reason: string }> = [];
 
       for (const phoneNumber of normalized.phoneNumbers) {
         const row = byPhone.get(phoneNumber);
         if (!row) {
-          rejected.push({ phoneNumber, reason: "not_bound" });
+          // 没有归属行 = 已经不路由给任何人，正是解绑要达到的终态 → 幂等成功。
+          alreadyUnbound.push(phoneNumber);
           continue;
         }
         // 隔离红线：只允许解绑自己绑过的号；别人的号连存在性都不对外暴露细节。
@@ -163,15 +167,18 @@ export async function unbindWabaPhones(input: unknown) {
         }
       }
 
-      return { unbound, rejected, disconnected };
+      return { unbound, alreadyUnbound, rejected, disconnected };
     },
     { isolationLevel: "Serializable" },
   );
 
   return {
+    // 只有「别家的号」才算失败；重复解绑是成功。
     ok: result.rejected.length === 0,
     partnerCustomerId: normalized.partnerCustomerId,
     unbound: result.unbound,
+    /** 本来就没绑（含重复解绑）。终态与 unbound 一致，调用方可一并当作已解绑。 */
+    alreadyUnbound: result.alreadyUnbound,
     rejected: result.rejected,
     // 只回数量，不回 wabaId —— 与「不对外暴露 WABA 标识」的既有口径一致
     disconnected: result.disconnected.length,
