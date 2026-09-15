@@ -112,7 +112,7 @@ describe('enqueueLlmPush — new release fields in INSERT', () => {
     const insert = client.queries.find((q) => q.sql.includes('INSERT INTO llm_push_tasks'));
     expect(insert).toBeTruthy();
 
-    // The SQL must reference all 11 columns
+    // The SQL must reference all 15 columns
     expect(insert!.sql).toContain('release_id');
     expect(insert!.sql).toContain('scope_type');
     expect(insert!.sql).toContain('idempotency_key');
@@ -120,8 +120,8 @@ describe('enqueueLlmPush — new release fields in INSERT', () => {
     expect(insert!.sql).toMatch(/\$10/);
     expect(insert!.sql).toMatch(/\$11/);
 
-    // The params array must have exactly 11 values
-    expect(insert!.params).toHaveLength(11);
+    // The params array must have exactly 15 values
+    expect(insert!.params).toHaveLength(15);
 
     // release_id is at position $9 (index 8)
     expect(insert!.params![8]).toBe('rel-123');
@@ -145,7 +145,7 @@ describe('enqueueLlmPush — new release fields in INSERT', () => {
 
     const insert = client.queries.find((q) => q.sql.includes('INSERT INTO llm_push_tasks'));
     expect(insert).toBeTruthy();
-    expect(insert!.params).toHaveLength(11);
+    expect(insert!.params).toHaveLength(15);
 
     // release_id defaults to null
     expect(insert!.params![8]).toBeNull();
