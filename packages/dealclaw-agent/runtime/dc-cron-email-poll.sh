@@ -32,9 +32,18 @@ python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-email-poll] 非法时区: $TZ" >&2; exit 1; }
 
 # 命令跑在 MIO_DIR，email_gateway 从 DC_DATA_DIR（默认 <MIO_DIR>/data）读 account/binding
+# ── schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）──
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+DEFAULT_CRON="*/5 * * * *"
+sched_env="$(python3 "$CONVERGE" resolve --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ")" || {
+  echo "[dc-cron-email-poll] schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+  exit 1
+}
+eval "$sched_env"
+
 openclaw cron add \
-  --cron "*/5 * * * *" \
-  --tz "$TZ" \
+  --cron "$DC_CRON_EXPR" \
+  --tz "$DC_CRON_TZ" \
   --command "python3 -m email_gateway.cron_notify --all" \
   --command-cwd "$MIO_DIR" \
   --command-env "DC_DATA_DIR=$MIO_DIR/data" \
@@ -42,6 +51,9 @@ openclaw cron add \
   --timeout-seconds 240 \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-email-reply-poll" \
-  --description "DealClaw 个人邮箱回复轮询（*/5 @ $TZ）"
+  --description "DealClaw 个人邮箱回复轮询（${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
 
-echo "[dc-cron-email-poll] 已同步（*/5 @ $TZ）"
+python3 "$CONVERGE" record --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ" \
+  || echo "[dc-cron-email-poll] 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
+
+echo "[dc-cron-email-poll] 已同步（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"

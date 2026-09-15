@@ -72,15 +72,29 @@ if [[ "$enabled" != "1" ]]; then
 fi
 
 # ── schedule 参数（--every 6h 或 --cron 表达式）──
+# DECLARED_* 是本次镜像声明的默认值，交给 dc-cron-converge.py 与用户手改做三方合并
 if [[ -n "$CRON_EXPR" ]]; then
-  SCHED_ARGS=(--cron "$CRON_EXPR" --tz "$TZ")
-  SCHED_DESC="${CRON_EXPR} @ ${TZ}"
+  DECLARED_ARGS=(--cron "$CRON_EXPR" --tz "$TZ")
 else
   # 周期优先级：CLI --every > knight.config.heartbeat.interval_hours > 6h
   [[ -z "$EVERY" ]] && EVERY="${interval_hours:+${interval_hours}h}"
   [[ -z "$EVERY" ]] && EVERY="6h"
-  SCHED_ARGS=(--every "$EVERY")
-  SCHED_DESC="${EVERY}"
+  DECLARED_ARGS=(--every "$EVERY")
+fi
+
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+if ! sched_env="$(python3 "$CONVERGE" resolve --decl-key "$DECL_KEY" "${DECLARED_ARGS[@]}")"; then
+  echo "[dc-cron-reflection] schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+  exit 1
+fi
+eval "$sched_env"
+
+if [[ "$DC_CRON_KIND" == "cron" ]]; then
+  SCHED_ARGS=(--cron "$DC_CRON_EXPR" --tz "$DC_CRON_TZ")
+  SCHED_DESC="${DC_CRON_EXPR} @ ${DC_CRON_TZ}"
+else
+  SCHED_ARGS=(--every "$DC_CRON_EVERY")
+  SCHED_DESC="每 ${DC_CRON_EVERY}ms"
 fi
 
 # ── 注入（add 自带 converge，幂等）──
@@ -96,4 +110,8 @@ openclaw cron add \
   --declaration-key "$DECL_KEY" \
   --description "DealClaw reflection heartbeat（${SCHED_DESC}）"
 
-echo "[dc-cron-reflection] 已同步：dealclaw-reflection-heartbeat（${SCHED_DESC}）"
+# 注册成功后才记录基线：提前记录会让 add 失败时把现状误判成用户修改
+python3 "$CONVERGE" record --decl-key "$DECL_KEY" "${DECLARED_ARGS[@]}" \
+  || echo "[dc-cron-reflection] 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
+
+echo "[dc-cron-reflection] 已同步：dealclaw-reflection-heartbeat（${SCHED_DESC}，schedule 来源: ${DC_CRON_SOURCE}）"

@@ -99,14 +99,25 @@ PY
 )
 
 # 注册 3 条 cron（对应当地时间 10/14/16 点；add 自带 converge，幂等）
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+# 单条失败不阻断其余两条
+failed=0
 idx=0
 for slot in 10 14 16; do
   idx=$((idx + 1))
   read -r M H <<< "$(echo "$BJ_CRONS" | sed -n "${idx}p")"
   decl_key="${DECL_KEY_PREFIX}-${slot}h"
+  # schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）
+  if ! sched_env="$(python3 "$CONVERGE" resolve --decl-key "$decl_key" --cron "${M} ${H} * * *" --tz "Asia/Shanghai")"; then
+    echo "[dc-cron-onsite-recommend] ${slot}h: schedule 解析失败，跳过（下次启动重试）" >&2
+    failed=1
+    continue
+  fi
+  eval "$sched_env"
+
   openclaw cron add \
-    --cron "${M} ${H} * * *" \
-    --tz "Asia/Shanghai" \
+    --cron "$DC_CRON_EXPR" \
+    --tz "$DC_CRON_TZ" \
     --command "python3 dc_onsite_recommend.py run" \
     --command-cwd "$MIO_DIR" \
     --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
@@ -116,8 +127,14 @@ for slot in 10 14 16; do
     --timeout-seconds 900 \
     --declaration-key "$decl_key" \
     --name "dealclaw-onsite-recommend-${slot}h" \
-    --description "DealClaw 现场推荐（展会当地时间 ${slot}:00 @ ${TZ}，北京时间 ${H}:${M}）"
-  echo "[dc-cron-onsite-recommend] 已同步 ${slot}h（${H}:${M} 北京时间）"
+    --description "DealClaw 现场推荐（展会当地时间 ${slot}:00 @ ${TZ}，实际 ${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
+
+  # 注册成功后才记录基线
+  python3 "$CONVERGE" record --decl-key "$decl_key" --cron "${M} ${H} * * *" --tz "Asia/Shanghai" \
+    || echo "[dc-cron-onsite-recommend] ${slot}h: 基线记录失败（下次升级可能误判）" >&2
+
+  echo "[dc-cron-onsite-recommend] 已同步 ${slot}h（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"
 done
 
 echo "[dc-cron-onsite-recommend] 完成（时区: $TZ）"
+exit "$failed"
