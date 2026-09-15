@@ -307,6 +307,16 @@ export function createRuntimeConfigRoutes(
 
   // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    // P0-5: 当 Catalog 权威已建立时，旧写 API 返回 410 引导到结构化目录。
+    // Break-glass 模式下旁路此检查，但冻结 Catalog Publish 并记录审计。
+    if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      res.status(410).json({
+        code: 'LEGACY_LLM_PROVIDERS_DISABLED',
+        message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
+        catalogUrl: '/catalog',
+      });
+      return;
+    }
     try {
       const { providers, defaultModel, imageModel, compactionModel, fallbackModels } = req.body ?? {};
 
@@ -365,6 +375,26 @@ export function createRuntimeConfigRoutes(
         statusCode: 200,
       });
 
+      // Break-glass 路径：写入成功后记录审计并创建 reconcile 待办。
+      if (config.catalogBreakGlass === true) {
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, old_value, new_value, ip)
+           VALUES ($1, $2, 'llm-providers.break-glass.write', 'llm-providers', $3, $4, $5)`,
+          [
+            actor,
+            actorType === 'external' ? 'service' : actorType,
+            prevLibrary ? JSON.stringify({ providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }) : null,
+            JSON.stringify({ providers: doc.providers.length, defaultModel: doc.defaultModel }),
+            req.ip ?? null,
+          ],
+        );
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, new_value, ip)
+           VALUES ('system', 'service', 'catalog.reconcile.pending', 'llm-providers', $1, '127.0.0.1')`,
+          [JSON.stringify({ reason: 'break-glass write detected', timestamp: new Date().toISOString() })],
+        );
+      }
+
       res.json({
         ok: true,
         taskId,
@@ -388,6 +418,15 @@ export function createRuntimeConfigRoutes(
 
   // DELETE /v1/admin/llm-providers — clear the global library + push all tenants
   router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    // P0-5: 同 PUT，当 Catalog 权威已建立时旧 DELETE 也返回 410。
+    if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      res.status(410).json({
+        code: 'LEGACY_LLM_PROVIDERS_DISABLED',
+        message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
+        catalogUrl: '/catalog',
+      });
+      return;
+    }
     try {
       const prevLibrary = await getGlobalLlmProviders(pool);
       const deleted = await deleteRuntimeConfig(pool, null, LLM_PROVIDERS_KEY);
@@ -419,6 +458,26 @@ export function createRuntimeConfigRoutes(
         newValue: { taskId, async: true },
         statusCode: 200,
       });
+
+      // Break-glass 路径：写入成功后记录审计并创建 reconcile 待办。
+      if (config.catalogBreakGlass === true) {
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, old_value, new_value, ip)
+           VALUES ($1, $2, 'llm-providers.break-glass.write', 'llm-providers', $3, $4, $5)`,
+          [
+            actor,
+            actorType === 'external' ? 'service' : actorType,
+            prevLibrary ? JSON.stringify({ providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }) : null,
+            JSON.stringify({ cleared: true }),
+            req.ip ?? null,
+          ],
+        );
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, new_value, ip)
+           VALUES ('system', 'service', 'catalog.reconcile.pending', 'llm-providers', $1, '127.0.0.1')`,
+          [JSON.stringify({ reason: 'break-glass delete detected', timestamp: new Date().toISOString() })],
+        );
+      }
 
       res.json({
         ok: true,

@@ -80,6 +80,19 @@ export interface ProvisioningConfig {
    * 明确错误（503 MIO_AUTH_NOT_CONFIGURED），不会静默降级成无鉴权调用。
    */
   mioBladeAuth?: string;
+  /**
+   * 当 Catalog 成为模型供应商管理的权威后，将旧 PUT/DELETE
+   * /v1/admin/llm-providers 置为只读（返回 410）。默认 false 不破坏现有
+   * 行为，生产切换时通过 env LEGACY_LLM_PROVIDERS_READONLY=true 开启。
+   */
+  legacyLlmProvidersReadonly?: boolean;
+  /**
+   * Break-glass：紧急情况下临时关闭 Catalog 权威，允许旧 API 写入 Legacy
+   * JSON。激活时 Catalog Publish 被冻结（503），旧写 API 恢复可用但
+   * 每次写入都记审计并创建 reconcile 待办。通过 env CATALOG_BREAK_GLASS=true
+   * 开启，**只能在故障应急时短期使用**。
+   */
+  catalogBreakGlass?: boolean;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -109,8 +122,10 @@ export function loadConfig(): ProvisioningConfig {
     rolloutBatchWorkerIntervalMs: Number(process.env.ROLLOUT_BATCH_WORKER_INTERVAL_MS ?? 500),
     rolloutBatchLeaseSeconds: Number(process.env.ROLLOUT_BATCH_LEASE_SECONDS ?? 600),
     mioApiBaseUrl: process.env.MIO_API_BASE_URL || DEFAULT_MIO_API_BASE_URL,
-    // 空字符串代表“未配置”——由 mio-supplier-client 在真正调用时抛明确错误。
+    // 空字符串代表"未配置"——由 mio-supplier-client 在真正调用时抛明确错误。
     // 这里绝不打印、绝不给默认值。
     mioBladeAuth: process.env.MIO_BLADE_AUTH || '',
+    legacyLlmProvidersReadonly: process.env.LEGACY_LLM_PROVIDERS_READONLY === 'true',
+    catalogBreakGlass: process.env.CATALOG_BREAK_GLASS === 'true',
   };
 }

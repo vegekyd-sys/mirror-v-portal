@@ -16,6 +16,7 @@ import {
 import { CatalogReleaseService } from '../services/catalog-release-service.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
 import { validateConfigValue } from '../services/runtime-config.js';
+import { checkCatalogDrift } from '../services/catalog-drift-detector.js';
 import type { CatalogReleaseRecord, CatalogReleaseView } from '../domain/catalog-release.js';
 import {
   GlobalModelPolicyInputSchema,
@@ -270,6 +271,14 @@ export function createModelCatalogRoutes(
 
   router.post('/v1/admin/model-catalog/snapshot-publish', async (req, res) => {
     if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    // P0-5: Break-glass 模式激活时冻结 Catalog Publish，防止双写。
+    if (config.catalogBreakGlass === true) {
+      res.status(503).json({
+        code: 'CATALOG_PUBLISH_FROZEN',
+        message: 'Break-glass 模式已激活，Catalog Publish 已冻结。请先解除 break-glass 再发布。',
+      });
+      return;
+    }
     const expectedFingerprint = typeof req.body?.fingerprint === 'string' ? req.body.fingerprint : '';
     if (!expectedFingerprint) {
       res.status(400).json({ code: 'VALIDATION', message: 'fingerprint is required' });
@@ -708,6 +717,23 @@ export function createModelCatalogRoutes(
     } catch (error) {
       console.error('model catalog catalog preview failed:', error);
       internalError(res, 'SNAPSHOT_INVALID', 422);
+    }
+  });
+
+  // ── Drift Detection (modelCatalogRead) ────────────────────────────────
+  // Compares the runtime LLM_PROVIDERS fingerprint against the pure Catalog
+  // snapshot fingerprint and the last published Release fingerprint. If any
+  // differ, drift has occurred (likely from a break-glass write that bypassed
+  // the Catalog). Used by the admin UI to flag "reconcile needed".
+
+  router.get('/v1/admin/model-catalog/drift-check', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const result = await checkCatalogDrift(pool);
+      res.json(result);
+    } catch (err) {
+      console.error('drift-check failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
     }
   });
 
