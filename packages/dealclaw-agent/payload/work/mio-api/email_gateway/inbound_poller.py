@@ -52,11 +52,15 @@ def resolve_notify_binding(*, origin_notify_target: str = "", account_id: str = 
     ``origin_notify_target`` 上，这里优先用它；旧记录缺字段或目标非法时自动回退
     account 绑定，行为与改造前一致（向后兼容，不报错）。
 
+    **发信会话形态不再限定飞书**：飞书 ``oc_/ou_`` 与微信 ``<…>@im.wechat`` 都是合法
+    发信会话（2026-09-15 接微信通道），判断统一走 ``notify_delivery.im_channel_for``。
+
     返回可直接交给 ``notify_delivery.deliver`` 的绑定形状（多一个 ``source``）：
     ``origin`` = 发信会话；``binding`` = account 级回退；无目标 → ``{}``。
     """
+    from email_gateway.notify_delivery import im_channel_for  # noqa: PLC0415
     target = str(origin_notify_target or "").strip()
-    if target.startswith(("oc_", "ou_")):
+    if im_channel_for(target):
         return {"account_id": account_id, "chat_id": target, "notify_enabled": 1,
                 "inbound_filter": "dealclaw_replies", "source": "origin"}
     binding = _binding_for_address(address, store=store) if address else {}
