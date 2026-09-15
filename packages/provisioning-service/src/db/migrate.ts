@@ -579,6 +579,70 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON llm_model_param_evidence(model_row_id, created_at DESC);
     `);
 
+    // ── Immutable Release registry + per-tenant rollout status (P0-2) ──────
+    // Every catalog publish creates an append-only Release row with an
+    // encrypted canonical snapshot + compat payload + fingerprint. The
+    // `llm_catalog_release_pointer` singleton tracks the current "desired"
+    // release. `llm_tenant_release_status` tracks per-tenant desired/applied
+    // state so the rollout worker can reconcile drift and report delivery.
+    //   - `llm_provider_instances.revision` enables optimistic CAS for
+    //     scoped rollout (compare-and-swap on the provider row).
+    //   - `llm_push_tasks` gains release_id / scope_type / idempotency_key
+    //     so a push task can be linked to its Release and de-duplicated.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_catalog_releases (
+        id                 UUID PRIMARY KEY,
+        version            BIGINT NOT NULL,
+        parent_id          UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        canonical_snapshot TEXT NOT NULL,
+        compat_payload     TEXT NOT NULL,
+        fingerprint        TEXT NOT NULL,
+        parent_fingerprint TEXT,
+        diff_summary       JSONB NOT NULL DEFAULT '{}'::jsonb,
+        warnings           JSONB NOT NULL DEFAULT '[]'::jsonb,
+        actor              TEXT,
+        actor_type         TEXT NOT NULL DEFAULT 'admin' CHECK (actor_type IN ('admin','service')),
+        status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','rolled-back')),
+        idempotency_key    TEXT UNIQUE,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_catalog_releases_version
+        ON llm_catalog_releases(version DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_catalog_releases_parent
+        ON llm_catalog_releases(parent_id);
+
+      CREATE TABLE IF NOT EXISTS llm_catalog_release_pointer (
+        id          TEXT PRIMARY KEY DEFAULT 'current',
+        release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      INSERT INTO llm_catalog_release_pointer (id) VALUES ('current') ON CONFLICT DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS llm_tenant_release_status (
+        tenant_id           TEXT NOT NULL,
+        desired_release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        applied_release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        applied_fingerprint TEXT,
+        applied_at          TIMESTAMPTZ,
+        restart_reason      TEXT,
+        delivery_status     TEXT CHECK (delivery_status IN ('pending','delivered','failed','skipped','unsupported')),
+        error               TEXT,
+        attempts            INTEGER NOT NULL DEFAULT 0,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id)
+      );
+
+      ALTER TABLE llm_provider_instances
+        ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS release_id UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'full';
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+    `);
+
     console.log(JSON.stringify({
       level: 'info',
       action: 'migrate',

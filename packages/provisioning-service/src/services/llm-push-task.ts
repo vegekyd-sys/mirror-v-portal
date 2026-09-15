@@ -46,6 +46,12 @@ export interface EnqueueLlmPushInput {
   nextLibrary: LlmProvidersConfig | null;
   actor: string;
   actorType: 'admin' | 'service';
+  /** Release this push task belongs to (for atomic publish). */
+  releaseId?: string;
+  /** Scope granularity: full rollout, allowlist, single tenant, etc. */
+  scopeType?: 'full' | 'allowlist' | 'single' | 'affected' | 'canary' | 'batch';
+  /** Idempotency key for de-duplication of identical push tasks. */
+  idempotencyKey?: string;
 }
 
 /** Public (脱敏) task view returned by the REST API — never exposes libraries. */
@@ -87,16 +93,25 @@ function decryptLibraryOrThrow(encrypted: string | null): LlmProvidersConfig | n
   return JSON.parse(decryptValue(encrypted)) as LlmProvidersConfig;
 }
 
-/** Create a pending task and return its id. */
+/**
+ * Create a pending task and return its id.
+ *
+ * Accepts either a `pg.Pool` (standalone connection) or a `pg.PoolClient`
+ * (a transaction-bound client). The latter is critical for atomic publish:
+ * the push task row is inserted within the same transaction as the Release
+ * record, so a crash before COMMIT leaves neither — no orphaned config
+ * without a push task, and no push task without a Release.
+ */
 export async function enqueueLlmPush(
-  pool: pg.Pool,
+  pool: pg.Pool | pg.PoolClient,
   input: EnqueueLlmPushInput,
 ): Promise<{ taskId: string; status: 'pending' }> {
   const taskId = randomUUID();
   await pool.query(
     `INSERT INTO llm_push_tasks
-       (id, kind, scope, trigger, prev_library, next_library, actor, actor_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+       (id, kind, scope, trigger, prev_library, next_library, actor, actor_type,
+        release_id, scope_type, idempotency_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       taskId,
       input.kind,
@@ -106,6 +121,9 @@ export async function enqueueLlmPush(
       input.nextLibrary ? encryptValue(JSON.stringify(input.nextLibrary)) : null,
       input.actor,
       input.actorType,
+      input.releaseId ?? null,
+      input.scopeType ?? 'full',
+      input.idempotencyKey ?? null,
     ],
   );
   return { taskId, status: 'pending' };

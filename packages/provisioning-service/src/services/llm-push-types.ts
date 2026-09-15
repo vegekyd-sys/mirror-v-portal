@@ -55,6 +55,12 @@ export interface LlmPushTaskRecord {
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
+  /** Release this push task belongs to (P0-2 atomic publish). */
+  release_id: string | null;
+  /** Scope granularity for the push (full / allowlist / single / etc.). */
+  scope_type: string;
+  /** Idempotency key for de-duplication. */
+  idempotency_key: string | null;
 }
 
 /** Raw row shape returned by PostgreSQL for llm_push_task_items. */
