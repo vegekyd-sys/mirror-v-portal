@@ -6,6 +6,7 @@ import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
+import { createWeComAppScanRoutes } from './routes/wecom-app-scan.js';
 import { createWeChatBindingRoutes } from './routes/wechat-binding.js';
 import { createWeComBindingRoutes } from './routes/wecom-binding.js';
 import { createDingTalkBindingRoutes } from './routes/dingtalk-binding.js';
@@ -99,6 +100,9 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(authAndAudit));
+  // WeCom (企业微信) bot QR-scan — one-click bot creation; credentials-only,
+  // feeds the wecom-binding form in the admin SPA.
+  app.use(createWeComAppScanRoutes(config, authAndAudit));
   // WeChat (personal WeChat) binding — QR-login direct connection.
   app.use(createWeChatBindingRoutes(pool, config, authAndAudit));
   // WeCom (企业微信) bot binding — credential-based direct connection.

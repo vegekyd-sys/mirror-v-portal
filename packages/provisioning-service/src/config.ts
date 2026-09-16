@@ -105,6 +105,18 @@ export interface ProvisioningConfig {
    * CATALOG_PROJECTION_FROM_AUTHORITY=true 开启。
    */
   catalogProjectionFromAuthority?: boolean;
+  /**
+   * 企业微信扫码授权 source 来源标识（env WECOM_SCAN_SOURCE，默认
+   * 'wecom-cli'，与官方 OpenClaw CLI 一致）。后续若向企业微信申请了独立
+   * 品牌标识，通过 env 覆盖即可。
+   */
+  wecomScanSource?: string;
+  /**
+   * 企业微信扫码授权 plat 平台码（env WECOM_SCAN_PLAT，可选数字）。
+   * 不配置时由 wecom-app-scan.ts 按运行时操作系统映射（darwin=1/win32=2/
+   * linux=3/其他=0）。
+   */
+  wecomScanPlat?: number;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -141,5 +153,10 @@ export function loadConfig(): ProvisioningConfig {
     catalogBreakGlass: process.env.CATALOG_BREAK_GLASS === 'true',
     selectionV2PrimaryRead: process.env.SELECTION_V2_PRIMARY_READ === 'true',
     catalogProjectionFromAuthority: process.env.CATALOG_PROJECTION_FROM_AUTHORITY === 'true',
+    wecomScanSource: process.env.WECOM_SCAN_SOURCE || 'wecom-cli',
+    wecomScanPlat:
+      process.env.WECOM_SCAN_PLAT !== undefined && process.env.WECOM_SCAN_PLAT !== ''
+        ? Number(process.env.WECOM_SCAN_PLAT)
+        : undefined,
   };
 }

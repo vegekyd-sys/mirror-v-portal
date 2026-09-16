@@ -7,6 +7,7 @@ import { api, errMsg } from '../lib/api';
 import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } from '../lib/types';
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
+import WeComAppScanModal from '../components/WeComAppScanModal';
 import WeChatScanModal from '../components/WeChatScanModal';
 import PodLogsModal from '../components/PodLogsModal';
 import PodTerminalModal from '../components/PodTerminalModal';
@@ -2085,6 +2086,7 @@ function WeComBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash:
   const [botId, setBotId] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const loadBinding = useCallback(async () => {
     try {
@@ -2177,6 +2179,14 @@ function WeComBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash:
                 onChange={(e) => setSecret(e.target.value)}
                 placeholder="Secret（仅提交时传输）"
               />
+              <button
+                className="btn-secondary"
+                disabled={busy}
+                onClick={() => setScanOpen(true)}
+                title="客户扫码一键创建机器人并自动回填凭据"
+              >
+                <IconRefresh /> 扫码获取凭据
+              </button>
               <button className="btn-primary" disabled={busy} onClick={() => void bind()}>
                 <IconChat /> {busy ? '处理中…' : '绑定'}
               </button>
@@ -2188,6 +2198,15 @@ function WeComBindingSection({ tenantId, onFlash }: { tenantId: string; onFlash:
           </div>
         </div>
       </div>
+      <WeComAppScanModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onCredentials={(b, s) => {
+          setBotId(b);
+          setSecret(s);
+          onFlash('已获取企业微信机器人凭据，请确认后点击「绑定」');
+        }}
+      />
     </>
   );
 }
