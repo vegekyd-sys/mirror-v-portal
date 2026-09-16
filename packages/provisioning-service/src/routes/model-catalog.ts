@@ -47,6 +47,13 @@ function paramWriteDisabled(res: Response): void {
   });
 }
 
+function globalPolicyBackfillWriteDisabled(res: Response): void {
+  res.status(403).json({
+    code: 'MODEL_CATALOG_GLOBAL_POLICY_BACKFILL_WRITE_DISABLED',
+    message: 'Global model policy backfill writes are disabled',
+  });
+}
+
 function handleParamError(res: Response, error: unknown): void {
   if (error instanceof ModelParamDiscoveryError) {
     res.status(error.status).json({
@@ -689,7 +696,9 @@ export function createModelCatalogRoutes(
     }
     const dryRun = body.dryRun === undefined ? true : body.dryRun as boolean;
     if (dryRun && config.modelCatalogRead !== true) return disabled(res);
-    if (!dryRun && config.modelCatalogGlobalPolicyBackfillWrite !== true) return paramWriteDisabled(res);
+    if (!dryRun && config.modelCatalogGlobalPolicyBackfillWrite !== true) {
+      return globalPolicyBackfillWriteDisabled(res);
+    }
     if (!dryRun && (typeof body.planFingerprint !== 'string' || !Number.isSafeInteger(body.expectedRevision))) {
       return validationError(res, 'planFingerprint and expectedRevision are required for apply');
     }
@@ -701,7 +710,15 @@ export function createModelCatalogRoutes(
       }
       const client = await pool.connect();
       try {
-        await client.query('BEGIN');
+        await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+        // Block every writer that follows PostgreSQL advisory locking while the
+        // plan is re-read, applied, and audited. The table locks additionally
+        // protect against existing writers that do not yet take the advisory lock.
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`);
+        await client.query('LOCK TABLE runtime_configs IN SHARE MODE');
+        await client.query('LOCK TABLE llm_provider_instances IN SHARE MODE');
+        await client.query('LOCK TABLE llm_provider_models IN SHARE MODE');
+        await client.query('LOCK TABLE llm_global_model_policy IN SHARE ROW EXCLUSIVE MODE');
         const transactionRepository = new CatalogRepository(client as unknown as pg.Pool);
         const transactionService = new GlobalPolicyBackfillService(
           client as unknown as pg.Pool,

@@ -96,7 +96,8 @@ describe('global policy backfill API', () => {
         auditValues.push(values ?? []);
         return { rows: [] };
       }
-      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+      if (sql.startsWith('BEGIN') || sql === 'COMMIT' || sql === 'ROLLBACK' ||
+          sql.startsWith('SELECT pg_advisory_xact_lock') || sql.startsWith('LOCK TABLE')) {
         transactionCommands.push(sql);
         return { rows: [] };
       }
@@ -116,7 +117,15 @@ describe('global policy backfill API', () => {
     expect(response.body.action).toBe('applied');
     expect(response.body.policy.revision).toBe(4);
     expect(auditValues).toHaveLength(1);
-    expect(transactionCommands).toEqual(['BEGIN', 'COMMIT']);
+    expect(transactionCommands).toEqual([
+      'BEGIN ISOLATION LEVEL SERIALIZABLE',
+      `SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`,
+      'LOCK TABLE runtime_configs IN SHARE MODE',
+      'LOCK TABLE llm_provider_instances IN SHARE MODE',
+      'LOCK TABLE llm_provider_models IN SHARE MODE',
+      'LOCK TABLE llm_global_model_policy IN SHARE ROW EXCLUSIVE MODE',
+      'COMMIT',
+    ]);
     expect(client.release).toHaveBeenCalledOnce();
     expect(JSON.stringify(auditValues)).not.toContain('top-secret');
     expect(JSON.stringify(auditValues)).not.toContain('encrypted-secret');
@@ -132,7 +141,7 @@ describe('global policy backfill API', () => {
       .post('/v1/admin/model-catalog/global-policy/backfill')
       .send({ dryRun: false, planFingerprint: 'fingerprint', expectedRevision: 0 });
     expect(apply.status).toBe(403);
-    expect(apply.body.code).toBe('MODEL_CATALOG_PARAM_WRITE_DISABLED');
+    expect(apply.body.code).toBe('MODEL_CATALOG_GLOBAL_POLICY_BACKFILL_WRITE_DISABLED');
   });
 
   it('rolls back the policy transaction when strict audit insertion fails', async () => {
@@ -142,7 +151,8 @@ describe('global policy backfill API', () => {
     }));
     const commands: string[] = [];
     const query = vi.fn(async (sql: string) => {
-      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql === 'COMMIT') {
+      if (sql.startsWith('BEGIN') || sql === 'ROLLBACK' || sql === 'COMMIT' ||
+          sql.startsWith('SELECT pg_advisory_xact_lock') || sql.startsWith('LOCK TABLE')) {
         commands.push(sql);
         return { rows: [] };
       }
@@ -170,7 +180,15 @@ describe('global policy backfill API', () => {
       dryRun: false, planFingerprint: preview.body.planFingerprint, expectedRevision: preview.body.expectedRevision,
     });
     expect(response.status).toBe(500);
-    expect(commands).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(commands).toEqual([
+      'BEGIN ISOLATION LEVEL SERIALIZABLE',
+      `SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`,
+      'LOCK TABLE runtime_configs IN SHARE MODE',
+      'LOCK TABLE llm_provider_instances IN SHARE MODE',
+      'LOCK TABLE llm_provider_models IN SHARE MODE',
+      'LOCK TABLE llm_global_model_policy IN SHARE ROW EXCLUSIVE MODE',
+      'ROLLBACK',
+    ]);
     expect(client.release).toHaveBeenCalledOnce();
   });
 });
