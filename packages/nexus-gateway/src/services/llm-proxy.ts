@@ -50,6 +50,14 @@ export interface UsageReportEvent {
   latencyMs: number;
   status: 'ok' | 'error' | 'blocked' | 'synthesized';
   requestId: string;
+  // Stable Catalog IDs (V2 mode only; null/undefined in v1/shadow).
+  // These are resolved at the route entry and attached to every usage
+  // report from that request. The ledger/pricing service still uses
+  // the legacy `provider`/`model` fields for rate matching; these are
+  // incremental metadata for future stable-ID-based attribution.
+  stableProviderId?: string | null;
+  stableModelId?: string | null;
+  releaseId?: string | null;
 }
 
 interface ParsedChatBody {
@@ -108,6 +116,11 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
         status: ev.status,
         source: 'proxy',
         requestId: ev.requestId,
+        // Stable Catalog IDs — included only when non-null (V2 mode).
+        // Ledger/pricing still matches on legacy provider/model fields.
+        ...(ev.stableProviderId != null ? { stableProviderId: ev.stableProviderId } : {}),
+        ...(ev.stableModelId != null ? { stableModelId: ev.stableModelId } : {}),
+        ...(ev.releaseId != null ? { releaseId: ev.releaseId } : {}),
       }),
       signal: AbortSignal.timeout(5_000),
     }).catch(err => {
@@ -148,11 +161,43 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
       const model = (parsed?.model && typeof parsed.model === 'string') ? parsed.model : 'unknown';
       const isChatCall = Array.isArray(parsed?.messages) && (parsed!.messages!.length ?? 0) > 0;
 
-      const mkReport = (status: UsageReportEvent['status'], inTok = 0, outTok = 0, hitTok = 0, missTok = 0) => ({
+      // ── resolve stable Catalog IDs (V2 mode only) ────────────────────
+      // In V2 mode, the route entry's providerId and the matched model's
+      // modelId are attached to every usage report from this request.
+      // In v1/shadow, they are null — the ledger uses legacy fields.
+      // Unmapped models produce null stableModelId but never block the proxy.
+      let stableProviderId: string | null = null;
+      let stableModelId: string | null = null;
+      const releaseId = (mode === 'v2' ? (config.releaseIdV2 ?? null) : null);
+
+      if (mode === 'v2' && config.llmRouteMapV2) {
+        const route = config.llmRouteMapV2.get(provider);
+        if (route) {
+          stableProviderId = route.providerId;
+          // Match body.model against the route's models array (by upstreamModel).
+          // The agent sends the upstream model identifier (e.g. "qwen-max")
+          // in body.model, which matches V2 route models[].upstreamModel.
+          if (model !== 'unknown') {
+            const modelEntry = route.models.find(m => m.upstreamModel === model);
+            if (modelEntry) {
+              stableModelId = modelEntry.modelId;
+            } else {
+              console.warn(
+                `[llm-proxy] V2: no stable modelId for model "${model}" on ` +
+                `provider "${provider}" (providerId="${stableProviderId}") — ` +
+                `usage will have null stableModelId`,
+              );
+            }
+          }
+        }
+      }
+
+      const mkReport = (status: UsageReportEvent['status'], inTok = 0, outTok = 0, hitTok = 0, missTok = 0): UsageReportEvent => ({
         tenantId: config.tenantId, provider, model,
         inputTokens: inTok, outputTokens: outTok,
         cacheHitTokens: hitTok, cacheMissTokens: missTok,
         latencyMs: Date.now() - started, status, requestId,
+        stableProviderId, stableModelId, releaseId,
       });
 
       // ── interception 1: balance keyword (chat calls only) ──

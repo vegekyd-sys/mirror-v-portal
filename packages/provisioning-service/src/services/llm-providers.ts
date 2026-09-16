@@ -919,19 +919,19 @@ export async function applyTenantLlmConfig(
     // Render V2 payloads alongside V1 and write them into the same Secrets.
     // V2 failures do NOT block V1 delivery — the agent can still boot from
     // the V1 blob. A V2 warning is recorded but the task stays 'delivered'.
+    // Build release provenance for V2 envelopes. The real release
+    // id/fingerprint come from the push task; here we use synthetic values
+    // since the shadow-mode writer runs inside applyTenantLlmConfig and
+    // doesn't have direct access to the release record.
+    const releaseProvenance = {
+      id: 'shadow',
+      version: 0,
+      fingerprint: 'shadow',
+    };
     let v2Warning: string | null = null;
     if (globalConfig && blob) {
       try {
         const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
-        // Build a fake release provenance for the envelope. The real release
-        // id/fingerprint come from the push task; here we use synthetic values
-        // since the shadow-mode writer runs inside applyTenantLlmConfig and
-        // doesn't have direct access to the release record.
-        const releaseProvenance = {
-          id: 'shadow',
-          version: 0,
-          fingerprint: 'shadow',
-        };
         const agentEnvelope = renderAgentEnvelope(
           effectiveDoc,
           rawSelection,
@@ -960,7 +960,12 @@ export async function applyTenantLlmConfig(
       try {
         const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
         const gatewayPayload = renderGatewayPayload(effectiveDoc);
-        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = JSON.stringify(gatewayPayload);
+        // Include releaseId as a top-level field in the V2 routes JSON so
+        // the gateway can attach it to stable usage attribution (Step 8).
+        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = JSON.stringify({
+          ...gatewayPayload,
+          releaseId: releaseProvenance.id,
+        });
       } catch (v2err) {
         if (!v2Warning) {
           v2Warning = `V2 gateway render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;

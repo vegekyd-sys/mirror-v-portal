@@ -46,6 +46,11 @@ export interface GatewayConfig {
    * Built at config load time when mode=v2. Null/undefined in v1/shadow.
    */
   llmRouteMapV2?: Map<string, V2RouteEntry> | null;
+  /**
+   * Release ID from the V2 routes JSON (top-level `releaseId` field).
+   * Populated in v2 mode when the V2 routes JSON includes it; null otherwise.
+   */
+  releaseIdV2?: string | null;
 }
 
 /** A single V2 gateway route entry (parsed from LLM_RUNTIME_ROUTES_V2). */
@@ -75,11 +80,19 @@ function required(name: string): string {
 //           strictly, build a routeKey/alias → entry map, and fail closed
 //           on any error or alias conflict.
 
+/** Result of validating the V2 routes JSON. */
+interface V2RoutesResult {
+  routes: V2RouteEntry[];
+  /** Release ID from the V2 routes JSON top-level field (null if absent). */
+  releaseId: string | null;
+}
+
 /**
  * Validate a parsed LLM_RUNTIME_ROUTES_V2 JSON object.
- * Returns the validated routes array, or throws on structural violations.
+ * Returns the validated routes array + optional releaseId, or throws on
+ * structural violations.
  */
-function validateV2Routes(raw: unknown): V2RouteEntry[] {
+function validateV2Routes(raw: unknown): V2RoutesResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new Error('LLM_RUNTIME_ROUTES_V2: expected object with "routes" array');
   }
@@ -87,6 +100,7 @@ function validateV2Routes(raw: unknown): V2RouteEntry[] {
   if (!Array.isArray(obj.routes)) {
     throw new Error('LLM_RUNTIME_ROUTES_V2: expected "routes" array');
   }
+  const releaseId = typeof obj.releaseId === 'string' && obj.releaseId ? obj.releaseId : null;
   const routes: V2RouteEntry[] = [];
   for (let i = 0; i < obj.routes.length; i++) {
     const r = obj.routes[i];
@@ -128,7 +142,7 @@ function validateV2Routes(raw: unknown): V2RouteEntry[] {
       models,
     });
   }
-  return routes;
+  return { routes, releaseId };
 }
 
 /**
@@ -254,6 +268,7 @@ export function loadConfig(): GatewayConfig {
   // ── Runtime Contract V2 mode resolution ──────────────────────────────
   const runtimeContractMode = (process.env.LLM_RUNTIME_CONTRACT_MODE || 'v1') as 'v1' | 'shadow' | 'v2';
   let llmRouteMapV2: Map<string, V2RouteEntry> | null = null;
+  let releaseIdV2: string | null = null;
   const v2RoutesRaw = (process.env.LLM_RUNTIME_ROUTES_V2 || '').trim();
 
   if (runtimeContractMode === 'v2') {
@@ -268,16 +283,17 @@ export function loadConfig(): GatewayConfig {
       } catch {
         throw new Error('LLM_RUNTIME_ROUTES_V2 is not valid JSON (mode=v2, fail-closed)');
       }
-      const routes = validateV2Routes(v2Parsed);
-      llmRouteMapV2 = buildV2RouteMap(routes); // throws on alias conflict
-      console.log(`[config] V2 contract active: ${routes.length} route(s)`);
+      const v2Result = validateV2Routes(v2Parsed);
+      llmRouteMapV2 = buildV2RouteMap(v2Result.routes); // throws on alias conflict
+      releaseIdV2 = v2Result.releaseId;
+      console.log(`[config] V2 contract active: ${v2Result.routes.length} route(s)${releaseIdV2 ? ` release=${releaseIdV2}` : ''}`);
     }
   } else if (runtimeContractMode === 'shadow') {
     if (v2RoutesRaw && v2RoutesRaw !== '{}') {
       try {
         const v2Parsed = JSON.parse(v2RoutesRaw);
-        const routes = validateV2Routes(v2Parsed);
-        compareV1V2Routes(llmUpstreams, routes);
+        const v2Result = validateV2Routes(v2Parsed);
+        compareV1V2Routes(llmUpstreams, v2Result.routes);
       } catch (err) {
         console.warn(`[config] shadow: V2 routes parse/validate failed — ${err instanceof Error ? err.message : err}`);
       }
@@ -310,6 +326,7 @@ export function loadConfig(): GatewayConfig {
     llmUpstreams,
     runtimeContractMode,
     llmRouteMapV2,
+    releaseIdV2,
     keyConfig: {
       customerKeyRef: required('DEALCLAW_CUSTOMER_KEY_REF'),
       botCredentialRef: required('DEALCLAW_BOT_CREDENTIAL_REF'),
