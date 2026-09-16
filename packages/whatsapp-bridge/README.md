@@ -72,19 +72,9 @@ Skill 在明确“绑定已有 WABA”时读取统一管理的 `WHATSAPP_BRIDGE_
 `partnerCustomerId` 与本次 `wabaId`；token 不进入日志或响应。Provisioning 的 runtime-config
 全局配置会热更新到租户 Skill 环境，确保所有租户使用同一个 Bridge 管理 token。
 
-**归属不变量：一个手机号只能属于一个 tenant；一个 WABA 可以被多个 tenant 共享。**
-归属落在 `WabaPhone`（`phoneNumber` 全局唯一），不在 WABA 上。导入必须显式指定
-`phoneNumbers`：号被别家占用返回 409 `PHONE_OWNED_BY_OTHER_TENANT`、号不在该 WABA 上返回
-404 `PHONE_NOT_ON_WABA`，两种情况都不写入。并发导入、解绑与 `PARTNER_ADDED` Webhook
-共用同一组 advisory lock（顺序固定为 phone 升序 → waba 升序）。
-
-嵌入式注册（`PARTNER_ADDED`）会自动认领该 WABA 上的**无主号**，因为它的 payload 里没有
-任何号码字段（Partner Direct Link 指南 §6），无法定位「本次接入对应哪个号」。
-但**该 WABA 上已有其他 tenant `CONNECTED` 时一个号都不认领** —— 那是运营手工拆分的共享
-场景，需要按号 `import-existing-waba`，不能让自助注册抢走未分配的号。
-
-`PARTNER_ADDED` 是唯一触发认领的事件且没有重试，所以入站反查 / 出站取号发现
-「`CONNECTED` 但零归属」时会补认领一次（闸门是纯 DB 的，正常状态下不产生 YCloud 调用）。
+**归属不变量：一个 WABA 只能属于一个 tenant。** 如果该 WABA 已有其他 tenant 的
+`CONNECTED` 记录，或任一号码已映射到其他 WABA，导入返回 409 且不写入。并发导入与
+`PARTNER_ADDED` Webhook 使用相同的数据库事务锁；本功能没有共享 WABA 模式。
 
 YCloud Webhook 需订阅 `whatsapp.inbound_message.received`、`whatsapp.message.updated`，以及嵌入式注册用的 `whatsapp.business_account.updated`。绑定成功后桥接会落库，并可通知发起飞书群 / 客服群。
 
