@@ -35,9 +35,9 @@
 模式下，一个 WABA 可被多个 tenant 共享，但手机号只能归一家；号码归属冲突时事务整体拒绝。
 该接口及凭据不得进入日常 agent skill，响应也不返回 WABA 标识。
 
-### 测试期一键清库（临时接口）
+### 测试期调库接口（临时，测完即删）
 
-`POST /api/admin/whatsapp/cleanup` 是**测试阶段的临时接口**，按测试期口径**不做请求侧校验**：
+`POST /api/admin/whatsapp/debugCleanup` 是**测试阶段的临时接口**，按测试期口径**不做请求侧校验**：
 直接 POST 即执行，空 body 也能清全量运行数据。测完请连同代码一起删除。
 
 默认清 `Message` / `PlatformThread` / `Conversation` / `Customer` / `WebhookEvent` /
@@ -57,6 +57,17 @@
 
 ⚠️ 该 host 对外可达（YCloud/飞书 webhook 必须能进来），而这个接口**无鉴权且会删数据**——
 只应作为测试期短时存在，验完立即删除。
+
+#### 查看全部表数据：`GET/POST /api/admin/whatsapp/debugTableList`
+
+把 9 张业务表的数据汇总成一个 JSON，**顶层 key 就是表名**，另有 `_meta` 放元信息：
+
+- `_meta.counts` 每张表行数、`_meta.rowCount` 总行数、`_meta.schema`、`_meta.generatedAt`
+- 可选过滤：`?tables=Customer,Message`（只取指定表）、`?limit=100`（每表最多 N 行，上限 5000）
+- 凭据类字段**固定脱敏**：`FeishuApp.appSecret` / `verificationToken` / `encryptKey`、
+  `WabaOnboarding.onboardingUrl` 返回 `"[redacted]"`（无鉴权接口不整包吐密钥）
+
+该接口只读、不改数据，同样不挂 `WHATSAPP_DISABLE_DB_CLEANUP` 开关。
 
 Skill 绑定已有 WABA 使用 provisioning 已为每个租户随机生成、注入
 `dealclaw-agent-config-<tenant>` 的 `OPENCLAW_GATEWAY_TOKEN` 签发短时用途隔离 HMAC。

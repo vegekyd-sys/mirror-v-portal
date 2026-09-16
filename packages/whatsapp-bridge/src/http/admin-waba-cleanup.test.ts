@@ -103,10 +103,10 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
     const app = await buildServer();
     const request =
       payload === undefined
-        ? { method: "POST" as const, url: `${config.routePrefix}/api/admin/whatsapp/cleanup` }
+        ? { method: "POST" as const, url: `${config.routePrefix}/api/admin/whatsapp/debugCleanup` }
         : {
             method: "POST" as const,
-            url: `${config.routePrefix}/api/admin/whatsapp/cleanup`,
+            url: `${config.routePrefix}/api/admin/whatsapp/debugCleanup`,
             payload,
           };
     const response = await app.inject(request);
