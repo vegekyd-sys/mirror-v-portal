@@ -680,16 +680,29 @@ export function createModelCatalogRoutes(
       return validationError(res, 'request body must be an object');
     }
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (Object.keys(body).some((key) => key !== 'dryRun' && key !== 'force') ||
+    const allowedFields = new Set(['dryRun', 'force', 'planFingerprint', 'expectedRevision']);
+    if (Object.keys(body).some((key) => !allowedFields.has(key)) ||
         (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') ||
-        (body.force !== undefined && typeof body.force !== 'boolean')) {
-      return validationError(res, 'only boolean dryRun and force fields are allowed');
+        (body.force !== undefined && typeof body.force !== 'boolean') ||
+        (body.planFingerprint !== undefined && typeof body.planFingerprint !== 'string') ||
+        (body.expectedRevision !== undefined &&
+          (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0))) {
+      return validationError(res, 'invalid backfill request fields');
     }
     const dryRun = body.dryRun === undefined ? true : body.dryRun as boolean;
     const force = body.force === true;
+    if (!dryRun && (typeof body.planFingerprint !== 'string' || !Number.isSafeInteger(body.expectedRevision))) {
+      return validationError(res, 'planFingerprint and expectedRevision are required for apply');
+    }
     try {
       const { actor, actorType } = actorFromRequest(req);
-      const result = await policyBackfill.apply({ dryRun, force, actor });
+      const result = await policyBackfill.apply({
+        dryRun,
+        force,
+        actor,
+        ...(typeof body.planFingerprint === 'string' ? { planFingerprint: body.planFingerprint } : {}),
+        ...(typeof body.expectedRevision === 'number' ? { expectedRevision: body.expectedRevision } : {}),
+      });
       if (!dryRun && result.action === 'applied') {
         await writeAuditLog(pool, {
           actor,

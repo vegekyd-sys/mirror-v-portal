@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import type {
   GlobalModelPolicyInput,
@@ -26,13 +27,22 @@ export interface GlobalPolicyDisabledReference extends GlobalPolicyReferenceIssu
   candidateIds: string[];
 }
 
+export interface GlobalPolicyReferenceWarning extends GlobalPolicyReferenceIssue {
+  modelId: string;
+  paramsStatus: 'fallback' | 'incomplete';
+}
+
 export interface GlobalPolicyBackfillPreview {
   sourceRefs: GlobalModelPolicyInput;
   resolvedIds: GlobalModelPolicyInput;
   missingRefs: GlobalPolicyReferenceIssue[];
   ambiguousRefs: GlobalPolicyAmbiguousReference[];
   disabledRefs: GlobalPolicyDisabledReference[];
+  invalidRefs: GlobalPolicyDisabledReference[];
+  warnings: GlobalPolicyReferenceWarning[];
   currentPolicy: GlobalModelPolicyRecord | null;
+  expectedRevision: number | null;
+  planFingerprint: string;
   legacyAvailable: boolean;
   ready: boolean;
   equivalent: boolean;
@@ -62,7 +72,7 @@ type LegacyLoader = (pool: pg.Pool) => Promise<LlmProvidersConfig | null>;
 /** Domain error with a stable API-safe code. */
 export class GlobalPolicyBackfillError extends Error {
   public constructor(
-    public readonly code: 'BACKFILL_NOT_READY' | 'POLICY_ALREADY_CONFIGURED' | 'POLICY_NOT_FOUND',
+    public readonly code: 'BACKFILL_NOT_READY' | 'POLICY_ALREADY_CONFIGURED' | 'POLICY_NOT_FOUND' | 'BACKFILL_PLAN_STALE',
     message: string,
   ) {
     super(message);
@@ -88,6 +98,10 @@ function policiesEqual(left: GlobalModelPolicyInput, right: GlobalModelPolicyInp
     left.compactionModel === right.compactionModel &&
     left.fallbackModels.length === right.fallbackModels.length &&
     left.fallbackModels.every((value, index) => value === right.fallbackModels[index]);
+}
+
+function planFingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
 function sourcePolicy(legacy: LlmProvidersConfig | null): GlobalModelPolicyInput {
@@ -126,6 +140,8 @@ export class GlobalPolicyBackfillService {
     const missingRefs: GlobalPolicyReferenceIssue[] = [];
     const ambiguousRefs: GlobalPolicyAmbiguousReference[] = [];
     const disabledRefs: GlobalPolicyDisabledReference[] = [];
+    const invalidRefs: GlobalPolicyDisabledReference[] = [];
+    const warnings: GlobalPolicyReferenceWarning[] = [];
 
     const resolve = (kind: GlobalPolicyReferenceKind, ref: string | null): string | null => {
       if (ref === null) return null;
@@ -150,6 +166,13 @@ export class GlobalPolicyBackfillService {
         disabledRefs.push({ kind, ref, candidateIds });
         return null;
       }
+      if (matches[0].paramsStatus === 'invalid') {
+        invalidRefs.push({ kind, ref, candidateIds });
+        return null;
+      }
+      if (matches[0].paramsStatus === 'fallback' || matches[0].paramsStatus === 'incomplete') {
+        warnings.push({ kind, ref, modelId: matches[0].id, paramsStatus: matches[0].paramsStatus });
+      }
       return matches[0].id;
     };
 
@@ -164,18 +187,34 @@ export class GlobalPolicyBackfillService {
     // Fail closed so force=true can never erase a configured Catalog policy.
     const legacyAvailable = legacy !== null;
     const referencesReady = legacyAvailable && missingRefs.length === 0 && ambiguousRefs.length === 0 &&
-      disabledRefs.length === 0;
+      disabledRefs.length === 0 && invalidRefs.length === 0;
     // Never call a partially resolved policy equivalent: unresolved refs are represented
     // as null/filtered values and could otherwise accidentally equal an empty policy.
     const equivalent = referencesReady && currentPolicy !== null && policiesEqual(currentPolicy, resolvedIds);
     const overwriteBlocked = currentPolicy !== null && !isEmptyPolicy(currentPolicy) && !equivalent && !force;
+    const expectedRevision = currentPolicy?.revision ?? null;
+    const fingerprint = planFingerprint({
+      sourceRefs,
+      resolvedIds,
+      missingRefs,
+      ambiguousRefs,
+      disabledRefs,
+      invalidRefs,
+      warnings,
+      expectedRevision,
+      legacyAvailable,
+    });
     return {
       sourceRefs,
       resolvedIds,
       missingRefs,
       ambiguousRefs,
       disabledRefs,
+      invalidRefs,
+      warnings,
       currentPolicy,
+      expectedRevision,
+      planFingerprint: fingerprint,
       legacyAvailable,
       ready: referencesReady && !overwriteBlocked,
       equivalent,
@@ -184,10 +223,23 @@ export class GlobalPolicyBackfillService {
   }
 
   /** Apply the resolved policy with CAS, or return a deterministic no-op. */
-  public async apply(options: { dryRun?: boolean; force?: boolean; actor?: string | null } = {}): Promise<GlobalPolicyBackfillResult> {
+  public async apply(options: {
+    dryRun?: boolean;
+    force?: boolean;
+    actor?: string | null;
+    planFingerprint?: string;
+    expectedRevision?: number;
+  } = {}): Promise<GlobalPolicyBackfillResult> {
     const dryRun = options.dryRun !== false;
     const preview = await this.preview(options.force === true);
     if (dryRun) return { ...preview, action: 'dry-run', policy: preview.currentPolicy };
+    if (typeof options.planFingerprint !== 'string' || options.planFingerprint !== preview.planFingerprint ||
+        !Number.isSafeInteger(options.expectedRevision) || options.expectedRevision !== preview.expectedRevision) {
+      throw new GlobalPolicyBackfillError(
+        'BACKFILL_PLAN_STALE',
+        'Backfill plan changed; run dry-run again and apply its fingerprint and revision',
+      );
+    }
     // Readiness must precede equivalence because unresolved refs collapse to null.
     if (!preview.ready && !preview.overwriteBlocked) {
       throw new GlobalPolicyBackfillError(

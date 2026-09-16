@@ -514,6 +514,7 @@ export class CatalogRepository {
                 JOIN llm_provider_instances provider ON provider.id=model.provider_instance_id
                WHERE model.id=requested.id
                  AND model.runtime_enabled=TRUE
+                 AND model.params_status <> 'invalid'
                  AND provider.enabled=TRUE
             )
          )
@@ -533,6 +534,7 @@ export class CatalogRepository {
                JOIN llm_provider_instances provider ON provider.id=model.provider_instance_id
               WHERE model.id = ANY($1::text[])
                 AND model.runtime_enabled=TRUE
+                AND model.params_status <> 'invalid'
                 AND provider.enabled=TRUE`,
             [refs],
           ),

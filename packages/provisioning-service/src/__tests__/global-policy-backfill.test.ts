@@ -134,7 +134,11 @@ describe('GlobalPolicyBackfillService', () => {
     const { service, update } = setup({ current });
     const preview = await service.preview();
     expect(preview.overwriteBlocked).toBe(true);
-    await expect(service.apply({ dryRun: false })).rejects.toMatchObject({
+    await expect(service.apply({
+      dryRun: false,
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    })).rejects.toMatchObject({
       code: 'POLICY_ALREADY_CONFIGURED',
     });
     expect(update).not.toHaveBeenCalled();
@@ -147,7 +151,12 @@ describe('GlobalPolicyBackfillService', () => {
       fallbackModels: ['lpm_fallback'], revision: 7,
     };
     const { service, update } = setup({ current });
-    const result = await service.apply({ dryRun: false });
+    const preview = await service.preview();
+    const result = await service.apply({
+      dryRun: false,
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    });
     expect(result.action).toBe('no-op');
     expect(result.policy).toBe(current);
     expect(update).not.toHaveBeenCalled();
@@ -162,14 +171,25 @@ describe('GlobalPolicyBackfillService', () => {
 
   it('applies using the current revision and actor', async () => {
     const { service, update } = setup({ current: { ...emptyCurrent, revision: 12 } });
-    const result = await service.apply({ dryRun: false, actor: 'admin' });
+    const preview = await service.preview();
+    const result = await service.apply({
+      dryRun: false,
+      actor: 'admin',
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    });
     expect(result.action).toBe('applied');
     expect(update).toHaveBeenCalledWith(result.resolvedIds, 12, 'admin');
   });
 
   it('rejects apply when any reference is unresolved', async () => {
     const { service, update } = setup({ legacy: { ...legacy, defaultModel: 'missing/model' } });
-    await expect(service.apply({ dryRun: false })).rejects.toMatchObject({
+    const preview = await service.preview();
+    await expect(service.apply({
+      dryRun: false,
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    })).rejects.toMatchObject({
       code: 'BACKFILL_NOT_READY',
     });
     expect(update).not.toHaveBeenCalled();
@@ -189,7 +209,12 @@ describe('GlobalPolicyBackfillService', () => {
       equivalent: false,
       overwriteBlocked: false,
     });
-    await expect(service.apply({ dryRun: false, force: true })).rejects.toMatchObject({
+    await expect(service.apply({
+      dryRun: false,
+      force: true,
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    })).rejects.toMatchObject({
       code: 'BACKFILL_NOT_READY',
     });
     expect(update).not.toHaveBeenCalled();
@@ -209,9 +234,33 @@ describe('GlobalPolicyBackfillService', () => {
     const preview = await service.preview();
     expect(preview).toMatchObject({ ready: false, equivalent: false });
     expect(preview.missingRefs).toEqual([{ kind: 'defaultModel', ref: 'missing/model' }]);
-    await expect(service.apply({ dryRun: false })).rejects.toMatchObject({
+    await expect(service.apply({
+      dryRun: false,
+      planFingerprint: preview.planFingerprint,
+      expectedRevision: preview.expectedRevision ?? undefined,
+    })).rejects.toMatchObject({
       code: 'BACKFILL_NOT_READY',
     });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale plans and invalid params while warning for incomplete params', async () => {
+    const invalidCatalog = catalog();
+    invalidCatalog[0].models[0].paramsStatus = 'invalid';
+    invalidCatalog[0].models[1].paramsStatus = 'incomplete';
+    const { service, update } = setup({ catalog: invalidCatalog });
+    const preview = await service.preview();
+    expect(preview.invalidRefs).toEqual([{
+      kind: 'defaultModel', ref: 'provider-a/chat', candidateIds: ['lpm_chat'],
+    }]);
+    expect(preview.warnings).toContainEqual({
+      kind: 'imageModel', ref: 'provider-a/vision', modelId: 'lpm_vision', paramsStatus: 'incomplete',
+    });
+    await expect(service.apply({
+      dryRun: false,
+      planFingerprint: 'stale',
+      expectedRevision: preview.expectedRevision ?? undefined,
+    })).rejects.toMatchObject({ code: 'BACKFILL_PLAN_STALE' });
     expect(update).not.toHaveBeenCalled();
   });
 });

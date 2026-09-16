@@ -97,7 +97,13 @@ describe('global policy backfill API', () => {
       throw new Error(`unexpected query: ${sql}`);
     }) } as unknown as pg.Pool;
 
-    const response = await request(app(pool)).post('/v1/admin/model-catalog/global-policy/backfill').send({ dryRun: false });
+    const application = app(pool);
+    const preview = await request(application).post('/v1/admin/model-catalog/global-policy/backfill').send({});
+    const response = await request(application).post('/v1/admin/model-catalog/global-policy/backfill').send({
+      dryRun: false,
+      planFingerprint: preview.body.planFingerprint,
+      expectedRevision: preview.body.expectedRevision,
+    });
     expect(response.status).toBe(200);
     expect(response.body.action).toBe('applied');
     expect(response.body.policy.revision).toBe(4);
