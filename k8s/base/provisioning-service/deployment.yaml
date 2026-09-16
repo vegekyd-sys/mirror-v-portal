@@ -29,6 +29,11 @@ spec:
           value: "production"
         - name: PORT
           value: "8082"
+        # 外部对话式集成（SSE）转发超时。必须比 nexus-gateway 的
+        # DEALCLAW_EXTERNAL_CHAT_STREAM_TIMEOUT_MS (1200000) 大，否则本层先于
+        # 网关超时，下游错误体被掩盖成通用 GATEWAY_TIMEOUT（+30s 余量）。
+        - name: DEALCLAW_EXTERNAL_CHAT_STREAM_TIMEOUT_MS
+          value: "1230000"
         # Central control-plane namespace, derived from the Pod's own namespace
         # (downward API). Used to build cross-tenant service FQDNs such as
         # credits-ledger.<ns> and provisioning-service.<ns> for tenant Pods.

@@ -12,6 +12,7 @@ import PlansPage from './pages/PlansPage';
 import SkillPricesPage from './pages/SkillPricesPage';
 import SkillsPage from './pages/SkillsPage';
 import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
+import GlobalDefaultsPage from './pages/GlobalDefaultsPage';
 import LlmProvidersPage from './pages/LlmProvidersPage';
 import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import LlmPushTasksPage from './pages/LlmPushTasksPage';
@@ -67,6 +68,7 @@ export default function App() {
             <Route path="image-releases" element={<ImageReleasesPage />} />
             <Route path="audit-logs" element={<AuditLogsPage />} />
             <Route path="runtime-configs" element={<RuntimeConfigsPage />} />
+            <Route path="global-defaults" element={<GlobalDefaultsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="external-api-keys" element={<ExternalApiKeysPage />} />
             <Route path="chat-api-keys" element={<ChatApiKeysPage />} />

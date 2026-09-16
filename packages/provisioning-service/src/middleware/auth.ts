@@ -79,8 +79,7 @@ export function isValidServiceOrAdminToken(token: string | undefined, envVar: st
  * authenticates with the JWT issued by credits-ledger login, so this
  * service no longer needs a proxy in front of it.
  */
-export function createServiceOrAdminAuthMiddleware(envVar: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function createServiceOrAdminAuthMiddleware(envVar: string) {  return (req: Request, res: Response, next: NextFunction) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
       res.status(401).json({ code: 'UNAUTHORIZED', message: 'Missing authorization token' });
@@ -103,5 +102,42 @@ export function createServiceOrAdminAuthMiddleware(envVar: string) {
       return;
     }
     res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid token' });
+  };
+}
+
+// ── 超管（super admin）门禁 ────────────────────────────────────────────────
+
+/**
+ * 视为「超管」的角色。admin_users.role 目前只存在 admin / operator：
+ * 超管 = admin，operator（运维/只读同类角色）不具全局默认配置的写权限。
+ * 后续若引入更细粒度角色（FDE / CSM），把角色名加进来即可。
+ */
+export const SUPER_ADMIN_ROLES = ['admin'];
+export const SUPER_ADMIN_DENIED_MESSAGE =
+  '仅超管可操作全局默认配置（服务令牌与其他角色无权限）';
+
+/**
+ * 超管门禁：必须挂在 authMiddleware（createServiceOrAdminAuthMiddleware）之后，
+ * 因为只有 admin JWT 路径会填 req.adminUser。
+ *   - 无 req.adminUser（服务令牌/未知凭据）→ 403；
+ *   - role 不在允许列表（如 operator）→ 403。
+ * 403 而不是 401：凭据本身有效，只是权限不足。
+ */
+export function createSuperAdminMiddleware(roles: string[] = SUPER_ADMIN_ROLES) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).adminUser as { role?: string; username?: string; sub?: string } | undefined;
+    if (!user) {
+      res.status(403).json({ code: 'FORBIDDEN', message: SUPER_ADMIN_DENIED_MESSAGE });
+      return;
+    }
+    const role = String(user.role ?? '');
+    if (!roles.includes(role)) {
+      res.status(403).json({
+        code: 'FORBIDDEN',
+        message: `${SUPER_ADMIN_DENIED_MESSAGE}（当前角色：${role || '未设置'}）`,
+      });
+      return;
+    }
+    next();
   };
 }

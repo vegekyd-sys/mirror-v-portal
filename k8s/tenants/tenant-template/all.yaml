@@ -131,6 +131,12 @@ spec:
               value: feishu
             - name: DEALCLAW_AGENT_URL
               value: http://dealclaw-agent:18789
+            # 外部对话式集成（SSE）转发超时。报告级任务（dealclaw-market-report:
+            # 11 步流程 + 近 20 页报告）远超默认 600s，否则会在网关处被 AbortSignal 截断。
+            # 与 provisioning-service 读同一变量名、默认值不同（600s vs 630s），
+            # 本处为网关值，provisioning-service 需设为 1230000（+30s 余量）。
+            - name: DEALCLAW_EXTERNAL_CHAT_STREAM_TIMEOUT_MS
+              value: "1200000"
           resources:
             requests:
               cpu: 100m

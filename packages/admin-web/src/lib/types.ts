@@ -114,8 +114,112 @@ export interface CreateTenantResponse {
   provisioning?: { dryRun?: boolean } | null;
 }
 
-export const TENANT_STATUSES = [
-  'pending',
+// ── 全局默认配置（「默认配置」页 · 工单 5） ────────────────────────────────
+
+/** 页面分组：密钥 / 群与绑定 / skill 默认。 */
+export type GlobalDefaultGroup = 'secret' | 'group' | 'skill';
+
+/** GET /v1/admin/global-defaults 的单条 —— 服务端永不回显明文。 */
+export interface GlobalDefaultItem {
+  key: string;
+  isSecret: boolean;
+  group?: GlobalDefaultGroup;
+  description?: string;
+  configured: boolean;
+  /** 明文长度（用于核对是否填错）；解密不可用时为 null。 */
+  length: number | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+}
+
+export interface GlobalDefaultListResponse {
+  ok: boolean;
+  items: GlobalDefaultItem[];
+  /** false = 服务端 RUNTIME_CONFIG_KEY 未配置（列表无法判定已配置/未配置）。 */
+  keyConfigured?: boolean;
+}
+
+/** PUT /v1/admin/global-defaults 响应（只写不回显）。 */
+export interface GlobalDefaultSaveResponse {
+  ok: boolean;
+  key: string;
+  isSecret: boolean;
+  configured: boolean;
+  length: number | null;
+  updatedAt?: string;
+  updatedBy?: string;
+  hint?: string;
+}
+
+/** dryRun 报告：受影响 Agent 清单（需要更新 / 已最新），不含明文。 */
+export interface GlobalDefaultDryRunEntry {
+  tenantId: string;
+  companyName?: string | null;
+  state: 'needs_update' | 'up_to_date' | 'skipped';
+  changedKeys: string[];
+  detail?: string;
+}
+
+export interface GlobalDefaultDryRunResponse {
+  ok: boolean;
+  dryRun: true;
+  keys: string[];
+  summary: {
+    total: number;
+    needsUpdate: number;
+    upToDate: number;
+    skipped: number;
+    unconfiguredKeys: string[];
+  };
+  tenants: GlobalDefaultDryRunEntry[];
+}
+
+export interface GlobalDefaultApplyReceipt {
+  tenantId: string;
+  companyName?: string | null;
+  ok: boolean;
+  rollout?: string;
+  error?: string;
+}
+
+export interface GlobalDefaultApplyResponse {
+  ok: boolean;
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  receipts: GlobalDefaultApplyReceipt[];
+}
+
+// ── 一键开通（工单 1） ────────────────────────────────────────────────────
+
+/** POST /v1/admin/onboarding/quick-start 响应。 */
+export interface QuickStartResponse {
+  ok: boolean;
+  tenantId: string;
+  supplierId: string;
+  deviceCode: string;
+  qrUrl: string;
+  qrDataUri?: string;
+  expireIn?: number;
+  /** 租户状态（如 pending：飞书凭据未绑定时不建工作负载）。 */
+  status: string;
+  scanStatus?: string;
+  scanMessage?: string;
+  provisioned?: boolean;
+  supplier?: { supplierId: string; name?: string | null; created: boolean };
+  tenant?: Tenant;
+  warnings?: string[];
+}
+
+/** 409 多命中时的候选（绝不自动取第一条）。 */
+export interface QuickStartCandidates {
+  code?: string;
+  message?: string;
+  candidates?: MioSupplierOption[];
+}
+
+
+export const TENANT_STATUSES = [  'pending',
   'provisioning',
   'active',
   'provisioning_failed',
