@@ -60,28 +60,44 @@ interface TenantRow {
   message_plane: string | null;
 }
 
+// 扫码会话的硬 deadline 是 Agent bridge 的 LOGIN_WAIT_TIMEOUT_MS（8 分钟）。
+// 这里额外留 2 分钟余量，用于吸收时钟偏差与最后一次状态轮询的传播延迟。
+const VALIDATING_TTL_MS = 10 * 60_000;
+
 /**
  * Read the current WeChat binding state of a tenant.
+ *
+ * 惰性过期（lazy expiry）：如果 DB 里残留 `validating` 且超过 TTL（例如管理员
+ * 发起扫码后未点「关闭」而是直接关闭页面/浏览器，导致 cancel 请求未发出），
+ * 这里会在读取时自动回退为 `unbound`，避免「扫码中…」badge 与按钮永久卡死。
  */
 export async function getTenantWeChatBinding(pool: Queryable, tenantId: string): Promise<WeChatBindingInfo | null> {
   const { rows } = await pool.query(
-    `SELECT tenant_id, account_id, weixin_user_id, status, bound_at, last_error
+    `SELECT tenant_id, account_id, weixin_user_id, status, bound_at, last_error, updated_at
        FROM wechat_bindings WHERE tenant_id = $1
        ORDER BY created_at DESC LIMIT 1`,
     [tenantId],
   );
   if (!rows.length) {
-    return {
-      tenantId,
-      bound: false,
-      accountId: null,
-      weixinUserId: null,
-      status: 'unbound',
-      boundAt: null,
-      lastError: null,
-    };
+    return unboundInfo(tenantId);
   }
   const r = rows[0];
+
+  if (r.status === 'validating') {
+    const updatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    const stale = !updatedAt || Date.now() - updatedAt > VALIDATING_TTL_MS;
+    if (stale) {
+      await pool.query(
+        `UPDATE wechat_bindings
+           SET status = 'unbound', session_id = NULL, last_error = '扫码会话超时自动失效',
+               updated_at = NOW()
+         WHERE tenant_id = $1 AND status = 'validating'`,
+        [tenantId],
+      );
+      return unboundInfo(tenantId);
+    }
+  }
+
   return {
     tenantId,
     bound: r.status === 'active' || r.status === 'bound',
@@ -90,6 +106,18 @@ export async function getTenantWeChatBinding(pool: Queryable, tenantId: string):
     status: r.status,
     boundAt: r.bound_at ?? null,
     lastError: r.last_error ?? null,
+  };
+}
+
+function unboundInfo(tenantId: string): WeChatBindingInfo {
+  return {
+    tenantId,
+    bound: false,
+    accountId: null,
+    weixinUserId: null,
+    status: 'unbound',
+    boundAt: null,
+    lastError: null,
   };
 }
 

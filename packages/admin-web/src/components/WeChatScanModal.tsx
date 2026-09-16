@@ -32,6 +32,9 @@ interface StatusResp {
 type Phase = 'starting' | 'scanning' | 'need_code' | 'success' | 'error';
 
 const POLL_INTERVAL_MS = 3000;
+// 后端 Agent bridge 的扫码 deadline（LOGIN_WAIT_TIMEOUT_MS = 8 分钟）。
+// 当 start 响应缺失 expiresAt 时，用它兜底，保证倒计时仍会到期而非静默失效。
+const QR_FALLBACK_TTL_MS = 8 * 60_000;
 
 interface Props {
   tenantId: string;
@@ -143,7 +146,8 @@ export default function WeChatScanModal({ tenantId, open, onClose, onBound }: Pr
       if (cancelledRef.current) return;
       sessionIdRef.current = r.sessionId;
       setQrcodeUrl(r.qrcodeUrl);
-      const ts = new Date(r.expiresAt).getTime();
+      const parsed = r.expiresAt ? new Date(r.expiresAt).getTime() : NaN;
+      const ts = Number.isFinite(parsed) ? parsed : Date.now() + QR_FALLBACK_TTL_MS;
       expiresAtRef.current = ts;
       setRemainingSec(Math.max(0, Math.floor((ts - Date.now()) / 1000)));
       setPhase('scanning');
