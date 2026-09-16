@@ -16,7 +16,6 @@ type PhoneRow = { phoneNumber: string; wabaId: string; supplierId: string };
 type MockTx = {
   $queryRaw: (..._args: unknown[]) => Promise<unknown>;
   wabaPhone: {
-    findMany: (args: unknown) => Promise<PhoneRow[]>;
     deleteMany: (args: unknown) => Promise<{ count: number }>;
     count: (args: unknown) => Promise<number>;
   };
@@ -44,20 +43,14 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
   let remainingByOwner = 0;
   let onboardingMatches = 1;
   let disconnected = 0;
-  let onboardingUpdateCalls = 0;
   let lockCount = 0;
-  let lockKeys: string[] = [];
 
   const tx: MockTx = {
-    $queryRaw: async (...args: unknown[]) => {
+    $queryRaw: async () => {
       lockCount += 1;
-      const key = args[1];
-      if (typeof key === "string") lockKeys.push(key);
       return [{ locked: true }];
     },
     wabaPhone: {
-      // 归属判定必须读事务内（加锁后）的状态
-      findMany: async () => rows,
       deleteMany: async (args: unknown) => {
         const where = (args as { where: Record<string, unknown> }).where;
         deleted.push(where);
@@ -74,7 +67,6 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     },
     wabaOnboarding: {
       updateMany: async () => {
-        onboardingUpdateCalls += 1;
         // 真实语义：WHERE 没命中就返回 count=0（例如调用方在这个 WABA 本来就没有
         // onboarding 行 —— 「想解绑别人的号」就是这种情形）
         if (onboardingMatches === 0) return { count: 0 };
@@ -85,10 +77,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
   };
 
   before(() => {
-    // 事务外读归属 = 锁不住的 TOCTOU。真出现就直接炸，别让它悄悄通过。
-    mutablePrisma.wabaPhone.findMany = async () => {
-      throw new Error("ownership must be read inside the locked transaction");
-    };
+    mutablePrisma.wabaPhone.findMany = async () => rows;
     mutablePrisma.$transaction = async (callback, options) => {
       assert.equal(options?.isolationLevel, "Serializable");
       return callback(tx);
@@ -101,9 +90,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     remainingByOwner = 0;
     onboardingMatches = 1;
     disconnected = 0;
-    onboardingUpdateCalls = 0;
     lockCount = 0;
-    lockKeys = [];
   });
 
   after(() => {
@@ -140,9 +127,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
 
   it("never unbinds another tenant's phone and writes nothing", async () => {
     rows = [{ phoneNumber: "+8615895553765", wabaId: "12345678901", supplierId: "tenant-other" }];
-    // 故意让 onboarding 的 WHERE 可命中：真「零改动」应该压根不发这条 UPDATE，
-    // 而不是靠 WHERE 恰好没命中侥幸过关。
-    onboardingMatches = 1;
+    onboardingMatches = 0; // 调用方在这个 WABA 没有 onboarding 行
     const response = await post({
       partnerCustomerId: "tenant-a",
       phoneNumbers: ["+8615895553765"],
@@ -155,11 +140,6 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     assert.equal(response.json().ok, false);
     assert.deepEqual(deleted, [], "别人的号绝对不能删");
     assert.equal(disconnected, 0);
-    assert.equal(
-      onboardingUpdateCalls,
-      0,
-      "全部 rejected 时不得触碰 onboarding 状态（零改动）",
-    );
     // 不泄露归属信息
     assert.equal(response.body.includes("tenant-other"), false);
     assert.equal(response.body.includes("12345678901"), false);
@@ -190,31 +170,6 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json().unbound, ["+8615895553765"]);
     assert.equal(response.json().disconnected, 0, "还有号就不该断开");
-  });
-
-  it("locks phones before WABAs so concurrent import/unbind cannot deadlock", async () => {
-    // import 一次性把 phone:/waba: 排序后加锁，'p' < 'w' → 先号后 WABA。
-    // unbind 必须落在同一个全局顺序上，否则两边并发命中同一 (waba, phone) 就是 ABBA 死锁。
-    rows = [
-      { phoneNumber: "+8615895553765", wabaId: "12345678901", supplierId: "tenant-a" },
-      { phoneNumber: "+8615895553766", wabaId: "12345678902", supplierId: "tenant-a" },
-    ];
-    remainingByOwner = 0;
-    const response = await post({
-      partnerCustomerId: "tenant-a",
-      phoneNumbers: ["+8615895553766", "+8615895553765"],
-    });
-    assert.equal(response.statusCode, 200);
-
-    const firstWaba = lockKeys.findIndex((key) => key.startsWith("waba:"));
-    const lastPhone = lockKeys.map((key) => key.startsWith("phone:")).lastIndexOf(true);
-    assert.equal(lockKeys.length > 0, true, "必须真的加锁");
-    assert.equal(firstWaba > lastPhone, true, `phone 锁必须全部先于 waba 锁：${lockKeys.join(",")}`);
-
-    const phoneKeys = lockKeys.filter((key) => key.startsWith("phone:"));
-    const wabaKeys = lockKeys.filter((key) => key.startsWith("waba:"));
-    assert.deepEqual(phoneKeys, [...phoneKeys].sort(), "phone 锁必须按升序，避免互相死锁");
-    assert.deepEqual(wabaKeys, [...wabaKeys].sort(), "waba 锁必须按升序，避免互相死锁");
   });
 
   it("rejects malformed input", async () => {

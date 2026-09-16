@@ -140,19 +140,15 @@ export async function resolveConversationWabaId(
     );
   }
 
-  // 共享 WABA 下「这个号在哪个 WABA 上」已经不足以证明归属 —— 同一个 WABA 上会有别家的号。
-  // 必须按 supplierId 取归属行：这是 selectConversationWaba 里「能走到这里说明该号属于本
-  // supplier」那句注释所依赖的前提，不在这里查就等于没有隔离（例如本租户解绑后号被别家绑走，
-  // 旧会话仍会拿着别人的号回发）。
   const phoneRows = await prisma.wabaPhone.findMany({
-    where: { phoneNumber: businessPhone, supplierId },
+    where: { phoneNumber: businessPhone },
     select: { wabaId: true },
   });
   const candidateWabaIds = [...new Set(phoneRows.map((row) => row.wabaId))];
   if (!candidateWabaIds.length) {
     throw new WabaTenantError(
       "WABA_PHONE_BINDING_MISSING",
-      "该会话企业号未绑定到当前租户（可能已解绑或归属他方），已阻止回发",
+      "该会话企业号尚未建立 WABA 映射",
       409,
     );
   }

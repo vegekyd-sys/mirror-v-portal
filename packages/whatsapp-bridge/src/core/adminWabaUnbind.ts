@@ -95,19 +95,24 @@ function normalizeUnbindInput(input: unknown): NormalizedUnbind {
 export async function unbindWabaPhones(input: unknown) {
   const normalized = normalizeUnbindInput(input);
 
+  const existing = await prisma.wabaPhone.findMany({
+    where: { phoneNumber: { in: normalized.phoneNumbers } },
+    select: { phoneNumber: true, wabaId: true, supplierId: true },
+  });
+  const byPhone = new Map(existing.map((row) => [row.phoneNumber, row]));
+  // 归属校验放在事务外先算一遍给响应；真正的删除在事务内按锁定后的状态再确认一次。
+  const targetWabaIds = new Set(existing.map((row) => row.wabaId));
+
   const result = await prisma.$transaction(
     async (tx) => {
-      // 加锁顺序：先 phone（请求里就有）→ 读库反查 waba → 再锁 waba。
-      // 与 import 的 phone→waba 顺序一致，否则并发 import/unbind 会 ABBA 死锁。
-      await lockWabaOwnershipKeys(tx, [], normalized.phoneNumbers);
-
-      // 归属判定必须读**锁之后**的状态：事务外的快照会在并发绑定/解绑下
-      // 把自己的号误判成 not_bound。
-      const existing = await tx.wabaPhone.findMany({
-        where: { phoneNumber: { in: normalized.phoneNumbers } },
-        select: { phoneNumber: true, wabaId: true, supplierId: true },
-      });
-      const byPhone = new Map(existing.map((row) => [row.phoneNumber, row]));
+      for (const wabaId of targetWabaIds) {
+        await lockWabaOwnershipKeys(tx, wabaId, []);
+      }
+      await lockWabaOwnershipKeys(
+        tx,
+        [...targetWabaIds].sort()[0] || "unbind",
+        normalized.phoneNumbers,
+      );
 
       const unbound: string[] = [];
       const rejected: Array<{ phoneNumber: string; reason: string }> = [];
@@ -133,24 +138,13 @@ export async function unbindWabaPhones(input: unknown) {
         }
       }
 
-      // 只有**真的解掉了号**的 WABA 才需要重算连接状态：全部 rejected 时不做任何改动。
-      const touchedWabaIds = [
-        ...new Set(
-          unbound
-            .map((phoneNumber) => byPhone.get(phoneNumber)?.wabaId)
-            .filter((wabaId): wabaId is string => Boolean(wabaId)),
-        ),
-      ].sort();
-
+      // 该 supplier 在这些 WABA 上已无号 → 置 DISCONNECTED（否则 /wabas 仍显示已连接）
       const disconnected: string[] = [];
-      if (touchedWabaIds.length) {
-        await lockWabaOwnershipKeys(tx, touchedWabaIds, []);
-        // 该 supplier 在这些 WABA 上已无号 → 置 DISCONNECTED（否则 /wabas 仍显示已连接）
-        for (const wabaId of touchedWabaIds) {
-          const remaining = await tx.wabaPhone.count({
-            where: { wabaId, supplierId: normalized.partnerCustomerId },
-          });
-          if (remaining > 0) continue;
+      for (const wabaId of new Set(existing.map((row) => row.wabaId))) {
+        const remaining = await tx.wabaPhone.count({
+          where: { wabaId, supplierId: normalized.partnerCustomerId },
+        });
+        if (remaining === 0) {
           const updated = await tx.wabaOnboarding.updateMany({
             where: {
               wabaId,
