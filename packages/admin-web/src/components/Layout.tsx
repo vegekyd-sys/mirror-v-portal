@@ -14,7 +14,6 @@ const WORKBENCH: NavItem[] = [
   { to: '/', icon: '概', label: '概览', end: true },
   { to: '/customers', icon: '客', label: '客户与 Credits' },
   { to: '/agents', icon: 'A', label: 'Agents 管理' },
-  { to: '/llm-providers', icon: '模', label: '模型供应商' },
   { to: '/catalog', icon: '录', label: '模型目录' },
   { to: '/llm-token-pricing', icon: '价', label: 'LLM Token 定价' },
   { to: '/chat', icon: '聊', label: '对话' },

@@ -760,7 +760,7 @@ export default function AgentsPage() {
               添加即真实开通——写客户记录、建 credits 账户、在独立 namespace 创建
               Deployment/Secret/PVC，飞书消息走 openclaw 直连平面（agent 内 @openclaw/feishu
               插件）。<b>飞书 App ID / Secret 必填</b>：未提供凭据将只创建客户记录、不创建
-              Agent。前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
+              Agent。前置条件：需先在<Link to="/catalog">「模型目录」</Link>配置 Provider、Model 和 Global Policy，并发布 Release。
               米奥供应商 ID 可选：不选也能建租户（不阻塞、不自动绑定），但建议在上方搜索并选中，
               选中后该 ID 会注入 agent 的 MIO_CDP_SUPPLIER_ID。
             </div>

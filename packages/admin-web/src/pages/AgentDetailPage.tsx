@@ -1246,7 +1246,7 @@ export default function AgentDetailPage() {
             <span className="hint" style={{ margin: 0 }}>加载中…</span>
           ) : llmSel.libraryEmpty ? (
             <div className="msg msg-warn" style={{ margin: 0 }}>
-              全局供应商库为空：请先到「模型供应商」页添加供应商并设置系统默认模型，再回到此处选择。
+              当前没有可选模型：请先到<Link to="/catalog">「模型目录」</Link>配置 Provider、Model 与 Global Policy，并发布 Release，再回到此处选择。
             </div>
           ) : (
             <>
@@ -1438,7 +1438,7 @@ export default function AgentDetailPage() {
               </div>
               <div className="hint">
                 保存后写入该 Agent 的 <span className="mono">tenant-config</span> Secret 并滚动重启，约 1–2 分钟生效
-                （模型配置在容器启动时应用，不支持热更新）。供应商与 API Key 在「模型供应商」页集中维护。
+                （模型配置在容器启动时应用，不支持热更新）。Provider、API Key 与 Global Policy 在<Link to="/catalog">「模型目录」</Link>集中维护并通过 Release 发布。
               </div>
             </>
           )}

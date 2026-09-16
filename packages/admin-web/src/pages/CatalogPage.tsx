@@ -12,9 +12,11 @@ import type {
   CatalogPreview,
   CatalogProvider,
   CatalogRelease,
+  CatalogStatus,
   GlobalModelPolicy,
   ImpactManifest,
   RolloutScopeType,
+  SnapshotMutationResponse,
   TenantReleaseStatus,
 } from '../lib/modelCatalogTypes';
 import Modal from '../components/Modal';
@@ -600,6 +602,7 @@ export default function CatalogPage() {
   const [catalogPreview, setCatalogPreview] = useState<CatalogPreview | null>(null);
   const [impactPreview, setImpactPreview] = useState<ImpactManifest | null>(null);
   const [rolloutStatus, setRolloutStatus] = useState<TenantReleaseStatus[]>([]);
+  const [catalogStatus, setCatalogStatus] = useState<CatalogStatus | null>(null);
 
   // Modals
   const [providerModal, setProviderModal] = useState<{ open: boolean; mode: 'create' | 'edit'; provider: CatalogProvider | null }>({ open: false, mode: 'create', provider: null });
@@ -684,6 +687,15 @@ export default function CatalogPage() {
     }
   }, []);
 
+  const loadCatalogStatus = useCallback(async () => {
+    try {
+      const result = await api<CatalogStatus>('/v1/admin/model-catalog/status?limit=20');
+      setCatalogStatus(result);
+    } catch {
+      setCatalogStatus(null);
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     await Promise.all([
@@ -692,9 +704,10 @@ export default function CatalogPage() {
       loadReleases(),
       loadCurrentRelease(),
       loadRolloutStatus(),
+      loadCatalogStatus(),
     ]);
     setLoading(false);
-  }, [loadProviders, loadPolicy, loadReleases, loadCurrentRelease, loadRolloutStatus]);
+  }, [loadProviders, loadPolicy, loadReleases, loadCurrentRelease, loadRolloutStatus, loadCatalogStatus]);
 
   useEffect(() => {
     void loadAll();
@@ -902,6 +915,26 @@ export default function CatalogPage() {
       await Promise.all([loadReleases(), loadCurrentRelease(), loadRolloutStatus()]);
     } catch (e) {
       flash(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreSnapshot = async (backupId: string): Promise<void> => {
+    const backup = catalogStatus?.recentSnapshotBackups.find((item) => item.id === backupId);
+    const fingerprint = backup?.sourceFingerprint ?? backupId;
+    if (!window.confirm(`危险操作：确认恢复备份 ${fingerprint.slice(0, 16)}？恢复会改变当前目录快照并触发租户推送。`)) return;
+    if (!window.confirm('请再次确认：此操作将覆盖当前已发布快照。是否继续？')) return;
+    setBusy(true);
+    try {
+      await api<SnapshotMutationResponse>('/v1/admin/model-catalog/snapshot-restore', {
+        method: 'POST',
+        body: { backupId },
+      });
+      flash('历史 Snapshot 已恢复；Release 与 Rollout 状态已刷新');
+      await Promise.all([loadCatalogStatus(), loadReleases(), loadCurrentRelease(), loadRolloutStatus()]);
+    } catch (restoreError) {
+      flash(errMsg(restoreError), true);
     } finally {
       setBusy(false);
     }
@@ -1173,6 +1206,38 @@ export default function CatalogPage() {
             )}
           </div>
 
+          {/* Snapshot backups */}
+          <div className="form-card" style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 14, color: '#171c2e', fontWeight: 700 }}>Snapshot backups / restore</span>
+              <span className="badge">最近 20 条</span>
+              <button className="btn-secondary btn-sm" style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => void loadCatalogStatus()}>
+                <IconRefresh /> 刷新
+              </button>
+            </div>
+            {!catalogStatus || catalogStatus.recentSnapshotBackups.length === 0 ? (
+              <div className="empty">暂无可恢复备份</div>
+            ) : (
+              <table>
+                <thead><tr><th>创建时间</th><th>操作者</th><th>来源 Fingerprint</th><th>操作</th></tr></thead>
+                <tbody>
+                  {catalogStatus.recentSnapshotBackups.map((backup) => (
+                    <tr key={backup.id}>
+                      <td style={{ fontSize: 11 }}>{formatDate(backup.createdAt)}</td>
+                      <td>{backup.actor || '—'}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>{backup.sourceFingerprint}</td>
+                      <td>
+                        <button className="btn-danger btn-sm" disabled={busy} onClick={() => void restoreSnapshot(backup.id)}>
+                          恢复此备份…
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
           {/* Rollout status */}
           <div className="form-card" style={{ marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -1215,8 +1280,8 @@ export default function CatalogPage() {
         <div className="form-card">
           <div style={{ fontSize: 14, color: '#171c2e', fontWeight: 700, marginBottom: 10 }}>迁移说明</div>
           <div className="msg msg-warn" style={{ marginBottom: 12 }}>
-            此页面将替代旧供应商管理页面（<Link to="/llm-providers" style={{ color: '#b45309', textDecoration: 'underline' }}>模型供应商</Link>）。
-            过渡期内两个页面并存，旧页面顶部已添加迁移横幅。完成迁移后旧页面将被移除。
+            模型目录现已是 Provider、Model、Global Policy、Release 与 Rollout 的唯一编辑入口。
+            旧<Link to="/llm-providers" style={{ color: '#b45309', textDecoration: 'underline' }}>模型供应商页</Link>已冻结，仅保留运行时投影、当前 Release 与用量的只读诊断。
           </div>
           <div className="hint">
             <b>新管理 UI 优势：</b>

@@ -1,8 +1,9 @@
 // 运行时配置 — migrated from legacy admin-dashboard/public/admin-runtime-configs.html.
 // Data: provisioning-service /v1/admin/runtime-configs (+ presets) with the
 // tenant scope list from /v1/tenants.
-// NOTE: LLM 供应商管理已迁出至独立的「模型供应商」页（LlmProvidersPage）。
+// NOTE: 模型配置由「模型目录」统一管理并通过 Release 发布。
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
 import { IconAlert, IconRefresh, IconSave } from '../components/icons';
@@ -165,7 +166,7 @@ export default function RuntimeConfigsPage() {
       <div className="page-head">
         <div>
           <div className="section-title">运行时配置</div>
-          <div className="page-sub">租户 Pod 的环境变量来源，敏感值加密入库（大模型供应商请用「模型供应商」页）</div>
+          <div className="page-sub">租户 Pod 的环境变量来源，敏感值加密入库（模型配置请在<Link to="/catalog">「模型目录」</Link>编辑 Global Policy 并发布 Release）</div>
         </div>
         <div className="page-actions">
           <select
@@ -273,7 +274,7 @@ export default function RuntimeConfigsPage() {
       {items.length === 0 ? (
         <div className="panel">
           <div className="empty">
-            {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置；大模型供应商请在「模型供应商」页维护'}
+            {scope ? '未覆盖的 key 将使用全局默认值' : '暂无配置；模型配置请在「模型目录」维护并发布 Release'}
           </div>
         </div>
       ) : (
