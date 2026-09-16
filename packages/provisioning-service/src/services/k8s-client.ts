@@ -912,6 +912,14 @@ export async function getTenantPod(
   return pod;
 }
 
+/** Verify that an exec target is the single Nexus Manager workload. */
+export async function getSystemAgentPod(namespace: string, podName: string): Promise<Record<string, any> | null> {
+  const res = await k8sRequest('GET', `/api/v1/namespaces/${namespace}/pods/${podName}`);
+  if (!res.ok) return null;
+  const pod = res.body as Record<string, any>;
+  return pod?.metadata?.labels?.['app.kubernetes.io/name'] === 'nexus-manager' ? pod : null;
+}
+
 export interface PodLogOptions {
   container?: string;
   tailLines?: number;

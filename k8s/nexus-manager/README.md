@@ -50,15 +50,13 @@ NEXUS_MANAGER_UI_URL=https://<ADMIN_HOST>/nexus-manager/openclaw
 - 控制台入口 `/nexus-manager`。外层管理栏不依赖 Gateway 启动成功；iframe 使用 admin-web 同源路径和原生认证，不提供独立域名入口。
 - Gateway 监听容器 loopback:18790；同进程管理的轻量代理在 18789 提供 HTTP/WS，保留原生认证，只对 UI HTML 的 CSP framing 指令进行定向适配。
 - 原生 UI 首次输入 Gateway 凭据，通过运维人员执行 `openclaw devices list` / `openclaw devices approve <requestId>` 完成配对。不要把 Gateway token 放入 URL。
-- 主供应商初始化为 `nexus`，API Key 引用 `${NEXUS_MODEL_API_KEY}`。首启可不提供该变量，随后由管理控制台创建版本化 Secret 并重启 Pod；其他模型、通道、定时任务在原生 UI 配置。原生插件是否随镜像提供须在部署验证时确认，缺少时固定版本加入镜像。
-- 凭据更换保存新版 immutable Secret，乐观锁更新 Deployment 引用，Recreate 重建 Pod；停止状态只保存，下一次启动生效。
-- 页面明确显示 Pod 状态；模型 Key 认证与余额必须通过实际对话确认，不声称自动做了模型验证。
-- “恢复上一版凭据”切换到保留 Secret，触发重新加载。不自动删除历史 Secret；后续人工清理须排除当前和回退引用。
-- 配置与工作区只在首次初始化，原生 UI 的修改跨重启保留。错误配置时通过可信运维入口恢复 NAS 上的备份并重启。
+- OpenClaw 首次启动、模型、消息渠道、Skills、认证与工作区均由原生 UI 管理。容器启动只创建 NAS 上的目录，绝不创建、迁移或修改 `openclaw.json`。
+- 管理控制台只提供启动、停止、重启、日志、Terminal 和原生页面刷新。Terminal 以 Nexus Manager 容器身份执行 `/bin/sh`，操作等同 `kubectl exec`。
+- OpenClaw 配置、会话、渠道登录态和工作区保存在 NAS；停止、重启和镜像升级均不删除或覆盖这些文件。错误配置时通过 Terminal 或可信运维入口恢复 NAS 备份后再重启。
 - 当前日志提供限量快照和 previous 容器日志，非长期存档；已知注入凭据做服务端遮盖，仍须避免应用输出其他密钥。
 - 默认不挂载项目 K8s 操作令牌；待明确项目操作范围再添加业务 namespace RoleBinding 和短期令牌。控制台管理实例的权限已经在模板中单独配置。
 - Pod 中断不保证正在运行的 shell 任务自动恢复；依靠持久化任务记录接续。
 
-生产放行前验证：原生 UI/WS/设备配对、模型对话、实际需要的消息插件、重启持久化、凭据切换/回退、NAS 文件语义与独立 OSS 备份恢复。保持一个写入者，节点失联时不得强制双开。
+生产放行前验证：原生 UI/WS/设备配对、模型对话、实际需要的消息插件、Terminal、重启持久化、NAS 文件语义与独立 OSS 备份恢复。保持一个写入者，节点失联时不得强制双开。
 
 首次实施状态：代码、镜像入口和 CNFS 模板已提供；真实 NAS 创建、admin-web 同源代理、备份任务和项目工具权限需要在上线阶段验证。

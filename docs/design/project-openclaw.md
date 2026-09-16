@@ -116,23 +116,17 @@ NAS 上保存权威状态；依赖缓存和可重建索引优先放临时存储�
 
 新增 `/nexus-manager` 页面及导航。上方为外层管理栏，下方 iframe 加载 admin-web 同源路径 `/nexus-manager/openclaw/` 的原生 UI，不移植或重写 OpenClaw 前端。
 
-- 外层管理栏：Pod 状态、启动/停止、重启、模型凭据切换/回退、当前/上一容器日志、刷新原生界面。
-- 原生 UI：对话、会话、模型与通道设置、定时任务等该固定版本支持的功能。
+- 外层管理栏：Pod 状态、启动/停止、重启、当前/上一容器日志、Terminal、刷新原生界面。
+- 原生 UI：对话、会话、模型、通道、Skills、认证、定时任务及该固定版本支持的全部 OpenClaw 功能。
 - Gateway 不可用时外层管理接口仍能读取 K8s 状态、日志并重启实例。
 - 不加入客户套餐、积分、欠费销毁和批量发布流程。
 - 日志首版为限量快照，可手动刷新，不声称长期存档或实时流；终端管理暂通过现有可信运维入口。
 
 ## 7. 配置和凭据如何生效
 
-NAS 上的原生配置是运行配置唯一权威来源，启动只做首次初始化，不覆盖原生 UI 保存的模型、通道和智能体配置。UI origin 与 basePath 属于部署路由配置，启动时会定向校准这两个字段，确保域名或路径迁移后 WebSocket 能建立连接。首版不再新增第二套模型/通道配置表单或 Gateway 配置 RPC adapter，直接使用嵌入的原生界面。
+NAS 上的原生配置是运行配置唯一权威来源。启动只创建持久化目录，不创建、迁移、补全或校准 `openclaw.json`，因此原生 UI 中保存的模型、通道、Skills、认证和智能体配置跨停止、重启与升级保持原样。管理员在原生 UI 完成首次 OpenClaw 设置；配置中可能含明文凭据，NAS 与备份均按敏感数据保护。
 
-模型 API Key 是例外：首启无需预置 Key，外层凭据表单会创建并更新 `${NEXUS_MODEL_API_KEY}` 对应的版本化 Kubernetes Secret，然后滚动重启 Pod；初始化的 `nexus` 供应商引用它。新增供应商需在原生 UI 配置其凭据；只有明确引用该变量的供应商才使用外层更新的 Key。
-
-生效流程：校验输入 → 创建新版 immutable Secret → 带 resourceVersion 更新 Deployment 引用 → Recreate 重建 → 页面轮询 Pod 状态。停止状态只保存，下一次启动加载。保留旧 Secret，支持显式恢复上一版。
-
-当前实现不自动进行模型付费请求：页面明确显示 Pod 就绪不代表 Key 可用，管理员需在原生 UI 发起实际对话验证。新 Key 失败不会偷偷切回旧 Key。并发配置冲突返回 409，不能覆盖别人的操作。
-
-凭据响应不回显明文；审计使用 apiKey 字段脱敏。原生 UI 中手填明文可能写入 NAS，持久化目录和备份均按敏感数据保护。
+外层控制台不维护第二套模型或渠道表单。它只管理这台固定实例的生命周期、日志与 Terminal；Terminal 通过管理认证和固定 Namespace/工作负载校验后执行容器内 `/bin/sh`，能力等同 `kubectl exec`。
 
 ## 8. iframe、认证与网络
 
@@ -153,13 +147,12 @@ admin-web Nginx 需支持 WebSocket 和长连接；现有 admin-web Ingress 的�
 | 接口 | 用途 |
 |---|---|
 | GET `/` | 实例信息、Pod 状态、版本、UI URL |
-| PUT `/credentials/model` | 创建 API Key 版本并切换实例引用 |
 | POST `/restart` | 带实例版本提交重启 |
 | POST `/stop`、`/start` | 副本数切换为 0 / 1 |
-| POST `/rollback-credentials` | 切换上一版凭据 |
 | GET `/logs` | 限量日志快照，支持 previous |
+| WS `/exec` | 受认证保护的 Nexus Manager 容器终端 |
 
-实例 namespace、deployment、service、PVC 由服务端固定配置，不接受浏览器任意指定集群资源。新增接口复用管理认证，并记录凭据修改、重启和停止操作审计。原生 UI 自身操作不经过此管理 API，不能声称已经全部进入平台审计。
+实例 namespace、deployment、service、PVC 由服务端固定配置，不接受浏览器任意指定集群资源。新增接口复用管理认证。原生 UI 自身操作不经过此管理 API，不能声称已经全部进入平台审计。
 
 控制台后端身份负责管理此实例；OpenClaw 的工具身份负责操作 DealClaw 业务服务。两者凭据分开，项目智能体不持有控制台主密钥。业务 namespace 的工作负载修改权限仍可能间接获取其 Secret，应按实际可承受的整个项目权限边界授权，不能仅靠“禁止读取 Secret”声称实现隔离。
 
@@ -209,13 +202,13 @@ k8s/nexus-manager/                              工作负载、网络、NAS 静�
 
 ## 13. 首版实施记录
 
-已实现：控制台 iframe 页面和外层管理栏、受认证保护的状态/启动/停止/重启/凭据版本切换与回退/日志 API、独立固定镜像、首次初始化人设与工作区、admin-web 同源 HTTP/WS 嵌入适配、专用 NAS 和同集群部署模板。
+已实现：控制台 iframe 页面和外层管理栏、受认证保护的状态/启动/停止/重启/日志/Terminal、独立固定镜像、admin-web 同源 HTTP/WS 嵌入适配、专用 NAS 和同集群部署模板。容器启动不初始化或修改 OpenClaw 原生状态。
 
 本地验证：
 
 - admin-web 生产构建通过；Provisioning Service TypeScript 构建通过。
 - 新管理接口、认证和审计相关共 40 项测试通过。
-- 运行时初始化保留、路径校验、CSP 与 WebSocket 代理共 4 项测试通过。
+- 运行时不修改原生配置、路径校验、CSP 与 WebSocket 代理测试通过。
 - 固定 OpenClaw 2026.7.1 镜像构建并实际启动，原生 UI、healthz、readyz 返回 200。
 - 最终镜像在只读根文件系统和临时持久卷下启动；重启后原生配置逐字保持不变，工作文件保留，readyz 恢复正常。该测试不能替代真实 NAS 验证。
 - 原生 UI CSP 保留原指令，仅允许指定 admin origin 嵌入。

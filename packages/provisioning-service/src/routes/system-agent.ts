@@ -13,8 +13,7 @@ export function createSystemAgentRoutes(auth: RequestHandler, service = createSy
   };
   router.get('/', handle(() => service.status()));
   router.get('/logs', handle(req => service.logs(String(req.query.pod || ''), req.query.previous === 'true')));
-  router.put('/credentials/model', handle(req => service.credentials(req.body?.apiKey, req.body?.version)));
-  for (const action of ['start', 'stop', 'restart', 'rollback-credentials']) {
+  for (const action of ['start', 'stop', 'restart']) {
     router.post(`/${action}`, handle(req => service.action(action, req.body?.version)));
   }
   return router;

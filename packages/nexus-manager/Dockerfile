@@ -13,7 +13,6 @@ RUN npm install --omit=dev --no-save --legacy-peer-deps \
     && node -e 'import("/app/dist/extensions/feishu/dist/configured-state.js")' \
     && chown -R node:node /opt/nexus-manager /app/dist/extensions/feishu
 COPY runtime /opt/nexus-manager/runtime
-COPY payload /opt/nexus-manager/payload
 RUN mkdir -p /data && chown node:node /data
 ENV TZ=Asia/Shanghai \
     HOME=/data/home \

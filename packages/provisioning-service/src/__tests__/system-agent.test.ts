@@ -7,7 +7,7 @@ import { createServiceOrAdminAuthMiddleware } from '../middleware/auth.js';
 
 const deployment = () => ({ metadata: { resourceVersion: '7', generation: 2 }, spec: {
   replicas: 1, template: { spec: { containers: [{ name: 'nexus-manager', image: 'image@sha256:abc', envFrom: [
-    { secretRef: { name: 'nexus-manager-credentials-initial' } }, { secretRef: { name: 'nexus-manager-gateway' } },
+    { secretRef: { name: 'nexus-manager-gateway' } },
   ] }] } },
 }, status: { observedGeneration: 2, updatedReplicas: 1, readyReplicas: 1 } });
 
@@ -34,52 +34,24 @@ describe('system agent management', () => {
     await expect(createSystemAgentService(request).action('stop', '6')).rejects.toMatchObject({ status: 409 });
     expect(request).toHaveBeenCalledTimes(1);
   });
-  it('versions secrets then patches only fixed deployment, preserving gateway reference', async () => {
-    const request = vi.fn().mockResolvedValueOnce(deployment()).mockResolvedValueOnce({ data: { OTHER_KEY: 'cHJlc2VydmU=' } }).mockResolvedValue({});
-    const result = await createSystemAgentService(request).credentials('new-secret', '7');
-    expect(result.accepted).toBe(true);
-    const secret = request.mock.calls[2][2];
-    expect(secret.immutable).toBe(true); expect(secret.data.OTHER_KEY).toBe('cHJlc2VydmU=');
-    expect(secret.data.NEXUS_MODEL_API_KEY).toBe(Buffer.from('new-secret').toString('base64'));
-    const patch = request.mock.calls[3];
-    expect(patch[1]).toBe('/apis/apps/v1/namespaces/dealclaw-system/deployments/nexus-manager');
-    expect(patch[2].metadata.resourceVersion).toBe('7');
-    expect(patch[2].spec.template.spec.containers[0].envFrom[1].secretRef.name).toBe('nexus-manager-gateway');
-    expect(JSON.stringify(result)).not.toContain('new-secret');
-  });
-  it('creates the first credential version for an agent started without a model key', async () => {
-    const d: any = deployment(); d.spec.template.spec.containers[0].envFrom = [{ secretRef: { name: 'nexus-manager-gateway' } }];
-    const request = vi.fn().mockResolvedValueOnce(d).mockResolvedValue({});
-    await createSystemAgentService(request).credentials('first-secret', '7');
-    const secret = request.mock.calls[1][2];
-    expect(secret.data).toEqual({ NEXUS_MODEL_API_KEY: Buffer.from('first-secret').toString('base64') });
-    const patch = request.mock.calls[2][2];
-    expect(patch.spec.template.spec.containers[0].envFrom).toEqual([
-      { secretRef: { name: 'nexus-manager-gateway' } },
-      { secretRef: { name: secret.metadata.name } },
-    ]);
-  });
   it('rejects foreign pod logs before accessing logs or secrets', async () => {
     const request = vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'nexus-manager-abc' } }] });
     await expect(createSystemAgentService(request).logs('customer-pod', false)).rejects.toMatchObject({ status: 404 });
     expect(request).toHaveBeenCalledTimes(1);
   });
-  it('masks current and previous injected credentials in logs', async () => {
-    const d: any = deployment(); d.metadata.annotations = { 'nexus.dealclaw.io/previous-credentials': 'nexus-manager-credentials-old' };
+  it('masks the gateway credential in logs', async () => {
     const request = vi.fn().mockResolvedValueOnce({ items: [{ metadata: { name: 'nexus-manager-abc' } }] })
-      .mockResolvedValueOnce('new-key old-key gateway-key').mockResolvedValueOnce(d)
-      .mockResolvedValueOnce({ data: { key: Buffer.from('new-key').toString('base64') } })
-      .mockResolvedValueOnce({ data: { key: Buffer.from('old-key').toString('base64') } })
+      .mockResolvedValueOnce('gateway-key').mockResolvedValueOnce(deployment())
       .mockResolvedValueOnce({ data: { key: Buffer.from('gateway-key').toString('base64') } });
-    expect((await createSystemAgentService(request).logs('nexus-manager-abc', true)).logs).toBe('[REDACTED] [REDACTED] [REDACTED]');
+    expect((await createSystemAgentService(request).logs('nexus-manager-abc', true)).logs).toBe('[REDACTED]');
     expect(request.mock.calls[1][1]).toContain('previous=true');
   });
   it('protects status and mutations with authentication', async () => {
-    const service = { status: vi.fn(), credentials: vi.fn() } as any;
+    const service = { status: vi.fn() } as any;
     const app = express(); app.use(express.json()); app.use('/v1/admin/system-agent', createSystemAgentRoutes(createServiceOrAdminAuthMiddleware('PROVISIONING_API_TOKEN'), service));
     expect((await supertest(app).get('/v1/admin/system-agent')).status).toBe(401);
-    expect((await supertest(app).put('/v1/admin/system-agent/credentials/model').send({ apiKey: 'secret' })).status).toBe(401);
-    expect(service.status).not.toHaveBeenCalled(); expect(service.credentials).not.toHaveBeenCalled();
+    expect((await supertest(app).post('/v1/admin/system-agent/restart')).status).toBe(401);
+    expect(service.status).not.toHaveBeenCalled();
     service.status.mockResolvedValue({ state: 'ready' });
     expect((await supertest(app).get('/v1/admin/system-agent').set('Authorization', 'Bearer admin-service')).status).toBe(200);
   });

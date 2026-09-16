@@ -1,13 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { bootstrap } from './bootstrap.mjs';
 import { createEmbedProxy } from './embed-proxy.mjs';
 
 process.umask(0o077);
 const origins = bootstrap();
-if (origins.pluginRegistryRefreshRequired) {
-  const refresh = spawnSync('openclaw', ['plugins', 'registry', '--refresh'], { stdio: 'inherit' });
-  if (refresh.status !== 0) throw new Error(`Plugin registry refresh failed with status ${refresh.status}`);
-}
 const child = spawn('openclaw', ['gateway', '--port', '18790', '--bind', 'loopback'], { stdio: 'inherit' });
 const proxy = createEmbedProxy(origins);
 let stopping = false;
