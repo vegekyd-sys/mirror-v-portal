@@ -50,6 +50,7 @@ def land_outbound_fact(
     message_id: str = "",
     enterprise: str = "",
     origin_notify_target: str = "",
+    send_channel: str = "founder_direct",
     store=None,
     now: str = "",
 ) -> dict[str, Any]:
@@ -83,6 +84,9 @@ def land_outbound_fact(
         record = {
             "account_id": account_id,
             "direction": "outbound",
+            # 显式渠道标记：本条走 Founder Direct（GS 直发见 dc_record_outbound.py）。
+            # quality_metrics 优先读它，不再靠 account_id 名推断。
+            "send_channel": str(send_channel or "founder_direct"),
             "message_id": message_id or f"local_{uuid.uuid4().hex[:16]}",
             # store 规范化后真正保留的是 smtp_message_id（回信 In-Reply-To 匹配靠它）
             "smtp_message_id": message_id or "",

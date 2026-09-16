@@ -452,6 +452,11 @@ class MarkdownEmailStore:
                 "touch_number": int(message.get("touch_number", 0)),
                 "content_version": message.get("content_version", "") or "",
                 "legacy": int(bool(message.get("legacy", False))),
+                # send_channel：**显式渠道标记**（growth_send / founder_direct）。
+                # 2026-09-16：dc_record_outbound 不再写死 resend_gs 假账号（回信匹配不上的根因），
+                # 渠道归属改为显式字段优先；旧记录缺该字段读到空串，quality_metrics 回退旧规则推断。
+                # _normalize 是白名单：不列在这里的字段会被静默丢弃。
+                "send_channel": message.get("send_channel", "") or "",
             })
         else:
             base.update({

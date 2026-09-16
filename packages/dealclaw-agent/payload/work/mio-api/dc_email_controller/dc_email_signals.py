@@ -58,7 +58,10 @@ _SAMPLE_TERMS = ["sample", "samples", "trial piece", "prototype", "样品", "样
 _MEETING_TERMS = ["meet", "meeting", "call", "schedule", "visit", "video", "zoom",
                   "teams", "booth", "见面", "会议", "电话", "视频", "参观", "展位", "预约",
                   "reunión", "reunion", "cita", "visita", "llamada", "reunião", "encontro",
-                  "agendar", "coordinar"]
+                  "agendar", "coordinar",
+                  # 2026-09-16 修复：买家【确认到展】的说法以前漏识别（回信通知失灵的一处）
+                  "be back", "will come", "will be there", "see you", "attend", "stop by",
+                  "会来", "到展", "到场", "到现场", "来展", "过来", "我会去", "我们会去"]
 # catalogue/catalog 单独不算 quote_request
 _CATALOGUE_ONLY = ["catalogue", "catalog", "brochure", "目录", "产品手册", "资料",
                    "catálogo", "catalogo", "catálogos", "folleto"]

@@ -31,12 +31,12 @@
     分子分母取自同一时间窗同一渠道（同队列），不会用「今天发送数」当历史退信的分母。
 
 渠道口径（`founder_direct` / `growth_send`）：
-  - `growth_send`：outbound 事实的 `account_id` 为 GS 直发固定账号（`resend_gs`，
-    见 `dc_record_outbound.py --account-id` 默认值）；
-  - `founder_direct`：其余有账号的 outbound；
-  - 无 `account_id` 或回复匹配不到原发件 → `unattributed`（不硬猜，也不静默丢弃）。
-  这是**推断**而非显式字段：事实层没有 channel 字段，`dc_send_log` 有 channel 但只记发送、
-  不含投递/退信事件，且已被标注为旧链路。详见 `gaps["channel"]`。
+  - **显式优先**：outbound 事实里的 `send_channel` 字段（`dc_record_outbound` → `growth_send`，
+    Founder Direct 落事实 → `founder_direct`）；
+  - **旧规则回退**（历史事实无该字段）：`account_id == resend_gs` → `growth_send`，其余有账号 → `founder_direct`；
+  - 无账号且无显式渠道 → `unattributed`（不硬猜，也不静默丢弃）。
+  背景：2026-09-16 起 `dc_record_outbound` 不再写死 `resend_gs`（假账号导致回信匹配失灵），
+  故渠道归属从「按账号名推断」改为「事实里显式落字段」。详见 `gaps["channel"]`。
 """
 from __future__ import annotations
 
@@ -114,13 +114,34 @@ def _norm_ref(value) -> str:
 
 
 def channel_of_account(account_id: str | None) -> str:
-    """账号 → 渠道；无账号不猜，归 unattributed。"""
+    """账号 → 渠道；无账号不猜，归 unattributed。
+
+    **旧规则**（兼容历史事实）：`account_id == resend_gs` → growth_send。
+    新事实请用 :func:`channel_of_record`（显式 `send_channel` 优先）。
+    """
     aid = (account_id or "").strip().lower()
     if not aid:
         return CHANNEL_UNATTRIBUTED
     if aid in GROWTH_SEND_ACCOUNT_IDS:
         return CHANNEL_GROWTH_SEND
     return CHANNEL_FOUNDER_DIRECT
+
+
+SEND_CHANNEL_FIELD = "send_channel"
+
+
+def channel_of_record(rec: dict | None) -> str:
+    """事实 → 渠道：**显式 send_channel 优先**，旧记录回退 account_id 推断。
+
+    2026-09-16：`dc_record_outbound` 不再写死 `resend_gs`（那是回信匹配不上的根因），
+    GS 直发开始带真实账号 → 原先「account_id == resend_gs」的推断会失灵，
+    所以改为事实里显式落 `send_channel`；历史事实没这个字段时仍走旧规则（不回溯改写）。
+    """
+    record = rec or {}
+    explicit = str(record.get(SEND_CHANNEL_FIELD) or "").strip().lower()
+    if explicit in CHANNELS:
+        return explicit
+    return channel_of_account(record.get("account_id"))
 
 
 def _record_time(rec: dict) -> str:
@@ -264,7 +285,7 @@ def metrics_view(enterprise_id: str, *, start: str | None = None, end: str | Non
 
     # ── 出站族：accepted / delivered / bounced / complained ──
     for rec in out_recs:
-        ch = channel_of_account(rec.get("account_id"))
+        ch = channel_of_record(rec)
         b = counts[ch]
         b["messages"] += 1
         adapted = adapt_outbound(rec)
@@ -310,7 +331,7 @@ def metrics_view(enterprise_id: str, *, start: str | None = None, end: str | Non
         matched = _match_outbound(rec, idx)
         if matched is None:
             unmatched_replies += 1
-        ch = channel_of_account(matched.get("account_id")) if matched else CHANNEL_UNATTRIBUTED
+        ch = channel_of_record(matched) if matched else CHANNEL_UNATTRIBUTED
         counts[ch]["replied"] += 1
         rk = _replier_key(rec)
         if rk:
@@ -569,13 +590,16 @@ def _gaps(*, undated_outbound: int, undated_replies: int, unmatched_replies: int
                             "complained 不进 v1 事实层 → 本指标直接读快照字段，v1 视图里看不到投诉"),
         },
         "channel": {
-            "collected": False,
-            "method": ("事实层无 channel 字段：按 outbound `account_id` 推断 "
-                       "（`resend_gs` → growth_send，其余有账号 → founder_direct，无账号 → unattributed）"),
-            "confidence": "medium",
-            "risk": ("GS 直发若改传 --account-id，或 FD 复用同一账号，渠道归属会漂移；"
-                     "`dc_send_log` 有 channel 字段但只记发送、不含投递事件，且已属旧链路"),
-            "where_to_fix": "在 outbound 事实里显式落 channel 字段（写入方：dc_record_outbound / dc_email_send）",
+            "collected": True,
+            "method": ("outbound 事实显式 `send_channel` 优先（growth_send / founder_direct）；"
+                       "历史事实无该字段时回退旧规则：`resend_gs` → growth_send，"
+                       "其余有账号 → founder_direct，无账号 → unattributed"),
+            "confidence": "high",
+            "risk": ("新写入方若不落 send_channel，仍会回退到 account_id 推断；"
+                     "回信匹配不到原发件时归 unattributed，不硬猜"),
+            "where_to_fix": ("已完成（2026-09-16）：写入方 dc_record_outbound / dc_backfill_outbound 落 "
+                             "growth_send，email_gateway.outbound_facts.land_outbound_fact 落 founder_direct；"
+                             "store._normalize 白名单同步加字段"),
         },
         "provider_cost": {
             "collected": False,
