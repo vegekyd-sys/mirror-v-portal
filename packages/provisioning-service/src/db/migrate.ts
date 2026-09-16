@@ -104,26 +104,6 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON runtime_configs(tenant_id, config_key) WHERE tenant_id IS NOT NULL;
     `);
 
-    // Global defaults (v0.13) — 「默认配置」页的数据面。
-    // 所有 Agent 的共性默认项（4 个共享 key + 主群规则等，见
-    // services/global-defaults.ts）。值用与 runtime_configs 完全相同的
-    // AES-256-GCM 机制加密（services/crypto.ts，密钥 RUNTIME_CONFIG_KEY），
-    // 不新造密钥/算法。
-    //   - 首次由运维写入 K8s Secret → 服务启动时从 env 幂等种子
-    //     （ON CONFLICT DO NOTHING：已存在不覆盖，缺失不阻断启动）。
-    //   - 之后只允许超管经 /v1/admin/global-defaults 修改（每次修改/下发写审计）。
-    //   - 建租户与 skill-env 推送时与 runtime_configs 合并进租户 env
-    //     （services/tenant-env.ts 是唯一合并口径）。
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS global_defaults (
-        key             TEXT PRIMARY KEY,
-        value_encrypted TEXT NOT NULL,
-        is_secret       BOOLEAN NOT NULL DEFAULT TRUE,
-        updated_by      TEXT,
-        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-
     // Image release registry + rollout targets (v0.6):
     // Every CI build records its image here (Jenkins post-build hook) so the
     // admin console can list built versions and roll them out manually.

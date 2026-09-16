@@ -1,12 +1,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import pg from 'pg';
+import { v4 as uuidv4 } from 'uuid';
 import { provisionTenant, deprovisionTenant, backupTenantData, restoreTenantData, tenantNamespace, switchTenantMessagePlane } from '../services/provisioning.js';
-import { resolveEffectiveTenantEnv } from '../services/tenant-env.js';
-import {
-  TenantCreateError,
-  createTenant,
-  rewriteTenantLlmToGateway,
-} from '../services/tenant-create.js';
+import { resolveTenantConfig } from '../services/runtime-config.js';
+import { createCreditsAccount } from '../services/credits-account.js';
 import { getTenantRuntimeStatus } from '../services/k8s-client.js';
 import {
   FeishuBindingError,
@@ -16,6 +13,7 @@ import {
 } from '../services/feishu-binding.js';
 import {
   MioSupplierError,
+  MIO_SUPPLIER_ID_PATTERN,
   updateTenantMioSupplier,
 } from '../services/mio-supplier.js';
 import {
@@ -24,7 +22,7 @@ import {
   pushTenantSkillEnv,
 } from '../services/skill-env.js';
 import { getMasterKey } from '../services/crypto.js';
-import { getTenantDirectModeMap } from '../services/llm-providers.js';
+import { getTenantDirectModeMap, getGlobalLlmProviders, applyTenantLlmConfig } from '../services/llm-providers.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import { getOverrideMap, setOverride, clearOverride, listOverrides } from '../services/tenant-image-overrides.js';
 import { enqueueRolloutBatch, getRolloutBatchDetail } from '../services/rollout-batch-task.js';
@@ -59,45 +57,270 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
     return writeAuditLog(pool, { ...entry, actor, actorType });
   };
 
+  /**
+   * 新建租户 provisioning 后立即把 LLM_PROVIDERS 重写为网关态。
+   *
+   * 根因：provisioning 步骤 1b 把全局库的真实上游 baseUrl 原样写进
+   * tenant-config，1d 把 llm-proxy-config 初始化为空 {}，指望后续
+   * pushLlmProviders 补齐。但 push 只在「有人改全局库」时触发，凡
+   * 「创建后没再触发过全局库保存」的新租户都会直连上游、绕过网关的
+   * 余额拦截 + token 计费。这里建租户成功后补一次单租户 scope 重写：
+   * baseUrl → nexus-gateway /v1/llm/<name>，真实地址进 LLM_UPSTREAMS，
+   * 并滚动 agent + gateway 让重写后的 Secret 生效。
+   *
+   * 幂等 + fail-open：applyTenantLlmConfig 内部合并现有 Secret、try-catch
+   * 返回 ok:false 不抛错；此处再包一层，任何失败只打日志，不阻断建租户。
+   */
+  const rewriteTenantLlmToGateway = async (tenantId: string): Promise<void> => {
+    if (config.k8sDryRun) return; // dry-run / test 流程无真实 K8s
+    try {
+      const nowLibrary = await getGlobalLlmProviders(pool);
+      if (!nowLibrary || nowLibrary.providers.length === 0) {
+        console.warn(`[provision] skip LLM gateway rewrite for ${tenantId}: global library empty`);
+        return;
+      }
+      const outcome = await applyTenantLlmConfig(pool, config, tenantId, nowLibrary, null, tenantId);
+      if (!outcome.ok) {
+        console.error(`[provision] LLM gateway rewrite failed for ${tenantId}: ${outcome.error}`);
+      }
+    } catch (err: unknown) {
+      const e = err as Error;
+      console.error(`[provision] LLM gateway rewrite error for ${tenantId}: ${e?.message ?? String(err)}`);
+    }
+  };
+
   // POST /v1/tenants — create new tenant
-  //
-  // 建租户逻辑已抽到 services/tenant-create.ts（与「一键开通流水线」共用，
-  // 避免 HTTP 自调）。本路由只做：入参透传 → 组装响应 → 错误映射，
-  // 行为与响应体保持完全向后兼容。
   router.post('/v1/tenants', async (req: Request, res: Response) => {
     try {
-      const outcome = await createTenant({ pool, config }, req.body ?? {});
-      const t = outcome.tenant;
+      const { companyName, contactEmail, contactPhone, planTier, quotaAgents, quotaCreditsMonthly, botAppId, botAppSecret, mioCdpSupplierId } = req.body;
+
+      // Validate required fields
+      // companyName: optional for QR-flow tenants (collected later by agent)
+      const hasCompanyName = companyName && typeof companyName === 'string' && companyName.trim().length > 0;
+      // contactEmail: optional for QR-flow tenants (collected later by agent)
+      const hasContactEmail = contactEmail && typeof contactEmail === 'string' && contactEmail.includes('@');
+      const safePlanTier = (['starter', 'pro', 'enterprise'] as const).includes(planTier) ? planTier : 'starter';
+      const safeQuotaAgents = Math.max(1, Math.min(Number(quotaAgents ?? 1), 100));
+      const safeQuotaCredits = Math.max(0, Math.min(Number(quotaCreditsMonthly ?? 1_000_000), 100_000_000));
+
+      // NS2 FIX: Use full UUID instead of 8-char hex (32-bit entropy → 128-bit entropy)
+      const tenantId = uuidv4().replace(/-/g, '');
+      const safeName = hasCompanyName ? companyName.trim().replace(/[<>"';&|`$]/g, '').slice(0, 200) : 'new-tenant';
+      const safeEmail = hasContactEmail ? contactEmail : `pending-${tenantId.slice(0, 8)}@dealclaw.cn`;
+      const safePhone = contactPhone ? contactPhone.replace(/[^0-9+ -]/g, '').slice(0, 30) : null;
+      const safeAppId = botAppId && typeof botAppId === 'string' && botAppId.trim() ? botAppId.trim().slice(0, 64) : null;
+      const safeAppSecret = botAppSecret && typeof botAppSecret === 'string' && botAppSecret.trim() ? botAppSecret.trim().slice(0, 128) : null;
+
+      // Message plane: Feishu bot credentials present → default to the
+      // openclaw direct-connect plane (feishu WS inside the tenant agent).
+      // Without credentials the gateway bridge is the only workable default.
+      // An explicit body.messagePlane wins, but 'openclaw' requires creds.
+      const explicitPlane = req.body?.messagePlane;
+      const hasBotCreds = Boolean(safeAppId && safeAppSecret);
+      if (explicitPlane === 'openclaw' && !hasBotCreds) {
+        res.status(400).json({ code: 'NO_BOT_CREDENTIALS', message: 'messagePlane=openclaw 需要同时提供 botAppId 与 botAppSecret' });
+        return;
+      }
+      const messagePlane: 'gateway' | 'openclaw' =
+        explicitPlane === 'gateway' || explicitPlane === 'openclaw' ? explicitPlane : (hasBotCreds ? 'openclaw' : 'gateway');
+      // Customer-only creation (no bot credentials) must NEVER land on the
+      // gateway plane: without credentials the gateway WS bridge cannot
+      // connect to Feishu at all — the root cause of "先建后绑" tenants.
+      // Pin the DB plane to the desired end state 'openclaw' so the later
+      // auto-provision (PUT /v1/tenants/:id/credentials) comes up correctly.
+      const dbMessagePlane = hasBotCreds ? messagePlane : 'openclaw';
+
+      // Mio CDP supplier id — optional, unique among live tenants, injected
+      // into the tenant agent's environment as MIO_CDP_SUPPLIER_ID.
+      const rawSupplierId = typeof mioCdpSupplierId === 'string' ? mioCdpSupplierId.trim() : '';
+      if (rawSupplierId && !MIO_SUPPLIER_ID_PATTERN.test(rawSupplierId)) {
+        res.status(400).json({ code: 'BAD_SUPPLIER_ID', message: 'Mio CDP 供应商 ID 格式不正确（1–64 位字母、数字、下划线或连字符）' });
+        return;
+      }
+      const safeSupplierId = rawSupplierId || null;
+      // Tenant workloads are fully isolated in a per-tenant namespace.
+      const k8sNs = `dealclaw-${tenantId}`;
+      const creditsAccountId = `acct_${tenantId}`;
+
+      // NS3 FIX: Wrap DB operations in transaction to prevent partial writes.
+      // K8s provisioning happens after commit; if it fails, tenant status gets updated.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        await client.query(
+          `INSERT INTO tenants (tenant_id, company_name, contact_email, contact_phone, plan_tier, k8s_namespace, credits_account_id, quota_agents, quota_credits_monthly, app_id, app_secret, mio_cdp_supplier_id, message_plane)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [tenantId, safeName, safeEmail, safePhone, safePlanTier, k8sNs, creditsAccountId, safeQuotaAgents, safeQuotaCredits, safeAppId, safeAppSecret, safeSupplierId, dbMessagePlane],
+        );
+
+        await client.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, NULL, 'pending', 'Tenant created')`,
+          [tenantId],
+        );
+
+        await client.query('COMMIT');
+      } catch (dbErr: unknown) {
+        const e = dbErr as any;
+        await client.query('ROLLBACK').catch(() => {});
+        if (e?.code === '23505') {
+          if (e?.constraint === 'tenants_mio_supplier_uq') {
+            res.status(409).json({ code: 'SUPPLIER_ID_TAKEN', message: '该 Mio CDP 供应商 ID 已绑定其他客户' });
+          } else {
+            res.status(409).json({ code: 'DUPLICATE', message: 'Tenant with this email already exists' });
+          }
+          return;
+        }
+        throw dbErr;
+      } finally {
+        client.release();
+      }
+
+      // Issue 1 FIX: 创建 credits-ledger 客户账户（身份一致：tenantId=UUID）。
+      // 账户 id = acct_<UUID>，与 tenants.credits_account_id 对齐，否则 agent 计费
+      // 会 ACCOUNT_NOT_FOUND。幂等：已存在 → DUPLICATE → ok。
+      const creditsResult = await createCreditsAccount({
+        tenantId,
+        companyName: safeName,
+        contactEmail: hasContactEmail ? contactEmail : undefined,
+        planTier: safePlanTier,
+        creditsLedgerUrl: config.creditsLedgerUrl,
+        creditsLedgerToken: config.creditsLedgerToken,
+      });
+      if (!creditsResult.ok) {
+        console.error('credits-ledger account creation failed:', creditsResult.error);
+        await pool.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+           VALUES ($1, 'pending', 'provisioning_failed', $2)`,
+          [tenantId, `credits account creation failed: ${creditsResult.error?.slice(0, 200)}`],
+        );
+        await pool.query(`UPDATE tenants SET status = 'provisioning_failed' WHERE tenant_id = $1`, [tenantId]);
+        res.status(500).json({ code: 'PROVISIONING_FAILED', message: 'Tenant created but credits account creation failed' });
+        return;
+      }
+
+      // Requirement (2026-08-27): a customer created WITHOUT Feishu bot
+      // credentials must NOT get an agent. Previously this silently created
+      // a gateway-plane agent whose WS bridge could never connect — the root
+      // cause of "先建后绑" (create first, bind later) tenants landing on the
+      // wrong message plane. Only the customer record + credits account are
+      // created here; the agent is provisioned later when credentials are
+      // bound, via PUT /v1/tenants/:id/credentials (auto-provision path).
+      if (!hasBotCreds) {
+        await pool.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+           VALUES ($1, 'pending', 'pending', 'No Feishu credentials — agent provisioning deferred until creds bound')`,
+          [tenantId],
+        );
+        res.status(201).json({
+          ok: true,
+          provisioned: false,
+          // null = 本次创建未绑定米奥供应商（不阻塞、不自动绑定），
+          // 前端据此提示操作者后续绑定（POST /v1/admin/tenants/:id/mio-supplier）。
+          mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
+          tenant: {
+            tenantId,
+            companyName: safeName,
+            contactEmail: safeEmail,
+            planTier: safePlanTier,
+            status: 'pending',
+            quotaAgents: safeQuotaAgents,
+            quotaCreditsMonthly: safeQuotaCredits,
+            mioCdpSupplierId: safeSupplierId,
+            k8sNamespace: k8sNs,
+            messagePlane: dbMessagePlane,
+          },
+          provisioning: null,
+        });
+        return;
+      }
+
+      // Provision K8s resources (after DB commit — if this fails, update status)
+      let provisionResult;
+      try {
+        // Resolve runtime config (global defaults + tenant overrides) from the
+        // runtime_configs table. Skipped in dry-run mode so local/test flows
+        // don't require RUNTIME_CONFIG_KEY. Resolution failures (missing
+        // master key, empty config) mark the tenant provisioning_failed below.
+        let runtimeSecretData: Record<string, string> | undefined;
+        if (!config.k8sDryRun) {
+          runtimeSecretData = await resolveTenantConfig(pool, tenantId);
+        }
+
+        provisionResult = await provisionTenant({
+          tenantId,
+          companyName: safeName,
+          contactEmail,
+          planTier: safePlanTier,
+          quotaAgents: safeQuotaAgents,
+          quotaCreditsMonthly: safeQuotaCredits,
+          appId: safeAppId || undefined,
+          appSecret: safeAppSecret || undefined,
+          messagePlane,
+          mioCdpSupplierId: safeSupplierId || undefined,
+        }, {
+          dryRun: config.k8sDryRun,
+          runtimeNamespace: config.runtimeNamespace,
+          imageRegistry: config.imageRegistry,
+          nexusGatewayImageTag: config.nexusGatewayImageTag,
+          dealclawAgentImageTag: config.dealclawAgentImageTag,
+          runtimeSecretData,
+          // Resolve promoted rollout targets so the new tenant's gateway and
+          // agent run the same image version the fleet was rolled to.
+          dbPool: pool,
+        });
+      } catch (provErr: unknown) {
+        const e = provErr as any;
+        console.error('K8s provisioning failed:', e);
+        await pool.query(
+          `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+           VALUES ($1, 'pending', 'provisioning_failed', $2)`,
+          [tenantId, e.message?.slice(0, 255) || 'Provisioning failed'],
+        );
+        await pool.query(`UPDATE tenants SET status = 'provisioning_failed' WHERE tenant_id = $1`, [tenantId]);
+        res.status(500).json({ code: 'PROVISIONING_FAILED', message: 'Tenant created but K8s provisioning failed' });
+        return;
+      }
+
+      // Provisioning succeeded — activate the tenant. The ops-agent state
+      // machine defines no automatic transition out of 'pending', so without
+      // this a successfully provisioned tenant would stay pending forever.
+      await pool.query(
+        `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
+         VALUES ($1, 'pending', 'active', 'K8s provisioning completed')`,
+        [tenantId],
+      );
+      await pool.query(
+        `UPDATE tenants SET status = 'active', updated_at = NOW() WHERE tenant_id = $1`,
+        [tenantId],
+      );
+
+      // 方案1 修复：provisioning 后立即把 LLM_PROVIDERS 重写为网关态，
+      // 避免「创建后无全局库改动」时直连上游绕过网关计费（见 helper 注释）。
+      await rewriteTenantLlmToGateway(tenantId);
 
       res.status(201).json({
         ok: true,
-        provisioned: outcome.provisioned,
-        // null = 本次创建未绑定米奥供应商（不阻塞、不自动绑定），
-        // 前端据此提示操作者后续绑定（POST /v1/admin/tenants/:id/mio-supplier）。
-        mioSupplier: t.mioCdpSupplierId ? { supplierId: t.mioCdpSupplierId } : null,
+        provisioned: true,
+        // 同 provisioned:false 分支：null 表示本次未绑定米奥供应商。
+        mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
         tenant: {
-          tenantId: t.tenantId,
-          companyName: t.companyName,
-          contactEmail: t.contactEmail,
-          planTier: t.planTier,
-          status: t.status,
-          quotaAgents: t.quotaAgents,
-          quotaCreditsMonthly: t.quotaCreditsMonthly,
-          mioCdpSupplierId: t.mioCdpSupplierId,
-          k8sNamespace: t.k8sNamespace,
-          messagePlane: t.messagePlane,
-          // provisioned:false 分支（未绑飞书凭据）不返回这两个字段，与旧响应一致。
-          ...(outcome.provisioned
-            ? { secretsCreated: t.secretsCreated ?? [], podsScheduled: t.podsScheduled ?? [] }
-            : {}),
+          tenantId,
+          companyName: safeName,
+          contactEmail: safeEmail,
+          planTier: safePlanTier,
+          status: 'active',
+          quotaAgents: safeQuotaAgents,
+          quotaCreditsMonthly: safeQuotaCredits,
+          mioCdpSupplierId: safeSupplierId,
+          k8sNamespace: provisionResult.namespace,
+          messagePlane,
+          secretsCreated: provisionResult.secrets,
+          podsScheduled: provisionResult.pods,
         },
-        provisioning: outcome.provisioning,
+        provisioning: provisionResult,
       });
     } catch (err: unknown) {
-      if (err instanceof TenantCreateError) {
-        res.status(err.status).json({ code: err.code, message: err.message });
-        return;
-      }
       const e = err as any;
       if (e?.code === '23505') {
         res.status(409).json({ code: 'DUPLICATE', message: 'Tenant with this email already exists' });
@@ -374,18 +597,11 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       }
 
       let runtimeSecretData: Record<string, string> | undefined;
-      let missingDefaultKeys: string[] = [];
       if (!config.k8sDryRun) {
-        const resolvedEnv = await resolveEffectiveTenantEnv(pool, tenantId);
-        runtimeSecretData = resolvedEnv.env;
-        missingDefaultKeys = resolvedEnv.missingDefaults;
+        runtimeSecretData = await resolveTenantConfig(pool, tenantId);
       }
 
       const planTier = (['starter', 'pro', 'enterprise'].includes(tenant.plan_tier) ? tenant.plan_tier : 'starter') as 'starter' | 'pro' | 'enterprise';
-      if (missingDefaultKeys.length) {
-        // 缺省不阻断（既定决策）：延迟开通路径上也只记服务端日志，不回显值。
-        console.warn(`[provision] 全局默认配置未就绪 for ${tenantId}: ${missingDefaultKeys.join(', ')}`);
-      }
       const provisionResult = await provisionTenant({
         tenantId,
         companyName: tenant.company_name || 'new-tenant',
@@ -410,7 +626,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       await pool.query(
         `UPDATE tenants SET message_plane = 'openclaw', status = 'active', updated_at = NOW() WHERE tenant_id = $1`,
         [tenantId],
-      );      await pool.query(
+      );
+      await pool.query(
         `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason)
          VALUES ($1, 'pending', 'active', 'Auto-provisioned after Feishu credentials bound (openclaw plane)')`,
         [tenantId],
@@ -418,7 +635,7 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
 
       // 方案1 修复：延迟 provision（openclaw 开通 Agent）后立即把
       // LLM_PROVIDERS 重写为网关态，避免直连上游绕过网关计费。
-      await rewriteTenantLlmToGateway({ pool, config }, tenantId);
+      await rewriteTenantLlmToGateway(tenantId);
 
       res.json({
         ok: true,

@@ -86,10 +86,6 @@ export function deriveAction(method: string, pathName: string): string {
     if (seg[2] === 'llm-providers' && seg[3] === 'selection') return 'llm-provider.selection';
     if (seg[2] === 'llm-providers') return `llm-provider.${verb}`;
     if (seg[2] === 'runtime-configs') return `runtime-config.${verb}`;
-    // 全局默认配置：GET 不入网；PUT → update；dry-run / apply 用子路径名。
-    if (seg[2] === 'global-defaults') return `global-default.${seg[3] ?? verb}`;
-    // 一键开通流水线（FDE 版）。
-    if (seg[2] === 'onboarding') return `onboarding.${seg.slice(3).join('-') || verb}`;
     if (seg[2] === 'external-api-keys') return `external-api-key.${verb}`;
     if (seg[2] === 'feishu-app' && seg[3] === 'scan') return `feishu-app-scan.${seg[4] ?? 'start'}`;
     if (seg[2] === 'tenants' && seg[4] === 'chat') return 'tenant.chat-proxy';
@@ -172,13 +168,6 @@ const BODY_SANITIZERS: Array<{ re: RegExp; sanitize: (body: any) => any }> = [
       body && typeof body === 'object' && body.isSecret === true
         ? { ...body, value: '***' }
         : body,
-  },
-  {
-    // PUT /v1/admin/global-defaults: 决策 3 要求「每次修改与下发都写审计，
-    // 不记录值」——`value` 不是通用敏感 key 名，必须在这里无条件打码。
-    re: /^\/v1\/admin\/global-defaults$/,
-    sanitize: (body) =>
-      body && typeof body === 'object' ? { ...body, value: body.value === undefined ? undefined : '***' } : body,
   },
 ];
 

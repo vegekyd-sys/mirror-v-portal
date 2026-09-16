@@ -2,7 +2,6 @@ import pg from 'pg';
 import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
-import { seedGlobalDefaults } from './services/global-defaults.js';
 import { syncImageReleases } from './services/registry-sync.js';
 import { pruneAuditLogs } from './services/audit.js';
 import { attachPodExecWebSocket } from './ws/pod-exec.js';
@@ -20,12 +19,6 @@ async function main() {
 
   // Run migrations
   await migrate(pool);
-
-  // 全局默认配置：首次由运维写 K8s Secret → env 形式注入本服务 → 这里幂等
-  // 种子入库（已存在不覆盖）。env 缺失或写库失败只记日志，不阻断启动。
-  await seedGlobalDefaults(pool).catch((err) =>
-    console.error('[global-defaults] seed failed:', err instanceof Error ? err.message : String(err)),
-  );
 
   // LLM push async task: the worker publishes progress to the SseBroker the
   // SSE routes also subscribe to, so the admin console can stream live

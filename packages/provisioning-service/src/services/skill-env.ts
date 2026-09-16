@@ -27,7 +27,7 @@
 
 import type pg from 'pg';
 import { getSecret, putSecret, getDeployment, patchDeployment } from './k8s-client.js';
-import { resolveEffectiveTenantEnv } from './tenant-env.js';
+import { resolveTenantConfig } from './runtime-config.js';
 import { decryptValue } from './crypto.js';
 import type { ProvisioningConfig } from '../config.js';
 
@@ -243,7 +243,7 @@ export async function updateSkillEnvSecret(
     return { pushed: false, skippedReason: 'no-own-agent', skippedKeys: [] };
   }
 
-  const { env: merged } = await resolveEffectiveTenantEnv(pool, tenantId);
+  const merged = await resolveTenantConfig(pool, tenantId);
   const { content, skippedKeys } = buildEnvFileContent(merged, tenant.mio_cdp_supplier_id);
   await putSecret(tenant.k8s_namespace as string, SKILL_ENV_SECRET_NAME, { '.env': content });
   return { pushed: true, skippedKeys };
@@ -301,11 +301,8 @@ export async function pushTenantSkillEnv(
   }
 
   const warnings: string[] = [];
-  const { env: merged, missingDefaults } = await resolveEffectiveTenantEnv(pool, tenantId);
+  const merged = await resolveTenantConfig(pool, tenantId);
   const { content, skippedKeys } = buildEnvFileContent(merged, tenant.mio_cdp_supplier_id);
-  if (missingDefaults.length) {
-    warnings.push(`全局默认配置未就绪（未写进本次 .env）：${missingDefaults.join(', ')}`);
-  }
   if (skippedKeys.length) {
     warnings.push(`以下 key 的值含换行、未写入 .env：${skippedKeys.join(', ')}`);
   }
