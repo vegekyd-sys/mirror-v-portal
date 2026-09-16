@@ -164,29 +164,50 @@ describe('POST /v1/admin/onboarding/quick-start', () => {
     expect(insert?.params?.[4]).toBe('pro'); // plan_tier
   });
 
-  it('0 条精确命中 → quickRegister 新建供应商并绑定', async () => {
+  it('0 条精确命中 → 404 MIO_SUPPLIER_NOT_FOUND，不自动注册、不建租户', async () => {
     const pool = makePool();
     stubCreditsLedger();
     mioMocks.searchMioSuppliers.mockResolvedValue({
       total: 1,
       items: [{ id: '111111111111', code: 'C9', name: 'Another Co' }],
     });
-    mioMocks.quickRegisterMioSupplier.mockResolvedValue({ supplierId: '555555555555', name: 'New Co' });
 
     const res = await request(makeApp(pool, makeScanStore()))
       .post('/v1/admin/onboarding/quick-start')
       .send({ companyName: 'New Co', contactPhone: '13900000000', intDialingCode: '+86' });
 
-    expect(res.status).toBe(201);
-    expect(mioMocks.quickRegisterMioSupplier).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ companyName: 'New Co', mobile: '13900000000', intDialingCode: '+86' }),
-    );
-    expect(res.body.supplierId).toBe('555555555555');
-    expect(res.body.supplier).toMatchObject({ created: true });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('MIO_SUPPLIER_NOT_FOUND');
+    expect(res.body.message).toContain('New Co');
+    // 关键不变式：不再静默 quickRegister，也不落库。
+    expect(mioMocks.quickRegisterMioSupplier).not.toHaveBeenCalled();
+    expect(pool.queries.some((q: FakeQuery) => q.sql.includes('INSERT INTO tenants'))).toBe(false);
   });
 
-  it('多条精确命中 → 409 + 候选列表，绝不自动取第一条，且不建租户', async () => {
+  it('显式传 mioCdpSupplierId → 直接使用，不查米奥搜索', async () => {
+    const pool = makePool();
+    stubCreditsLedger();
+
+    const res = await request(makeApp(pool, makeScanStore()))
+      .post('/v1/admin/onboarding/quick-start')
+      .send({
+        companyName: 'Explicit Co',
+        contactPhone: '13700000000',
+        intDialingCode: '+86',
+        mioCdpSupplierId: '777777777777',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.supplierId).toBe('777777777777');
+    expect(res.body.supplier).toMatchObject({ supplierId: '777777777777', created: false });
+    expect(mioMocks.searchMioSuppliers).not.toHaveBeenCalled();
+    expect(mioMocks.quickRegisterMioSupplier).not.toHaveBeenCalled();
+
+    const insert = pool.queries.find((q: FakeQuery) => q.sql.includes('INSERT INTO tenants'));
+    expect(insert?.params?.[11]).toBe('777777777777');
+  });
+
+  it('多条精确命中 → 409 MIO_SUPPLIER_AMBIGUOUS + 候选列表，绝不自动取第一条，且不建租户', async () => {
     const pool = makePool();
     stubCreditsLedger();
     mioMocks.searchMioSuppliers.mockResolvedValue({
@@ -202,7 +223,7 @@ describe('POST /v1/admin/onboarding/quick-start', () => {
       .send({ companyName: 'acme ltd', contactPhone: '13800000000' });
 
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('MULTIPLE_MATCHES');
+    expect(res.body.code).toBe('MIO_SUPPLIER_AMBIGUOUS');
     expect(res.body.candidates).toEqual([
       { id: '111111111111', code: null, name: 'Acme Ltd' },
       { id: '222222222222', code: null, name: 'ACME LTD' },
@@ -211,12 +232,11 @@ describe('POST /v1/admin/onboarding/quick-start', () => {
     expect(mioMocks.quickRegisterMioSupplier).not.toHaveBeenCalled();
   });
 
-  it('米奥业务失败（如同名重复）→ 409，原样透出上游 msg', async () => {
+  it('米奥搜索本身业务失败 → 409，原样透出上游 msg', async () => {
     const pool = makePool();
     stubCreditsLedger();
-    mioMocks.searchMioSuppliers.mockResolvedValue({ total: 0, items: [] });
-    mioMocks.quickRegisterMioSupplier.mockRejectedValue(
-      new (mioMocks.MioApiError as any)('business', 409, 'MIO_BUSINESS_ERROR', '公司名称已存在'),
+    mioMocks.searchMioSuppliers.mockRejectedValue(
+      new (mioMocks.MioApiError as any)('business', 409, 'MIO_BUSINESS_ERROR', '供应商查询被拒绝'),
     );
 
     const res = await request(makeApp(pool, makeScanStore()))
@@ -224,10 +244,11 @@ describe('POST /v1/admin/onboarding/quick-start', () => {
       .send({ companyName: 'Dup Co', contactPhone: '13800000000' });
 
     expect(res.status).toBe(409);
-    expect(res.body.message).toBe('公司名称已存在');
+    expect(res.body.message).toBe('供应商查询被拒绝');
+    expect(pool.queries.some((q: FakeQuery) => q.sql.includes('INSERT INTO tenants'))).toBe(false);
   });
 
-  it('校验：缺企业名 / 缺手机号 → 400，且不打米奥接口', async () => {
+  it('校验：缺企业名 / 缺手机号 / 非法供应商 ID → 400，且不打米奥接口', async () => {
     const pool = makePool();
     const app = makeApp(pool, makeScanStore());
 
@@ -237,6 +258,12 @@ describe('POST /v1/admin/onboarding/quick-start', () => {
 
     const noPhone = await request(app).post('/v1/admin/onboarding/quick-start').send({ companyName: 'X' });
     expect(noPhone.status).toBe(400);
+
+    const badSupplierId = await request(app)
+      .post('/v1/admin/onboarding/quick-start')
+      .send({ companyName: 'X', contactPhone: '13800000000', mioCdpSupplierId: '有中文的 id' });
+    expect(badSupplierId.status).toBe(400);
+    expect(badSupplierId.body.code).toBe('BAD_SUPPLIER_ID');
 
     expect(mioMocks.searchMioSuppliers).not.toHaveBeenCalled();
     expect(pool.queries).toHaveLength(0);
