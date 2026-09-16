@@ -723,14 +723,19 @@ export default function AgentsPage() {
             </div>
             <div className="form-row">
               <label className="field-label">Mio CDP 供应商 ID</label>
-              {/* 2026-09-16 按 A 方案：ID **只读回显**，只能由上方「搜索供应商」选中后自动填入，
-                  不再支持手填（手输错号会把订单绑到别的供应商）。 */}
+              {/* 2026-09-16：恢复手填 —— 上方「搜索供应商」选中后仍会自动填入，
+                  但搜索不到/已知 ID 时也可以直接输入或粘贴（之前误置 readOnly 导致无法输入）。 */}
               <input
                 type="text"
                 className="mono"
                 value={addForm.mioSupplierId}
-                readOnly
-                placeholder="由上方「搜索供应商」选中后自动填入（不可手填）"
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setAddForm((f) => ({ ...f, mioSupplierId: value }));
+                  // 手改后之前选中的供应商不再可信，避免「已选：xxx」与实际 ID 不一致
+                  setMioSelected((cur) => (cur && cur.id === value.trim() ? cur : null));
+                }}
+                placeholder="由上方「搜索供应商」选中后自动填入，也可直接输入/粘贴 ID"
               />
               {addForm.mioSupplierId && (
                 <button
