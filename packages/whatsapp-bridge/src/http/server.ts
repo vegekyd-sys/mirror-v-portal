@@ -51,6 +51,10 @@ import {
   cleanupWhatsappData,
 } from "../core/adminWabaCleanup";
 import {
+  AdminWabaUnbindError,
+  unbindWabaTenant,
+} from "../core/adminWabaUnbind";
+import {
   AdminDebugTablesError,
   listAllDebugTables,
 } from "../core/adminDebugTables";
@@ -258,6 +262,28 @@ export async function buildServer() {
           return reply.code(500).send({
             error: "failed to import WhatsApp business account",
             code: "ADMIN_IMPORT_FAILED",
+          });
+        }
+      });
+
+      /**
+       * 解绑 supplierId ↔ wabaId（WABA 级归属，回滚后的口径）。
+       *
+       * 只把该租户在这个 WABA 上的 CONNECTED 行置为 DISCONNECTED；**不碰手机号**
+       * （不删 WabaPhone、不调 YCloud/Meta 释放号码）；按 partnerCustomerId 收范围，
+       * 只能解自己的绑定；重复调用幂等。
+       */
+      scope.post("/api/admin/whatsapp/unbind-waba", async (request, reply) => {
+        try {
+          return await unbindWabaTenant(request.body);
+        } catch (error) {
+          if (error instanceof AdminWabaUnbindError) {
+            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+          }
+          request.log.error({ err: error }, "WABA unbind failed");
+          return reply.code(500).send({
+            error: "failed to unbind WhatsApp WABA",
+            code: "ADMIN_UNBIND_FAILED",
           });
         }
       });

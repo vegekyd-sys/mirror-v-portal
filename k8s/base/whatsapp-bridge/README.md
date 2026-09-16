@@ -31,9 +31,20 @@
 
 桥接进程不配置默认租户或全局当前 WABA。调用方显式传 `partnerCustomerId`（或 `supplierId`）；日常号码、模板、会话和消息接口只额外接受可选业务号 `from`，WABA 由服务按租户绑定和 `WabaPhone` 动态解析。多业务号未指定 `from` 时服务拒绝任意选择；onboarding/status 与 webhook 内部才保留 WABA 数据。
 
-`POST /api/admin/whatsapp/import-existing-waba` 仅供授权运维恢复 YCloud 已有 WABA。共享 WABA
-模式下，一个 WABA 可被多个 tenant 共享，但手机号只能归一家；号码归属冲突时事务整体拒绝。
-该接口及凭据不得进入日常 agent skill，响应也不返回 WABA 标识。
+`POST /api/admin/whatsapp/import-existing-waba` 仅供授权运维恢复 YCloud 已有 WABA。归属是
+**WABA 级**（2026-09-16 回滚后口径）：一个 WABA 只能有一个 CONNECTED owner，一个租户也只
+绑一个 WABA；导入时该 WABA 已被别的租户 CONNECTED 占用则事务整体拒绝。该接口及凭据不得
+进入日常 agent skill，响应也不返回 WABA 标识。
+
+`POST /api/admin/whatsapp/unbind-waba` 解绑 `partnerCustomerId`（别名 `supplierId`）与 `wabaId`：
+
+- 只把该租户在这个 WABA 上的 `CONNECTED` 行置为 `DISCONNECTED` —— 归属判定只认 `CONNECTED`
+  （见 `src/core/tenant.ts`），所以置位即解绑生效；
+- **不碰手机号**：不删 `WabaPhone` 行，也不调 YCloud/Meta 释放号码（那是不可逆的外部动作）；
+- 按 `partnerCustomerId` 收范围，**只能解自己的绑定**，别人的一律不动；
+- 幂等：重复解绑仍返回 200，只是如实回报 `WABA_ALREADY_UNBOUND`；从未绑定则报 `WABA_NOT_BOUND`；
+- 入参：`partnerCustomerId`（必填，或传别名 `supplierId`）、`wabaId`（必填，5–32 位十进制）；
+  非法入参返回 400 `ADMIN_UNBIND_INVALID_INPUT`，且不会碰到数据库。
 
 ### 测试期调库接口（临时，测完即删）
 
