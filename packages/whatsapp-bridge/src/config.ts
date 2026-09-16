@@ -47,6 +47,12 @@ export const config = {
   },
   databaseUrl: process.env.DATABASE_URL || "",
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
+  admin: {
+    /** 测试期 DB 清理接口的总开关；默认 false，生产不得裸开。 */
+    allowDbCleanup: flag("WHATSAPP_ALLOW_DB_CLEANUP"),
+    /** 清理接口独立 token，走 X-WhatsApp-Cleanup-Token，不复用 webhook secret。 */
+    cleanupToken: optional("WHATSAPP_CLEANUP_TOKEN"),
+  },
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),

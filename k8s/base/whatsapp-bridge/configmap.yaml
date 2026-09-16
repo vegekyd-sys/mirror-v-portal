@@ -25,6 +25,10 @@ data:
   WHATSAPP_BRIDGE_BASE_URL: "https://dealclaw.datathink.com/whatsapp"
   PROVISIONING_SERVICE_URL: "http://provisioning-service:8082"
 
+  # 测试期 DB 清理接口默认**关闭**。测试 overlay 才可显式覆写为 "true"；
+  # 即使开启仍必须携带 Secret 中的 WHATSAPP_CLEANUP_TOKEN + confirm 确认串。
+  WHATSAPP_ALLOW_DB_CLEANUP: "false"
+
   # 租户标识不进入桥接进程环境：每个租户请求必须显式传 partnerCustomerId / supplierId。
 
   FEISHU_BASE_URL: "https://open.feishu.cn"
