@@ -344,6 +344,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 <script>
 (function () {
   var deviceCode = null, pollTimer = null, tickTimer = null, expireAt = null;
+  // Edge providers treat sub-second-scale polling from many clients as an attack;
+  // 3s is still responsive for a scan while roughly halving requests per session.
+  var POLL_MS = 3000;
   var gate = document.getElementById('gate');
   var core = document.getElementById('core');
   var code = document.getElementById('code');
@@ -412,7 +415,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       tick();
       progress(4);
 
-      pollTimer = setInterval(poll, 2000);
+      pollTimer = setInterval(poll, POLL_MS);
       tickTimer = setInterval(tick, 1000);
     } catch (err) {
       closeGate(err.message || '通道开启失败');
@@ -448,6 +451,19 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   }
 
   retry.addEventListener('click', open);
+
+  // While the user is away in Feishu scanning, this tab is hidden and every poll
+  // it fires is wasted load. Resume with an immediate check so nothing is missed.
+  document.addEventListener('visibilitychange', function () {
+    if (!deviceCode || !expireAt) return;
+    if (document.hidden) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    } else if (!pollTimer) {
+      poll();
+      pollTimer = setInterval(poll, POLL_MS);
+    }
+  });
 
   window.addEventListener('beforeunload', function () {
     if (!deviceCode) return;
