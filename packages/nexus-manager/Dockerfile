@@ -9,6 +9,8 @@ RUN npm install --omit=dev --no-save --legacy-peer-deps \
     --prefix /opt/nexus-manager/plugins/feishu @openclaw/feishu@2026.9.4 \
     && test ! -e /app/dist/extensions/feishu \
     && cp -a /opt/nexus-manager/plugins/feishu/node_modules/@openclaw/feishu /app/dist/extensions/feishu \
+    && ln -s /app /app/dist/extensions/feishu/node_modules/openclaw \
+    && node -e 'import("/app/dist/extensions/feishu/dist/configured-state.js")' \
     && chown -R node:node /opt/nexus-manager /app/dist/extensions/feishu
 COPY runtime /opt/nexus-manager/runtime
 COPY payload /opt/nexus-manager/payload
