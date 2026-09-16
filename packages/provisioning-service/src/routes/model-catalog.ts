@@ -14,6 +14,10 @@ import {
   type ProviderInstanceRecord,
 } from '../services/model-catalog.js';
 import { CatalogReleaseService } from '../services/catalog-release-service.js';
+import {
+  GlobalPolicyBackfillError,
+  GlobalPolicyBackfillService,
+} from '../services/global-policy-backfill.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
 import { TenantSelectionV2Service } from '../services/tenant-selection-v2.js';
 import { validateConfigValue } from '../services/runtime-config.js';
@@ -124,6 +128,7 @@ export function createModelCatalogRoutes(
   const repository = new CatalogRepository(pool);
   const service = new CatalogService(repository);
   const paramDiscovery = new ModelParamDiscoveryService(pool);
+  const policyBackfill = new GlobalPolicyBackfillService(pool, repository);
   const releases = releaseService ?? new CatalogReleaseService(pool);
   // Inject feature flags into the release service for P1-2 catalog projection.
   if ('setConfig' in releases && typeof (releases as any).setConfig === 'function') {
@@ -668,6 +673,49 @@ export function createModelCatalogRoutes(
   });
 
   // ── Global Model Policy (read = modelCatalogRead, write = modelCatalogSnapshotWrite) ──
+
+  router.post('/v1/admin/model-catalog/global-policy/backfill', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    if (req.body !== undefined && (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body))) {
+      return validationError(res, 'request body must be an object');
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (Object.keys(body).some((key) => key !== 'dryRun' && key !== 'force') ||
+        (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') ||
+        (body.force !== undefined && typeof body.force !== 'boolean')) {
+      return validationError(res, 'only boolean dryRun and force fields are allowed');
+    }
+    const dryRun = body.dryRun === undefined ? true : body.dryRun as boolean;
+    const force = body.force === true;
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const result = await policyBackfill.apply({ dryRun, force, actor });
+      if (!dryRun && result.action === 'applied') {
+        await writeAuditLog(pool, {
+          actor,
+          actorType,
+          action: 'model-catalog.global-policy.backfill',
+          method: 'POST',
+          path: req.path,
+          resourceType: 'llm_global_model_policy',
+          resourceId: 'current',
+          oldValue: result.currentPolicy,
+          newValue: result.policy,
+        });
+      }
+      res.json(result);
+    } catch (error) {
+      if (error instanceof GlobalPolicyBackfillError) {
+        const status = error.code === 'POLICY_ALREADY_CONFIGURED' ? 409 : 422;
+        res.status(status).json({ code: error.code, message: error.message });
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('STALE_REVISION')) return staleRevision(res);
+      console.error('model catalog global policy backfill failed:', error);
+      internalError(res, 'GLOBAL_POLICY_BACKFILL_FAILED');
+    }
+  });
 
   router.get('/v1/admin/model-catalog/global-policy', async (_req, res) => {
     if (config.modelCatalogRead !== true) return disabled(res);

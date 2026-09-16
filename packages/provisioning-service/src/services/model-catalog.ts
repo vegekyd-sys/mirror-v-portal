@@ -238,6 +238,22 @@ export class CatalogRepository {
     };
   }
 
+  /** List enabled providers and all models for reference validation, including disabled models. */
+  public async listCatalogReferenceCandidates(): Promise<Array<{ provider: ProviderInstanceRecord; models: ProviderModelRecord[] }>> {
+    const { rows } = await this.pool.query(`
+      SELECT p.*, COALESCE(json_agg(to_jsonb(m) ORDER BY m.model_id)
+        FILTER (WHERE m.id IS NOT NULL), '[]') AS models
+        FROM llm_provider_instances p
+        LEFT JOIN llm_provider_models m ON m.provider_instance_id=p.id
+       WHERE p.enabled=TRUE
+       GROUP BY p.id
+       ORDER BY p.legacy_provider_name`);
+    return rows.map((row) => ({
+      provider: rowToProvider(row),
+      models: (row.models as Record<string, unknown>[]).map(rowToModel),
+    }));
+  }
+
   public async listRuntimeCatalog(): Promise<Array<{ provider: ProviderInstanceRecord; models: ProviderModelRecord[] }>> {
     const { rows } = await this.pool.query(`
       SELECT p.*, COALESCE(json_agg((to_jsonb(m) || jsonb_build_object(
