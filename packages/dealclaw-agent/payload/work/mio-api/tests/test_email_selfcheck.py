@@ -166,6 +166,39 @@ class NeedsHumanClassification(_Base):
         self.assertTrue(any("回信" in item for item in human))
 
 
+class HealReplyMatch(_Base):
+    """自愈类 4：回信未匹配 → 重跑兜底收敛；只有唯一命中才认，否则交给人。"""
+
+    def _add_account(self, addr="proxy@mail.dealclaw.io"):
+        sys.path.insert(0, str(_MIO))
+        from email_gateway.store import EmailStore  # noqa: PLC0415
+
+        return EmailStore(self.data).add_account(
+            enterprise_id="test", owner_open_id="ou_x", email_address=addr,
+            provider="resend", mailbox_kind="dealclaw_proxy", secret_ref="env:RESEND_API_KEY",
+        )
+
+    def test_recipient_without_account_is_skipped_not_guessed(self):
+        """收件邮箱不在本租户账号表 → 不动（不能替别的租户乱认回信）。"""
+        self.add_inbound(binding_status="unmatched", failure_reason="no_matching_outbound")
+        heal = sc.heal_reply_match(self.data, apply=True, hours=24)
+        self.assertEqual(heal["fixed"], 0)
+        self.assertEqual(heal["skip_reasons"].get("no_recipient_account"), 1)
+
+    def test_dry_run_never_writes(self):
+        self.add_inbound(binding_status="unmatched", failure_reason="x")
+        heal = sc.heal_reply_match(self.data, apply=False, hours=24)
+        self.assertEqual(heal["applied"], False)
+        stuck = [p for p in (self.data / "email-facts" / "inbound").rglob("*.md")]
+        self.assertTrue(stuck, "dry-run 不得动文件")
+        self.assertFalse((self.data / "email-facts" / sc.FIX_LOG_NAME).exists())
+
+    def test_already_matched_is_left_alone(self):
+        self.add_inbound(binding_status="matched")
+        heal = sc.heal_reply_match(self.data, apply=True, hours=24)
+        self.assertEqual((heal["fixable"], heal["fixed"], heal["skipped"]), (0, 0, 0))
+
+
 class WindowingAndRobustness(_Base):
     def test_old_records_are_outside_window(self):
         self.add_inbound(binding_status="unmatched", failure_reason="old", when=-48)

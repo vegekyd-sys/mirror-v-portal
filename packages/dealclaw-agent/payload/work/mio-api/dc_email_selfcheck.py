@@ -324,6 +324,98 @@ def needs_human(result: dict) -> list[str]:
     return out
 
 
+def heal_reply_match(data_dir: Path, *, apply: bool = False,
+                     hours: int = DEFAULT_HOURS) -> dict:
+    """自愈类 4：回信未匹配 → **重跑兜底收敛**（同联系人 + 时间窗），只有**唯一命中**才认。
+
+    为什么：未匹配里有一部分只是“当时没兜底”或“候选后来才齐”，重跑一次能配上。
+    但若收敛结果仍是 ambiguous（多候选）→ **不猜、交给人**（乱配比不配更糟）。
+    ``apply=False`` 只算不改。幂等：已 matched / 已 rebound 的记录不再动。
+    """
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    root = data_dir / "email-facts" / "inbound"
+    fixable: list[dict] = []
+    skipped: list[dict] = []
+    fixed: list[dict] = []
+    log_path = data_dir / "email-facts" / FIX_LOG_NAME
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from dc_email_controller import dc_webhook_handler as wh  # noqa: PLC0415
+        from email_gateway import reply_attribution as ra  # noqa: PLC0415
+        from email_gateway.store import EmailStore  # noqa: PLC0415
+
+        store = EmailStore(data_dir)
+    except Exception as exc:  # noqa: BLE001
+        return {"kind": "reply_match", "applied": bool(apply), "error": f"{type(exc).__name__}: {exc}",
+                "fixable": 0, "fixed": 0, "skipped": 0, "skip_reasons": {}, "samples": [], "log": ""}
+
+    for path in sorted(root.rglob("*.md")) if root.exists() else []:
+        obj = _first_json(path)
+        if not obj:
+            continue
+        if str(obj.get("binding_status") or "") == "matched" or obj.get("rebound_by"):
+            continue
+        when = _parse_ts(obj.get("received_at") or obj.get("created_at"))
+        if when and when < since:
+            continue
+        recipients = obj.get("recipients") or []
+        if not isinstance(recipients, list):
+            recipients = [recipients]
+        to_email = str(recipients[0]) if recipients else ""
+        try:
+            acct = ra.resolve_mailbox(recipients, store=store) or {}
+        except Exception:  # noqa: BLE001
+            acct = {}
+        account_id = str(acct.get("account_id") or "")
+        if not account_id:
+            skipped.append({"path": str(path), "reason": "no_recipient_account"})
+            continue
+        try:
+            fb = wh._fallback_match_by_contact(store, account_id, str(obj.get("sender") or ""), to_email) or {}
+        except Exception as exc:  # noqa: BLE001
+            skipped.append({"path": str(path), "reason": f"fallback_error:{type(exc).__name__}"})
+            continue
+        if fb.get("status") != "matched":
+            skipped.append({"path": str(path), "reason": str(fb.get("status") or "no_match")})
+            continue
+        outbound = fb.get("outbound") or {}
+        entry = {"path": str(path), "account_id": account_id,
+                 "outbound_id": str(outbound.get("resend_id") or outbound.get("message_id") or ""),
+                 "method": str(fb.get("binding_method") or "fallback_replay")}
+        fixable.append(entry)
+        if not apply:
+            continue
+        try:
+            obj.update({
+                "binding_status": "matched",
+                "matched_outbound_id": entry["outbound_id"],
+                "binding_method": entry["method"],
+                "binding_confidence": "low",
+                "rebound_by": "email-selfcheck",
+                "rebound_at": datetime.now(timezone.utc).isoformat(),
+            })
+            obj.pop("failure_reason", None)
+            path.write_text(json.dumps(obj, ensure_ascii=False) + "\n", encoding="utf-8")
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(),
+                                     "action": "reply_match", **entry}, ensure_ascii=False) + "\n")
+            fixed.append(entry)
+        except OSError as exc:  # noqa: BLE001
+            skipped.append({"path": str(path), "reason": f"write_failed:{type(exc).__name__}"})
+
+    return {
+        "kind": "reply_match",
+        "applied": bool(apply),
+        "fixable": len(fixable),
+        "fixed": len(fixed),
+        "skipped": len(skipped),
+        "skip_reasons": _tally(r.get("reason", "") for r in skipped),
+        "samples": fixable[:5],
+        "log": str(log_path) if apply else "",
+    }
+
+
 def run_selfcheck(data_dir: Path, hours: int = DEFAULT_HOURS) -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     links = {
@@ -381,7 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = Path(args.data_dir)
     heal = None
     if args.fix:
-        heal = heal_outbound_attribution(data_dir, apply=bool(args.apply))
+        heal = [
+            heal_outbound_attribution(data_dir, apply=bool(args.apply)),
+            heal_reply_match(data_dir, apply=bool(args.apply), hours=args.hours),
+        ]
 
     result = run_selfcheck(data_dir, hours=args.hours)
     if heal is not None:
@@ -392,12 +487,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(render(result))
         if heal is not None:
-            mode = "已写入" if heal["applied"] else "dry-run（未改动）"
-            print(f"\n🛠 自愈 outbound_attribution（{mode}）：可修 {heal['fixable']} / 已修 {heal['fixed']} / 跳过 {heal['skipped']}")
-            if heal["skip_reasons"]:
-                print(f"   跳过原因：{heal['skip_reasons']}")
-            for item in result.get("needs_human") or []:
-                print(f"   需人工：{item}")
+            mode = "已写入" if args.apply else "dry-run（未改动）"
+            for item in heal:
+                if item.get("error"):
+                    print(f"\n🛠 自愈 {item['kind']}：不可用（{item['error']}）")
+                    continue
+                print(f"\n🛠 自愈 {item['kind']}（{mode}）：可修 {item['fixable']} / 已修 {item['fixed']} / 跳过 {item['skipped']}")
+                if item["skip_reasons"]:
+                    print(f"   跳过原因：{item['skip_reasons']}")
+            for line in result.get("needs_human") or []:
+                print(f"   需人工：{line}")
     # 修完复检：自愈后仍不健康才非 0（告警只报「修不动的」）
     return EXIT_CODES.get(result["status"], 1)
 
