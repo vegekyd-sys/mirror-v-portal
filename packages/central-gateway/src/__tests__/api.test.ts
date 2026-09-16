@@ -162,7 +162,10 @@ describe('GET /onboard — Feishu registration', () => {
     const res = await request(app).get('/onboard').set('User-Agent', 'Chrome');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
-    expect(res.text).toContain('DealClaw');
+    expect(res.text).toContain('NEXUS');
+    // The gate deliberately carries no customer-identifying content.
+    expect(res.text).not.toContain('公司名称');
+    expect(res.text).not.toContain('联系邮箱');
   });
 
   it('returns HTML page for dingtalk', async () => {
