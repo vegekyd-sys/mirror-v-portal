@@ -16,7 +16,7 @@
  *
  * Channel framing (k8s remotecommand v4): every message is
  *   [1-byte stream type][payload]
- *   0=stdin  1=stdout  2=stderr  3=error  255=resize(JSON {Width,Height})
+ *   0=stdin  1=stdout  2=stderr  3=error  4=resize(JSON {Width,Height})
  */
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -44,7 +44,7 @@ const STREAM_STDIN = 0;
 const STREAM_STDOUT = 1;
 const STREAM_STDERR = 2;
 const STREAM_ERROR = 3;
-const STREAM_RESIZE = 255;
+const STREAM_RESIZE = 4;
 
 /** Tokenize a shell command safely: split on whitespace, allow quoting. */
 function parseCommand(raw: string): string[] | null {
