@@ -237,6 +237,89 @@ def collect_opportunities(company_id: str) -> list[dict]:
     return [s for s in list_signals(company_id) if s.get("signal_type") in opp]
 
 
+def _parse_iso_utc(ts):
+    """宽容解析带时区 ISO（兼容事实层的 “2026-09-15 05:57:49.881000+00” 写法）。"""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _sender_parts(raw: str) -> tuple[str, str]:
+    """``“Name <a@b>”`` → (显示名, 地址)；只有地址时名字为空。"""
+    text = str(raw or "").strip()
+    if "<" in text and ">" in text:
+        name = text.split("<")[0].strip().strip('"').strip()
+        addr = text[text.index("<") + 1:text.rindex(">")].strip().lower()
+        return name, addr
+    return "", text.lower()
+
+
+def collect_reply_intent_rows(company_id: str, *, hours: int = 24,
+                             store=None) -> list[dict]:
+    """窗口内的回信（入站事实）+ 其信号，供「采购意图」推理段使用（只读，不发送）。
+
+    数据源：``email-facts/inbound``（事实层，Resend/IMAP 两条路都会落）+
+    ``email-signals``（active 信号）。按回信 message_id 关联；关联不到就是零信号回信，
+    照样进「未识别出采购意图」清单（客户口径：两类都不能少）。
+    """
+    from dc_email_controller.dc_email_signals import list_signals
+    if store is None:
+        from email_gateway.store import EmailStore
+        store = EmailStore()
+    try:
+        inbounds = store.list_inbound_records(company_id=company_id) or []
+    except Exception:
+        return []
+    by_mid: dict[str, list[dict]] = {}
+    try:
+        for s in (list_signals(company_id) or []):
+            mid = str(s.get("source_message_id") or "")
+            if mid:
+                by_mid.setdefault(mid, []).append(s)
+    except Exception:
+        pass
+    since = datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))
+    rows: list[dict] = []
+    for ib in inbounds:
+        when = _parse_iso_utc(ib.get("received_at") or ib.get("created_at"))
+        if when is None or when < since:
+            continue
+        mid = str(ib.get("message_id") or "")
+        sender_name, sender_addr = _sender_parts(ib.get("sender") or "")
+        rows.append({
+            "message_id": mid,
+            "sender": sender_addr,
+            "sender_name": sender_name,
+            "company_name": str(ib.get("buyer_company") or ib.get("company_name") or ""),
+            "subject": str(ib.get("subject") or ""),
+            "excerpt": str(ib.get("text_preview") or ib.get("text") or ""),
+            "received_at": str(ib.get("received_at") or ib.get("created_at") or ""),
+            "signals": by_mid.get(mid, []),
+        })
+    rows.sort(key=lambda r: r.get("received_at") or "", reverse=True)
+    return rows
+
+
+def _reply_intent_section(company_id: str, slot: str, store=None) -> str:
+    """早晚报「回信采购意图」段（两类清单都不省；无回信时也输出 0 计数，证明段落没被省）。"""
+    try:
+        from dc_daily_brief import classify_reply_purchase_intent, render_reply_intent_section
+        if slot == "morning":
+            hours = 24
+        else:
+            now_local = datetime.now(timezone.utc).astimezone(ZoneInfo(BUSINESS_TZ))
+            elapsed = (now_local - now_local.replace(hour=0, minute=0, second=0, microsecond=0))
+            hours = max(1, int(elapsed.total_seconds() // 3600) + 1)
+        rows = collect_reply_intent_rows(company_id, hours=hours, store=store)
+        return render_reply_intent_section(classify_reply_purchase_intent(rows))
+    except Exception:
+        return ""
+
+
 def _campaign_brief(company_id: str) -> str:
     """展会进度简表。"""
     try:
@@ -505,11 +588,13 @@ def _pipeline_brief(company_id: str, slot: str) -> str:
             r = pipeline.run_morning_brief(ctx, base)
             plan = r.get("plan") or {}
             parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
+                     _reply_intent_section(company_id, "morning"),
                      _fmt_pipeline_morning(plan)]
         else:
             r = pipeline.run_evening_brief(ctx, base)
             plan = r.get("plan") or {}
             parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
+                     _reply_intent_section(company_id, "evening"),
                      _fmt_pipeline_evening(r.get("review"), plan)]
         return "\n\n".join(p for p in parts if p)
     except Exception:

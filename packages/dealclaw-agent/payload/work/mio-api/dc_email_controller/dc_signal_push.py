@@ -5,6 +5,11 @@ dc_signal_push.py — P0-E3A Push 决策层（只 dry-run）
 读取 email-signals/by-id → 判断是否值得通知 → 合并同一回复的多个信号 →
 生成 push candidate → Markdown 持久化 → **不真实发送**。
 
+决策入口有两个（2026-09-16 起）：
+  evaluate_reply_for_push（按**信**，收信链用）——除 intent ∈ {自动回复, 拒绝} 保持静默外，
+    其余回信一律生成 candidate（零信号也推，标题「买家回信（未识别出采购意图）」）；
+  evaluate_for_push（按**信号**，保留给其它调用方）——下列 build_candidates 规则：
+
 决策规则（详见 build_candidates）：
   quote_request   → 实时 Push 候选
   sample_request  → 实时 Push 候选
@@ -216,6 +221,11 @@ def format_candidate_message(cand: dict) -> str:
     parts = [title]
     if evidence:
         parts.append(f"买家原文：{evidence}")
+    if cand.get("category") == REPLY_CATEGORY:
+        # 零信号回信：不透传「草稿已准备好」（本类**不生成回复草稿、不自动发信**），
+        # 只把买家原文给到人，并明确要他自行判断——口径见 2026-09-16 客户定稿。
+        parts.append("未识别出明确采购意图，需你自行判断是否回复。")
+        return "\n".join(parts)
     if missing:
         cn = "、".join(_MISSING_CN.get(m, m) for m in missing)
         parts.append(f"回复草稿已准备好，但还缺{cn}信息，等你确认发送。")
@@ -447,6 +457,202 @@ def evaluate_for_push(signal_ids: list[str], mode: str = None) -> dict:
         candidates.append(cand)
     pushed = _deliver_live(candidates) if (mode == "live" and route_ok) else []
     return {"mode": mode, "candidates": candidates, "count": len(candidates), "pushed": pushed}
+
+
+# ── 2026-09-16 田耕郡口径：推送以「信」为单位，不漏推 ──────────────────
+# 旧口径只从 active **信号** 生成 candidate：分类器没吐信号的回信 → 没有 candidate →
+# 完全不通知，买家回信静默消失（客户明确不接受）。新口径：除 {自动回复, 拒绝}
+# 两类**保持静默**，其余回信——**即使零信号**——也必须生成 candidate 并投递。
+REPLY_CATEGORY = "reply"
+SILENT_STATUS = "silent_intent_blocked"
+
+
+def _blocked_intents() -> set:
+    try:
+        from .dc_email_signals import BLOCKED_INTENTS
+        return set(BLOCKED_INTENTS)
+    except Exception:  # noqa: BLE001 - 兜底失败时宁可推（漏推比多推贵）
+        return set()
+
+
+def is_silent_intent(intent: str) -> bool:
+    """intent 是否属「保持静默」的两类（自动回复 / 拒绝）。"""
+    return (intent or "").strip() in _blocked_intents()
+
+
+def _excerpt(text: str, limit: int = 240) -> str:
+    """买家原文摘要：先剥引用（只留本次新回复），再截断。"""
+    t = (text or "").strip()
+    try:
+        from dc_iq_engine import strip_quoted_reply
+        t = (strip_quoted_reply(t) or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return t[:limit]
+
+
+def resolve_signals(signals) -> list[dict]:
+    """signals 允许传 signal dict 或 signal_id（混用也接受）。"""
+    from . import dc_email_signals as sig
+    out: list[dict] = []
+    for item in (signals or []):
+        if isinstance(item, dict):
+            if item.get("signal_type"):
+                out.append(item)
+        elif isinstance(item, str) and item:
+            rec = sig.get_signal(item)
+            if rec:
+                out.append(rec)
+    return out
+
+
+def record_silent_reply(message_id: str, company_id: str = "", intent: str = "",
+                        reason: str = "intent_blocked") -> None:
+    """记一条「按口径静默」的回信（自动回复 / 拒绝）。
+
+    为什么记：漏推对账必须能区分「该推没推」和「按口径不推」，
+    否则自检会永远喊狼，真正漏推反而被噪声淹掉。
+    """
+    _append_history({"status": SILENT_STATUS, "reason": reason, "intent": intent,
+                     "company_id": company_id, "source_message_id": message_id, "at": _now()})
+
+
+def history_entries(since: str = "") -> list[dict]:
+    """读 push history（全部日文件，按 at 过滤；坏行跳过）。供自检/回放使用。"""
+    out: list[dict] = []
+    if not HISTORY.exists():
+        return out
+    for p in sorted(HISTORY.glob("*.md")):
+        try:
+            lines = p.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if since and str(rec.get("at") or "") < since:
+                continue
+            out.append(rec)
+    return out
+
+
+def _build_reply_candidate(message_id: str, text: str, company_id: str, sigs: list[dict],
+                           intent: str, campaign_id: str, lead_id: str = "",
+                           contact_id: str = "", thread_id: str = "") -> dict:
+    """按「信」生成 candidate：有采购意图信号 → 沿用机会候选；否则 → 通用回信候选。"""
+    cand = _build_opportunity(message_id, sigs, "scale") if sigs else None
+    if cand is not None:
+        cand.update({
+            "candidate_id": _candidate_id(company_id, message_id),
+            "company_id": cand.get("company_id") or company_id,
+            "intent": intent,
+            "lead_id": lead_id,
+            "contact_id": contact_id,
+            "thread_id": thread_id,
+            "signal_backed": True,
+        })
+        return cand
+    signal_types = [s.get("signal_type") for s in sigs if s.get("signal_type")]
+    missing: list[str] = []
+    for s in sigs:
+        if s.get("signal_type") == "missing_info":
+            missing.extend((s.get("evidence") or {}).get("missing_fields") or [])
+    return {
+        "candidate_id": _candidate_id(company_id, message_id),
+        "company_id": company_id,
+        "campaign_id": campaign_id,
+        "lead_id": lead_id,
+        "contact_id": contact_id,
+        "thread_id": thread_id,
+        "source_message_id": message_id,
+        "category": REPLY_CATEGORY,
+        "priority": "medium",
+        "signals": sorted({t for t in signal_types}),
+        "title": "买家回信（未识别出采购意图）",
+        "evidence": _excerpt(text),
+        "missing_fields": sorted(set(missing)),
+        "intent": intent,
+        "signal_backed": False,
+        "delivery_mode": "realtime",
+        "decision": "push",
+        "status": "proposed",
+    }
+
+
+def evaluate_reply_for_push(message_id: str, intent: str = "", text: str = "",
+                           company_id: str = "", signals=None, mode: str = None, *,
+                           campaign_id: str = "", lead_id: str = "", contact_id: str = "",
+                           thread_id: str = "", received_at: str = "",
+                           trigger: str = "reply_received") -> dict:
+    """**按「信」**做 Push 决策（2026-09-16 口径，不漏推）。
+
+    与 `evaluate_for_push`（按信号，保留给其它调用方）的区别：
+      - intent ∈ {自动回复, 拒绝} → 不生成 candidate、不通知（记 silent 供对账）；
+      - 其余回信 → **一律**生成 candidate 并投递（零信号也推，标题「买家回信（未识别出采购意图）」）。
+
+    幂等：candidate_id 仍按 `_candidate_id(company_id, message_id)`，同一封回信只推一次；
+    重复调用时若既有 candidate 仍是 proposed（例如上次在 shadow 下没发出去）→ 只补投递，不新建。
+    发送仍走 `publish_candidate` → dc_notify（kind=signal_item, slot=realtime），不新开通道。
+    """
+    from . import dc_email_signals as sig  # noqa: F401 - 保持与信号层同一数据目录口径
+    mode = (mode or _automation_mode()).strip().lower()
+    if not message_id:
+        return {"mode": mode, "action": "skipped", "reason": "no message_id",
+                "candidates": [], "candidate": None, "count": 0, "pushed": []}
+    if is_silent_intent(intent):
+        record_silent_reply(message_id, company_id, intent)
+        return {"mode": mode, "action": "silent", "reason": "intent_blocked",
+                "intent": intent, "candidates": [], "candidate": None,
+                "count": 0, "pushed": []}
+    if mode == "off":
+        return {"mode": "off", "action": "skipped", "reason": "automation off",
+                "candidates": [], "candidate": None, "count": 0, "pushed": []}
+    # 防历史爆发：enabled_after 已配置时，早于它的回信不推（回放/兜底拉历史时不刷屏）。
+    # 与 evaluate_for_push 的差别：未配置 enabled_after 时**不拒**——本入口只处理刚到的
+    # 单封回信，不配这个开关就把所有回信吞掉，正是客户不接受的「静默消失」。
+    after = _enabled_after()
+    if after and (received_at or _now()) < after:
+        return {"mode": mode, "action": "rejected", "reason": "before_enabled_after",
+                "candidates": [], "candidate": None, "count": 0, "pushed": []}
+
+    sigs = resolve_signals(signals)
+    cand = _build_reply_candidate(message_id, text, company_id, sigs, intent, campaign_id,
+                                  lead_id=lead_id, contact_id=contact_id, thread_id=thread_id)
+    cid = cand["candidate_id"]
+    route_ok = _route_verified(company_id) if company_id else False
+    cand.update({
+        "automation_mode": mode,
+        "trigger": trigger,
+        "trigger_signal_ids": [s.get("signal_id") for s in sigs if s.get("signal_id")],
+        "evaluated_at": _now(),
+        "route_verified": route_ok,
+    })
+
+    existing = get_candidate(cid)
+    created = False
+    if existing is None:
+        created = record_candidate(cand)
+    else:
+        cand = existing
+    pushed: list[dict] = []
+    if mode == "live" and route_ok and str(cand.get("status") or "") == "proposed":
+        pushed = _deliver_live([cand])
+    if pushed:
+        action = "pushed"
+    elif created:
+        action = "proposed"
+    elif existing is not None:
+        action = "duplicate"
+    else:
+        action = "proposed"
+    return {"mode": mode, "action": action, "reason": "", "intent": intent,
+            "candidate": cand, "candidates": [cand], "count": 1, "pushed": pushed,
+            "created": created}
 
 
 def list_candidates(company_id: str = None, status: str = None) -> list[dict]:

@@ -46,13 +46,40 @@ class _Base(unittest.TestCase):
                "sent_at": _now_iso(when)}
         (d / f"{abs(hash(str(rec) + sub))}.md").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
-    def add_inbound(self, *, binding_status="matched", failure_reason="", when=0):
+    def add_inbound(self, *, binding_status="matched", failure_reason="", when=0,
+                    message_id=None, company_id=None, sender="buyer@x.com"):
         d = self.data / "email-facts" / "inbound" / "c1" / "2026-09"
         d.mkdir(parents=True, exist_ok=True)
         rec = {"record_type": "inbound", "binding_status": binding_status,
                "failure_reason": failure_reason, "received_at": _now_iso(when),
-               "sender": "buyer@x.com"}
-        (d / f"{abs(hash(str(rec)))}.md").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+               "sender": sender}
+        if message_id is not None:
+            rec["message_id"] = message_id
+        if company_id is not None:
+            rec["company_id"] = company_id
+        (d / f"{abs(hash(str(rec) + str(message_id)))}.md").write_text(json.dumps(rec) + "\n",
+                                                                      encoding="utf-8")
+
+    def add_signal_item(self, candidate_id, *, status="sent", when=0, source="sent",
+                        file_name="sent.md"):
+        """写一条 signal_item 通知（推送层投递结果的唯一事实源）。"""
+        rec = {"notification_id": "n_" + candidate_id[:10], "kind": "signal_item",
+               "status": status, "slot": "realtime",
+               "dedupe_key": f"signal-push:{candidate_id}",
+               "payload": {"candidate_id": candidate_id, "title": "买家想报价"},
+               "sent_at": _now_iso(when), "created_at": _now_iso(when)}
+        path = self.data / "notifications" / file_name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+
+    def add_silent_marker(self, message_id, *, when=0):
+        """写推送层的「按口径静默」留痕（自动回复/拒绝）。"""
+        d = self.data / "signal-push" / "history"
+        d.mkdir(parents=True, exist_ok=True)
+        rec = {"status": "silent_intent_blocked", "reason": "intent_blocked",
+               "source_message_id": message_id, "at": _now_iso(when)}
+        (d / "2026-09-16.md").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
     def add_notification(self, *, status="sent", error="", when=0):
         rec = {"notification_id": "n_1", "status": status, "last_error": error,
@@ -70,6 +97,14 @@ class HealthyChain(_Base):
         self.assertEqual(result["status"], sc.STATUS_OK)
         self.assertTrue(result["ok"])
         self.assertEqual(sc.EXIT_CODES[result["status"]], 0)
+
+    def test_fourth_link_present_and_ok_when_reply_was_notified(self):
+        """新增的漏推对账也要在健康态下报 ok（matched 回信都通知出去了）。"""
+        self.add_inbound(binding_status="matched", message_id="<r1@buyer>", company_id="c1")
+        self.add_signal_item(sc._candidate_id_for("c1", "<r1@buyer>"))
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["status"], sc.STATUS_OK)
+        self.assertEqual((link["matched_replies"], link["notified"], link["missing"]), (1, 1, 0))
 
 
 class DegradedChain(_Base):
@@ -156,6 +191,87 @@ def _render_contains_heal():
     return None
 
 
+class PushReconcile(_Base):
+    """漏推对账：匹配成功的回信 vs 实际通知数，落差 > 0 → degraded 且点名。"""
+
+    def test_gap_is_degraded_and_names_the_reply(self):
+        for i, mid in enumerate(("<r1@b>", "<r2@b>", "<r3@b>")):
+            self.add_inbound(binding_status="matched", message_id=mid, company_id="c1",
+                             sender=f"buyer{i}@x.com")
+        self.add_signal_item(sc._candidate_id_for("c1", "<r1@b>"))
+        self.add_signal_item(sc._candidate_id_for("c1", "<r2@b>"))
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["status"], sc.STATUS_DEGRADED)
+        self.assertEqual(link["expected_push"], 3)
+        self.assertEqual(link["notified"], 2)
+        self.assertEqual(link["missing"], 1)
+        self.assertEqual(link["missing_samples"][0]["message_id"], "<r3@b>")
+        self.assertEqual(link["missing_samples"][0]["sender"], "buyer2@x.com")
+        self.assertEqual(link["missing_samples"][0]["has_candidate"], False)
+
+    def test_reply_with_candidate_but_no_notification_is_flagged(self):
+        """candidate 生成了却没投递（最阴的漏推）也要能被识别。"""
+        self.add_inbound(binding_status="matched", message_id="<r9@b>", company_id="c1")
+        cid = sc._candidate_id_for("c1", "<r9@b>")
+        d = self.data / "signal-push" / "by-id"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "c.md").write_text(json.dumps({"candidate_id": cid, "status": "proposed",
+                                             "created_at": _now_iso()}) + "\n", encoding="utf-8")
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["missing"], 1)
+        self.assertEqual(link["missing_samples"][0]["has_candidate"], True)
+        self.assertEqual(link["candidates_seen"], 1)
+
+    def test_silent_by_policy_is_not_counted_as_missing(self):
+        """自动回复/拒绝按口径静默 —— 不能算漏推，否则自检永远喊狼。"""
+        self.add_inbound(binding_status="matched", message_id="<auto@b>", company_id="c1")
+        self.add_silent_marker("<auto@b>")
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["status"], sc.STATUS_OK)
+        self.assertEqual(link["silent_by_policy"], 1)
+        self.assertEqual(link["expected_push"], 0)
+
+    def test_unmatched_reply_is_not_part_of_reconcile(self):
+        self.add_inbound(binding_status="unmatched", failure_reason="no_matching_outbound",
+                         message_id="<u@b>", company_id="c1")
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["matched_replies"], 0)
+        self.assertEqual(link["status"], sc.STATUS_OK)
+
+    def test_failed_signal_item_counts_as_missing(self):
+        """投递失败 = 没通知到，必须计入落差（不能因为“试过了”就算通知）。"""
+        self.add_inbound(binding_status="matched", message_id="<f@b>", company_id="c1")
+        self.add_signal_item(sc._candidate_id_for("c1", "<f@b>"), status="failed",
+                             file_name="failed.md")
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["missing"], 1)
+        self.assertEqual(link["notify_failed"], 1)
+
+    def test_old_records_outside_window(self):
+        self.add_inbound(binding_status="matched", message_id="<old@b>", company_id="c1",
+                         when=-48)
+        link = sc.run_selfcheck(self.data, hours=24)["links"]["push_reconcile"]
+        self.assertEqual(link["matched_replies"], 0)
+
+    def test_candidate_id_formula_matches_push_layer(self):
+        """本地复算的 candidate_id 必须与推送层一模一样，否则对账会静默失灵。"""
+        sys.path.insert(0, str(_MIO))
+        from dc_email_controller.dc_signal_push import _candidate_id as real
+        self.assertEqual(sc._candidate_id_for("c1", "<x@b>"), real("c1", "<x@b>"))
+        self.assertEqual(sc._candidate_id_for("", ""), real("", ""))
+
+    def test_render_and_needs_human_surface_the_gap(self):
+        self.add_inbound(binding_status="matched", message_id="<g@b>", company_id="c1",
+                         sender="gap@x.com")
+        result = sc.run_selfcheck(self.data, hours=24)
+        text = sc.render(result)
+        self.assertIn("push_reconcile", text)
+        self.assertIn("匹配了但没通知", text)
+        self.assertIn("<g@b>", text)
+        self.assertTrue(any("漏推" in item for item in sc.needs_human(result)))
+        self.assertEqual(sc.EXIT_CODES[result["status"]], 1)
+
+
 class NeedsHumanClassification(_Base):
     def test_notify_failure_and_unmatched_reply_are_flagged_for_human(self):
         self.add_inbound(binding_status="unmatched", failure_reason="ambiguous")
@@ -218,7 +334,7 @@ class WindowingAndRobustness(_Base):
 
     def test_render_contains_link_names(self):
         text = sc.render(sc.run_selfcheck(self.data, hours=1))
-        for name in ("outbound_facts", "reply_match", "notify_delivery"):
+        for name in ("outbound_facts", "reply_match", "notify_delivery", "push_reconcile"):
             self.assertIn(name, text)
 
 

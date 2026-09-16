@@ -14,6 +14,9 @@
      未匹配的原因直方图（failure_reason）。未匹配占比过高 → 告警。
   3. 通知投递：窗口内 notifications/sent.md 的投递结果（status / last_error），
      失败逐条列出。投递失败必须可见，不得静默。
+  4. 漏推对账（2026-09-16 补）：窗口内 **归属成功(matched)的回信数** vs
+     **通知里 kind=signal_item 且已 sent 的条数**，落差 > 0 → degraded，
+     并把「匹配了但没通知」的 message_id / 发件人列出来（提示可能是漏推）。
 
 输出：人读摘要 + `--json` 结构化结果；退出码 0=全通 / 1=降级 / 2=断链（供 cron 告警）。
 
@@ -27,6 +30,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -43,6 +47,12 @@ EXIT_CODES = {STATUS_OK: 0, STATUS_DEGRADED: 1, STATUS_BROKEN: 2}
 UNMATCHED_DEGRADE_RATIO = 0.5      # 未匹配占比 ≥50% 视为降级
 OUTBOUND_NO_ACCOUNT_DEGRADE = 1    # 有出站事实但没有任何归属 → 降级
 DEFAULT_HOURS = 24
+
+# 漏推对账：推送层使用的通知 kind / 按口径静默标记（与 dc_signal_push 对齐）
+SIGNAL_ITEM_KIND = "signal_item"
+DEDUPE_PREFIX = "signal-push:"
+SILENT_STATUS = "silent_intent_blocked"
+MISSING_SAMPLE_LIMIT = 20
 
 
 def _default_data_dir() -> Path:
@@ -215,6 +225,148 @@ def check_notifications(data_dir: Path, since: datetime) -> dict:
     }
 
 
+def _candidate_id_for(company_id: str, message_id: str) -> str:
+    """与 ``dc_signal_push._candidate_id`` 同一公式（本地复算）。
+
+    为什么不 import：自检要在任何环境（含只有 Markdown 快照、模块路径不全）都能算对；
+    公式一经改动由 ``tests/test_email_selfcheck.py`` 的等式断言兜住（不会静默漂移）。
+    """
+    return hashlib.sha256("|".join(["candidate", company_id or "", message_id or ""])
+                          .encode("utf-8")).hexdigest()
+
+
+def _notification_candidate_id(rec: dict) -> str:
+    """从通知记录里取 candidate_id（payload.candidate_id 优先，兜底 dedupe_key）。"""
+    cid = str(((rec.get("payload") or {}).get("candidate_id")) or "").strip()
+    if cid:
+        return cid
+    key = str(rec.get("dedupe_key") or "")
+    return key[len(DEDUPE_PREFIX):] if key.startswith(DEDUPE_PREFIX) else ""
+
+
+def _push_history(data_dir: Path, since: datetime) -> list[dict]:
+    """读推送层 history（按「信」决策留痕）。"""
+    out: list[dict] = []
+    root = data_dir / "signal-push" / "history"
+    for path in sorted(root.glob("*.md")) if root.exists() else []:
+        for rec in _iter_json_lines(path):
+            when = _parse_ts(rec.get("at"))
+            if when is not None and when < since:
+                continue
+            out.append(rec)
+    return out
+
+
+def _push_candidates(data_dir: Path, since: datetime) -> dict[str, dict]:
+    """读 push candidate 快照：candidate_id → 记录（窗口内）。"""
+    out: dict[str, dict] = {}
+    root = data_dir / "signal-push" / "by-id"
+    for path in sorted(root.glob("*.md")) if root.exists() else []:
+        obj = _first_json(path)
+        if not obj:
+            continue
+        when = _parse_ts(obj.get("created_at"))
+        if when is not None and when < since:
+            continue
+        cid = str(obj.get("candidate_id") or "").strip()
+        if cid:
+            out.setdefault(cid, obj)
+    return out
+
+
+def check_push_reconcile(data_dir: Path, since: datetime) -> dict:
+    """漏推对账（2026-09-16 客户口径）：匹配成功的回信 vs 实际通知数。
+
+    推送口径已改成「以信为单位、不漏推」，但最后一层仍可能断：candidate 没生成、
+    生成了没 publish、publish 了没 dispatch。只靠客户回报 = 漏推永远后知后觉，
+    所以这里拿两个可核对的事实做差：
+
+      左：窗口内 ``email-facts/inbound`` 里 **binding_status=matched** 的回信；
+      右：``notifications/sent.md`` 里 **kind=signal_item 且 status=sent** 的记录，
+          按 candidate_id 归位（candidate_id 由 company_id + 回信 message_id 稳定推出）。
+
+    落差 > 0 → degraded，并把「匹配了但没通知」的 message_id / 发件人列出来（可能是漏推）。
+    intent ∈ {自动回复, 拒绝} 按口径本就静默，它们由推送层写 silent 留痕，这里剔除，
+    否则自检会永远喊狼。
+    """
+    inbound_root = data_dir / "email-facts" / "inbound"
+    matched = []
+    for fact in _md_facts(inbound_root, since):
+        if str(fact.get("binding_status") or "").strip() != "matched":
+            continue
+        mid = str(fact.get("message_id") or "").strip()
+        if not mid:
+            continue
+        matched.append({
+            "message_id": mid,
+            "sender": _address_of(fact.get("sender") or ""),
+            "company_id": str(fact.get("company_id") or "").strip(),
+            "received_at": str(fact.get("received_at") or fact.get("created_at") or ""),
+        })
+
+    silent_ids = {str(rec.get("source_message_id") or "").strip()
+                  for rec in _push_history(data_dir, since)
+                  if str(rec.get("status") or "") == SILENT_STATUS}
+    candidates = _push_candidates(data_dir, since)
+
+    notified: set[str] = set()
+    notify_failed = 0
+    for name, source in (("sent", "sent.md"), ("failed", "failed.md")):
+        for rec in _iter_json_lines(data_dir / "notifications" / source):
+            if str(rec.get("kind") or "") != SIGNAL_ITEM_KIND:
+                continue
+            when = _parse_ts(rec.get("sent_at") or rec.get("created_at") or rec.get("updated_at"))
+            if when is not None and when < since:
+                continue
+            cid = _notification_candidate_id(rec)
+            if not cid:
+                continue
+            if str(rec.get("status") or "") == "sent":
+                notified.add(cid)
+            elif name == "failed":
+                notify_failed += 1
+
+    expected = [r for r in matched if r["message_id"] not in silent_ids]
+    missing = []
+    without_candidate = 0
+    for row in expected:
+        cid = _candidate_id_for(row["company_id"], row["message_id"])
+        if cid in notified:
+            continue
+        has_candidate = cid in candidates
+        if not has_candidate:
+            without_candidate += 1
+        missing.append({**row, "candidate_id": cid, "has_candidate": has_candidate})
+
+    status = STATUS_DEGRADED if missing else STATUS_OK
+    problems: list[str] = []
+    if missing:
+        problems.append(
+            f"漏推对账：窗口内匹配成功回信 {len(expected)} 封，已通知 {len(expected) - len(missing)} 封，"
+            f"差 {len(missing)} 封（其中未生成 candidate {without_candidate} 封）—— 疑似漏推")
+    elif not matched:
+        problems.append("窗口内没有匹配成功的回信（无可对账样本）")
+    if notify_failed:
+        problems.append(f"另有 {notify_failed} 条 signal_item 通知投递失败（见 notify_delivery）")
+    return {
+        "status": status,
+        "matched_replies": len(matched),
+        "silent_by_policy": len([r for r in matched if r["message_id"] in silent_ids]),
+        "expected_push": len(expected),
+        "notified": len(expected) - len(missing),
+        "missing": len(missing),
+        "missing_without_candidate": without_candidate,
+        "notify_failed": notify_failed,
+        "candidates_seen": len(candidates),
+        "missing_samples": [
+            {"message_id": m["message_id"], "sender": m["sender"],
+             "company_id": m["company_id"], "has_candidate": m["has_candidate"]}
+            for m in missing[:MISSING_SAMPLE_LIMIT]
+        ],
+        "problems": problems,
+    }
+
+
 ADDRESS_RE = __import__("re").compile(r"<([^>]+)>")
 FIX_LOG_NAME = "_selfcheck-fixes.jsonl"
 
@@ -315,6 +467,11 @@ def needs_human(result: dict) -> list[str]:
     notify = result["links"]["notify_delivery"]
     if notify["failed"]:
         out.append(f"通知投递失败 {notify['failed']} 条：需人看通道/账号（例：{notify['failed_samples'][0]['error'][:60] if notify['failed_samples'] else ''}）")
+    reconcile = (result["links"].get("push_reconcile") or {})
+    if reconcile.get("missing"):
+        sample = (reconcile.get("missing_samples") or [{}])[0]
+        out.append(f"疑似漏推 {reconcile['missing']} 封回信（例：{sample.get('message_id', '')} / "
+                   f"{sample.get('sender', '')}）：需人到收信与通知两侧核因，不自动补发")
     reply = result["links"]["reply_match"]
     if reply["unmatched"]:
         out.append(f"回信未匹配 {reply['unmatched']} 条：先由自愈重跑兜底收敛；仍配不上需人工判断")
@@ -422,6 +579,7 @@ def run_selfcheck(data_dir: Path, hours: int = DEFAULT_HOURS) -> dict:
         "outbound_facts": check_outbound(data_dir, since),
         "reply_match": check_reply_match(data_dir, since),
         "notify_delivery": check_notifications(data_dir, since),
+        "push_reconcile": check_push_reconcile(data_dir, since),
     }
     order = {STATUS_BROKEN: 2, STATUS_DEGRADED: 1, STATUS_OK: 0}
     worst = STATUS_OK
@@ -447,13 +605,17 @@ def render(result: dict) -> str:
     for name, link in result["links"].items():
         lines.append(f"\n{icon[link['status']]} {name}")
         for key, value in link.items():
-            if key in ("status", "problems", "failed_samples", "unmatched_reasons"):
+            if key in ("status", "problems", "failed_samples", "unmatched_reasons",
+                       "missing_samples"):
                 continue
             lines.append(f"   {key}: {value}")
         if link.get("unmatched_reasons"):
             lines.append(f"   unmatched_reasons: {link['unmatched_reasons']}")
         for sample in link.get("failed_samples") or []:
             lines.append(f"   ✗ {sample['title'] or sample['notification_id']} :: {sample['error'][:120]}")
+        for sample in link.get("missing_samples") or []:
+            lines.append(f"   ✗ 匹配了但没通知：{sample['message_id']} / {sample['sender']}"
+                         f"（{'已有候选未投递' if sample['has_candidate'] else '未生成候选'}）")
         for problem in link.get("problems") or []:
             lines.append(f"   ⚠ {problem}")
     return "\n".join(lines)

@@ -221,10 +221,10 @@ class ImapSynchronizer:
         self.secret_resolver = secret_resolver
 
     def _record_reply_fact(self, account, bound, buyer_email, reply_text, inbound_message_id):
-        """把已绑定的入站回复写入七信号（统一信号入口）。"""
+        """把已绑定的入站回复写入七信号（统一信号入口）+ 按「信」推送决策。"""
         try:
             from dc_email_controller.dc_email_signals import analyze_reply, process_reply
-            from dc_email_controller.dc_signal_push import evaluate_for_push
+            from dc_email_controller.dc_signal_push import evaluate_reply_for_push
             from enterprise_ids import canonical_company_id
             _company = canonical_company_id(bound.get("company_id", "") or account.get("enterprise_id", ""))
             _buyer = (buyer_email.split("@")[-1].lower() if "@" in buyer_email else buyer_email)
@@ -236,7 +236,15 @@ class ImapSynchronizer:
                 lead_id=bound.get("lead_id", ""), contact_id=bound.get("contact_id", ""),
                 iq_intent=_a["intent"], requested_materials=_a["requested_materials"],
                 missing_fields=_a["missing_fields"], confidence=_a["confidence"])
-            evaluate_for_push([s["signal_id"] for s in _res.get("signals", [])])
+            # 2026-09-16 口径：零信号回信也要推（旧调用 evaluate_for_push 只认信号）。
+            evaluate_reply_for_push(
+                inbound_message_id, intent=_a.get("intent", ""), text=reply_text or "",
+                company_id=_company, signals=_res.get("signals", []),
+                campaign_id=bound.get("campaign_id", ""),
+                lead_id=bound.get("lead_id", ""),
+                contact_id=bound.get("contact_id", ""),
+                thread_id=bound.get("thread_id") or bound.get("local_message_id", ""),
+                trigger="imap_sync")
         except Exception as e:
             print(f"[imap_sync] signal failed: {e}")
 

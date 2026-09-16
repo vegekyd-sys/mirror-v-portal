@@ -434,6 +434,127 @@ def write_plan(path: Path, plan: dict, existing_plan: dict | None = None) -> dic
     return plan
 
 
+# ── 回信采购意图（2026-09-16 客户口径）──────────────────────
+# 早晚报必须**推理**并列出两类回信，两类都不允许省：「有明确采购意图」/「已回信但未识别出
+# 采购意图」。谁也不能只列一类——只列前者等于把“分类器没命中的真买家”静默丢掉。
+PURCHASE_INTENT_SIGNALS = ("quote_request", "sample_request", "meeting_interest", "missing_info")
+SIGNAL_LABELS = {
+    "quote_request": "询价/报价请求",
+    "sample_request": "样品请求",
+    "meeting_interest": "见面/到展意向",
+    "missing_info": "索要资料（我方缺字段）",
+}
+REPLY_SECTION_TITLE = "【回信采购意图】"
+REPLY_LIST_LIMIT = 20
+
+
+def _one_line(text: Any, limit: int = 160) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()[:limit]
+
+
+def _signal_reason(signals: list[dict]) -> str:
+    """判断理由：引用命中的信号与关键词（不编词、只用证据字段）。"""
+    parts: list[str] = []
+    for s in signals:
+        if not isinstance(s, dict):
+            continue
+        label = SIGNAL_LABELS.get(str(s.get("signal_type") or ""), str(s.get("signal_type") or ""))
+        ev = s.get("evidence") if isinstance(s.get("evidence"), dict) else {}
+        terms = [str(t) for t in (ev.get("matched_terms") or []) if str(t).strip()]
+        missing = [str(t) for t in (ev.get("missing_fields") or []) if str(t).strip()]
+        if terms:
+            label = f"{label}（关键词：{'、'.join(terms[:5])}）"
+        elif missing:
+            label = f"{label}（缺字段：{'、'.join(missing[:5])}）"
+        parts.append(label)
+    return "；".join(parts)
+
+
+def classify_reply_purchase_intent(replies: list[dict], *,
+                                   limit: int = REPLY_LIST_LIMIT) -> dict:
+    """纯函数：按「信」判定采购意图，产出两类清单（两类都不许省）。
+
+    replies 元素（字段可缺，缺按缺处理）：message_id / sender / sender_name /
+    company_name / subject / excerpt（或 text）/ received_at / signals=[{signal_type, evidence}]。
+    返回 ``{with_intent, without_intent, counts, limit}``；只做判定与整理，不发消息、不写数据。
+    """
+    with_intent: list[dict] = []
+    without_intent: list[dict] = []
+    for r in replies or []:
+        if not isinstance(r, dict):
+            continue
+        signals = [s for s in (r.get("signals") or []) if isinstance(s, dict)]
+        hit = [s for s in signals
+               if str(s.get("signal_type") or "") in PURCHASE_INTENT_SIGNALS]
+        row = {
+            "message_id": str(r.get("message_id") or ""),
+            "sender": str(r.get("sender") or ""),
+            "sender_name": str(r.get("sender_name") or ""),
+            "company_name": str(r.get("company_name") or ""),
+            "subject": _one_line(r.get("subject"), 80),
+            "excerpt": _one_line(r.get("excerpt") if r.get("excerpt") else r.get("text")),
+            "received_at": str(r.get("received_at") or ""),
+        }
+        if hit:
+            row["signals"] = sorted({str(s.get("signal_type")) for s in hit})
+            row["reason"] = _signal_reason(hit)
+            with_intent.append(row)
+        else:
+            row["signals"] = sorted({str(s.get("signal_type")) for s in signals})
+            row["reason"] = (f"只命中了非采购类信号：{_signal_reason(signals)}"
+                              if signals else "未命中任何采购信号")
+            without_intent.append(row)
+    key = lambda x: x.get("received_at") or ""
+    with_intent.sort(key=key, reverse=True)
+    without_intent.sort(key=key, reverse=True)
+    return {
+        "with_intent": with_intent,
+        "without_intent": without_intent,
+        "counts": {"with_intent": len(with_intent), "without_intent": len(without_intent),
+                   "total": len(with_intent) + len(without_intent)},
+        "limit": limit,
+    }
+
+
+def _reply_row_line(row: dict, *, manual: bool = False) -> str:
+    who = row.get("company_name") or row.get("sender_name") or row.get("sender") or "未知买家"
+    if row.get("sender") and row.get("sender") not in who:
+        who = f"{who}（{row['sender']}）"
+    bits = [who]
+    if row.get("excerpt"):
+        bits.append(f"原文：{row['excerpt']}")
+    bits.append(f"依据：{row.get('reason') or ''}")
+    if manual:
+        bits.append("需人工判断是否回复")
+    return " · ".join(bits)
+
+
+def render_reply_intent_section(classified: dict, *, title: str = REPLY_SECTION_TITLE) -> str:
+    """渲染回信采购意图段：两类标题与计数**无条件出现**（空就写「无」）。"""
+    c = classified or {}
+    wi = list(c.get("with_intent") or [])
+    wo = list(c.get("without_intent") or [])
+    try:
+        limit = int(c.get("limit") or REPLY_LIST_LIMIT)
+    except (TypeError, ValueError):
+        limit = REPLY_LIST_LIMIT
+    lines = [title, f"■ 有明确采购意图（{len(wi)} 封）"]
+    if wi:
+        lines += [f"  · {_reply_row_line(row)}" for row in wi[:limit]]
+        if len(wi) > limit:
+            lines.append(f"  · （另有 {len(wi) - limit} 封未展开）")
+    else:
+        lines.append("  · 无")
+    lines.append(f"■ 已回信但未识别出采购意图（{len(wo)} 封）")
+    if wo:
+        lines += [f"  · {_reply_row_line(row, manual=True)}" for row in wo[:limit]]
+        if len(wo) > limit:
+            lines.append(f"  · （另有 {len(wo) - limit} 封未展开）")
+    else:
+        lines.append("  · 无")
+    return "\n".join(lines)
+
+
 # ── Provider 异常包装 ─────────────────────────────────
 def safe_collect(provider: Provider, context: BriefContext) -> ProviderResult:
     """包装 Provider.collect：抛错 → errors，不崩。"""

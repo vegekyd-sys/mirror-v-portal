@@ -535,10 +535,12 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
     except Exception:
         pass
 
-    # 生成七信号 + 自动触发 Push 决策（shadow/live）；best-effort
+    # 生成七信号 + 按「信」生成 Push 决策（shadow/live）；best-effort
+    # 2026-09-16 口径：分类器**没吐信号也要推**，所以入口从 evaluate_for_push（按信号）
+    # 换成 evaluate_reply_for_push（按信）；后者在有采购意图信号时沿用同一机会候选形态。
     try:
         from .dc_email_signals import analyze_reply, process_reply
-        from .dc_signal_push import evaluate_for_push
+        from .dc_signal_push import evaluate_reply_for_push
         from enterprise_ids import canonical_company_id
         _company = canonical_company_id(outbound.get("company_id", "") or account.get("enterprise_id", ""))
         _a = analyze_reply(text, buyer_domain=from_email.split("@")[-1].lower() if "@" in from_email else from_email,
@@ -550,7 +552,14 @@ def handle_inbound_event(data: dict, fetch=None) -> dict:
             lead_id=outbound.get("lead_id", ""), contact_id=outbound.get("contact_id", ""),
             iq_intent=_a["intent"], requested_materials=_a["requested_materials"],
             missing_fields=_a["missing_fields"], confidence=_a["confidence"])
-        _ev = evaluate_for_push([s["signal_id"] for s in _res.get("signals", [])])
+        _ev = evaluate_reply_for_push(
+            message_id or email_id, intent=_a.get("intent", ""), text=text, company_id=_company,
+            signals=_res.get("signals", []),
+            campaign_id=outbound.get("campaign_id", ""),
+            lead_id=outbound.get("lead_id", ""),
+            contact_id=outbound.get("contact_id", ""),
+            thread_id=outbound.get("thread_id") or outbound.get("local_message_id", ""),
+            trigger="inbound_webhook")
         # P0-E4：机会 candidate 生成后自动生成回复草稿（幂等，不发送）
         try:
             from .dc_reply_draft import generate_draft, record_draft
