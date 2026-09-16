@@ -121,7 +121,16 @@ export function registerLlmProxy(app: Express, config: GatewayConfig, hooks: Llm
     async (req: Request, res: Response) => {
       const provider = String(req.params.provider || '');
       const subPath = String(req.params[0] || '');
-      const upstreamBase = config.llmUpstreams[provider];
+      // V2 mode: resolve provider via the V2 route map (runtimeKey or alias).
+      // V1/shadow: use the V1 upstream map (providerName → baseUrl).
+      const mode = config.runtimeContractMode ?? 'v1';
+      let upstreamBase: string | undefined;
+      if (mode === 'v2' && config.llmRouteMapV2) {
+        const route = config.llmRouteMapV2.get(provider);
+        upstreamBase = route?.upstreamBaseUrl;
+      } else {
+        upstreamBase = config.llmUpstreams[provider];
+      }
       const started = Date.now();
       const requestId = randomUUID();
 
