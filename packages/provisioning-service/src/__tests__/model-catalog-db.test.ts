@@ -2,7 +2,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { migrate } from '../db/migrate.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
-import { CatalogRepository, stableProviderInstanceId } from '../services/model-catalog.js';
+import {
+  CatalogRepository,
+  snapshotFingerprint,
+  stableProviderInstanceId,
+} from '../services/model-catalog.js';
+import {
+  CatalogReleaseIdempotencyConflictError,
+  CatalogReleaseService,
+} from '../services/catalog-release-service.js';
+import { getGlobalLlmProviders } from '../services/llm-providers.js';
 import { ModelParamDiscoveryService } from '../services/model-param-discovery.js';
 import { upsertRuntimeConfig } from '../services/runtime-config.js';
 
@@ -81,6 +90,49 @@ describe.skipIf(!process.env.DATABASE_URL)('model catalog PostgreSQL integration
       writer.release();
       backfill.release();
       await pool.query('DELETE FROM llm_provider_instances WHERE id=$1', [providerId]);
+    }
+  });
+
+  it('replays concurrent publish idempotently and keeps both connections usable', async () => {
+    const snapshot = await getGlobalLlmProviders(pool);
+    expect(snapshot).not.toBeNull();
+    const fingerprint = snapshotFingerprint(snapshot!);
+    const idempotencyKey = `catalog-release-race-${Date.now()}`;
+    await pool.query("UPDATE llm_catalog_release_pointer SET release_id=NULL WHERE id='current'");
+    await pool.query('DELETE FROM llm_catalog_releases WHERE idempotency_key=$1', [idempotencyKey]);
+
+    const firstPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    const secondPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    try {
+      const publish = (database: pg.Pool, requestedFingerprint: string) =>
+        new CatalogReleaseService(database).atomicPublish({
+          expectedParentFingerprint: null,
+          snapshot: snapshot!,
+          fingerprint: requestedFingerprint,
+          diffSummary: {},
+          warnings: [],
+          actor: 'integration-test',
+          actorType: 'service',
+          idempotencyKey,
+          rollout: { mode: 'no-rollout' },
+        });
+      const [first, replay] = await Promise.all([
+        publish(firstPool, fingerprint),
+        publish(secondPool, fingerprint),
+      ]);
+      expect(first?.release.id).toBe(replay?.release.id);
+      expect(await firstPool.query('SELECT 1 AS healthy')).toMatchObject({ rows: [{ healthy: 1 }] });
+      expect(await secondPool.query('SELECT 1 AS healthy')).toMatchObject({ rows: [{ healthy: 1 }] });
+
+      await expect(publish(secondPool, `${fingerprint}-different`))
+        .rejects.toBeInstanceOf(CatalogReleaseIdempotencyConflictError);
+      expect(await secondPool.query('SELECT 1 AS healthy')).toMatchObject({ rows: [{ healthy: 1 }] });
+    } finally {
+      await firstPool.end();
+      await secondPool.end();
+      await pool.query("UPDATE llm_catalog_release_pointer SET release_id=NULL WHERE id='current'");
+      await pool.query('DELETE FROM audit_logs WHERE resource_id IN (SELECT id::text FROM llm_catalog_releases WHERE idempotency_key=$1)', [idempotencyKey]);
+      await pool.query('DELETE FROM llm_catalog_releases WHERE idempotency_key=$1', [idempotencyKey]);
     }
   });
 

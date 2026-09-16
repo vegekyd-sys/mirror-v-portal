@@ -298,6 +298,22 @@ export class CatalogReleaseService {
         }
       }
 
+      // Re-check idempotency after acquiring the mutation lock. A concurrent
+      // request may have committed while this transaction waited for the
+      // runtime-config row. Replay must win over parent CAS in that case.
+      if (idempotencyKey) {
+        const existing = await this.findReleaseByIdempotencyKey(
+          idempotencyKey,
+          client,
+        );
+        if (existing) {
+          this.assertIdempotencySemantics(existing, requestFingerprint);
+          await client.query('ROLLBACK');
+          const taskId = await this.findTaskIdForRelease(existing.id);
+          return { release: this.recordToView(existing), taskId };
+        }
+      }
+
       // Step 4: CAS — compare expectedParentFingerprint with current release's fingerprint.
       const pointerResult = await client.query(
         `SELECT release_id FROM llm_catalog_release_pointer WHERE id = 'current' FOR UPDATE`,
@@ -410,13 +426,18 @@ export class CatalogReleaseService {
         compactionModel: null, fallbackModels: [],
       };
       const oldFingerprint = snapshotFingerprint(previousForFingerprint);
+      let newBackupId: string | null = null;
       if (lockedConfigId && lockedEncryptedValue) {
-        await client.query(
+        const backupResult = await client.query(
           `INSERT INTO llm_catalog_snapshot_backups
              (id, runtime_config_id, encrypted_value, source_fingerprint, actor)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+           VALUES (gen_random_uuid(), $1, $2, $3, $4)
+           RETURNING id`,
           [lockedConfigId, lockedEncryptedValue, oldFingerprint, actor],
         );
+        newBackupId = backupResult.rows[0]?.id
+          ? String(backupResult.rows[0].id)
+          : null;
       }
 
       // Step 9: Upsert runtime_config with the new snapshot.
@@ -460,6 +481,7 @@ export class CatalogReleaseService {
         oldValue: { parentReleaseId: currentReleaseId, parentFingerprint },
         newValue: {
           releaseId,
+          newBackupId,
           fingerprint: effectiveFingerprint,
           rollout: normalizedRollout,
           requestFingerprint,
@@ -664,13 +686,18 @@ export class CatalogReleaseService {
         compactionModel: null, fallbackModels: [],
       };
       const oldFingerprint = snapshotFingerprint(previousForFingerprint);
+      let newBackupId: string | null = null;
       if (lockedConfigId && lockedEncryptedValue) {
-        await client.query(
+        const newBackupResult = await client.query(
           `INSERT INTO llm_catalog_snapshot_backups
              (id, runtime_config_id, encrypted_value, source_fingerprint, actor)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+           VALUES (gen_random_uuid(), $1, $2, $3, $4)
+           RETURNING id`,
           [lockedConfigId, lockedEncryptedValue, oldFingerprint, actor],
         );
+        newBackupId = newBackupResult.rows[0]?.id
+          ? String(newBackupResult.rows[0].id)
+          : null;
       }
 
       // Upsert runtime_config with the restored snapshot.
@@ -712,7 +739,8 @@ export class CatalogReleaseService {
         oldValue: { parentReleaseId: currentReleaseId, parentFingerprint },
         newValue: {
           releaseId,
-          backupId,
+          sourceBackupId: backupId,
+          newBackupId,
           fingerprint,
           rollout: normalizedRollout,
           requestFingerprint,
@@ -809,8 +837,11 @@ export class CatalogReleaseService {
   }
 
   /** Find a release by its idempotency key. */
-  private async findReleaseByIdempotencyKey(key: string): Promise<CatalogReleaseRecord | null> {
-    const { rows } = await this.pool.query(
+  private async findReleaseByIdempotencyKey(
+    key: string,
+    database: Pick<pg.Pool, 'query'> = this.pool,
+  ): Promise<CatalogReleaseRecord | null> {
+    const { rows } = await database.query(
       `SELECT * FROM llm_catalog_releases WHERE idempotency_key = $1`,
       [key],
     );

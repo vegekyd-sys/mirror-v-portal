@@ -180,6 +180,9 @@ describe('CatalogReleaseService — atomicPublish', () => {
       if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
         return { rows: [{ release_id: null }], rowCount: 1 };
       }
+      if (sql.includes('INSERT INTO llm_catalog_snapshot_backups')) {
+        return { rows: [{ id: 'publish-backup-id' }], rowCount: 1 };
+      }
       return { rows: [], rowCount: 0 };
     };
     const service = new CatalogReleaseService(makeFakePool(client) as any);
@@ -201,6 +204,7 @@ describe('CatalogReleaseService — atomicPublish', () => {
     expect(auditInsert).toBeTruthy();
     expect(auditInsert!.params![2]).toBe('model-catalog.snapshot.publish');
     const auditedValue = JSON.parse(String(auditInsert!.params![9])) as Record<string, unknown>;
+    expect(auditedValue.newBackupId).toBe('publish-backup-id');
     expect(auditedValue).not.toHaveProperty('idempotencyKey');
     expect(auditedValue.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(auditedValue)).not.toContain('publish-no-rollout');
@@ -371,6 +375,62 @@ describe('CatalogReleaseService — atomicPublish', () => {
     expect(result!.taskId).toBe('existing-task-id');
   });
 
+  it('replays a concurrent publish after locking before evaluating parent CAS', async () => {
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      expectedParentFingerprint: null,
+      fingerprint: 'new-fp',
+      operation: 'publish',
+      rollout: { mode: 'no-rollout' },
+    })).digest('hex');
+    const existingRow = {
+      id: 'concurrent-release', version: 1, parent_id: null,
+      canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+      fingerprint: 'new-fp', parent_fingerprint: null,
+      diff_summary: { releaseRequestFingerprint: requestFingerprint }, warnings: [],
+      actor: 'admin', actor_type: 'admin', status: 'active',
+      idempotency_key: 'concurrent-key', created_at: new Date(),
+    };
+    const client = makeFakeClient();
+    client.query = async (sql: string, params?: unknown[]) => {
+      client.queries.push({ sql, params });
+      if (sql.includes('FOR UPDATE') && sql.includes('runtime_configs')) {
+        return { rows: [{ id: 'rc-1', encrypted_value: `enc:${JSON.stringify(goodLibrary)}` }], rowCount: 1 };
+      }
+      if (sql.includes('idempotency_key = $1')) {
+        return { rows: [existingRow], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    let poolLookupCount = 0;
+    const pool = {
+      connect: async () => client,
+      query: async (sql: string) => {
+        if (sql.includes('idempotency_key = $1')) {
+          poolLookupCount += 1;
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes('FROM llm_push_tasks WHERE release_id')) {
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+
+    const result = await new CatalogReleaseService(pool as any).atomicPublish({
+      expectedParentFingerprint: null,
+      snapshot: goodLibrary,
+      fingerprint: 'new-fp',
+      diffSummary: {}, warnings: [], actor: 'admin', actorType: 'admin',
+      idempotencyKey: 'concurrent-key', rollout: { mode: 'no-rollout' },
+    });
+
+    expect(poolLookupCount).toBe(1);
+    expect(result?.release.id).toBe('concurrent-release');
+    expect(client.queries.map((query) => query.sql)).toContain('ROLLBACK');
+    expect(client.queries.some((query) =>
+      query.sql.includes('llm_catalog_release_pointer') && query.sql.includes('FOR UPDATE'))).toBe(false);
+  });
+
   it('rejects an idempotency key reused with different request semantics', async () => {
     const pool = {
       connect: async () => { throw new Error('should not connect'); },
@@ -474,6 +534,9 @@ describe('CatalogReleaseService — atomicRestore', () => {
       if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
         return { rows: [{ release_id: null }], rowCount: 1 };
       }
+      if (sql.includes('INSERT INTO llm_catalog_snapshot_backups')) {
+        return { rows: [{ id: 'pre-restore-backup-id' }], rowCount: 1 };
+      }
       return { rows: [], rowCount: 0 };
     };
     const pool = {
@@ -492,7 +555,9 @@ describe('CatalogReleaseService — atomicRestore', () => {
     expect(auditInsert).toBeTruthy();
     expect(auditInsert!.params![2]).toBe('model-catalog.snapshot.restore');
     const auditedValue = JSON.parse(String(auditInsert!.params![9])) as Record<string, unknown>;
-    expect(auditedValue.backupId).toBe('backup-1');
+    expect(auditedValue.sourceBackupId).toBe('backup-1');
+    expect(auditedValue.newBackupId).toBe('pre-restore-backup-id');
+    expect(auditedValue).not.toHaveProperty('backupId');
     expect(auditedValue).not.toHaveProperty('idempotencyKey');
     expect(auditedValue.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(auditedValue)).not.toContain('restore-no-rollout');
