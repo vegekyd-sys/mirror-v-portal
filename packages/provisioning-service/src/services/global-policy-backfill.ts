@@ -129,7 +129,7 @@ export class GlobalPolicyBackfillService {
   }
 
   /** Resolve every configured Legacy reference without performing writes. */
-  public async preview(force = false): Promise<GlobalPolicyBackfillPreview> {
+  public async preview(): Promise<GlobalPolicyBackfillPreview> {
     const [legacy, catalog, currentPolicy] = await Promise.all([
       this.loadLegacy(this.pool),
       this.repository.listCatalogReferenceCandidates(),
@@ -191,7 +191,7 @@ export class GlobalPolicyBackfillService {
     // Never call a partially resolved policy equivalent: unresolved refs are represented
     // as null/filtered values and could otherwise accidentally equal an empty policy.
     const equivalent = referencesReady && currentPolicy !== null && policiesEqual(currentPolicy, resolvedIds);
-    const overwriteBlocked = currentPolicy !== null && !isEmptyPolicy(currentPolicy) && !equivalent && !force;
+    const overwriteBlocked = currentPolicy !== null && !isEmptyPolicy(currentPolicy) && !equivalent;
     const expectedRevision = currentPolicy?.revision ?? null;
     const fingerprint = planFingerprint({
       sourceRefs,
@@ -225,13 +225,12 @@ export class GlobalPolicyBackfillService {
   /** Apply the resolved policy with CAS, or return a deterministic no-op. */
   public async apply(options: {
     dryRun?: boolean;
-    force?: boolean;
     actor?: string | null;
     planFingerprint?: string;
     expectedRevision?: number;
   } = {}): Promise<GlobalPolicyBackfillResult> {
     const dryRun = options.dryRun !== false;
-    const preview = await this.preview(options.force === true);
+    const preview = await this.preview();
     if (dryRun) return { ...preview, action: 'dry-run', policy: preview.currentPolicy };
     if (typeof options.planFingerprint !== 'string' || options.planFingerprint !== preview.planFingerprint ||
         !Number.isSafeInteger(options.expectedRevision) || options.expectedRevision !== preview.expectedRevision) {
@@ -240,8 +239,10 @@ export class GlobalPolicyBackfillService {
         'Backfill plan changed; run dry-run again and apply its fingerprint and revision',
       );
     }
-    // Readiness must precede equivalence because unresolved refs collapse to null.
-    if (!preview.ready && !preview.overwriteBlocked) {
+    // Reference validity must precede overwrite/equivalence because unresolved refs collapse to null.
+    const referencesInvalid = !preview.legacyAvailable || preview.missingRefs.length > 0 ||
+      preview.ambiguousRefs.length > 0 || preview.disabledRefs.length > 0 || preview.invalidRefs.length > 0;
+    if (referencesInvalid) {
       throw new GlobalPolicyBackfillError(
         'BACKFILL_NOT_READY',
         'Legacy model references must each resolve uniquely to a runtime-enabled Catalog model',

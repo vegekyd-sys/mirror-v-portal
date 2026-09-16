@@ -61,6 +61,8 @@ export interface ProvisioningConfig {
   modelCatalogSnapshotWrite?: boolean;
   /** Enable writes to discovered/override model parameter layers only. */
   modelCatalogParamWrite?: boolean;
+  /** Enable the one-time Legacy global policy stable-ID backfill apply. */
+  modelCatalogGlobalPolicyBackfillWrite?: boolean;
   /** LLM push worker 轮询间隔（毫秒） */
   llmPushWorkerIntervalMs: number;
   /** LLM push 任务租约 TTL（秒）——覆盖单租户最坏 ~40s 重启 */
@@ -141,6 +143,8 @@ export function loadConfig(): ProvisioningConfig {
     modelCatalogRead: process.env.MODEL_CATALOG_READ === 'true',
     modelCatalogSnapshotWrite: process.env.MODEL_CATALOG_SNAPSHOT_WRITE === 'true',
     modelCatalogParamWrite: process.env.MODEL_CATALOG_PARAM_WRITE === 'true',
+    modelCatalogGlobalPolicyBackfillWrite:
+      process.env.MODEL_CATALOG_GLOBAL_POLICY_BACKFILL_WRITE === 'true',
     llmPushWorkerIntervalMs: Number(process.env.LLM_PUSH_WORKER_INTERVAL_MS ?? 500),
     llmPushLeaseSeconds: Number(process.env.LLM_PUSH_LEASE_SECONDS ?? 600),
     rolloutBatchWorkerIntervalMs: Number(process.env.ROLLOUT_BATCH_WORKER_INTERVAL_MS ?? 500),

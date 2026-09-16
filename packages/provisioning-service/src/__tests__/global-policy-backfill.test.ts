@@ -129,7 +129,7 @@ describe('GlobalPolicyBackfillService', () => {
     }]);
   });
 
-  it('blocks overwrite unless forced', async () => {
+  it('blocks overwrite of a nonempty policy', async () => {
     const current = { ...emptyCurrent, defaultModel: 'lpm_other', revision: 4 };
     const { service, update } = setup({ current });
     const preview = await service.preview();
@@ -195,23 +195,22 @@ describe('GlobalPolicyBackfillService', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('rejects missing Legacy data even with force instead of clearing a policy', async () => {
+  it('rejects missing Legacy data instead of clearing a policy', async () => {
     const current = {
       ...emptyCurrent,
       defaultModel: 'lpm_chat',
       revision: 9,
     };
     const { service, update } = setup({ current, legacy: null });
-    const preview = await service.preview(true);
+    const preview = await service.preview();
     expect(preview).toMatchObject({
       legacyAvailable: false,
       ready: false,
       equivalent: false,
-      overwriteBlocked: false,
+      overwriteBlocked: true,
     });
     await expect(service.apply({
       dryRun: false,
-      force: true,
       planFingerprint: preview.planFingerprint,
       expectedRevision: preview.expectedRevision ?? undefined,
     })).rejects.toMatchObject({

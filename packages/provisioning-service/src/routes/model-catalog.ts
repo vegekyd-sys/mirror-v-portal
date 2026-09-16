@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
-import { actorFromRequest, writeAuditLog } from '../services/audit.js';
+import { actorFromRequest, writeAuditLog, writeAuditLogStrict } from '../services/audit.js';
 import { decryptValue, maskValue } from '../services/crypto.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
 import {
@@ -675,48 +675,65 @@ export function createModelCatalogRoutes(
   // ── Global Model Policy (read = modelCatalogRead, write = modelCatalogSnapshotWrite) ──
 
   router.post('/v1/admin/model-catalog/global-policy/backfill', async (req, res) => {
-    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
     if (req.body !== undefined && (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body))) {
       return validationError(res, 'request body must be an object');
     }
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const allowedFields = new Set(['dryRun', 'force', 'planFingerprint', 'expectedRevision']);
+    const allowedFields = new Set(['dryRun', 'planFingerprint', 'expectedRevision']);
     if (Object.keys(body).some((key) => !allowedFields.has(key)) ||
         (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') ||
-        (body.force !== undefined && typeof body.force !== 'boolean') ||
         (body.planFingerprint !== undefined && typeof body.planFingerprint !== 'string') ||
         (body.expectedRevision !== undefined &&
           (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0))) {
       return validationError(res, 'invalid backfill request fields');
     }
     const dryRun = body.dryRun === undefined ? true : body.dryRun as boolean;
-    const force = body.force === true;
+    if (dryRun && config.modelCatalogRead !== true) return disabled(res);
+    if (!dryRun && config.modelCatalogGlobalPolicyBackfillWrite !== true) return paramWriteDisabled(res);
     if (!dryRun && (typeof body.planFingerprint !== 'string' || !Number.isSafeInteger(body.expectedRevision))) {
       return validationError(res, 'planFingerprint and expectedRevision are required for apply');
     }
     try {
       const { actor, actorType } = actorFromRequest(req);
-      const result = await policyBackfill.apply({
-        dryRun,
-        force,
-        actor,
-        ...(typeof body.planFingerprint === 'string' ? { planFingerprint: body.planFingerprint } : {}),
-        ...(typeof body.expectedRevision === 'number' ? { expectedRevision: body.expectedRevision } : {}),
-      });
-      if (!dryRun && result.action === 'applied') {
-        await writeAuditLog(pool, {
-          actor,
-          actorType,
-          action: 'model-catalog.global-policy.backfill',
-          method: 'POST',
-          path: req.path,
-          resourceType: 'llm_global_model_policy',
-          resourceId: 'current',
-          oldValue: result.currentPolicy,
-          newValue: result.policy,
-        });
+      if (dryRun) {
+        res.json(await policyBackfill.apply({ dryRun: true, actor }));
+        return;
       }
-      res.json(result);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const transactionRepository = new CatalogRepository(client as unknown as pg.Pool);
+        const transactionService = new GlobalPolicyBackfillService(
+          client as unknown as pg.Pool,
+          transactionRepository,
+        );
+        const result = await transactionService.apply({
+          dryRun: false,
+          actor,
+          planFingerprint: body.planFingerprint as string,
+          expectedRevision: body.expectedRevision as number,
+        });
+        if (result.action === 'applied') {
+          await writeAuditLogStrict(client as unknown as pg.Pool, {
+            actor,
+            actorType,
+            action: 'model-catalog.global-policy.backfill',
+            method: 'POST',
+            path: req.path,
+            resourceType: 'llm_global_model_policy',
+            resourceId: 'current',
+            oldValue: result.currentPolicy,
+            newValue: result.policy,
+          });
+        }
+        await client.query('COMMIT');
+        res.json(result);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     } catch (error) {
       if (error instanceof GlobalPolicyBackfillError) {
         const status = error.code === 'POLICY_ALREADY_CONFIGURED' ? 409 : 422;
