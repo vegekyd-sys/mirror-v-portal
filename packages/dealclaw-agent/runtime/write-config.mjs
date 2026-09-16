@@ -21,17 +21,318 @@ function fail(msg) {
 // gateway — the OpenClaw config references them by env id (never inline).
 const llmEnvPath = path.join(stateDir, 'llm-env.sh');
 fs.mkdirSync(stateDir, { recursive: true });
-let llmDoc = null;
+// ── V1 LLM_PROVIDERS parsing ─────────────────────────────────────────
+// LLM_PROVIDERS is the V1 contract: a JSON doc { providers: [{name,
+// baseUrl, apiKey, models: [{id, reasoning?}]}], defaultModel:
+// '<name>/<modelId>' }. Provider API keys are materialised as shell
+// exports in <stateDir>/llm-env.sh, which entrypoint.sh sources before
+// starting the gateway — the OpenClaw config references them by env id
+// (never inline).
+let v1LlmDoc = null;
 const llmRaw = (process.env.LLM_PROVIDERS || '').trim();
 if (llmRaw) {
   try {
-    llmDoc = JSON.parse(llmRaw);
+    v1LlmDoc = JSON.parse(llmRaw);
   } catch {
     fail('LLM_PROVIDERS is not valid JSON — refusing to start with a broken model config');
   }
-  if (!llmDoc || !Array.isArray(llmDoc.providers)) {
+  if (!v1LlmDoc || !Array.isArray(v1LlmDoc.providers)) {
     fail('LLM_PROVIDERS must contain a "providers" array');
   }
+}
+
+// ── Runtime Contract V2 (shadow dual-read) ────────────────────────────
+// LLM_RUNTIME_CONTRACT_MODE: 'v1' (default) | 'shadow' | 'v2'
+//
+// - v1:     Read LLM_PROVIDERS only. Legacy behaviour, completely unchanged.
+// - shadow: Read LLM_PROVIDERS for actual use. Additionally parse
+//           LLM_RUNTIME_CONFIG_V2 (a RuntimeEnvelopeV2 JSON), normalise
+//           it to the same llmDoc shape, and compare. Log mismatches but
+//           never block — the V1 payload remains the source of truth.
+// - v2:     Read LLM_RUNTIME_CONFIG_V2 as the sole source. Validate the
+//           envelope strictly and fail closed on any error — no silent
+//           fallback to V1.
+//
+// After mode resolution, `llmDoc` holds the active document (from V1 or
+// V2) and the rest of write-config consumes it identically regardless
+// of origin. This reuses the single OpenClaw renderer path — V2 is
+// normalised INTO the V1 llmDoc IR, not rendered independently.
+
+/**
+ * Lightweight V2 envelope validator (plain JS, no provisioning-service dep).
+ * Collects all structural issues rather than failing on the first — mirrors
+ * the provisioning-service validateEnvelope() approach so that shadow-mode
+ * logs and v2-mode fail-closed messages are actionable.
+ * @param {unknown} raw
+ * @returns {Array<{path: string[], message: string}>}
+ */
+function validateV2Envelope(raw) {
+  const issues = [];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return [{ path: ['$'], message: 'expected object' }];
+  }
+  if (raw.schema !== 'agent') {
+    issues.push({ path: ['schema'], message: `expected "agent", got ${JSON.stringify(raw.schema)}` });
+  }
+  if (raw.schemaVersion !== 2) {
+    issues.push({ path: ['schemaVersion'], message: `expected 2, got ${JSON.stringify(raw.schemaVersion)}` });
+  }
+  if (typeof raw.payload !== 'object' || raw.payload === null || Array.isArray(raw.payload)) {
+    issues.push({ path: ['payload'], message: 'expected object' });
+    return issues;
+  }
+  const p = raw.payload;
+  if (typeof p.directMode !== 'boolean') {
+    issues.push({ path: ['payload', 'directMode'], message: 'expected boolean' });
+  }
+  if (!Array.isArray(p.providers)) {
+    issues.push({ path: ['payload', 'providers'], message: 'expected array' });
+    return issues;
+  }
+  for (let i = 0; i < p.providers.length; i++) {
+    const prov = p.providers[i];
+    const ppath = ['payload', 'providers', i];
+    if (typeof prov !== 'object' || prov === null || Array.isArray(prov)) {
+      issues.push({ path: ppath, message: 'expected object' });
+      continue;
+    }
+    if (typeof prov.providerId !== 'string' || !prov.providerId) {
+      issues.push({ path: [...ppath, 'providerId'], message: 'expected non-empty string' });
+    }
+    if (typeof prov.baseUrl !== 'string' || !/^https?:\/\//.test(prov.baseUrl)) {
+      issues.push({ path: [...ppath, 'baseUrl'], message: 'expected http(s) URL string' });
+    }
+    if (typeof prov.apiKey !== 'string' || !prov.apiKey) {
+      issues.push({ path: [...ppath, 'apiKey'], message: 'expected non-empty string' });
+    }
+    if (!Array.isArray(prov.models) || prov.models.length === 0) {
+      issues.push({ path: [...ppath, 'models'], message: 'expected non-empty array' });
+      continue;
+    }
+    for (let j = 0; j < prov.models.length; j++) {
+      const m = prov.models[j];
+      const mpath = [...ppath, 'models', j];
+      if (typeof m !== 'object' || m === null || Array.isArray(m)) {
+        issues.push({ path: mpath, message: 'expected object' });
+        continue;
+      }
+      if (typeof m.modelId !== 'string' || !m.modelId) {
+        issues.push({ path: [...mpath, 'modelId'], message: 'expected non-empty string' });
+      }
+      if (typeof m.upstreamModel !== 'string' || !m.upstreamModel) {
+        issues.push({ path: [...mpath, 'upstreamModel'], message: 'expected non-empty string' });
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * Normalise a validated V2 agent envelope into the V1 llmDoc shape so that
+ * downstream OpenClaw config generation can consume it identically.
+ *
+ * V2 providerId   → V1 provider.name
+ * V2 upstreamModel → V1 model.id
+ * V2 ref {providerId, modelId} → V1 "providerName/upstreamModel" string
+ *   (resolved by looking up the model in the provider's models array)
+ *
+ * @param {ReturnType<typeof validateV2Envelope> extends never ? never : {payload: any}} envelope
+ * @returns {{providers: any[], defaultModel?: string, imageModel?: string, compactionModel?: string, fallbackModels?: string[]}}
+ */
+function normalizeV2ToLlmDoc(envelope) {
+  const payload = envelope.payload;
+
+  const providers = payload.providers.map((p) => {
+    const models = p.models.map((m) => {
+      const model = { id: m.upstreamModel };
+      if (m.modelType) model.modelType = m.modelType;
+      if (m.protocol) model.protocol = m.protocol;
+      if (typeof m.contextWindow === 'number' && m.contextWindow > 0) {
+        model.contextWindow = m.contextWindow;
+      }
+      if (typeof m.maxOutputTokens === 'number' && m.maxOutputTokens > 0) {
+        model.maxOutputTokens = m.maxOutputTokens;
+      }
+      if (Array.isArray(m.inputModalities) && m.inputModalities.length > 0) {
+        model.inputModalities = m.inputModalities;
+      }
+      if (m.reasoning === true) model.reasoning = true;
+      if (m.vision === true) model.vision = true;
+      if (typeof m.displayName === 'string' && m.displayName) {
+        model.displayName = m.displayName;
+      }
+      if (m.compat && typeof m.compat === 'object' && !Array.isArray(m.compat) && Object.keys(m.compat).length > 0) {
+        model.compat = m.compat;
+      }
+      return model;
+    });
+    return {
+      name: p.providerId,
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+      models,
+    };
+  });
+
+  // Helper: convert a V2 ref {providerId, modelId} to a V1
+  // "providerName/upstreamModel" string by looking up the model in the
+  // V2 provider's models array (robust against composite vs. lpi_ IDs).
+  function refToV1(ref) {
+    if (!ref || typeof ref !== 'object') return null;
+    if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') return null;
+    const provider = payload.providers.find((p) => p.providerId === ref.providerId);
+    if (!provider) return null;
+    const model = provider.models.find((m) => m.modelId === ref.modelId);
+    if (!model) return null;
+    return `${ref.providerId}/${model.upstreamModel}`;
+  }
+
+  const doc = { providers };
+  if (payload.primary) {
+    const ref = refToV1(payload.primary);
+    if (ref) doc.defaultModel = ref;
+  }
+  if (payload.image) {
+    const ref = refToV1(payload.image);
+    if (ref) doc.imageModel = ref;
+  }
+  if (payload.compaction) {
+    const ref = refToV1(payload.compaction);
+    if (ref) doc.compactionModel = ref;
+  }
+  if (Array.isArray(payload.fallbacks) && payload.fallbacks.length > 0) {
+    const refs = payload.fallbacks.map(refToV1).filter((r) => r !== null);
+    if (refs.length > 0) doc.fallbackModels = refs;
+  }
+  return doc;
+}
+
+/**
+ * Compare a V1 llmDoc with a V2-normalised llmDoc for structural drift.
+ * Returns an array of human-readable mismatch descriptions (empty = match).
+ * Only compares fields that have a V2 equivalent; extra V1-only fields
+ * (e.g. maxReasoningTokens) are not flagged.
+ * @param {any} v1Doc
+ * @param {any} v2Doc
+ * @returns {string[]}
+ */
+function compareLlmDocs(v1Doc, v2Doc) {
+  const mismatches = [];
+  const v1 = v1Doc || { providers: [] };
+  const v2 = v2Doc || { providers: [] };
+
+  // Provider set
+  const v1Names = (v1.providers || []).map((p) => p.name).sort();
+  const v2Names = (v2.providers || []).map((p) => p.name).sort();
+  if (JSON.stringify(v1Names) !== JSON.stringify(v2Names)) {
+    mismatches.push(`provider set: v1=[${v1Names.join(',')}] v2=[${v2Names.join(',')}]`);
+  }
+
+  // Per-provider baseUrl + model list
+  for (const v2Prov of v2.providers || []) {
+    const v1Prov = (v1.providers || []).find((p) => p.name === v2Prov.name);
+    if (!v1Prov) continue; // already flagged in provider set
+    if (v1Prov.baseUrl !== v2Prov.baseUrl) {
+      mismatches.push(`provider ${v2Prov.name} baseUrl: v1=${v1Prov.baseUrl} v2=${v2Prov.baseUrl}`);
+    }
+    const v1ModelIds = (v1Prov.models || []).map((m) => m.id).sort();
+    const v2ModelIds = (v2Prov.models || []).map((m) => m.id).sort();
+    if (JSON.stringify(v1ModelIds) !== JSON.stringify(v2ModelIds)) {
+      mismatches.push(`provider ${v2Prov.name} models: v1=[${v1ModelIds.join(',')}] v2=[${v2ModelIds.join(',')}]`);
+    }
+  }
+
+  // Refs
+  const v1Default = v1.defaultModel || null;
+  const v2Default = v2.defaultModel || null;
+  if (v1Default !== v2Default) {
+    mismatches.push(`defaultModel: v1=${v1Default} v2=${v2Default}`);
+  }
+  const v1Image = v1.imageModel || null;
+  const v2Image = v2.imageModel || null;
+  if (v1Image !== v2Image) {
+    mismatches.push(`imageModel: v1=${v1Image} v2=${v2Image}`);
+  }
+  const v1Comp = v1.compactionModel || null;
+  const v2Comp = v2.compactionModel || null;
+  if (v1Comp !== v2Comp) {
+    mismatches.push(`compactionModel: v1=${v1Comp} v2=${v2Comp}`);
+  }
+  const v1Fb = v1.fallbackModels || [];
+  const v2Fb = v2.fallbackModels || [];
+  if (JSON.stringify(v1Fb) !== JSON.stringify(v2Fb)) {
+    mismatches.push(`fallbackModels: v1=[${v1Fb.join(',')}] v2=[${v2Fb.join(',')}]`);
+  }
+  return mismatches;
+}
+
+// ── Mode resolution ───────────────────────────────────────────────────
+const runtimeContractMode = process.env.LLM_RUNTIME_CONTRACT_MODE || 'v1';
+let llmDoc = null;
+
+if (runtimeContractMode === 'v2') {
+  // V2 is the sole source — fail closed on any error, no silent fallback.
+  const v2Raw = (process.env.LLM_RUNTIME_CONFIG_V2 || '').trim();
+  if (!v2Raw || v2Raw === '{}') {
+    // Empty V2 → no providers (same as empty V1 LLM_PROVIDERS)
+    llmDoc = null;
+  } else {
+    let v2Envelope;
+    try {
+      v2Envelope = JSON.parse(v2Raw);
+    } catch {
+      fail('LLM_RUNTIME_CONFIG_V2 is not valid JSON — refusing to start (mode=v2, fail-closed)');
+    }
+    const issues = validateV2Envelope(v2Envelope);
+    if (issues.length > 0) {
+      const formatted = issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
+      fail(`LLM_RUNTIME_CONFIG_V2 validation failed (mode=v2, fail-closed):\n${formatted}`);
+    }
+    llmDoc = normalizeV2ToLlmDoc(v2Envelope);
+    if (!llmDoc || !Array.isArray(llmDoc.providers)) {
+      fail('LLM_RUNTIME_CONFIG_V2 normalised to invalid llmDoc (mode=v2, fail-closed)');
+    }
+    console.log(
+      `[dealclaw-runtime] V2 contract active: ${llmDoc.providers.length} provider(s)` +
+      (v2Envelope.releaseId ? ` from release ${v2Envelope.releaseId}` : ''),
+    );
+  }
+} else if (runtimeContractMode === 'shadow') {
+  // V1 is the actual source of truth; V2 is parsed for comparison only.
+  llmDoc = v1LlmDoc;
+
+  const v2Raw = (process.env.LLM_RUNTIME_CONFIG_V2 || '').trim();
+  if (!v2Raw || v2Raw === '{}') {
+    console.warn('[dealclaw-runtime] shadow: LLM_RUNTIME_CONFIG_V2 is empty — no V2 comparison (V1 remains active)');
+  } else {
+    let v2Envelope;
+    try {
+      v2Envelope = JSON.parse(v2Raw);
+    } catch {
+      console.warn('[dealclaw-runtime] shadow: LLM_RUNTIME_CONFIG_V2 is not valid JSON — V2 comparison skipped (V1 remains active)');
+    }
+    if (v2Envelope) {
+      const issues = validateV2Envelope(v2Envelope);
+      if (issues.length > 0) {
+        const formatted = issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
+        console.warn(`[dealclaw-runtime] shadow: V2 envelope has ${issues.length} validation issue(s):\n${formatted}`);
+      } else {
+        const v2LlmDoc = normalizeV2ToLlmDoc(v2Envelope);
+        const mismatches = compareLlmDocs(v1LlmDoc, v2LlmDoc);
+        if (mismatches.length > 0) {
+          console.warn(`[dealclaw-runtime] shadow: V1/V2 drift detected (${mismatches.length} mismatch(es)):`);
+          for (const m of mismatches) {
+            console.warn(`[dealclaw-runtime] shadow mismatch: ${m}`);
+          }
+        } else {
+          console.log('[dealclaw-runtime] shadow: V1 and V2 payloads match — no drift detected');
+        }
+      }
+    }
+  }
+} else {
+  // v1 (default): V1 only, completely unchanged behaviour.
+  llmDoc = v1LlmDoc;
 }
 
 function defaultModelSpec(id, reasoning, vision) {
