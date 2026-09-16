@@ -163,15 +163,8 @@ model WabaPhone {
   wabaId      String
   phoneNumber String
   /** 拥有该手机号的租户（= partnerCustomerId）。手机号在全局唯一 → 一个号只能归一家。
-   *
-   *  **刻意不给 @default**：有默认值 Prisma 就会把它变成 create 时的可选字段，
-   *  于是「每一行都必须有主」从编译期保证退化成运行时约定。保持必填，
-   *  写入点漏传 supplierId 直接编译不过。列上的 DEFAULT 已由
-   *  20260915234500_waba_phone_owner_required 去掉。
-   *
-   *  空串 = 无主，只可能是 20260915230000 回填的存量行；
-   *  claimWabaPhonesForTenant / adminWabaImport 会认领它们。 */
-  supplierId  String
+   *  默认空串 = 无主（仅迁移遗留行会是这个状态），下一次绑定/PARTNER_ADDED 会认领它。 */
+  supplierId  String   @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
