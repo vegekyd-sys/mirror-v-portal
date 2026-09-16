@@ -1,0 +1,13 @@
+# Nexus edge
+
+Vercel fronts the Nexus gateway so the onboarding page has a public HTTPS
+address without a registered domain. Everything is rewritten to the control
+plane host; nothing is served from Vercel itself.
+
+The control plane cannot run on Vercel: runtime-manager holds a Feishu long
+connection and an idle-collector timer, neither of which survives a
+serverless invocation. It runs under systemd on the vlab host instead, with
+runtime-manager bound to 127.0.0.1 and only central-gateway exposed.
+
+Replace the destination host when the control plane moves, and drop this
+project entirely once a registered domain terminates TLS directly.
