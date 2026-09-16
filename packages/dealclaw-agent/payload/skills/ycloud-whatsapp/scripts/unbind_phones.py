@@ -5,9 +5,6 @@
 （那是不可逆的 Meta 侧操作）。归属隔离由桥接强制执行：只能解绑自己的号，
 别人的号一律被 reject 且不会产生任何改动。
 
-**幂等**：本来就没绑的号（含重复解绑）进 alreadyUnbound，算成功 —— 终态和首次解绑一致。
-只有 rejected（别家的号）才是失败。
-
 Usage:
     python3 unbind_phones.py --phones +8615895553765
     python3 unbind_phones.py --phones +8615895553765,+8615895553766
@@ -97,23 +94,16 @@ def main() -> int:
 
     if 200 <= status < 300:
         unbound = parsed.get("unbound") if isinstance(parsed.get("unbound"), list) else []
-        already = (
-            parsed.get("alreadyUnbound")
-            if isinstance(parsed.get("alreadyUnbound"), list)
-            else []
-        )
         rejected = parsed.get("rejected") if isinstance(parsed.get("rejected"), list) else []
         safe = {
             "ok": parsed.get("ok") is True and not rejected,
             "partnerCustomerId": parsed.get("partnerCustomerId"),
             "unbound": unbound,
-            # 本来就没绑（含重复解绑）—— 和 unbound 一样都是「已解绑」，不是失败
-            "alreadyUnbound": already,
             "rejected": rejected,
             "disconnected": parsed.get("disconnected", 0),
         }
         print(json.dumps(safe, ensure_ascii=False))
-        # 只有别家的号（rejected）才算失败；重复解绑照常成功退出。
+        # 有被拒的号 → 非零退出（调用方必须如实报告，不得谎报成功）
         return 0 if not rejected else 1
     code = parsed.get("code") if isinstance(parsed.get("code"), str) else "WHATSAPP_SKILL_UNBIND_FAILED"
     return fail(code, status)
