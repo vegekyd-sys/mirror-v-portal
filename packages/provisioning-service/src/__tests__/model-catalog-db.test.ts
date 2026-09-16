@@ -53,6 +53,37 @@ afterAll(async () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)('model catalog PostgreSQL integration', () => {
+  it('sees a writer commit that completes while the backfill table lock waits', async () => {
+    const providerId = stableProviderInstanceId('backfill-lock-test');
+    await pool.query(
+      `INSERT INTO llm_provider_instances
+         (id,legacy_provider_name,template_key,protocol,base_url,encrypted_api_key,source,enabled,metadata,revision)
+       VALUES ($1,'backfill-lock-test','custom-openai','openai-completions','https://example.invalid','','manual',TRUE,'{}',0)
+       ON CONFLICT (id) DO UPDATE SET enabled=TRUE`,
+      [providerId],
+    );
+    const writer = await pool.connect();
+    const backfill = await pool.connect();
+    try {
+      await writer.query('BEGIN');
+      await writer.query('UPDATE llm_provider_instances SET enabled=FALSE WHERE id=$1', [providerId]);
+
+      await backfill.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await backfill.query(`SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill-test'))`);
+      const lockPromise = backfill.query('LOCK TABLE llm_provider_instances IN SHARE MODE');
+      await writer.query('COMMIT');
+      await lockPromise;
+
+      const observed = await backfill.query('SELECT enabled FROM llm_provider_instances WHERE id=$1', [providerId]);
+      expect(observed.rows[0].enabled).toBe(false);
+      await backfill.query('ROLLBACK');
+    } finally {
+      writer.release();
+      backfill.release();
+      await pool.query('DELETE FROM llm_provider_instances WHERE id=$1', [providerId]);
+    }
+  });
+
   it('imports the legacy catalog repeatedly without duplicate rows or pushing runtime config', async () => {
     const first = await importLegacyCatalog(pool, { dryRun: false, actor: 'integration-test' });
     const second = await importLegacyCatalog(pool, { dryRun: false, actor: 'integration-test' });

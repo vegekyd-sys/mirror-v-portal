@@ -710,10 +710,10 @@ export function createModelCatalogRoutes(
       }
       const client = await pool.connect();
       try {
-        await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-        // Block every writer that follows PostgreSQL advisory locking while the
-        // plan is re-read, applied, and audited. The table locks additionally
-        // protect against existing writers that do not yet take the advisory lock.
+        // READ COMMITTED intentionally takes a fresh snapshot for every statement.
+        // Therefore, if a table lock waits for an existing writer, all plan reads
+        // below observe that writer's committed state instead of a pre-lock snapshot.
+        await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
         await client.query(`SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`);
         await client.query('LOCK TABLE runtime_configs IN SHARE MODE');
         await client.query('LOCK TABLE llm_provider_instances IN SHARE MODE');

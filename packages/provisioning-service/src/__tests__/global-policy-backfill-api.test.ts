@@ -118,7 +118,7 @@ describe('global policy backfill API', () => {
     expect(response.body.policy.revision).toBe(4);
     expect(auditValues).toHaveLength(1);
     expect(transactionCommands).toEqual([
-      'BEGIN ISOLATION LEVEL SERIALIZABLE',
+      'BEGIN ISOLATION LEVEL READ COMMITTED',
       `SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`,
       'LOCK TABLE runtime_configs IN SHARE MODE',
       'LOCK TABLE llm_provider_instances IN SHARE MODE',
@@ -181,7 +181,7 @@ describe('global policy backfill API', () => {
     });
     expect(response.status).toBe(500);
     expect(commands).toEqual([
-      'BEGIN ISOLATION LEVEL SERIALIZABLE',
+      'BEGIN ISOLATION LEVEL READ COMMITTED',
       `SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`,
       'LOCK TABLE runtime_configs IN SHARE MODE',
       'LOCK TABLE llm_provider_instances IN SHARE MODE',
