@@ -67,6 +67,28 @@ FC 自定义镜像模板要求同账号、同地域并绑定 VPC 的 ACR **企�
 
 凭据仅保存在 gitignored 的本地私有配置，不进入文档、镜像或前端。
 
+### 端到端真实对话已通过（2026-09-16）
+
+本地 manager 接 `ap-southeast-1`，`alibaba.enabled=true` 且 `templateId` 为空（base 引导模式），用 `alibaba-trial` 租户走完整链路：
+
+| 阶段 | 实测 | 说明 |
+|---|---|---|
+| 首次唤醒 | 96.453 s | 含完整引导（procps、node、openclaw、payload） |
+| 模型响应 | 971 ms | deepseek-flash，HTTP 200 |
+| 生成完成 | 3.837 s | |
+| 每轮状态备份 | 12.768 s | 明显偏慢，是后续优化的首要目标 |
+| 空闲释放 | 约 60 s 后进入 `sleeping` | 由 Nexus collector 主动 `pause`，计算资源释放 |
+| 二次唤醒 | 16.872 s | 跳过引导；其中 resume 约 1.3 s，其余是 OpenClaw 进程重启 |
+| 跨休眠记忆 | 通过 | 实例彻底休眠后重新唤醒，准确复述休眠前的回答 |
+
+第一轮回复为 payload 中的 DealClaw 人格（“出海精灵小元”），说明 payload 正确播种、OpenClaw 正常运行、模型链路通畅。第二轮复述验证了会话状态经备份/恢复后保持连续。
+
+`keepMemory:false` 决定了休眠保留文件系统而不保留进程，因此二次唤醒必然包含一次 OpenClaw 冷启。16.9 s 中真正的 resume 只占 1.3 s，其余是进程启动，这是压缩唤醒延迟的着力点。
+
+### 尚未验证
+
+过程流式与首字延迟、定时唤醒（cron/heartbeat）、飞书端真实试用、多 Agent 并发下的配额表现，以及连续多轮休眠后的稳定性，均未在阿里侧测过。OpenClaw 已发布 v2026.9.4，本文所有数据基于钉住的 v2026.7.1。
+
 ## 隔离与运行合同
 
 - `elastic_tenants.runtime_provider` 固定每个 Agent 的供应商，旧记录默认 `vercel`。路由覆盖 ensure、execute、stop，因此消息、Cron、heartbeat 使用同一条供应商路由。
@@ -102,7 +124,7 @@ docker build --platform linux/amd64 --provenance=false --sbom=false -t nexus-dea
 2. ~~完成完整镜像的私有发布及 FC 模板构建~~ — 改为 base 模板唤醒时引导，已实测通过；ACR EE 路线保留为可选优化。
 3. ~~`scripts/verify-alibaba-lifecycle.ts`~~ — 2026-09-16 全项通过。
 4. ~~把 base 引导流程接入 `AlibabaProvider`，并使引导具备幂等性~~ — 2026-09-16 实测通过，含休眠恢复后的幂等验证。
-5. 使用 AlibabaProvider 完成真实 OpenClaw 聊天、过程流式、每轮备份、闲置后恢复记忆以及定时唤醒测试。
+5. 真实 OpenClaw 聊天、每轮备份、闲置后恢复记忆 — 2026-09-16 通过（见上）。过程流式与定时唤醒仍待测。
 6. 验收通过后设 `alibaba.enabled=true`，在没有活动执行时滚动更新本地 manager。浏览器试用列表将新增 `DealClaw 阿里云试用`，现有租户仍为 Vercel。
 
 创建新飞书租户的 `POST /v1/tenants` 增加可选 `runtimeProvider:"alibaba"`，未启用返回 503。原扫码不传该字段，继续默认 Vercel；本次尚未提供阿里专用二维码入口，不将其误称为已经完成飞书端试用。
