@@ -14,6 +14,7 @@ import {
   type ProviderInstanceRecord,
 } from '../services/model-catalog.js';
 import {
+  CatalogReleaseIdempotencyConflictError,
   CatalogReleaseService,
   type ReleaseRolloutPolicy,
 } from '../services/catalog-release-service.js';
@@ -340,6 +341,14 @@ export function createModelCatalogRoutes(
         streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
       });
     } catch (error) {
+      if (error instanceof CatalogReleaseIdempotencyConflictError) {
+        conflictError(res, error.code, error.message);
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('INVALID_ROLLOUT_TARGETS:')) {
+        validationError(res, error.message);
+        return;
+      }
       console.error('model catalog snapshot restore failed:', error);
       internalError(res);
     }
@@ -421,6 +430,14 @@ export function createModelCatalogRoutes(
         streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
       });
     } catch (error) {
+      if (error instanceof CatalogReleaseIdempotencyConflictError) {
+        conflictError(res, error.code, error.message);
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('INVALID_ROLLOUT_TARGETS:')) {
+        validationError(res, error.message);
+        return;
+      }
       const tooLarge = error instanceof Error && error.message.includes('too long');
       console.error('model catalog snapshot publish failed:', error);
       internalError(res, tooLarge ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', tooLarge ? 422 : 500);

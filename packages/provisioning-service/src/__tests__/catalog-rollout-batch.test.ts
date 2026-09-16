@@ -129,6 +129,19 @@ function makeRolloutPool(opts: {
     }]),
     // Global LLM providers (prev library) — return empty
     rowsResponder('FROM runtime_configs', []),
+    // Explicit-scope eligibility query.
+    {
+      match: (sql) => sql.includes('SELECT tenant_id, status, k8s_namespace, agent_endpoint'),
+      respond: (params) => ({
+        rows: ((params?.[0] as string[] | undefined) ?? []).map((tenantId) => ({
+          tenant_id: tenantId,
+          status: 'active',
+          k8s_namespace: `ns-${tenantId}`,
+          agent_endpoint: null,
+        })),
+        rowCount: ((params?.[0] as string[] | undefined) ?? []).length,
+      }),
+    },
     // Full-scope tenant query
     rowsResponder(
       'SELECT tenant_id FROM tenants',

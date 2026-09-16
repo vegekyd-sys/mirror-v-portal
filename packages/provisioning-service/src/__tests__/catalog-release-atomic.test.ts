@@ -21,7 +21,11 @@ const k8sMocks = vi.hoisted(() => ({
 }));
 vi.mock('../services/k8s-client.js', () => k8sMocks);
 
-import { CatalogReleaseService } from '../services/catalog-release-service.js';
+import {
+  CatalogReleaseIdempotencyConflictError,
+  CatalogReleaseService,
+} from '../services/catalog-release-service.js';
+import { createHash } from 'node:crypto';
 
 interface FakeQuery {
   sql: string;
@@ -193,7 +197,39 @@ describe('CatalogReleaseService — atomicPublish', () => {
     expect(result?.taskId).toBeNull();
     expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_catalog_releases'))).toBe(true);
     expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_push_tasks'))).toBe(false);
+    const auditInsert = client.queries.find((query) => query.sql.includes('INSERT INTO audit_logs'));
+    expect(auditInsert).toBeTruthy();
+    expect(auditInsert!.params![2]).toBe('model-catalog.snapshot.publish');
+    const auditedValue = JSON.parse(String(auditInsert!.params![9])) as Record<string, unknown>;
+    expect(auditedValue).not.toHaveProperty('idempotencyKey');
+    expect(auditedValue.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(auditedValue)).not.toContain('publish-no-rollout');
+    expect(auditedValue).not.toHaveProperty('snapshot');
     expect(client.queries.map((query) => query.sql)).toContain('COMMIT');
+  });
+
+  it('rolls back the release mutation when strict audit fails', async () => {
+    const client = makeFakeClient();
+    client.query = async (sql: string, params?: unknown[]) => {
+      client.queries.push({ sql, params });
+      if (sql.includes('FOR UPDATE') && sql.includes('runtime_configs')) {
+        return { rows: [{ id: 'rc-1', encrypted_value: `enc:${JSON.stringify(goodLibrary)}` }], rowCount: 1 };
+      }
+      if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ release_id: null }], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO audit_logs')) throw new Error('audit unavailable');
+      return { rows: [], rowCount: 0 };
+    };
+    await expect(new CatalogReleaseService(makeFakePool(client) as any).atomicPublish({
+      expectedParentFingerprint: null,
+      snapshot: goodLibrary,
+      fingerprint: 'new-fp',
+      diffSummary: {}, warnings: [], actor: 'admin', actorType: 'admin',
+      idempotencyKey: 'audit-failure', rollout: { mode: 'no-rollout' },
+    })).rejects.toThrow('audit unavailable');
+    expect(client.queries.map((query) => query.sql)).toContain('ROLLBACK');
+    expect(client.queries.map((query) => query.sql)).not.toContain('COMMIT');
   });
 
   it('returns null on CAS failure (expectedParentFingerprint does not match)', async () => {
@@ -292,7 +328,14 @@ describe('CatalogReleaseService — atomicPublish', () => {
               compat_payload: 'enc:compat',
               fingerprint: 'existing-fp',
               parent_fingerprint: 'parent-fp',
-              diff_summary: {},
+              diff_summary: {
+                releaseRequestFingerprint: createHash('sha256').update(JSON.stringify({
+                  expectedParentFingerprint: 'parent-fp',
+                  fingerprint: 'new-fp',
+                  operation: 'publish',
+                  rollout: { mode: 'rollout', scopeType: 'full' },
+                })).digest('hex'),
+              },
               warnings: [],
               actor: 'admin',
               actor_type: 'admin',
@@ -326,6 +369,36 @@ describe('CatalogReleaseService — atomicPublish', () => {
     expect(result).not.toBeNull();
     expect(result!.release.id).toBe('existing-release');
     expect(result!.taskId).toBe('existing-task-id');
+  });
+
+  it('rejects an idempotency key reused with different request semantics', async () => {
+    const pool = {
+      connect: async () => { throw new Error('should not connect'); },
+      query: async (sql: string) => sql.includes('idempotency_key = $1')
+        ? {
+            rows: [{
+              id: 'existing-release', version: 1, parent_id: null,
+              canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+              fingerprint: 'old-fp', parent_fingerprint: null,
+              diff_summary: { releaseRequestFingerprint: 'different' }, warnings: [],
+              actor: 'admin', actor_type: 'admin', status: 'active',
+              idempotency_key: 'idem-conflict', created_at: new Date(),
+            }],
+            rowCount: 1,
+          }
+        : { rows: [], rowCount: 0 },
+    };
+    await expect(new CatalogReleaseService(pool as any).atomicPublish({
+      expectedParentFingerprint: null,
+      snapshot: goodLibrary,
+      fingerprint: 'new-fp',
+      diffSummary: {},
+      warnings: [],
+      actor: 'admin',
+      actorType: 'admin',
+      idempotencyKey: 'idem-conflict',
+      rollout: { mode: 'no-rollout' },
+    })).rejects.toBeInstanceOf(CatalogReleaseIdempotencyConflictError);
   });
 });
 
@@ -415,7 +488,111 @@ describe('CatalogReleaseService — atomicRestore', () => {
     });
     expect(result?.taskId).toBeNull();
     expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_push_tasks'))).toBe(false);
+    const auditInsert = client.queries.find((query) => query.sql.includes('INSERT INTO audit_logs'));
+    expect(auditInsert).toBeTruthy();
+    expect(auditInsert!.params![2]).toBe('model-catalog.snapshot.restore');
+    const auditedValue = JSON.parse(String(auditInsert!.params![9])) as Record<string, unknown>;
+    expect(auditedValue.backupId).toBe('backup-1');
+    expect(auditedValue).not.toHaveProperty('idempotencyKey');
+    expect(auditedValue.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(auditedValue)).not.toContain('restore-no-rollout');
+    expect(auditedValue).not.toHaveProperty('snapshot');
     expect(client.queries.map((query) => query.sql)).toContain('COMMIT');
+  });
+
+  it('rolls back and replays restore after a concurrent idempotency conflict', async () => {
+    const client = makeFakeClient();
+    client.query = async (sql: string, params?: unknown[]) => {
+      client.queries.push({ sql, params });
+      if (sql.includes('FOR UPDATE') && sql.includes('runtime_configs')) {
+        return {
+          rows: [{ id: 'rc-1', encrypted_value: `enc:${JSON.stringify(goodLibrary)}` }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ release_id: null }], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO llm_catalog_releases')) {
+        throw Object.assign(new Error('duplicate idempotency key'), { code: '23505' });
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      backupId: 'backup-1',
+      operation: 'restore',
+      rollout: { mode: 'no-rollout' },
+    })).digest('hex');
+    let idempotencyLookups = 0;
+    const pool = {
+      connect: async () => client,
+      query: async (sql: string) => {
+        if (sql.includes('FROM llm_catalog_snapshot_backups WHERE id = $1')) {
+          return {
+            rows: [{
+              encrypted_value: `enc:${JSON.stringify(goodLibrary)}`,
+              source_fingerprint: 'old',
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('idempotency_key = $1')) {
+          idempotencyLookups += 1;
+          if (idempotencyLookups === 1) return { rows: [], rowCount: 0 };
+          return {
+            rows: [{
+              id: 'existing-restore', version: 7, parent_id: null,
+              canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+              fingerprint: 'restored-fp', parent_fingerprint: null,
+              diff_summary: { releaseRequestFingerprint: requestFingerprint }, warnings: [],
+              actor: 'admin', actor_type: 'admin', status: 'rolled-back',
+              idempotency_key: 'restore-race', created_at: new Date(),
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM llm_push_tasks WHERE release_id')) {
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+
+    const result = await new CatalogReleaseService(pool as any).atomicRestore({
+      backupId: 'backup-1', actor: 'admin', actorType: 'admin',
+      idempotencyKey: 'restore-race', rollout: { mode: 'no-rollout' },
+    });
+
+    expect(result?.release.id).toBe('existing-restore');
+    expect(result?.taskId).toBeNull();
+    const sqls = client.queries.map((query) => query.sql);
+    expect(sqls).toContain('ROLLBACK');
+    expect(sqls).not.toContain('COMMIT');
+    expect(client.queries.some((query) => query.sql.includes('INSERT INTO audit_logs'))).toBe(false);
+  });
+
+  it('rejects a restore idempotency key reused with different semantics', async () => {
+    const pool = {
+      connect: async () => { throw new Error('should not connect'); },
+      query: async (sql: string) => sql.includes('idempotency_key = $1')
+        ? {
+            rows: [{
+              id: 'existing-restore', version: 1, parent_id: null,
+              canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+              fingerprint: 'old-fp', parent_fingerprint: null,
+              diff_summary: { releaseRequestFingerprint: 'different' }, warnings: [],
+              actor: 'admin', actor_type: 'admin', status: 'rolled-back',
+              idempotency_key: 'restore-conflict', created_at: new Date(),
+            }],
+            rowCount: 1,
+          }
+        : { rows: [], rowCount: 0 },
+    };
+
+    await expect(new CatalogReleaseService(pool as any).atomicRestore({
+      backupId: 'different-backup', actor: 'admin', actorType: 'admin',
+      idempotencyKey: 'restore-conflict', rollout: { mode: 'no-rollout' },
+    })).rejects.toBeInstanceOf(CatalogReleaseIdempotencyConflictError);
   });
 
   it('returns null when backup is not found', async () => {

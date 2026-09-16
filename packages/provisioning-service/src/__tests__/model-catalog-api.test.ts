@@ -31,22 +31,32 @@ afterEach(() => {
   restoreCatalogEnv();
 });
 
-function createConfig(read: boolean, paramWrite = false): ProvisioningConfig {
+function createConfig(
+  read: boolean,
+  paramWrite = false,
+  snapshotWrite = false,
+): ProvisioningConfig {
   return {
     port: 0, databaseUrl: '', k8sDryRun: true, runtimeNamespace: 'test', imageRegistry: 'test',
     nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test', agentPvcSize: '1Gi',
     agentPvcStorageClass: 'test', agentPvcAccessMode: 'ReadWriteOnce', ossEndpoint: '', ossBucket: '',
     ossSecretName: '', backupImage: '', creditsLedgerUrl: '', creditsLedgerToken: '',
-    modelCatalogRead: read, modelCatalogShadowImport: false, modelCatalogSnapshotWrite: false,
+    modelCatalogRead: read, modelCatalogShadowImport: false,
+    modelCatalogSnapshotWrite: snapshotWrite,
     modelCatalogParamWrite: paramWrite,
     llmPushWorkerIntervalMs: 100, llmPushLeaseSeconds: 600,
   };
 }
 
-function createApp(pool: pg.Pool, read: boolean, paramWrite = false) {
+function createApp(
+  pool: pg.Pool,
+  read: boolean,
+  paramWrite = false,
+  snapshotWrite = false,
+) {
   const app = express();
   app.use(express.json());
-  app.use(createModelCatalogRoutes(pool, createConfig(read, paramWrite)));
+  app.use(createModelCatalogRoutes(pool, createConfig(read, paramWrite, snapshotWrite)));
   return app;
 }
 
@@ -258,5 +268,37 @@ describe('model catalog status API', () => {
     expect(response.body.diff.fallbackWarnings).toEqual([{
       providerName: 'provider', modelId: 'chat-model', fallbackFields: ['inputModalities', 'outputModalities'],
     }]);
+  });
+
+  it('returns 409 when a restore idempotency key is reused for different semantics', async () => {
+    const query = async (sql: string) => {
+      if (sql.includes('idempotency_key = $1')) {
+        return {
+          rows: [{
+            id: 'existing-release', version: 1, parent_id: null,
+            canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+            fingerprint: 'existing-fp', parent_fingerprint: null,
+            diff_summary: { releaseRequestFingerprint: 'different-request' }, warnings: [],
+            actor: 'admin', actor_type: 'admin', status: 'rolled-back',
+            idempotency_key: 'reused-key', created_at: new Date(),
+          }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    };
+    const response = await request(createApp({ query } as unknown as pg.Pool, true, false, true))
+      .post('/v1/admin/model-catalog/snapshot-restore')
+      .send({
+        backupId: 'backup-2',
+        idempotencyKey: 'reused-key',
+        rollout: { mode: 'no-rollout' },
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      code: 'IDEMPOTENCY_KEY_REUSED',
+      message: 'Idempotency key was already used for a different release mutation',
+    });
   });
 });

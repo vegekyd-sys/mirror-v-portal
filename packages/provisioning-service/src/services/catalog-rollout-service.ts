@@ -515,18 +515,33 @@ export class CatalogRolloutService {
     prev: LlmProvidersConfig | null,
     next: LlmProvidersConfig,
   ): Promise<string[]> {
-    if (scopeType === 'single') {
-      if (!tenantIds || tenantIds.length === 0) {
-        throw new Error('scopeType=single requires at least one tenantId');
-      }
-      return [tenantIds[0]];
-    }
-
-    if (scopeType === 'allowlist' || scopeType === 'canary') {
+    if (scopeType === 'single' || scopeType === 'allowlist' || scopeType === 'canary') {
       if (!tenantIds || tenantIds.length === 0) {
         throw new Error(`scopeType=${scopeType} requires at least one tenantId`);
       }
-      return tenantIds;
+      const uniqueTenantIds = [...new Set(tenantIds)];
+      const { rows } = await this.pool.query<{
+        tenant_id: string;
+        status: string;
+        k8s_namespace: string | null;
+        agent_endpoint: string | null;
+      }>(
+        `SELECT tenant_id, status, k8s_namespace, agent_endpoint
+           FROM tenants
+          WHERE tenant_id = ANY($1::text[])`,
+        [uniqueTenantIds],
+      );
+      const eligible = new Set(
+        rows
+          .filter((row) => row.status !== 'destroyed' &&
+            row.k8s_namespace !== null && row.agent_endpoint === null)
+          .map((row) => row.tenant_id),
+      );
+      const invalid = uniqueTenantIds.filter((tenantId) => !eligible.has(tenantId));
+      if (invalid.length > 0) {
+        throw new Error(`INVALID_ROLLOUT_TARGETS: ${invalid.join(',')}`);
+      }
+      return uniqueTenantIds;
     }
 
     if (scopeType === 'affected') {

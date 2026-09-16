@@ -365,6 +365,19 @@ describe('CatalogRolloutService.enqueueScopedRollout', () => {
       rowsResponder('FROM llm_catalog_releases', [releaseRow]),
       // Global LLM providers (prev library) — return null (empty library)
       rowsResponder('FROM runtime_configs', []),
+      // Explicit-scope tenant eligibility query
+      {
+        match: (sql) => sql.includes('SELECT tenant_id, status, k8s_namespace, agent_endpoint'),
+        respond: (params) => ({
+          rows: ((params?.[0] as string[]) ?? []).map((tenantId) => ({
+            tenant_id: tenantId,
+            status: 'active',
+            k8s_namespace: `ns-${tenantId}`,
+            agent_endpoint: null,
+          })),
+          rowCount: ((params?.[0] as string[]) ?? []).length,
+        }),
+      },
       // Full-scope tenant query
       rowsResponder(
         'SELECT tenant_id FROM tenants',
@@ -442,6 +455,35 @@ describe('CatalogRolloutService.enqueueScopedRollout', () => {
     // params: [releaseId, tenantId1, tenantId2, tenantId3]
     expect(statusInsert!.params).toHaveLength(4);
     expect(statusInsert!.params![0]).toBe('rel-123');
+  });
+
+  it('deduplicates eligible explicit targets and rejects ineligible targets', async () => {
+    const eligiblePool = makeRolloutPool();
+    const result = await new CatalogRolloutService(eligiblePool as any).enqueueScopedRollout({
+      releaseId: 'rel-123',
+      scopeType: 'allowlist',
+      tenantIds: ['t1', 't1', 't2'],
+      actor: 'admin',
+      actorType: 'admin',
+    });
+    expect(result.total).toBe(2);
+
+    const ineligiblePool = makeFakePool([
+      rowsResponder('FROM llm_catalog_releases', [releaseRow]),
+      rowsResponder('FROM runtime_configs', []),
+      rowsResponder('SELECT tenant_id, status, k8s_namespace, agent_endpoint', [
+        { tenant_id: 'active', status: 'active', k8s_namespace: 'ns', agent_endpoint: null },
+        { tenant_id: 'destroyed', status: 'destroyed', k8s_namespace: 'ns', agent_endpoint: null },
+        { tenant_id: 'external', status: 'active', k8s_namespace: null, agent_endpoint: 'https://external' },
+      ]),
+    ]);
+    await expect(new CatalogRolloutService(ineligiblePool as any).enqueueScopedRollout({
+      releaseId: 'rel-123',
+      scopeType: 'allowlist',
+      tenantIds: ['missing', 'destroyed', 'external'],
+      actor: 'admin',
+      actorType: 'admin',
+    })).rejects.toThrow('INVALID_ROLLOUT_TARGETS: missing,destroyed,external');
   });
 
   it('scope=affected only targets tenants with affected=true', async () => {

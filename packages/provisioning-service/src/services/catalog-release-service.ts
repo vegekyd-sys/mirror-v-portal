@@ -18,13 +18,20 @@
  * returns the pre-existing release (no duplicate push task).
  */
 import type pg from 'pg';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { encryptValue, decryptValue } from './crypto.js';
 import { upsertRuntimeConfig, validateConfigValue } from './runtime-config.js';
 import { getGlobalLlmProviders, validateLlmProviders, LLM_PROVIDERS_KEY } from './llm-providers.js';
 import { snapshotFingerprint, CatalogRepository, CatalogService } from './model-catalog.js';
 import { CatalogRolloutService, type ScopeType } from './catalog-rollout-service.js';
+import { writeAuditLogStrict } from './audit.js';
 import type { LlmProvidersConfig } from './llm-providers.js';
+import type { ProvisioningConfig } from '../config.js';
+import type {
+  CatalogReleaseRecord,
+  CatalogReleaseView,
+  TenantReleaseStatusRecord,
+} from '../domain/catalog-release.js';
 
 /** Explicit rollout policy attached to a Release mutation. */
 export type ReleaseRolloutPolicy =
@@ -36,12 +43,16 @@ export interface CatalogReleaseMutationResult {
   release: CatalogReleaseView;
   taskId: string | null;
 }
-import type { ProvisioningConfig } from '../config.js';
-import type {
-  CatalogReleaseRecord,
-  CatalogReleaseView,
-  TenantReleaseStatusRecord,
-} from '../domain/catalog-release.js';
+
+/** Raised when an idempotency key is reused for a different mutation. */
+export class CatalogReleaseIdempotencyConflictError extends Error {
+  readonly code = 'IDEMPOTENCY_KEY_REUSED';
+
+  constructor() {
+    super('Idempotency key was already used for a different release mutation');
+    this.name = 'CatalogReleaseIdempotencyConflictError';
+  }
+}
 
 /** Map a raw DB row (snake_case) to a CatalogReleaseRecord. */
 function rowToRecord(row: Record<string, unknown>): CatalogReleaseRecord {
@@ -246,12 +257,17 @@ export class CatalogReleaseService {
     // Preserve the historical service default (full rollout) for internal callers;
     // API callers must always provide an explicit policy.
     this.validateRolloutPolicy(rollout);
+    const normalizedRollout = this.normalizeRolloutPolicy(rollout);
+    const requestFingerprint = this.requestFingerprint({
+      operation: 'publish', fingerprint, expectedParentFingerprint,
+      rollout: normalizedRollout,
+    });
 
-    // Idempotency: if a release with this key already exists, return it.
+    // Idempotency: replay only when the key is bound to identical semantics.
     if (idempotencyKey) {
       const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
       if (existing) {
-        // Find the push task associated with this release.
+        this.assertIdempotencySemantics(existing, requestFingerprint);
         const taskId = await this.findTaskIdForRelease(existing.id);
         return { release: this.recordToView(existing), taskId };
       }
@@ -352,7 +368,7 @@ export class CatalogReleaseService {
             compatPayload,
             effectiveFingerprint,
             parentFingerprint,
-            JSON.stringify(diffSummary),
+            JSON.stringify({ ...diffSummary, releaseRequestFingerprint: requestFingerprint }),
             JSON.stringify(warnings),
             actor,
             actorType,
@@ -366,10 +382,9 @@ export class CatalogReleaseService {
           await client.query('ROLLBACK');
           const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
           if (existing) {
+            this.assertIdempotencySemantics(existing, requestFingerprint);
             const taskId = await this.findTaskIdForRelease(existing.id);
-            if (taskId) {
-              return { release: this.recordToView(existing), taskId };
-            }
+            return { release: this.recordToView(existing), taskId };
           }
         }
         throw insertError;
@@ -434,7 +449,25 @@ export class CatalogReleaseService {
         taskId = rolloutResult.taskId;
       }
 
-      // Step 11: COMMIT — all or nothing.
+      await writeAuditLogStrict(client as unknown as pg.Pool, {
+        actor: actor ?? 'service',
+        actorType,
+        action: 'model-catalog.snapshot.publish',
+        method: 'POST',
+        path: '/v1/admin/model-catalog/snapshot-publish',
+        resourceType: 'llm_catalog_release',
+        resourceId: releaseId,
+        oldValue: { parentReleaseId: currentReleaseId, parentFingerprint },
+        newValue: {
+          releaseId,
+          fingerprint: effectiveFingerprint,
+          rollout: normalizedRollout,
+          requestFingerprint,
+          taskId,
+        },
+      });
+
+      // Step 11: COMMIT — all or nothing, including strict audit.
       await client.query('COMMIT');
 
       // Build the view from the data we have (avoids a re-query).
@@ -486,9 +519,14 @@ export class CatalogReleaseService {
       rollout = { mode: 'rollout', scopeType: 'full' },
     } = params;
     this.validateRolloutPolicy(rollout);
+    const normalizedRollout = this.normalizeRolloutPolicy(rollout);
+    const requestFingerprint = this.requestFingerprint({
+      operation: 'restore', backupId, rollout: normalizedRollout,
+    });
     if (idempotencyKey) {
       const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
       if (existing) {
+        this.assertIdempotencySemantics(existing, requestFingerprint);
         return {
           release: this.recordToView(existing),
           taskId: await this.findTaskIdForRelease(existing.id),
@@ -569,27 +607,42 @@ export class CatalogReleaseService {
         backupSourceFingerprint,
       };
 
-      await client.query(
-        `INSERT INTO llm_catalog_releases
-           (id, version, parent_id, canonical_snapshot, compat_payload,
-            fingerprint, parent_fingerprint, diff_summary, warnings,
-            actor, actor_type, status, idempotency_key)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'rolled-back',$12)`,
-        [
-          releaseId,
-          version,
-          currentReleaseId,
-          canonicalSnapshot,
-          compatPayload,
-          fingerprint,
-          parentFingerprint,
-          JSON.stringify(diffSummary),
-          JSON.stringify([]),
-          actor,
-          actorType,
-          idempotencyKey ?? null,
-        ],
-      );
+      try {
+        await client.query(
+          `INSERT INTO llm_catalog_releases
+             (id, version, parent_id, canonical_snapshot, compat_payload,
+              fingerprint, parent_fingerprint, diff_summary, warnings,
+              actor, actor_type, status, idempotency_key)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'rolled-back',$12)`,
+          [
+            releaseId,
+            version,
+            currentReleaseId,
+            canonicalSnapshot,
+            compatPayload,
+            fingerprint,
+            parentFingerprint,
+            JSON.stringify({ ...diffSummary, releaseRequestFingerprint: requestFingerprint }),
+            JSON.stringify([]),
+            actor,
+            actorType,
+            idempotencyKey ?? null,
+          ],
+        );
+      } catch (insertError: unknown) {
+        if (idempotencyKey && this.isUniqueViolation(insertError)) {
+          await client.query('ROLLBACK');
+          const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
+          if (existing) {
+            this.assertIdempotencySemantics(existing, requestFingerprint);
+            return {
+              release: this.recordToView(existing),
+              taskId: await this.findTaskIdForRelease(existing.id),
+            };
+          }
+        }
+        throw insertError;
+      }
 
       // Mark old release as superseded.
       if (currentReleaseId) {
@@ -648,6 +701,24 @@ export class CatalogReleaseService {
         taskId = rolloutResult.taskId;
       }
 
+      await writeAuditLogStrict(client as unknown as pg.Pool, {
+        actor: actor ?? 'service',
+        actorType,
+        action: 'model-catalog.snapshot.restore',
+        method: 'POST',
+        path: '/v1/admin/model-catalog/snapshot-restore',
+        resourceType: 'llm_catalog_release',
+        resourceId: releaseId,
+        oldValue: { parentReleaseId: currentReleaseId, parentFingerprint },
+        newValue: {
+          releaseId,
+          backupId,
+          fingerprint,
+          rollout: normalizedRollout,
+          requestFingerprint,
+          taskId,
+        },
+      });
       await client.query('COMMIT');
 
       const releaseView: CatalogReleaseView = {
@@ -701,6 +772,39 @@ export class CatalogReleaseService {
     }
     if ((policy.scopeType === 'full' || policy.scopeType === 'affected') && tenantIds !== undefined) {
       throw new Error(`INVALID_ROLLOUT_POLICY: ${policy.scopeType} does not accept tenantIds`);
+    }
+  }
+
+  /** Normalize semantically set-like tenant targets before hashing/auditing. */
+  private normalizeRolloutPolicy(policy: ReleaseRolloutPolicy): ReleaseRolloutPolicy {
+    if (policy.mode === 'no-rollout' || policy.tenantIds === undefined) return policy;
+    return { ...policy, tenantIds: [...new Set(policy.tenantIds)].sort() };
+  }
+
+  /** Produce a stable digest from normalized request semantics. */
+  private requestFingerprint(value: Record<string, unknown>): string {
+    const normalize = (input: unknown): unknown => {
+      if (Array.isArray(input)) return input.map(normalize);
+      if (input !== null && typeof input === 'object') {
+        return Object.fromEntries(
+          Object.entries(input as Record<string, unknown>)
+            .filter(([, nested]) => nested !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, nested]) => [key, normalize(nested)]),
+        );
+      }
+      return input;
+    };
+    return createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+  }
+
+  /** Reject replay when a key was bound to different request semantics. */
+  private assertIdempotencySemantics(
+    release: CatalogReleaseRecord,
+    requestFingerprint: string,
+  ): void {
+    if (release.diffSummary.releaseRequestFingerprint !== requestFingerprint) {
+      throw new CatalogReleaseIdempotencyConflictError();
     }
   }
 
