@@ -13,7 +13,10 @@ import {
   modelRowIdToLegacyRef, legacyRefToModelRowId,
   type ProviderInstanceRecord,
 } from '../services/model-catalog.js';
-import { CatalogReleaseService } from '../services/catalog-release-service.js';
+import {
+  CatalogReleaseService,
+  type ReleaseRolloutPolicy,
+} from '../services/catalog-release-service.js';
 import {
   GlobalPolicyBackfillError,
   GlobalPolicyBackfillService,
@@ -121,6 +124,30 @@ function validationError(res: Response, message: string): void {
 /** Send a conflict error response. */
 function conflictError(res: Response, code: string, message: string): void {
   res.status(409).json({ code, message })
+}
+
+/** Parse and strictly validate an explicit Release rollout policy. */
+function parseReleaseRollout(value: unknown): ReleaseRolloutPolicy | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.mode === 'no-rollout') {
+    return Object.keys(body).length === 1 ? { mode: 'no-rollout' } : null;
+  }
+  const allowed = new Set(['mode', 'scopeType', 'tenantIds']);
+  if (body.mode !== 'rollout' || Object.keys(body).some((key) => !allowed.has(key))) return null;
+  const scopes = ['full', 'allowlist', 'single', 'affected', 'canary'] as const;
+  if (!scopes.includes(body.scopeType as typeof scopes[number])) return null;
+  const scopeType = body.scopeType as typeof scopes[number];
+  const tenantIds = body.tenantIds;
+  if (tenantIds !== undefined &&
+      (!Array.isArray(tenantIds) || tenantIds.some((id) => typeof id !== 'string' || id.trim() === ''))) {
+    return null;
+  }
+  const ids = tenantIds as string[] | undefined;
+  if (scopeType === 'single' && ids?.length !== 1) return null;
+  if ((scopeType === 'allowlist' || scopeType === 'canary') && !ids?.length) return null;
+  if ((scopeType === 'full' || scopeType === 'affected') && ids !== undefined) return null;
+  return ids ? { mode: 'rollout', scopeType, tenantIds: ids } : { mode: 'rollout', scopeType };
 }
 
 /** Admin routes for the P0 shadow catalog and explicit compatibility publishing. */
@@ -242,16 +269,25 @@ export function createModelCatalogRoutes(
     }
   });
 
-  router.get('/v1/admin/model-catalog/snapshot-preview', async (_req, res) => {
+  router.get('/v1/admin/model-catalog/snapshot-preview', async (req, res) => {
     if (config.modelCatalogRead !== true) return disabled(res);
     try {
+      if (req.query.mode === 'authority') {
+        const preview = await releases.buildAuthorityPreview();
+        res.json({ ...preview, snapshot: redactSnapshot(preview.snapshot), mode: 'authority' });
+        return;
+      }
+      if (req.query.mode !== undefined && req.query.mode !== 'compatibility') {
+        validationError(res, 'mode must be compatibility or authority');
+        return;
+      }
       const legacy = await getGlobalLlmProviders(pool);
       const previous = legacy ?? {
         providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [],
       };
       const snapshot = await service.buildCompatibilitySnapshot(legacy);
       const diff = service.diffCompatibilitySnapshot(previous, snapshot);
-      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: diff.fingerprint, diff });
+      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: diff.fingerprint, diff, mode: 'compatibility' });
     } catch (error) {
       console.error('model catalog snapshot preview failed:', error);
       internalError(res, 'SNAPSHOT_INVALID', 422);
@@ -270,9 +306,18 @@ export function createModelCatalogRoutes(
       });
       return;
     }
-    const backupId = typeof req.body?.backupId === 'string' ? req.body.backupId : '';
-    if (!backupId) {
-      res.status(400).json({ code: 'VALIDATION', message: 'backupId is required' });
+    const restoreBody = req.body as Record<string, unknown> | undefined;
+    const restoreAllowed = new Set(['backupId', 'idempotencyKey', 'rollout']);
+    const backupId = typeof restoreBody?.backupId === 'string' ? restoreBody.backupId : '';
+    const restoreIdempotencyKey = typeof restoreBody?.idempotencyKey === 'string'
+      ? restoreBody.idempotencyKey.trim() : '';
+    const restoreRollout = parseReleaseRollout(restoreBody?.rollout);
+    if (!restoreBody || Object.keys(restoreBody).some((key) => !restoreAllowed.has(key)) ||
+        !backupId || !restoreIdempotencyKey || !restoreRollout) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'backupId, idempotencyKey, and valid explicit rollout are required',
+      });
       return;
     }
     try {
@@ -281,6 +326,8 @@ export function createModelCatalogRoutes(
         backupId,
         actor,
         actorType: actorType === 'external' ? 'service' : actorType,
+        idempotencyKey: restoreIdempotencyKey,
+        rollout: restoreRollout,
       });
       if (!result) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Snapshot backup not found' });
@@ -290,7 +337,7 @@ export function createModelCatalogRoutes(
         ok: true,
         release: result.release,
         taskId: result.taskId,
-        streamUrl: `/v1/admin/llm-push-tasks/${result.taskId}/stream`,
+        streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
       });
     } catch (error) {
       console.error('model catalog snapshot restore failed:', error);
@@ -308,15 +355,32 @@ export function createModelCatalogRoutes(
       });
       return;
     }
-    const expectedFingerprint = typeof req.body?.fingerprint === 'string' ? req.body.fingerprint : '';
-    if (!expectedFingerprint) {
-      res.status(400).json({ code: 'VALIDATION', message: 'fingerprint is required' });
+    const publishBody = req.body as Record<string, unknown> | undefined;
+    const publishAllowed = new Set([
+      'fingerprint', 'expectedParentFingerprint', 'idempotencyKey', 'rollout',
+    ]);
+    const expectedFingerprint = typeof publishBody?.fingerprint === 'string' ? publishBody.fingerprint : '';
+    const expectedParentFingerprint = publishBody?.expectedParentFingerprint === null ||
+      typeof publishBody?.expectedParentFingerprint === 'string'
+      ? publishBody.expectedParentFingerprint as string | null : undefined;
+    const idempotencyKey = typeof publishBody?.idempotencyKey === 'string'
+      ? publishBody.idempotencyKey.trim() : '';
+    const rollout = parseReleaseRollout(publishBody?.rollout);
+    if (!publishBody || Object.keys(publishBody).some((key) => !publishAllowed.has(key)) ||
+        !expectedFingerprint || expectedParentFingerprint === undefined || !idempotencyKey || !rollout) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'fingerprint, expectedParentFingerprint, idempotencyKey, and valid explicit rollout are required',
+      });
       return;
     }
     try {
-      // Read-only: build the snapshot and compute its fingerprint (outside tx).
+      // Rebuild through the same canonical Authority builder used inside
+      // atomicPublish when Authority projection is enabled.
       const previous = await getGlobalLlmProviders(pool);
-      const next = validateLlmProviders(await service.buildCompatibilitySnapshot(previous));
+      const next = config.catalogProjectionFromAuthority === true
+        ? (await releases.buildAuthorityPreview()).snapshot
+        : validateLlmProviders(await service.buildCompatibilitySnapshot(previous));
       const actualFingerprint = snapshotFingerprint(next);
       if (actualFingerprint !== expectedFingerprint) {
         res.status(409).json({ code: 'FINGERPRINT_MISMATCH', message: 'Catalog changed after preview', details: { actualFingerprint } });
@@ -330,12 +394,8 @@ export function createModelCatalogRoutes(
       );
       const { actor, actorType } = actorFromRequest(req);
 
-      // Resolve the current release's fingerprint for CAS.
-      const currentReleaseId = await releases.getCurrentReleaseId();
-      const currentRelease = currentReleaseId ? await releases.getRelease(currentReleaseId) : null;
-      const expectedParentFingerprint = currentRelease?.fingerprint ?? null;
-
-      // Atomic publish: Release + runtime_config + push task in one tx.
+      // Atomic publish: Release + runtime_config + optional push task in one tx.
+      // expectedParentFingerprint is supplied by preview; never refresh it here.
       const result = await releases.atomicPublish({
         expectedParentFingerprint,
         snapshot: next,
@@ -344,6 +404,8 @@ export function createModelCatalogRoutes(
         warnings: diff.fallbackWarnings ?? [],
         actor,
         actorType: actorType === 'external' ? 'service' : actorType,
+        idempotencyKey,
+        rollout,
       });
 
       if (!result) {
@@ -356,7 +418,7 @@ export function createModelCatalogRoutes(
         ok: true,
         release: result.release,
         taskId: result.taskId,
-        streamUrl: `/v1/admin/llm-push-tasks/${result.taskId}/stream`,
+        streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
       });
     } catch (error) {
       const tooLarge = error instanceof Error && error.message.includes('too long');

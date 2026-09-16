@@ -166,6 +166,36 @@ describe('CatalogReleaseService — atomicPublish', () => {
     expect(pushInsert!.params![9]).toBe('full'); // scope_type at $10 (index 9)
   });
 
+  it('publishes atomically without creating a push task for no-rollout', async () => {
+    const client = makeFakeClient();
+    client.query = async (sql: string, params?: unknown[]) => {
+      client.queries.push({ sql, params });
+      if (sql.includes('FOR UPDATE') && sql.includes('runtime_configs')) {
+        return { rows: [{ id: 'rc-1', encrypted_value: `enc:${JSON.stringify(goodLibrary)}` }], rowCount: 1 };
+      }
+      if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ release_id: null }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    const service = new CatalogReleaseService(makeFakePool(client) as any);
+    const result = await service.atomicPublish({
+      expectedParentFingerprint: null,
+      snapshot: goodLibrary,
+      fingerprint: 'new-fp',
+      diffSummary: {},
+      warnings: [],
+      actor: 'admin',
+      actorType: 'admin',
+      idempotencyKey: 'publish-no-rollout',
+      rollout: { mode: 'no-rollout' },
+    });
+    expect(result?.taskId).toBeNull();
+    expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_catalog_releases'))).toBe(true);
+    expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_push_tasks'))).toBe(false);
+    expect(client.queries.map((query) => query.sql)).toContain('COMMIT');
+  });
+
   it('returns null on CAS failure (expectedParentFingerprint does not match)', async () => {
     const client = makeFakeClient();
     client.query = async (sql: string, params?: unknown[]) => {
@@ -359,6 +389,33 @@ describe('CatalogReleaseService — atomicRestore', () => {
     const pushInsert = client.queries.find((q) => q.sql.includes('INSERT INTO llm_push_tasks'));
     expect(pushInsert).toBeTruthy();
     expect(pushInsert!.params![3]).toBe('retry'); // trigger at $4 (index 3)
+  });
+
+  it('restores atomically without creating a push task for no-rollout', async () => {
+    const client = makeFakeClient();
+    client.query = async (sql: string, params?: unknown[]) => {
+      client.queries.push({ sql, params });
+      if (sql.includes('FOR UPDATE') && sql.includes('runtime_configs')) {
+        return { rows: [{ id: 'rc-1', encrypted_value: `enc:${JSON.stringify(goodLibrary)}` }], rowCount: 1 };
+      }
+      if (sql.includes('llm_catalog_release_pointer') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ release_id: null }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    const pool = {
+      connect: async () => client,
+      query: async (sql: string) => sql.includes('FROM llm_catalog_snapshot_backups WHERE id = $1')
+        ? { rows: [{ encrypted_value: `enc:${JSON.stringify(goodLibrary)}`, source_fingerprint: 'old' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 },
+    };
+    const result = await new CatalogReleaseService(pool as any).atomicRestore({
+      backupId: 'backup-1', actor: 'admin', actorType: 'admin',
+      idempotencyKey: 'restore-no-rollout', rollout: { mode: 'no-rollout' },
+    });
+    expect(result?.taskId).toBeNull();
+    expect(client.queries.some((query) => query.sql.includes('INSERT INTO llm_push_tasks'))).toBe(false);
+    expect(client.queries.map((query) => query.sql)).toContain('COMMIT');
   });
 
   it('returns null when backup is not found', async () => {

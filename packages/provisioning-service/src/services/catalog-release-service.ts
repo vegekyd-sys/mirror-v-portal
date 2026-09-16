@@ -20,11 +20,22 @@
 import type pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import { encryptValue, decryptValue } from './crypto.js';
-import { enqueueLlmPush } from './llm-push-task.js';
 import { upsertRuntimeConfig, validateConfigValue } from './runtime-config.js';
 import { getGlobalLlmProviders, validateLlmProviders, LLM_PROVIDERS_KEY } from './llm-providers.js';
 import { snapshotFingerprint, CatalogRepository, CatalogService } from './model-catalog.js';
+import { CatalogRolloutService, type ScopeType } from './catalog-rollout-service.js';
 import type { LlmProvidersConfig } from './llm-providers.js';
+
+/** Explicit rollout policy attached to a Release mutation. */
+export type ReleaseRolloutPolicy =
+  | { mode: 'no-rollout' }
+  | { mode: 'rollout'; scopeType: ScopeType; tenantIds?: string[] };
+
+/** Result of an atomic Release mutation. */
+export interface CatalogReleaseMutationResult {
+  release: CatalogReleaseView;
+  taskId: string | null;
+}
 import type { ProvisioningConfig } from '../config.js';
 import type {
   CatalogReleaseRecord,
@@ -104,6 +115,35 @@ export class CatalogReleaseService {
    */
   setConfig(config: Pick<ProvisioningConfig, 'catalogProjectionFromAuthority'>): void {
     this.config = config;
+  }
+
+  /**
+   * Build the canonical Authority snapshot used by atomicPublish and compare it
+   * semantically with the current Legacy projection.
+   */
+  async buildAuthorityPreview(): Promise<{
+    snapshot: LlmProvidersConfig;
+    fingerprint: string;
+    diff: Record<string, unknown>;
+    expectedParentFingerprint: string | null;
+  }> {
+    const snapshot = await this.buildAuthoritySnapshot(this.pool);
+    const fingerprint = snapshotFingerprint(snapshot);
+    const legacy = await getGlobalLlmProviders(this.pool);
+    const previous = legacy ?? {
+      providers: [], defaultModel: null, imageModel: null,
+      compactionModel: null, fallbackModels: [],
+    };
+    const catalogService = new CatalogService(new CatalogRepository(this.pool));
+    const diff = catalogService.diffCompatibilitySnapshot(previous, snapshot);
+    const currentReleaseId = await this.getCurrentReleaseId();
+    const currentRelease = currentReleaseId ? await this.getRelease(currentReleaseId) : null;
+    return {
+      snapshot,
+      fingerprint,
+      diff: diff as unknown as Record<string, unknown>,
+      expectedParentFingerprint: currentRelease?.fingerprint ?? null,
+    };
   }
 
   /** Get the release_id pointed to by the 'current' pointer. */
@@ -189,7 +229,8 @@ export class CatalogReleaseService {
     actor: string | null;
     actorType: 'admin' | 'service';
     idempotencyKey?: string;
-  }): Promise<{ release: CatalogReleaseView; taskId: string } | null> {
+    rollout?: ReleaseRolloutPolicy;
+  }): Promise<CatalogReleaseMutationResult | null> {
     const {
       expectedParentFingerprint,
       snapshot,
@@ -199,7 +240,12 @@ export class CatalogReleaseService {
       actor,
       actorType,
       idempotencyKey,
+      rollout = { mode: 'rollout', scopeType: 'full' },
     } = params;
+
+    // Preserve the historical service default (full rollout) for internal callers;
+    // API callers must always provide an explicit policy.
+    this.validateRolloutPolicy(rollout);
 
     // Idempotency: if a release with this key already exists, return it.
     if (idempotencyKey) {
@@ -207,9 +253,7 @@ export class CatalogReleaseService {
       if (existing) {
         // Find the push task associated with this release.
         const taskId = await this.findTaskIdForRelease(existing.id);
-        if (taskId) {
-          return { release: this.recordToView(existing), taskId };
-        }
+        return { release: this.recordToView(existing), taskId };
       }
     }
 
@@ -275,9 +319,7 @@ export class CatalogReleaseService {
       let effectiveSnapshot = snapshot;
       let effectiveFingerprint = fingerprint;
       if (this.config?.catalogProjectionFromAuthority === true) {
-        const catalogRepo = new CatalogRepository(this.pool);
-        const catalogService = new CatalogService(catalogRepo);
-        const authoritySnapshot = await catalogService.buildCatalogSnapshot();
+        const authoritySnapshot = await this.buildAuthoritySnapshot(client);
         const authorityFingerprint = snapshotFingerprint(authoritySnapshot);
         if (authorityFingerprint !== fingerprint) {
           await client.query('ROLLBACK');
@@ -373,19 +415,24 @@ export class CatalogReleaseService {
         description: '模型目录显式发布的兼容快照',
       });
 
-      // Step 10: Enqueue push task ON THE TRANSACTION CLIENT.
-      const { taskId } = await enqueueLlmPush(client, {
-        kind: 'global_push',
-        scope: null,
-        trigger: 'save',
-        prevLibrary: lockedPrevious,
-        nextLibrary: effectiveSnapshot,
-        actor: actor ?? 'service',
-        actorType,
-        releaseId,
-        scopeType: 'full',
-        idempotencyKey,
-      });
+      // Step 10: Optionally enqueue the explicitly requested rollout on the
+      // transaction client. no-rollout intentionally creates no push task.
+      let taskId: string | null = null;
+      if (rollout.mode === 'rollout') {
+        const rolloutService = new CatalogRolloutService(client as unknown as pg.Pool);
+        const rolloutResult = await rolloutService.enqueueReleaseMutationRollout({
+          releaseId,
+          scopeType: rollout.scopeType,
+          tenantIds: rollout.tenantIds,
+          actor,
+          actorType,
+          idempotencyKey,
+          prevLibrary: lockedPrevious,
+          nextLibrary: effectiveSnapshot,
+          trigger: 'save',
+        });
+        taskId = rolloutResult.taskId;
+      }
 
       // Step 11: COMMIT — all or nothing.
       await client.query('COMMIT');
@@ -428,8 +475,26 @@ export class CatalogReleaseService {
     backupId: string;
     actor: string | null;
     actorType: 'admin' | 'service';
-  }): Promise<{ release: CatalogReleaseView; taskId: string } | null> {
-    const { backupId, actor, actorType } = params;
+    idempotencyKey?: string;
+    rollout?: ReleaseRolloutPolicy;
+  }): Promise<CatalogReleaseMutationResult | null> {
+    const {
+      backupId,
+      actor,
+      actorType,
+      idempotencyKey,
+      rollout = { mode: 'rollout', scopeType: 'full' },
+    } = params;
+    this.validateRolloutPolicy(rollout);
+    if (idempotencyKey) {
+      const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return {
+          release: this.recordToView(existing),
+          taskId: await this.findTaskIdForRelease(existing.id),
+        };
+      }
+    }
 
     // Read the backup (outside the transaction — it's immutable).
     const backupResult = await this.pool.query(
@@ -508,8 +573,8 @@ export class CatalogReleaseService {
         `INSERT INTO llm_catalog_releases
            (id, version, parent_id, canonical_snapshot, compat_payload,
             fingerprint, parent_fingerprint, diff_summary, warnings,
-            actor, actor_type, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'rolled-back')`,
+            actor, actor_type, status, idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'rolled-back',$12)`,
         [
           releaseId,
           version,
@@ -522,6 +587,7 @@ export class CatalogReleaseService {
           JSON.stringify([]),
           actor,
           actorType,
+          idempotencyKey ?? null,
         ],
       );
 
@@ -565,18 +631,22 @@ export class CatalogReleaseService {
         description: '模型目录快照恢复',
       });
 
-      // Enqueue push task on the transaction client.
-      const { taskId } = await enqueueLlmPush(client, {
-        kind: 'global_push',
-        scope: null,
-        trigger: 'retry',
-        prevLibrary: lockedPrevious,
-        nextLibrary: restored,
-        actor: actor ?? 'service',
-        actorType,
-        releaseId,
-        scopeType: 'full',
-      });
+      let taskId: string | null = null;
+      if (rollout.mode === 'rollout') {
+        const rolloutService = new CatalogRolloutService(client as unknown as pg.Pool);
+        const rolloutResult = await rolloutService.enqueueReleaseMutationRollout({
+          releaseId,
+          scopeType: rollout.scopeType,
+          tenantIds: rollout.tenantIds,
+          actor,
+          actorType,
+          idempotencyKey,
+          prevLibrary: lockedPrevious,
+          nextLibrary: restored,
+          trigger: 'retry',
+        });
+        taskId = rolloutResult.taskId;
+      }
 
       await client.query('COMMIT');
 
@@ -608,6 +678,31 @@ export class CatalogReleaseService {
   }
 
   // ── Private helpers ──
+
+  /** Build the canonical Authority projection through the shared builder. */
+  private async buildAuthoritySnapshot(database: pg.Pool | pg.PoolClient): Promise<LlmProvidersConfig> {
+    const repository = new CatalogRepository(database as unknown as pg.Pool);
+    return new CatalogService(repository).buildCatalogSnapshot();
+  }
+
+  /** Validate rollout scope invariants before starting a transaction. */
+  private validateRolloutPolicy(policy: ReleaseRolloutPolicy): void {
+    if (policy.mode === 'no-rollout') return;
+    const tenantIds = policy.tenantIds;
+    if (tenantIds !== undefined &&
+        (!Array.isArray(tenantIds) || tenantIds.some((id) => typeof id !== 'string' || id.trim() === ''))) {
+      throw new Error('INVALID_ROLLOUT_POLICY: tenantIds must contain non-empty strings');
+    }
+    if (policy.scopeType === 'single' && tenantIds?.length !== 1) {
+      throw new Error('INVALID_ROLLOUT_POLICY: single requires exactly one tenantId');
+    }
+    if ((policy.scopeType === 'allowlist' || policy.scopeType === 'canary') && !tenantIds?.length) {
+      throw new Error(`INVALID_ROLLOUT_POLICY: ${policy.scopeType} requires tenantIds`);
+    }
+    if ((policy.scopeType === 'full' || policy.scopeType === 'affected') && tenantIds !== undefined) {
+      throw new Error(`INVALID_ROLLOUT_POLICY: ${policy.scopeType} does not accept tenantIds`);
+    }
+  }
 
   /** Find a release by its idempotency key. */
   private async findReleaseByIdempotencyKey(key: string): Promise<CatalogReleaseRecord | null> {

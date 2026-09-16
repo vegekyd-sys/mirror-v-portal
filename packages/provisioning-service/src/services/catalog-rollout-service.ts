@@ -318,6 +318,46 @@ export class CatalogRolloutService {
   }
 
   /**
+   * Enqueue rollout as part of an already-open Release mutation transaction.
+   * The service must be constructed with that transaction client.
+   */
+  async enqueueReleaseMutationRollout(params: ScopedRolloutParams & {
+    prevLibrary: LlmProvidersConfig | null;
+    nextLibrary: LlmProvidersConfig;
+    trigger: 'save' | 'retry';
+  }): Promise<{ taskId: string; status: string; total: number }> {
+    const targetTenantIds = await this.resolveTargetTenants(
+      params.scopeType,
+      params.tenantIds,
+      params.prevLibrary,
+      params.nextLibrary,
+    );
+    const pushResult = await enqueueLlmPush(this.pool, {
+      kind: params.scopeType === 'single' ? 'tenant_push' : 'global_push',
+      scope: params.scopeType === 'single' ? targetTenantIds[0] ?? null : null,
+      trigger: params.trigger,
+      prevLibrary: params.prevLibrary,
+      nextLibrary: params.nextLibrary,
+      actor: params.actor ?? 'service',
+      actorType: params.actorType,
+      releaseId: params.releaseId,
+      scopeType: params.scopeType,
+      idempotencyKey: params.idempotencyKey,
+    });
+    if (targetTenantIds.length > 0 && params.scopeType !== 'full') {
+      await this.enqueueBatchedItems(pushResult.taskId, targetTenantIds, targetTenantIds.length);
+      await this.pool.query(
+        `UPDATE llm_push_tasks SET total_count = $1 WHERE id = $2`,
+        [targetTenantIds.length, pushResult.taskId],
+      );
+    }
+    if (targetTenantIds.length > 0) {
+      await this.initTenantReleaseStatus(params.releaseId, targetTenantIds);
+    }
+    return { taskId: pushResult.taskId, status: pushResult.status, total: targetTenantIds.length };
+  }
+
+  /**
    * Update a tenant's applied release status after the worker completes
    * (or skips / fails) the rollout for that tenant.
    */
