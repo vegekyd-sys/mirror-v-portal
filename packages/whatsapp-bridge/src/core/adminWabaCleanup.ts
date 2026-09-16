@@ -133,6 +133,24 @@ function scopeWhere(supplierId?: string) {
   return supplierId ? { supplierId } : {};
 }
 
+/**
+ * 绑定模型（2026-09-16 回滚后）回到 **WABA 级归属**：`WabaPhone` 不再持有租户，
+ * 「这个号属于谁」由 `WabaOnboarding(partnerCustomerId, wabaId, CONNECTED)` 决定。
+ * 因此按租户清理时必须先解析该租户名下的 WABA，再按 wabaId 收范围。
+ */
+async function scopedWabaIds(db: CleanupDb, supplierId?: string): Promise<string[]> {
+  if (!supplierId) return [];
+  const rows = await db.wabaOnboarding.findMany({
+    where: { partnerCustomerId: supplierId },
+    select: { wabaId: true },
+  });
+  return [...new Set(rows.map((row) => row.wabaId).filter((id): id is string => Boolean(id)))];
+}
+
+function wabaPhoneWhere(supplierId?: string, wabaIds: string[] = []) {
+  return supplierId ? { wabaId: { in: wabaIds } } : {};
+}
+
 async function countData(db: CleanupDb, input: NormalizedCleanup): Promise<WhatsappCleanupCounts> {
   const supplierId = input.supplierId;
   const counts = emptyCounts();
@@ -143,7 +161,8 @@ async function countData(db: CleanupDb, input: NormalizedCleanup): Promise<Whats
   counts.conversations = await db.conversation.count({ where: scopeWhere(supplierId) });
   counts.customers = await db.customer.count({ where: scopeWhere(supplierId) });
   counts.webhookEvents = await db.webhookEvent.count({ where: scopeWhere(supplierId) });
-  counts.wabaPhones = await db.wabaPhone.count({ where: scopeWhere(supplierId) });
+  const wabaIds = await scopedWabaIds(db, supplierId);
+  counts.wabaPhones = await db.wabaPhone.count({ where: wabaPhoneWhere(supplierId, wabaIds) });
   counts.wabaOnboardings = await db.wabaOnboarding.count({
     where: supplierId ? { partnerCustomerId: supplierId } : {},
   });
@@ -174,11 +193,12 @@ async function deleteData(
   deleted.customers = (await db.customer.deleteMany({ where: scopeWhere(supplierId) })).count;
 
   // 独立运行数据与路由/绑定。
+  const wabaIds = await scopedWabaIds(db, supplierId);
   deleted.webhookEvents = (
     await db.webhookEvent.deleteMany({ where: scopeWhere(supplierId) })
   ).count;
   deleted.wabaPhones = (
-    await db.wabaPhone.deleteMany({ where: scopeWhere(supplierId) })
+    await db.wabaPhone.deleteMany({ where: wabaPhoneWhere(supplierId, wabaIds) })
   ).count;
   deleted.wabaOnboardings = (
     await db.wabaOnboarding.deleteMany({

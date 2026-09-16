@@ -16,6 +16,7 @@ import { buildServer } from "./server";
 type Delegate = {
   count: (args?: unknown) => Promise<number>;
   deleteMany: (args?: unknown) => Promise<{ count: number }>;
+  findMany?: (args?: unknown) => Promise<unknown[]>;
 };
 
 type MutablePrisma = {
@@ -53,6 +54,7 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
       names.map((name) => [name, { count: db[name].count, deleteMany: db[name].deleteMany }]),
     ) as Record<Name, Delegate>,
     disabled: config.admin.dbCleanupDisabled,
+    wabaOnboardingFindMany: db.wabaOnboarding.findMany,
   };
 
   const counts: Record<Name, number> = {
@@ -66,7 +68,7 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
     feishuApp: 1,
     appSetting: 1,
   };
-  const calls: Array<{ op: "count" | "delete"; table: Name; args: unknown }> = [];
+  const calls: Array<{ op: "count" | "delete" | "find"; table: Name; args: unknown }> = [];
 
   before(() => {
     for (const name of names) {
@@ -83,6 +85,11 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
       assert.deepEqual(options, { isolationLevel: "Serializable" });
       return callback(db);
     };
+    // 回滚后 WabaPhone 没有 supplierId：按租户清理要先解析该租户名下的 WABA。
+    db.wabaOnboarding.findMany = async (args?: unknown) => {
+      calls.push({ op: "find", table: "wabaOnboarding", args });
+      return [{ wabaId: "waba-a" }];
+    };
   });
 
   beforeEach(() => {
@@ -97,6 +104,7 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
       db[name].deleteMany = originals.delegates[name].deleteMany;
     }
     config.admin.dbCleanupDisabled = originals.disabled;
+    db.wabaOnboarding.findMany = originals.wabaOnboardingFindMany;
   });
 
   async function post(payload?: Record<string, unknown>) {
@@ -174,6 +182,7 @@ describe("WhatsApp DB cleanup admin endpoint", { concurrency: false }, () => {
     const deleted = calls.filter((call) => call.op === "delete");
     assert.deepEqual(deleted[0].args, { where: { supplierId: "tenant-a" } });
     assert.deepEqual(deleted[1].args, { where: { conversation: { supplierId: "tenant-a" } } });
+    assert.deepEqual(deleted[5].args, { where: { wabaId: { in: ["waba-a"] } } });
     assert.deepEqual(deleted[6].args, { where: { partnerCustomerId: "tenant-a" } });
   });
 
