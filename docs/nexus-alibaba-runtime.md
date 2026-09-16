@@ -43,6 +43,26 @@ FC 自定义镜像模板要求同账号、同地域并绑定 VPC 的 ACR **企�
 
 两处约束是实测得到、必须保留在实现里的：`openclaw@2026.7.1` 的 engines 是 `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`，base 的 v20 不满足；`/vercel` 需要 `sudo` 创建后 `chown` 给 `user`，否则 `mkdir` 被拒。e2b 在非零退出时抛出 message 为空的 `CommandExitError`，脚本必须读 `exitCode`/`stderr`，否则失败原因会被吞掉。
 
+### 引导已接入 AlibabaProvider
+
+`AlibabaProvider.create` 在未配置 `templateId` 时用 `base` 创建并调用 `bootstrap`，`checkConfiguration` 改为要求本地存在 payload 归档（由 `scripts/build-alibaba-template.ts` 用 `git archive` 产出，不含客户数据）。引导以 revision 标记幂等，标记覆盖 node 版本、openclaw 版本和 payload 字节，最后写入——半成品引导不会在下次唤醒时被当作完成。
+
+`pnpm exec tsx scripts/verify-alibaba-bootstrap.ts` 实测（报告在私有 dataDir `alibaba-bootstrap.json`）：
+
+| 项 | 实测 |
+|---|---|
+| 首次创建（含引导） | 87.044 s |
+| 默认 `node` | v24.21.0 |
+| OpenClaw | `OpenClaw 2026.7.1 (2d2ddc4)` |
+| payload | 663 个文件 |
+| 同实例二次引导 | 0.249 s，`bootstrapped:false` |
+| pause / resume | 12.044 s / 1.359 s |
+| 休眠恢复后再引导 | 1.101 s，仍为 no-op，运行时完好 |
+
+两点必须记住：`ensure()` 用无路径的 `node` 运行 `boot.mjs`，因此引导用 `sudo ln -sf` 让 `/usr/local/bin/node` 指向新装的 v24，实测非登录 shell 同样生效；单次文件写入 32 MiB 会被拒（`InvalidArgumentError`），16 MiB 可用，payload 因此分块上传后在沙箱内合并。
+
+87 秒明显高于分步测量之和（约 44 秒），差值来自 `AlibabaSandbox.runCommand` 的后台执行加轮询开销，不是阿里侧耗时。首次创建仍在可接受范围，如需压缩可优先优化这里，其次才是回到自定义镜像。
+
 镜像路线未被否定，仅从关键路径移出：若之后要削掉这 21 秒首次成本或固定依赖版本，仍可购买 ACR EE 走 `scripts/build-alibaba-template.ts`。本地 `linux/amd64` 镜像 `nexus-dealclaw-alibaba:2026-09-14` 仍在，OpenClaw 本地启动约 5.209 秒。
 
 凭据仅保存在 gitignored 的本地私有配置，不进入文档、镜像或前端。
@@ -81,7 +101,7 @@ docker build --platform linux/amd64 --provenance=false --sbom=false -t nexus-dea
 1. ~~开通新加坡模板的暂停、恢复和自动暂停功能~~ — 2026-09-16 实测通过。
 2. ~~完成完整镜像的私有发布及 FC 模板构建~~ — 改为 base 模板唤醒时引导，已实测通过；ACR EE 路线保留为可选优化。
 3. ~~`scripts/verify-alibaba-lifecycle.ts`~~ — 2026-09-16 全项通过。
-4. 把 base 引导流程接入 `AlibabaProvider` 的 ensure 路径（当前 provider 仍假设镜像已内置运行时），并使引导具备幂等性与失败重试。
+4. ~~把 base 引导流程接入 `AlibabaProvider`，并使引导具备幂等性~~ — 2026-09-16 实测通过，含休眠恢复后的幂等验证。
 5. 使用 AlibabaProvider 完成真实 OpenClaw 聊天、过程流式、每轮备份、闲置后恢复记忆以及定时唤醒测试。
 6. 验收通过后设 `alibaba.enabled=true`，在没有活动执行时滚动更新本地 manager。浏览器试用列表将新增 `DealClaw 阿里云试用`，现有租户仍为 Vercel。
 
