@@ -291,6 +291,8 @@ def handle_status_event(event_type: str, data: dict) -> dict:
     result["campaign_id"] = outbound.get("campaign_id", "")
     result["lead_id"] = outbound.get("lead_id", "")
     result["contact_id"] = outbound.get("contact_id", "")
+    # 来源透传：回信闸门据此判定「能不能免确认自动回」（空→按需确认）
+    result["source"] = outbound.get("source", "")
 
     recipients = _outbound_recipients(outbound)
     buyer_email = recipients[0] if recipients else ""

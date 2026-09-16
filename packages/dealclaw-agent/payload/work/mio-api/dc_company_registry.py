@@ -40,10 +40,12 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "匹配度",   "type": "select", "multiple": False, "options": [
         {"name": "A"}, {"name": "B"}, {"name": "C"}, {"name": "待确认"}]},
     {"name": "来源",     "type": "select", "multiple": False, "options": [
-        {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
+        {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎客线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
         {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"},
-        {"name": "展中推荐"}]},
+        {"name": "展中推荐"}, {"name": "扫码买家"}]},
+    {"name": "线索大类", "type": "select", "multiple": False, "options": [
+        {"name": "展会买家"}, {"name": "常态买家"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [
         {"name": "待触达"}, {"name": "已触达"}, {"name": "已回复"},
         {"name": "报价中"}, {"name": "成交"}, {"name": "停止触达"},
@@ -66,7 +68,7 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
 # 冷热已退役（阶段④）；联系人=主要联系人（完整联系人存 customer.contacts[]）
 EXPECTED_FIELD_NAMES = {
     "公司名", "官网", "公司简介", "公司CDPID", "国家", "买家类型", "匹配产品",
-    "推荐理由", "联系人", "职位", "匹配度", "来源", "阶段",
+    "推荐理由", "联系人", "职位", "匹配度", "来源", "线索大类", "阶段",
     "跟进优先级", "优先级理由", "下一步动作", "截止时间", "最近联系时间",
     "买家回复数", "跟进档案链接", "联系策略", "商机状态", "优先级规则版本", "优先级更新时间",
 }
@@ -79,6 +81,8 @@ EXHIBITION_POOL_SCOPE = "exhibition"
 EXHIBITION_POOL_NAME_SUFFIX = "｜展中推荐"
 EXHIBITION_POOL_SOURCE = "展中推荐"
 EXHIBITION_POOL_STAGE = "现场对接中"
+#: 展会线索的统一大类（2026-09-15 用户定稿：来源 + 线索大类 两列）
+EXHIBITION_POOL_CATEGORY = "展会买家"
 
 
 def _now():
@@ -228,6 +232,28 @@ def _get_field_map(app_token: str, table_id: str) -> Dict[str, str]:
         if name and fid:
             field_map[name] = fid
     return field_map
+
+
+def _ensure_missing_pool_fields(app_token: str, table_id: str, field_map: Dict[str, str]) -> tuple[Dict[str, str], list[str]]:
+    """给已有线索池补缺失字段（幂等）。
+
+    新池由 `+base-create --fields` 一次带全；旧池以前只刷新 field_map、不建列，
+    导致新增「线索大类」永远写不进去。这里统一补齐，失败直接抛出，不能静默让写入
+    继续落到缺列的旧表。
+    """
+    definitions = json.loads(LEAD_POOL_FIELDS_JSON)
+    missing = [f for f in definitions if f.get("name") not in field_map]
+    if not missing:
+        return field_map, []
+    _run_lark(
+        "base", "+field-create",
+        "--base-token", app_token,
+        "--table-id", table_id,
+        "--json", json.dumps(missing, ensure_ascii=False),
+        "--as", "bot",
+        timeout=60,
+    )
+    return _get_field_map(app_token, table_id), [str(f["name"]) for f in missing]
 
 
 def _extract_field(result: dict) -> Optional[dict]:
@@ -450,9 +476,12 @@ def ensure_company_lead_pool(
                     f"https://versa-ai.feishu.cn/base/{existing['app_token']}?table={existing['table_id']}",
             }
             return result
-        # field_map 不完整 → 尝试刷新
+        # field_map 不完整 → 刷新并补齐缺列（旧池兼容新增「线索大类」等字段）
         try:
             fresh_map = _get_field_map(existing["app_token"], existing["table_id"])
+            fresh_map, created_fields = _ensure_missing_pool_fields(
+                existing["app_token"], existing["table_id"], fresh_map
+            )
             existing["field_map"] = fresh_map
             registry.set(company_id, existing, canonical=canonicalize_id)
             return {
@@ -460,6 +489,7 @@ def ensure_company_lead_pool(
                 "table_id": existing["table_id"],
                 "field_map": fresh_map,
                 "created": False,
+                "fields_created": created_fields,
                 "bitable_url": existing.get("bitable_url") or
                     f"https://versa-ai.feishu.cn/base/{existing['app_token']}?table={existing['table_id']}",
             }
@@ -474,6 +504,9 @@ def ensure_company_lead_pool(
         recovered = None
     if recovered:
         field_map = _get_field_map(recovered["app_token"], recovered["table_id"])
+        field_map, created_fields = _ensure_missing_pool_fields(
+            recovered["app_token"], recovered["table_id"], field_map
+        )
         entry = {
             **recovered,
             "field_map": field_map,
@@ -482,7 +515,7 @@ def ensure_company_lead_pool(
             "updated_at": _now(),
         }
         registry.set(company_id, entry, canonical=canonicalize_id)
-        return {**entry, "created": False, "recovered": True}
+        return {**entry, "created": False, "recovered": True, "fields_created": created_fields}
 
     # 2. 创建新线索池（lark-cli base 一步搞定：建 base + 建表 + 建全部字段）
     bitable = _create_bitable(company_name)
@@ -1085,7 +1118,7 @@ def sync_exhibition_leads_to_pool(
     out = sync_records_to_pool(
         pool["app_token"], pool["table_id"], records,
         source=source,
-        ensure_select_values={"来源": [source], "阶段": [stage]},
+        ensure_select_values={"来源": [source], "阶段": [stage], "线索大类": [EXHIBITION_POOL_CATEGORY]},
     )
     out.update({
         "bitable_url": pool["bitable_url"],

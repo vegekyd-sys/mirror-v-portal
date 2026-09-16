@@ -455,6 +455,14 @@ def run(args) -> dict:
     if not company_id:
         raise SystemExit("[dc_onsite_recommend] 无法确定企业 ID")
 
+    # 执行闸门：展中推荐属「需确认」类，绝不能免确认自动发（2026-09-15 定稿）
+    try:
+        from dc_exhibition_policy import decide_send  # noqa: PLC0415
+        send_policy = decide_send(ONSITE_POOL_SOURCE, stage="展中")
+    except Exception:  # noqa: BLE001
+        send_policy = {"action": "confirm", "auto": False,
+                       "reason": "闸门不可用 → 按最保守处理"}
+
     # 确定当前开展展会
     if args.exhibition_id:
         exhs = [{"exhibitionId": args.exhibition_id, "name": "", "country": "",
@@ -494,7 +502,8 @@ def run(args) -> dict:
                             "pool": pool})
 
     return {"action": "onsite_recommend", "company_id": company_id,
-            "exhibitions": len(exhs), "results": results}
+            "exhibitions": len(exhs), "results": results,
+            "send_policy": send_policy}
 
 
 def main() -> None:

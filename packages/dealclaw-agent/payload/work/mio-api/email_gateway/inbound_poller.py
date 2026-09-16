@@ -158,16 +158,60 @@ def _substantive(item: dict, event: dict, ingest_result: dict | None = None) -> 
     return True, "unknown_content"
 
 
+def _resolve_reply_source(res: dict, data: dict) -> str:
+    """解析回信对应的来源（闸门判据）。取不到就返回空串 → 需确认。"""
+    for key in ("source", "来源", "来源渠道"):
+        for holder in (res, data):
+            val = holder.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
 def _reply_brief(item: dict, event: dict, ingest_result: dict | None = None,
-                 attribution: dict | None = None) -> dict:
+                 attribution: dict | None = None, *, source_channel: str = "",
+                 stage: str = "", in_exhibition: bool | None = None,
+                 materials_ready: bool = False) -> dict:
     """给 agent 消费的新回信事实包（不含任何"发给谁"的投递决策）。
 
     设计意图：邮件直接交给 V（项目 agent）读取，由 V 自己出解读与下一步，
     因此这里只提供**原始事实**（发件人/主题/到达时间/正文摘录/已识别信号），
     不做二次加工，避免模板话术盖住模型判断。
+
+    例外：``reply_policy`` 是**执行闸门结论**（能不能免确认自动回），不是话术模板。
+    它来自 ``dc_exhibition_policy.decide_reply`` 这个单一判定源；来源/阶段未知时
+    一律回落 ``confirm``，与人工确认铁律一致。
     """
     data = event.get("payload") or {}
     res = ingest_result or {}
+
+    try:
+        from dc_exhibition_policy import decide_reply  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        decide_reply = None
+    # 来源：显式传入优先，否则从 ingest 结果 / 事件载荷自动解析（取不到 → 需确认）
+    if not source_channel:
+        source_channel = _resolve_reply_source(res, data)
+    # 阶段：没显式给就走展会模式自动判定（展会期内按「展中」）
+    if not stage and in_exhibition is None:
+        try:
+            from dc_exhibition_mode import in_exhibition_mode  # noqa: PLC0415
+            in_exhibition = in_exhibition_mode()
+        except Exception:  # noqa: BLE001
+            in_exhibition = None
+    if decide_reply is not None:
+        try:
+            reply_policy = decide_reply(
+                source_channel, stage=stage, in_exhibition=in_exhibition,
+                materials_ready=materials_ready,
+            )
+        except Exception:  # noqa: BLE001
+            reply_policy = {"action": "confirm", "auto": False,
+                            "reason": "闸门异常 → 按最保守处理", "source_channel": source_channel}
+    else:
+        reply_policy = {"action": "confirm", "auto": False,
+                        "reason": "闸门不可用 → 按最保守处理", "source_channel": source_channel}
+
     excerpt = ""
     for key in ("text_preview", "preview", "excerpt", "snippet"):
         val = res.get(key) or data.get(key)
@@ -191,6 +235,8 @@ def _reply_brief(item: dict, event: dict, ingest_result: dict | None = None,
         "attribution": attribution or {},
         "substantive": substantive,
         "non_substantive_reason": "" if substantive else why,
+        # 执行闸门：auto_reply 才允许免确认自动回；confirm 必须人工确认
+        "reply_policy": reply_policy,
     }
 
 

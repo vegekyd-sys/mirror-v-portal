@@ -34,9 +34,12 @@ LEAD_POOL_FIELDS_JSON = json.dumps([
     {"name": "推荐理由", "type": "text"},
     {"name": "联系人",   "type": "text"},
     {"name": "来源",     "type": "select", "multiple": False, "options": [
-        {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎采线索"},
+        {"name": "引擎搜索"}, {"name": "星擎线索"}, {"name": "猎客线索"},
         {"name": "米奥数据库"}, {"name": "Apollo数据库"}, {"name": "展会线索"},
-        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"}]},
+        {"name": "历届展会"}, {"name": "用户导入"}, {"name": "买家推荐"},
+        {"name": "展中推荐"}, {"name": "扫码买家"}]},
+    {"name": "线索大类", "type": "select", "multiple": False, "options": [
+        {"name": "展会买家"}, {"name": "常态买家"}]},
     {"name": "冷热",     "type": "select", "multiple": False, "options": [
         {"name": "🔥热"}, {"name": "❄️冷"}]},
     {"name": "阶段",     "type": "select", "multiple": False, "options": [

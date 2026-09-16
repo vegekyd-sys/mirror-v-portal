@@ -168,6 +168,7 @@ class SmtpSender:
         touch_number: int = 0,
         content_version: str = "",
         thread_id: str = "",
+        source: str = "",
     ) -> dict[str, Any]:
         if not to or any("@" not in address for address in [*to, *(cc or []), *(bcc or [])]):
             raise ValueError("valid recipients are required")
@@ -318,6 +319,8 @@ class SmtpSender:
                 "lead_id": lead_id,
                 "contact_id": contact_id,
                 "contact_name": resolved_name,
+                # 来源：回信时据此判定「能不能免确认自动回」（展会闸门读它）
+                "source": source or "",
                 "idempotency_key": idempotency_key,
                 # 个人邮箱 SMTP 无投递回执：发信成功即乐观默认 delivered，
                 # 后续 IMAP 扫到退信 NDR 时由 mark_bounced_by_contact 改回 bounced。

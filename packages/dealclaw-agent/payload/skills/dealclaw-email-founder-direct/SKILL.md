@@ -121,3 +121,22 @@ bash scripts/dealclaw-billing-record.sh <tenantId> dealclaw-email-founder-direct
 ```
 
 - 后台异步，不阻塞回复；失败静默
+
+## 邮件计费上报（按发送次数，小元 credit）
+
+> 2026-09-15 新增：每封邮件**成功发出后**，按**实际发出条数**上报一次。
+
+```bash
+xiaoyuan report-usage \
+  --api-code "dealclaw-email-founder-direct" \
+  --api-name "一对一精准开发信" \
+  --quantity <本次成功发出的邮件条数>
+```
+
+- `--quantity` = 本次**真实成功发出**的条数；失败 / 被闸门拦截 / 被时区窗口阻断的**不计**
+- 不传 `--credit` → 走平台定价表；**未配置则按 0 计**（所以 code 必须与定价表一致）
+- 余额不足：服务端置 0、**不拒绝发送**（计费不阻断业务）
+- 上报失败静默，不阻塞主流程；但**结果里要能看出是否已上报**（可观测）
+- 与既有 `dealclaw-billing-record.sh`（shadow 记录）**并存**：shadow 继续记，本条是正式扣点
+
+- 定价表单价：**200 credit/单位**（`credits-ledger/skill_pricing_full.tsv`）
