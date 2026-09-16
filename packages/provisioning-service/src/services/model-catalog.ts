@@ -493,38 +493,57 @@ export class CatalogRepository {
     expectedRevision: number,
     updatedBy: string | null,
   ): Promise<GlobalModelPolicyRecord> {
-    const refs = [
+    const refs = [...new Set([
       input.defaultModel, input.imageModel, input.compactionModel,
       ...input.fallbackModels,
-    ].filter((r): r is string => r !== null)
-    if (refs.length) {
-      const { rows } = await this.pool.query(
-        `SELECT id FROM llm_provider_models
-          WHERE id = ANY($1::text[]) AND runtime_enabled=TRUE`,
-        [refs],
-      )
-      const found = new Set(rows.map((r) => String(r.id)))
-      const missing = refs.filter((r) => !found.has(r))
-      if (missing.length) {
-        throw new Error(`DANGLING_MODEL_REFERENCE: models not found or not runtime-enabled: ${missing.join(', ')}`)
-      }
-    }
+    ].filter((r): r is string => r !== null))]
+    // Validate references and mutate the policy in one statement. This closes the
+    // SELECT→UPDATE window in which a model/provider could otherwise be disabled.
     const { rows } = await this.pool.query(
-      `UPDATE llm_global_model_policy
+      `UPDATE llm_global_model_policy policy
          SET default_model=$2, image_model=$3, compaction_model=$4,
-             fallback_models=$5, revision=revision+1, updated_by=$6, updated_at=NOW()
-       WHERE id='current' AND revision=$1
-       RETURNING *`,
+             fallback_models=$5, revision=policy.revision+1, updated_by=$6, updated_at=NOW()
+       WHERE policy.id='current'
+         AND policy.revision=$1
+         AND NOT EXISTS (
+           SELECT 1
+             FROM unnest($7::text[]) requested(id)
+            WHERE NOT EXISTS (
+              SELECT 1
+                FROM llm_provider_models model
+                JOIN llm_provider_instances provider ON provider.id=model.provider_instance_id
+               WHERE model.id=requested.id
+                 AND model.runtime_enabled=TRUE
+                 AND provider.enabled=TRUE
+            )
+         )
+       RETURNING policy.*`,
       [expectedRevision,
        input.defaultModel, input.imageModel, input.compactionModel,
-       input.fallbackModels, updatedBy],
+       input.fallbackModels, updatedBy, refs],
     )
     if (!rows.length) {
-      const { rows: check } = await this.pool.query(
-        `SELECT revision FROM llm_global_model_policy WHERE id='current'`,
-      )
-      if (!check.length) throw new Error('Global model policy row not found')
-      throw new Error(`STALE_REVISION: expected ${expectedRevision}, got ${check[0].revision}`)
+      const [{ rows: policyRows }, { rows: validRows }] = await Promise.all([
+        this.pool.query(`SELECT revision FROM llm_global_model_policy WHERE id='current'`),
+        refs.length === 0
+          ? Promise.resolve({ rows: [] })
+          : this.pool.query(
+            `SELECT model.id
+               FROM llm_provider_models model
+               JOIN llm_provider_instances provider ON provider.id=model.provider_instance_id
+              WHERE model.id = ANY($1::text[])
+                AND model.runtime_enabled=TRUE
+                AND provider.enabled=TRUE`,
+            [refs],
+          ),
+      ])
+      if (!policyRows.length) throw new Error('Global model policy row not found')
+      if (Number(policyRows[0].revision) !== expectedRevision) {
+        throw new Error(`STALE_REVISION: expected ${expectedRevision}, got ${policyRows[0].revision}`)
+      }
+      const found = new Set(validRows.map((candidate) => String(candidate.id)))
+      const missing = refs.filter((ref) => !found.has(ref))
+      throw new Error(`DANGLING_MODEL_REFERENCE: models or providers not found or not runtime-enabled: ${missing.join(', ')}`)
     }
     const row = rows[0]
     return {

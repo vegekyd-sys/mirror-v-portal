@@ -174,4 +174,24 @@ describe('GlobalPolicyBackfillService', () => {
     });
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('never treats unresolved references as equivalent to an empty policy', async () => {
+    const { service, update } = setup({
+      legacy: {
+        providers: [],
+        defaultModel: 'missing/model',
+        imageModel: null,
+        compactionModel: null,
+        fallbackModels: [],
+      },
+      catalog: [],
+    });
+    const preview = await service.preview();
+    expect(preview).toMatchObject({ ready: false, equivalent: false });
+    expect(preview.missingRefs).toEqual([{ kind: 'defaultModel', ref: 'missing/model' }]);
+    await expect(service.apply({ dryRun: false })).rejects.toMatchObject({
+      code: 'BACKFILL_NOT_READY',
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
 });

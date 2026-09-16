@@ -159,7 +159,11 @@ export class GlobalPolicyBackfillService {
       .map((ref) => resolve('fallbackModels', ref))
       .filter((id): id is string => id !== null);
 
-    const equivalent = currentPolicy !== null && policiesEqual(currentPolicy, resolvedIds);
+    const referencesReady = missingRefs.length === 0 && ambiguousRefs.length === 0 &&
+      disabledRefs.length === 0;
+    // Never call a partially resolved policy equivalent: unresolved refs are represented
+    // as null/filtered values and could otherwise accidentally equal an empty policy.
+    const equivalent = referencesReady && currentPolicy !== null && policiesEqual(currentPolicy, resolvedIds);
     const overwriteBlocked = currentPolicy !== null && !isEmptyPolicy(currentPolicy) && !equivalent && !force;
     return {
       sourceRefs,
@@ -168,8 +172,7 @@ export class GlobalPolicyBackfillService {
       ambiguousRefs,
       disabledRefs,
       currentPolicy,
-      ready: missingRefs.length === 0 && ambiguousRefs.length === 0 &&
-        disabledRefs.length === 0 && !overwriteBlocked,
+      ready: referencesReady && !overwriteBlocked,
       equivalent,
       overwriteBlocked,
     };
@@ -180,6 +183,13 @@ export class GlobalPolicyBackfillService {
     const dryRun = options.dryRun !== false;
     const preview = await this.preview(options.force === true);
     if (dryRun) return { ...preview, action: 'dry-run', policy: preview.currentPolicy };
+    // Readiness must precede equivalence because unresolved refs collapse to null.
+    if (!preview.ready && !preview.overwriteBlocked) {
+      throw new GlobalPolicyBackfillError(
+        'BACKFILL_NOT_READY',
+        'Legacy model references must each resolve uniquely to a runtime-enabled Catalog model',
+      );
+    }
     if (preview.equivalent) return { ...preview, action: 'no-op', policy: preview.currentPolicy };
     if (preview.overwriteBlocked) {
       throw new GlobalPolicyBackfillError(
