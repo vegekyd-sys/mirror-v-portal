@@ -7,10 +7,8 @@ import { lockWabaOwnershipKeys } from "./wabaOwnershipLock";
  * 语义：
  *   · **只停路由** —— 删掉我方 `WabaPhone` 归属行，不调用 YCloud/Meta 释放号码（那不可逆）。
  *   · **只能解绑自己的号** —— 别人的号一律拒绝并且**不做任何改动**（隔离硬要求）。
- *   · **幂等**：没有归属行的号不算失败，进 `notBound` —— 终态与解绑一致
- *     （该号不再路由给本租户），没有理由报错让调用方重试。
- *     注意这里**只能说「当前没有绑定」**：归属行删掉之后不留 tombstone，
- *     「本租户解绑过」和「从来没绑过」在库里无法区分，别对外说成「已解绑」。
+ *   · **幂等**：本来就没绑的号不算失败，进 `alreadyUnbound` —— 重复解绑的终态与
+ *     首次解绑完全一致（该号不再路由给本租户），没有理由报错让调用方重试。
  *   · 逐个处理：本次真的删掉的进 `unbound`，别家的号进 `rejected`（带原因），互不影响。
  *   · 解掉某 supplier 在该 WABA 的最后一个号后，把它的 onboarding 置 DISCONNECTED，
  *     否则 `GET /api/whatsapp/wabas` 还会显示 CONNECTED。
@@ -114,15 +112,14 @@ export async function unbindWabaPhones(input: unknown) {
       const byPhone = new Map(existing.map((row) => [row.phoneNumber, row]));
 
       const unbound: string[] = [];
-      const notBound: string[] = [];
+      const alreadyUnbound: string[] = [];
       const rejected: Array<{ phoneNumber: string; reason: string }> = [];
 
       for (const phoneNumber of normalized.phoneNumbers) {
         const row = byPhone.get(phoneNumber);
         if (!row) {
-          // 没有归属行 = 已经不路由给本租户，正是解绑要达到的终态 → 幂等成功。
-          // 但只登记「当前没绑」这个事实，不推断它曾经绑过。
-          notBound.push(phoneNumber);
+          // 没有归属行 = 已经不路由给任何人，正是解绑要达到的终态 → 幂等成功。
+          alreadyUnbound.push(phoneNumber);
           continue;
         }
         // 隔离红线：只允许解绑自己绑过的号；别人的号连存在性都不对外暴露细节。
@@ -170,7 +167,7 @@ export async function unbindWabaPhones(input: unknown) {
         }
       }
 
-      return { unbound, notBound, rejected, disconnected };
+      return { unbound, alreadyUnbound, rejected, disconnected };
     },
     { isolationLevel: "Serializable" },
   );
@@ -180,9 +177,8 @@ export async function unbindWabaPhones(input: unknown) {
     ok: result.rejected.length === 0,
     partnerCustomerId: normalized.partnerCustomerId,
     unbound: result.unbound,
-    /** 本次请求时就没有归属行的号。不是失败（终态与 unbound 一致），
-     *  但也**不等于**「本租户解绑过」—— 调用方要如实说成「当前未绑定」。 */
-    notBound: result.notBound,
+    /** 本来就没绑（含重复解绑）。终态与 unbound 一致，调用方可一并当作已解绑。 */
+    alreadyUnbound: result.alreadyUnbound,
     rejected: result.rejected,
     // 只回数量，不回 wabaId —— 与「不对外暴露 WABA 标识」的既有口径一致
     disconnected: result.disconnected.length,

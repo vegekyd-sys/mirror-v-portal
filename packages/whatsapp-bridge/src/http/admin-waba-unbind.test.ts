@@ -8,8 +8,7 @@ import { buildServer } from "./server";
  * 解绑手机号（2026-09-15）：**
  *   · 只停路由（删我方 WabaPhone 归属行），不调 YCloud/Meta；
  *   · 只能解绑自己的号 —— 别人的号一律 rejected 且**不做任何改动**（隔离硬要求）；
- *   · 幂等 —— 当前没绑的号进 notBound，算成功，不让调用方误以为要重试；
- *     但只登记「当前没绑」，不推断它曾经绑过（归属行删掉不留 tombstone）；
+ *   · 幂等 —— 本来就没绑的号进 alreadyUnbound，算成功，不让调用方误以为要重试；
  *   · 解掉某 supplier 在该 WABA 的最后一个号后，onboarding 置 DISCONNECTED。
  */
 
@@ -155,7 +154,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
       { phoneNumber: "+8615895553765", reason: "not_owned_by_caller" },
     ]);
     assert.equal(response.json().ok, false, "别家的号仍必须是失败，幂等只放宽 not_bound");
-    assert.deepEqual(response.json().notBound, [], "别家的号是失败，不是「当前未绑定」");
+    assert.deepEqual(response.json().alreadyUnbound, [], "别家的号不是「已解绑」");
     assert.deepEqual(deleted, [], "别人的号绝对不能删");
     assert.equal(disconnected, 0);
     assert.equal(
@@ -168,14 +167,14 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     assert.equal(response.body.includes("12345678901"), false);
   });
 
-  it("reports a phone with no binding as notBound, not as an unbind that happened", async () => {
+  it("treats an unbound phone as idempotent success without touching anything", async () => {
     const response = await post({
       partnerCustomerId: "tenant-a",
       phoneNumbers: ["+8613000000000"],
     });
     assert.equal(response.statusCode, 200);
-    // 终态就是「该号不路由给本租户」—— 和解绑一致，没有理由报错让人重试
-    assert.deepEqual(response.json().notBound, ["+8613000000000"]);
+    // 终态就是「该号不路由给本租户」—— 和首次解绑一致，没有理由报错让人重试
+    assert.deepEqual(response.json().alreadyUnbound, ["+8613000000000"]);
     assert.deepEqual(response.json().unbound, [], "没真删就不能说成本次解绑的");
     assert.deepEqual(response.json().rejected, []);
     assert.equal(response.json().ok, true);
@@ -200,9 +199,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     });
     assert.equal(second.statusCode, 200);
     assert.equal(second.json().ok, true, "重复解绑必须是成功");
-    // 重放和「从没绑过」在库里无法区分，所以只能落在 notBound，不能声称本次解绑了
-    assert.deepEqual(second.json().notBound, ["+8615895553765"]);
-    assert.deepEqual(second.json().unbound, []);
+    assert.deepEqual(second.json().alreadyUnbound, ["+8615895553765"]);
     assert.deepEqual(second.json().rejected, []);
   });
 
