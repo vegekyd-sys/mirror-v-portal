@@ -31,14 +31,6 @@ describe("tenant isolation", () => {
     assert.throws(() => selectTenantOwnedWaba("tenant-b", "waba-a", bindings), {
       code: "WABA_TENANT_MISMATCH",
     });
-    // 共享 WABA：同一 WABA 有多个 CONNECTED owner 不再算冲突，各自都能认领自己的行
-    assert.equal(
-      selectTenantOwnedWaba("tenant-a", "waba-a", [
-        ...bindings,
-        { wabaId: "waba-a", partnerCustomerId: "tenant-b", status: "CONNECTED" },
-      ]).partnerCustomerId,
-      "tenant-a",
-    );
   });
 
   it("resolves Feishu reply WABA only from the conversation tenant and business phone candidates", () => {
@@ -49,14 +41,13 @@ describe("tenant isolation", () => {
     assert.throws(() => selectConversationWaba("tenant-c", ["waba-a"], bindings), {
       code: "WABA_PHONE_BINDING_MISSING",
     });
-    // 共享 WABA（2026-09-15）：同一个 WABA 有别的 CONNECTED owner 是正常状态，
-    // 只要本租户自己也是 owner，就应该正常回发，不再判 WABA_TENANT_AMBIGUOUS。
-    assert.equal(
-      selectConversationWaba("tenant-a", ["waba-a"], [
-        ...bindings,
-        { wabaId: "waba-a", partnerCustomerId: "tenant-b", status: "CONNECTED" },
-      ]),
-      "waba-a",
+    assert.throws(
+      () =>
+        selectConversationWaba("tenant-a", ["waba-a"], [
+          ...bindings,
+          { wabaId: "waba-a", partnerCustomerId: "tenant-b", status: "CONNECTED" },
+        ]),
+      { code: "WABA_TENANT_AMBIGUOUS" },
     );
   });
 

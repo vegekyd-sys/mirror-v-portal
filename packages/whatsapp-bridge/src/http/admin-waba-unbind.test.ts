@@ -98,7 +98,7 @@ describe("unbind WABA phones (tenant isolation)", { concurrency: false }, () => 
     mutablePrisma.$transaction = originals.transaction;
   });
 
-  async function post(payload: Record<string, unknown>) {
+  async function post(payload: unknown) {
     const app = await buildServer();
     const response = await app.inject({
       method: "POST",

@@ -62,12 +62,17 @@ export function selectTenantOwnedWaba(
 ): WabaOwnerRow {
   const connected = rows.filter((row) => row.wabaId === wabaId && row.status === "CONNECTED");
   const owners = new Set(connected.map((row) => row.partnerCustomerId));
-  // 共享 WABA：一个 WABA 多个 CONNECTED owner 是正常状态，不再据 owner 数量判冲突，
-  // 只要求调用方自己确实在 owner 里。
   if (!owners.has(supplierId)) {
     throw new WabaTenantError(
       "WABA_TENANT_MISMATCH",
       "该 wabaId 未绑定到当前租户，或绑定尚未处于 CONNECTED 状态",
+    );
+  }
+  if (owners.size !== 1) {
+    throw new WabaTenantError(
+      "WABA_TENANT_AMBIGUOUS",
+      "该 wabaId 存在冲突的租户绑定，已拒绝操作",
+      409,
     );
   }
   return connected.find((row) => row.partnerCustomerId === supplierId)!;
@@ -114,10 +119,22 @@ export function selectConversationWaba(
       409,
     );
   }
-  // 共享 WABA（2026-09-15）：一个 WABA 会有多个 CONNECTED 的 supplier，
-  // 所以**不再**因「该 WABA 还有别的 owner」拒绝回发 —— 隔离由手机号级归属保证
-  // （能走到这里，已确认该企业号属于本 supplier）。
-  return candidates[0];
+  const selected = candidates[0];
+  if (
+    rows.some(
+      (row) =>
+        row.wabaId === selected &&
+        row.status === "CONNECTED" &&
+        row.partnerCustomerId !== supplierId,
+    )
+  ) {
+    throw new WabaTenantError(
+      "WABA_TENANT_AMBIGUOUS",
+      "该会话 WABA 存在冲突的租户绑定，已拒绝回发",
+      409,
+    );
+  }
+  return selected;
 }
 
 export async function resolveConversationWabaId(
