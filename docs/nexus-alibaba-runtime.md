@@ -1,16 +1,51 @@
 # Nexus 阿里云国际站后端
 
-## 状态（2026-09-14）
+## 状态（2026-09-16）
 
-新增 Alibaba FC Agent Sandbox provider，与 Vercel 并存。代码已通过本地构建和 29 项测试，但阿里完整聊天与休眠恢复尚未验收，`alibaba.enabled` 保持关闭，现有 Vercel 服务未切换。
+阿里云账号的暂停/恢复权限已开通，完整生命周期验收通过。`alibaba.enabled` 仍保持关闭，现有 Vercel 服务未切换；尚未完成真实 OpenClaw 聊天与飞书端试用。
 
-阿里云国际站新加坡 `ap-southeast-1` 已创建 `nexus-comparison` Team（Std）及专用、永不过期 API Key。凭据仅保存在 gitignored 的本地私有配置，不进入文档、镜像或前端。
+新加坡 `ap-southeast-1` 实测（`pnpm exec tsx scripts/verify-alibaba-lifecycle.ts`，报告在私有 dataDir `alibaba-lifecycle.json`）：
 
-真实基础设施验证：内置模板创建约 2.218 秒、1.866 秒，命令执行及文件写入通过。这是基础沙箱创建时间，不是 OpenClaw 首字时间。暂停请求返回 `pauseSession is not enabled for this function`；启用超时自动暂停创建返回 `enableAutoPause requires snapshot feature to be enabled for this function`。失败的测试实例已清理。原始测试报告在私有 dataDir 下 `alibaba-lifecycle.json`。
+| 步骤 | 实测 |
+|---|---|
+| 创建沙箱 | 1.621 s |
+| 命令执行 | 通过 |
+| `pause({keepMemory:false})` | 2.544 s |
+| `Sandbox.connect` 恢复 | 1.349 s |
+| 恢复后文件标记 | 与暂停前一致 |
+| 第二实例隔离 | 通过，看不到对方标记 |
+| 超时自动暂停 | 通过（真实等待后轮询确认 `paused`，非依赖接口返回值） |
+| 测试实例清理 | 通过 |
 
-当前控制台已经填写新加坡暂停/恢复/自动暂停开通申请，因账号“联系方式未设置”无法提交，尚无工单号。需补充联系信息并确认实际提交结果。不能把公开产品文档的休眠能力视为此账号已开通。
+这取代 2026-09-14 记录的 `pauseSession is not enabled for this function`。工单 `006547184EN` 涉及的暂停/恢复白名单已生效。
 
-本地 `linux/amd64` 镜像已构建：`nexus-dealclaw-alibaba:2026-09-14`。通过非 root 用户 `node` 的完整 boot 检查，OpenClaw 启动约 5.209 秒，再次 boot 成功复用进程；这是本地 Docker 验证，不是阿里启动性能，也未调用模型。执行 `pnpm exec tsx scripts/verify-alibaba-image.ts` 可复现，脚本使用占位凭据并在结束时清理测试容器。
+### 自动暂停有 600 秒下限，主动暂停没有
+
+`enableAutoPause` 要求 `sessionIdleTimeoutInSeconds >= 600`，传 60 会被拒。这不影响计费模型：Nexus 的空闲释放主线是自己的 collector 主动调用 `provider.stop()`（`src/manager.ts` 的 `collect`，按每租户 `idle_seconds` 判定，取值域 15–1800 秒，默认 60 秒），主动 `pause` 不受 600 秒限制。平台 autoPause 只作为 manager 失联时的兜底网，验收脚本据此把兜底超时设为 600 秒。
+
+### 自定义镜像不在关键路径上
+
+FC 自定义镜像模板要求同账号、同地域并绑定 VPC 的 ACR **企业版**（经济版不支持），是订阅制固定月费。实测表明内置 `base` 模板可以在唤醒时引导出可用运行时，因此 ACR EE 不是跑通的前置条件。
+
+`pnpm exec tsx scripts/probe-alibaba-base-bootstrap.ts` 在新加坡实测（报告在私有 dataDir `alibaba-base-bootstrap.json`）：
+
+| 步骤 | 实测 | 说明 |
+|---|---|---|
+| 创建 base 沙箱 | 2.548 s | |
+| 重建 `/vercel` 布局 | 1.007 s | base 以 uid 1000 `user` 运行且无 `/vercel`，`sudo -n` 可用 |
+| 安装 node v24.21.0 | 2.273 s | base 自带 v20.20.2，不满足 openclaw engines |
+| 安装 openclaw@2026.7.1 | 17.760 s | |
+| **首次引导合计** | **21.040 s** | 仅每个 Agent 首次创建时发生 |
+| `--version` 验证 | `OpenClaw 2026.7.1 (2d2ddc4)` | |
+| 引导后体积 | 602 M | |
+| pause / resume | 11.485 s / 1.147 s | |
+| 恢复后 `--version` | 与引导时一致 | 引导结果随文件系统完整保留 |
+
+两处约束是实测得到、必须保留在实现里的：`openclaw@2026.7.1` 的 engines 是 `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`，base 的 v20 不满足；`/vercel` 需要 `sudo` 创建后 `chown` 给 `user`，否则 `mkdir` 被拒。e2b 在非零退出时抛出 message 为空的 `CommandExitError`，脚本必须读 `exitCode`/`stderr`，否则失败原因会被吞掉。
+
+镜像路线未被否定，仅从关键路径移出：若之后要削掉这 21 秒首次成本或固定依赖版本，仍可购买 ACR EE 走 `scripts/build-alibaba-template.ts`。本地 `linux/amd64` 镜像 `nexus-dealclaw-alibaba:2026-09-14` 仍在，OpenClaw 本地启动约 5.209 秒。
+
+凭据仅保存在 gitignored 的本地私有配置，不进入文档、镜像或前端。
 
 ## 隔离与运行合同
 
@@ -43,11 +78,12 @@ docker build --platform linux/amd64 --provenance=false --sbom=false -t nexus-dea
 
 ## 启用前验收
 
-1. 开通新加坡模板的暂停、恢复和自动暂停功能。
-2. 完成完整镜像的私有发布及 FC 模板构建。
-3. `pnpm exec tsx scripts/verify-alibaba-lifecycle.ts`：创建、命令、写标记、暂停、恢复并验证标记、第二实例隔离、超时自动暂停，以及清理测试实例。
-4. 使用 AlibabaProvider 完成真实 OpenClaw 聊天、过程流式、每轮备份、闲置后恢复记忆以及定时唤醒测试。
-5. 验收通过后设 `alibaba.enabled=true`，在没有活动执行时滚动更新本地 manager。浏览器试用列表将新增 `DealClaw 阿里云试用`，现有租户仍为 Vercel。
+1. ~~开通新加坡模板的暂停、恢复和自动暂停功能~~ — 2026-09-16 实测通过。
+2. ~~完成完整镜像的私有发布及 FC 模板构建~~ — 改为 base 模板唤醒时引导，已实测通过；ACR EE 路线保留为可选优化。
+3. ~~`scripts/verify-alibaba-lifecycle.ts`~~ — 2026-09-16 全项通过。
+4. 把 base 引导流程接入 `AlibabaProvider` 的 ensure 路径（当前 provider 仍假设镜像已内置运行时），并使引导具备幂等性与失败重试。
+5. 使用 AlibabaProvider 完成真实 OpenClaw 聊天、过程流式、每轮备份、闲置后恢复记忆以及定时唤醒测试。
+6. 验收通过后设 `alibaba.enabled=true`，在没有活动执行时滚动更新本地 manager。浏览器试用列表将新增 `DealClaw 阿里云试用`，现有租户仍为 Vercel。
 
 创建新飞书租户的 `POST /v1/tenants` 增加可选 `runtimeProvider:"alibaba"`，未启用返回 503。原扫码不传该字段，继续默认 Vercel；本次尚未提供阿里专用二维码入口，不将其误称为已经完成飞书端试用。
 

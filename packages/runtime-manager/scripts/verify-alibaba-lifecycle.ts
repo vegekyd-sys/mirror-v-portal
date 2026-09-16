@@ -24,14 +24,15 @@ try {
   report.resumeMs = Date.now() - at;
   if (await resumed.files.read("/tmp/nexus-lifecycle-marker") !== marker) throw Error("MEMORY_RESTORE_FAILED");
   const b = await Sandbox.create(config.alibaba!.templateId || "base", {
-    ...options, timeoutMs: 60_000,
+    // FC rejects enableAutoPause below 600s idle timeout; 600s is the platform floor.
+    ...options, timeoutMs: 600_000,
     lifecycle: { onTimeout: { action: "pause", keepMemory: false }, autoResume: false },
   });
   ids.push(b.sandboxId);
   if (b.sandboxId === a.sandboxId || await b.files.exists("/tmp/nexus-lifecycle-marker")) throw Error("TENANT_ISOLATION_FAILED");
   // Verify timeout expiry really pauses instead of trusting an accepted setting.
-  for (let i = 0; i < 15; i++) {
-    await new Promise(resolve => setTimeout(resolve, 5_000));
+  for (let i = 0; i < 56; i++) {
+    await new Promise(resolve => setTimeout(resolve, 15_000));
     if ((await Sandbox.getInfo(b.sandboxId, options)).state === "paused") { report.autoPause = true; break; }
   }
   if (!report.autoPause) throw Error("AUTO_PAUSE_NOT_CONFIRMED");
