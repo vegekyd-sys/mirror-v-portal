@@ -33,10 +33,6 @@ describe("tenant-isolated WhatsApp APIs", { concurrency: false }, () => {
   };
   const wabaPhoneDelegate = prisma.wabaPhone as unknown as {
     upsert: (args: unknown) => Promise<unknown>;
-    updateMany: (args: unknown) => Promise<unknown>;
-    findMany: (
-      args: unknown,
-    ) => Promise<Array<{ phoneNumber: string; wabaId: string; supplierId: string }>>;
   };
   const customerDelegate = prisma.customer as unknown as {
     findFirst: (args: unknown) => Promise<unknown>;
@@ -56,8 +52,6 @@ describe("tenant-isolated WhatsApp APIs", { concurrency: false }, () => {
   const originals = {
     wabaFindMany: wabaDelegate.findMany,
     wabaPhoneUpsert: wabaPhoneDelegate.upsert,
-    wabaPhoneUpdateMany: wabaPhoneDelegate.updateMany,
-    wabaPhoneFindMany: wabaPhoneDelegate.findMany,
     customerFindFirst: customerDelegate.findFirst,
     conversationFindMany: conversationDelegate.findMany,
     conversationFindUnique: conversationDelegate.findUnique,
@@ -93,38 +87,7 @@ describe("tenant-isolated WhatsApp APIs", { concurrency: false }, () => {
       }
       return [];
     };
-    // 手机号级归属 fixture：由 bindings + phonesByWaba 推导（一号只归一家）
-    const wabaByPhone: Record<string, string> = {};
-    const ownerByPhone: Record<string, string> = {};
-    for (const [wabaId, phones] of Object.entries(phonesByWaba)) {
-      const owner = bindings.find((row) => row.wabaId === wabaId)?.partnerCustomerId || "";
-      for (const phone of phones) {
-        wabaByPhone[phone] = wabaId;
-        ownerByPhone[phone] = owner;
-      }
-    }
     wabaPhoneDelegate.upsert = async () => ({});
-    wabaPhoneDelegate.updateMany = async () => ({ count: 0 });
-    // 读取收口（listTenantBusinessPhones 按 supplierId 过滤）与
-    // 入站路由（resolveSupplierIdByBusinessPhone 按手机号取归属）都走这个 mock。
-    wabaPhoneDelegate.findMany = async (args) => {
-      const where =
-        ((args as { where?: Record<string, unknown> }).where || {}) as {
-          supplierId?: string;
-          phoneNumber?: string | { in?: string[] };
-        };
-      const phoneFilter = where.phoneNumber;
-      const phones =
-        typeof phoneFilter === "string" ? [phoneFilter] : phoneFilter?.in || [];
-      return phones
-        .filter((phone) => phone in ownerByPhone)
-        .filter((phone) => !where.supplierId || ownerByPhone[phone] === where.supplierId)
-        .map((phone) => ({
-          phoneNumber: phone,
-          wabaId: wabaByPhone[phone] || "",
-          supplierId: ownerByPhone[phone] || "",
-        }));
-    };
     customerDelegate.findFirst = async () => ({
       id: "customer-single",
       phoneNumber: "+85290000000",
@@ -193,8 +156,6 @@ describe("tenant-isolated WhatsApp APIs", { concurrency: false }, () => {
   after(() => {
     wabaDelegate.findMany = originals.wabaFindMany;
     wabaPhoneDelegate.upsert = originals.wabaPhoneUpsert;
-    wabaPhoneDelegate.updateMany = originals.wabaPhoneUpdateMany;
-    wabaPhoneDelegate.findMany = originals.wabaPhoneFindMany;
     customerDelegate.findFirst = originals.customerFindFirst;
     conversationDelegate.findMany = originals.conversationFindMany;
     conversationDelegate.findUnique = originals.conversationFindUnique;

@@ -10,10 +10,7 @@ export class AdminWabaImportError extends Error {
     | "ADMIN_IMPORT_YCLOUD_FAILED"
     | "ADMIN_IMPORT_WABA_NOT_FOUND"
     | "ADMIN_IMPORT_WABA_OWNED"
-    | "ADMIN_IMPORT_PHONE_CONFLICT"
-    | "ADMIN_IMPORT_PHONES_REQUIRED"
-    | "ADMIN_IMPORT_PHONE_NOT_ON_WABA"
-    | "ADMIN_IMPORT_PHONE_OWNED_BY_OTHER_TENANT";
+    | "ADMIN_IMPORT_PHONE_CONFLICT";
 
   constructor(
     code: AdminWabaImportError["code"],
@@ -30,9 +27,6 @@ export class AdminWabaImportError extends Error {
 type NormalizedImport = {
   partnerCustomerId: string;
   wabaId: string;
-  /** 本次要绑定的手机号（E.164，如 +8615895553765）。
-   *  必填：一个 WABA 可被多个 supplier 共享，归属只能落在手机号这一级。 */
-  phoneNumbers: string[];
 };
 
 function normalizeImportInput(input: unknown): NormalizedImport {
@@ -44,7 +38,7 @@ function normalizeImportInput(input: unknown): NormalizedImport {
     );
   }
   const body = input as Record<string, unknown>;
-  const allowed = new Set(["partnerCustomerId", "wabaId", "phoneNumbers"]);
+  const allowed = new Set(["partnerCustomerId", "wabaId"]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
     throw new AdminWabaImportError(
       "ADMIN_IMPORT_INVALID_INPUT",
@@ -77,32 +71,7 @@ function normalizeImportInput(input: unknown): NormalizedImport {
       400,
     );
   }
-  // 手机号：必填且非空。一个号只能归一家 → 绑定必须明确到号（2026-09-15 决策）。
-  const rawPhones = body.phoneNumbers;
-  if (!Array.isArray(rawPhones) || rawPhones.length === 0) {
-    throw new AdminWabaImportError(
-      "ADMIN_IMPORT_PHONES_REQUIRED",
-      "phoneNumbers is required and must be a non-empty array of E.164 numbers",
-      400,
-    );
-  }
-  const phoneNumbers = [
-    ...new Set(
-      rawPhones
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => normalizeYCloudPhone(value))
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ].sort();
-  if (!phoneNumbers.length) {
-    throw new AdminWabaImportError(
-      "ADMIN_IMPORT_PHONES_REQUIRED",
-      "phoneNumbers contains no valid E.164 number (example: +8615895553765)",
-      400,
-    );
-  }
-
-  return { partnerCustomerId, wabaId, phoneNumbers };
+  return { partnerCustomerId, wabaId };
 }
 
 function normalizeYCloudPhone(value: string | undefined): string | undefined {
@@ -130,14 +99,14 @@ export async function importExistingWaba(input: unknown) {
     );
   }
 
-  const allPhones = [
+  const phones = [
     ...new Set(
       ycloudPhones.phones
         .map((phone) => normalizeYCloudPhone(phone.phoneNumber))
         .filter((phone): phone is string => Boolean(phone)),
     ),
   ].sort();
-  if (!allPhones.length) {
+  if (!phones.length) {
     throw new AdminWabaImportError(
       "ADMIN_IMPORT_WABA_NOT_FOUND",
       "YCloud returned no valid phone numbers for this WhatsApp business account",
@@ -145,34 +114,22 @@ export async function importExistingWaba(input: unknown) {
     );
   }
 
-  // 请求里的号必须是该 WABA 真实拥有的号（防止把手写错的号绑进来）。
-  const notOnWaba = normalized.phoneNumbers.filter((phone) => !allPhones.includes(phone));
-  if (notOnWaba.length) {
-    throw new AdminWabaImportError(
-      "ADMIN_IMPORT_PHONE_NOT_ON_WABA",
-      "one or more phone numbers do not belong to this WhatsApp business account",
-      404,
-    );
-  }
-  const phones = normalized.phoneNumbers;
-
   await prisma.$transaction(
     async (tx) => {
       await lockWabaOwnershipKeys(tx, normalized.wabaId, phones);
 
-      // 一个 WABA 可被多个 supplier 共享 —— 不再做 WABA 级独占检查。
-      // 独占性只落在手机号上：被别人占用的号一律拒绝（见下）。
-      const ownedRows = await tx.wabaPhone.findMany({
-        where: { phoneNumber: { in: phones } },
-        select: { phoneNumber: true, supplierId: true },
+      const connectedOwners = await tx.wabaOnboarding.findMany({
+        where: { wabaId: normalized.wabaId, status: "CONNECTED" },
+        select: { partnerCustomerId: true },
       });
-      const takenByOthers = ownedRows.filter(
-        (row) => row.supplierId && row.supplierId !== normalized.partnerCustomerId,
-      );
-      if (takenByOthers.length) {
+      if (
+        connectedOwners.some(
+          (owner) => owner.partnerCustomerId !== normalized.partnerCustomerId,
+        )
+      ) {
         throw new AdminWabaImportError(
-          "ADMIN_IMPORT_PHONE_OWNED_BY_OTHER_TENANT",
-          "one or more phone numbers are already owned by another tenant",
+          "ADMIN_IMPORT_WABA_OWNED",
+          "WhatsApp business account is already connected to another tenant",
           409,
         );
       }
@@ -221,18 +178,9 @@ export async function importExistingWaba(input: unknown) {
 
       for (const phoneNumber of phones) {
         await tx.wabaPhone.upsert({
-          // 手机号全局唯一 → 以 phoneNumber 为键幂等 upsert（重复导入同一个号不报错）
-          where: { phoneNumber },
-          update: {
-            wabaId: normalized.wabaId,
-            supplierId: normalized.partnerCustomerId,
-            updatedAt: new Date(),
-          },
-          create: {
-            wabaId: normalized.wabaId,
-            phoneNumber,
-            supplierId: normalized.partnerCustomerId,
-          },
+          where: { wabaId_phoneNumber: { wabaId: normalized.wabaId, phoneNumber } },
+          update: { updatedAt: new Date() },
+          create: { wabaId: normalized.wabaId, phoneNumber },
         });
       }
     },

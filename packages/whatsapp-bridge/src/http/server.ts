@@ -19,10 +19,6 @@ import {
   WhatsAppBindingError,
 } from "../core/onboarding";
 import {
-  AdminWabaUnbindError,
-  unbindWabaPhones,
-} from "../core/adminWabaUnbind";
-import {
   resolveTenantContext,
   TenantContextError,
   WabaTenantError,
@@ -262,23 +258,6 @@ export async function buildServer() {
           return reply.code(500).send({
             error: "failed to import WhatsApp business account",
             code: "ADMIN_IMPORT_FAILED",
-          });
-        }
-      });
-
-      // 解绑手机号：只停路由（删我方归属行），不调 YCloud/Meta 释放号码；
-      // 只能解绑自己的号 —— 别人的号一律拒绝且不做任何改动（隔离硬要求）。
-      scope.post("/api/admin/whatsapp/unbind-phones", async (request, reply) => {
-        try {
-          return await unbindWabaPhones(request.body);
-        } catch (error) {
-          if (error instanceof AdminWabaUnbindError) {
-            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
-          }
-          request.log.error({ err: error }, "WABA phone unbind failed");
-          return reply.code(500).send({
-            error: "failed to unbind WhatsApp phone numbers",
-            code: "ADMIN_UNBIND_FAILED",
           });
         }
       });

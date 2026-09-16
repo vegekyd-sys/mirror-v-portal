@@ -121,25 +121,19 @@ export function invalidateWabaPhoneCache(wabaId?: string) {
   else phoneCache.clear();
 }
 
-/**
- * 刷新 WabaPhone 的 updatedAt —— **不再创建归属行**。
- *
- * 2026-09-15 起归属只能由显式绑定（POST /api/admin/whatsapp/import-existing-waba）建立：
- * 一个 WABA 可被多个 supplier 共享，YCloud 的号码列表只回答「这个 WABA 有哪些号」，
- * 而「哪个号归谁」只有绑定表说了算。这里若继续 create，就会把别家的号重新插回来
- * （全局唯一键冲突）或写出无归属的行。
- */
+/** 回填 WabaPhone 映射（wabaId ↔ phoneNumber），供 inbound 消息按 businessPhone 反查租户。 */
 export async function upsertWabaPhones(wabaId: string, numbers: string[]): Promise<void> {
   if (!wabaId || !numbers.length) return;
   try {
     for (const phoneNumber of numbers) {
-      await prisma.wabaPhone.updateMany({
-        where: { wabaId, phoneNumber },
-        data: { updatedAt: new Date() },
+      await prisma.wabaPhone.upsert({
+        where: { wabaId_phoneNumber: { wabaId, phoneNumber } },
+        update: { updatedAt: new Date() },
+        create: { wabaId, phoneNumber },
       });
     }
   } catch (error) {
-    console.error("refresh WabaPhone mapping failed", error);
+    console.error("upsert WabaPhone mapping failed", error);
   }
 }
 
@@ -155,34 +149,25 @@ export async function resolveSupplierIdByWabaId(wabaId: string): Promise<string 
 }
 
 /** inbound 消息按 businessPhone（E.164 企业号）反查租户 supplierId。 */
-/**
- * businessPhone → supplierId（**手机号级归属**，2026-09-15）。
- *
- * 共享 WABA 后不能再靠「这个 WABA 的 owner 是谁」推断租户 —— 一个 WABA 会有多个 owner。
- * 归属唯一定在手机号上：直接读 WabaPhone.supplierId，再校验该 supplier 在这个 WABA 上
- * 仍是 CONNECTED（解绑最后一个号后会置 DISCONNECTED，避免继续路由到已解绑的号）。
- */
 export async function resolveSupplierIdByBusinessPhone(
   businessPhone: string,
 ): Promise<string | undefined> {
   const phone = toE164(businessPhone);
   if (!phone) return undefined;
-  const rows = await prisma.wabaPhone.findMany({
+  const mappings = await prisma.wabaPhone.findMany({
     where: { phoneNumber: phone },
-    select: { wabaId: true, supplierId: true },
+    select: { wabaId: true },
   });
-  const owners = [...new Set(rows.map((row) => row.supplierId).filter(Boolean))];
-  if (owners.length !== 1) return undefined;
-  const supplierId = owners[0];
-  const connected = await prisma.wabaOnboarding.findMany({
+  if (!mappings.length) return undefined;
+  const rows = await prisma.wabaOnboarding.findMany({
     where: {
-      wabaId: { in: [...new Set(rows.map((row) => row.wabaId))] },
-      partnerCustomerId: supplierId,
+      wabaId: { in: [...new Set(mappings.map((mapping) => mapping.wabaId))] },
       status: "CONNECTED",
     },
-    select: { id: true },
+    select: { partnerCustomerId: true },
   });
-  return connected.length ? supplierId : undefined;
+  const owners = [...new Set(rows.map((row) => row.partnerCustomerId).filter(Boolean))];
+  return owners.length === 1 ? owners[0] : undefined;
 }
 
 export async function listCurrentWabaPhoneNumbers(wabaId: string): Promise<string[]> {
@@ -231,9 +216,24 @@ export async function listTenantBusinessPhones(supplierId: string): Promise<Tena
     );
   }
 
-  // 共享 WABA（2026-09-15）：一个 WABA 会有多个 CONNECTED 的 supplier，
-  // 因此这里**不再**要求「WABA 只有唯一 owner」（那会直接拒掉正当共享）。
-  // 隔离改由手机号级归属保证 —— 见下面 scoped 过滤。
+  // Refuse a corrupted/shared WABA binding before consulting or returning any phone number.
+  const ownershipRows = await prisma.wabaOnboarding.findMany({
+    where: { wabaId: { in: wabaIds }, status: "CONNECTED" },
+    select: { wabaId: true, partnerCustomerId: true, status: true },
+  });
+  for (const wabaId of wabaIds) {
+    const owners = new Set(
+      ownershipRows
+        .filter((row) => row.wabaId === wabaId)
+        .map((row) => row.partnerCustomerId),
+    );
+    if (owners.size !== 1 || !owners.has(supplierId)) {
+      throw new WhatsAppBindingError(
+        "WHATSAPP_FROM_AMBIGUOUS",
+        "当前租户的 WhatsApp 绑定存在归属冲突，已拒绝操作。",
+      );
+    }
+  }
 
   const candidates: TenantBusinessPhone[] = [];
   for (const wabaId of wabaIds) {
@@ -256,22 +256,7 @@ export async function listTenantBusinessPhones(supplierId: string): Promise<Tena
       "当前租户没有可用 WhatsApp 企业号，请先在 Meta / YCloud 完成号码接入。",
     );
   }
-
-  // 只保留**归本租户所有**的号（WabaPhone.supplierId）。
-  // 共享 WABA 下 YCloud 返回的号码列表包含别家的号 —— 不过滤就会跨租户泄漏/误发。
-  const owned = await prisma.wabaPhone.findMany({
-    where: { supplierId, phoneNumber: { in: candidates.map((candidate) => candidate.from) } },
-    select: { phoneNumber: true },
-  });
-  const ownedSet = new Set(owned.map((row) => row.phoneNumber));
-  const scoped = candidates.filter((candidate) => ownedSet.has(candidate.from));
-  if (!scoped.length) {
-    throw new WhatsAppBindingError(
-      "WHATSAPP_BINDING_REQUIRED",
-      "当前租户没有已绑定的 WhatsApp 手机号，请先绑定（绑定必须指定手机号）。",
-    );
-  }
-  return scoped;
+  return candidates;
 }
 
 /** Select one internal WABA/phone route without exposing WABA identity to the caller. */
