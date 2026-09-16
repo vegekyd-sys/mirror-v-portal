@@ -351,7 +351,7 @@ def _buyer_facts(buyer: dict, keywords: list[str]) -> dict:
         reasons.append(f"规模{size}")
 
     return {
-        "name": buyer.get("companyName") or "",
+        "name": strip_tags(buyer.get("companyName") or ""),
         "country": (buyer.get("countryCnName") or buyer.get("country")
                     or buyer.get("countryEnName") or ""),
         "attr_label": attr_label,
@@ -359,15 +359,105 @@ def _buyer_facts(buyer: dict, keywords: list[str]) -> dict:
         "reason": (",".join(reasons) if reasons else "现场买家"),
         "cdp": str(buyer.get("companyCdpId") or buyer.get("companyCdpid") or "").strip(),
         "website": str(buyer.get("website") or buyer.get("domain") or "").strip(),
+        # 2026-09-17 客户口径：推送不能只给一个名字 —— 要能看到「到场联系人 + 联系方式」，
+        # 方便现场直接打电话；再配一句公司简介，方便一眼判断要不要邀约到展位。
+        "contact": "、".join(buyer.get("_contacts") or []) or _first_of(buyer, CONTACT_KEYS),
+        "phone": " / ".join(buyer.get("_phones") or []) or _first_of(buyer, PHONE_KEYS),
+        "intro": _one_liner(_first_of(buyer, ("companyProfile", "companyProfileCn", "profileCn",
+                                              "companyIntro", "intro", "companyProfileEn"))),
     }
 
 
+def _first_of(buyer: dict, keys: tuple[str, ...]) -> str:
+    """按字段名优先级取第一个非空值（各数据源命名不一，不猜）。"""
+    for key in keys:
+        value = buyer.get(key)
+        if isinstance(value, (list, tuple)):
+            value = next((v for v in value if str(v or "").strip()), "")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _one_liner(html_or_text: str, limit: int = 60) -> str:
+    """一句话简介：去标签 + 去空白 + 限长（不硬截字，从句读处断）。"""
+    import re as _re
+
+    text = _re.sub(r"<[^>]+>", " ", str(html_or_text or ""))
+    text = _re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    cut = max(text.rfind("。", 0, limit), text.rfind(". ", 0, limit), text.rfind("，", 0, limit))
+    return (text[:cut + 1] if cut > limit // 2 else text[:limit]).strip() + "…"
+
+
+def strip_tags(value: str) -> str:
+    """去 HTML 标签 + 归并空白（现场接口的公司名会带 <em> 高亮标记，不能直接发出去）。"""
+    import re as _re
+
+    return _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", "", str(value or ""))).strip()
+
+
+CONTACT_KEYS = ("contactName", "contact_name", "buyerName", "custName", "linkman")
+PHONE_KEYS = ("phone", "mobile", "telephone", "contactPhone", "whatsapp")
+
+
+def dedupe_buyers(buyers: list[dict]) -> list[dict]:
+    """同一公司只留一条：公司名（去标签）归一后合并联系人/电话（多条记一个公司）。
+
+    为什么：现场接口同一家公司会有多条记录（截图为证：XTRANSFER 一连推了十几条）；
+    现在合并成一条，联系人/电话多个并列（“A、B” / “tel1 / tel2”），不丢人也不刷屏。
+    内部用列表去重，避免反复拼接导致“A、B、B、B…”这种膨胀。
+    """
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for buyer in buyers or []:
+        if not isinstance(buyer, dict):
+            continue
+        name = strip_tags(buyer.get("companyName") or buyer.get("company_name") or "")
+        key = name.lower() or f"__anon_{len(order)}"
+        contact = _first_of(buyer, CONTACT_KEYS)
+        phone = _first_of(buyer, PHONE_KEYS)
+        item = merged.get(key)
+        if item is None:
+            copy = dict(buyer)
+            copy["companyName"] = name
+            copy["_contacts"] = [contact] if contact else []
+            copy["_phones"] = [phone] if phone else []
+            merged[key] = copy
+            order.append(key)
+            continue
+        if contact and contact not in item["_contacts"]:
+            item["_contacts"].append(contact)
+        if phone and phone not in item["_phones"]:
+            item["_phones"].append(phone)
+    return [merged[k] for k in order]
+
+
 def classify(buyer: dict, keywords: list[str]) -> tuple[str, str]:
-    """分层：主推 / 跟进；返回 (层级, 展示行)。"""
+    """分层：主推 / 跟进；返回 (层级, 展示行)。
+
+    展示行口径（2026-09-17 客户定稿）：**公司名｜到场联系人（电话）｜一句话简介**。
+    联系人/电话是现场能直接拨号的依据；拿不到就如实标「未提供」，**不编**。
+    """
     f = _buyer_facts(buyer, keywords)
     tier = "主推" if (f["attr_label"] or f["size"]) else "跟进"
     name = f["name"] or "(未知)"
-    return tier, f"{name}｜{f['country']}｜{f['reason']}"
+    contact = f["contact"] or ""
+    phone = f["phone"] or ""
+    if contact and phone:
+        contact_bit = f"到场联系人 {contact}（{phone}）"
+    elif contact:
+        contact_bit = f"到场联系人 {contact}"
+    elif phone:
+        contact_bit = f"电话/WA {phone}"
+    else:
+        contact_bit = "到场联系人未提供"
+    bits = [name, contact_bit]
+    if f["intro"]:
+        bits.append(f["intro"])
+    return tier, "｜".join(bits)
 
 
 # ── 6. 展中推荐落池（每届展会一个独立池）───────────────────
@@ -515,6 +605,23 @@ def land_onsite_leads(company_id: str, exhibition: dict, buyers: list,
 # 本展会线索池入口跟汇总气泡走（≤阈值时挂末条明细气泡）。
 ONSITE_BATCH_SIZE = 10
 ONSITE_SUMMARY_THRESHOLD = 10
+# 2026-09-17 客户口径：**每个定时最多推 10 家**（此前一次能推 50 条）。
+# 主推优先入选；没进这一轮的**顺延到下一次定时**（不丢，只是不在本轮推）。
+ONSITE_MAX_PER_RUN = 10
+
+
+def cap_per_run(main: list[str], follow: list[str],
+                limit: int = ONSITE_MAX_PER_RUN) -> tuple[list[str], list[str], int]:
+    """每个定时最多推 limit 家（主推在前）；返回 (主推, 跟进, 顺延家数)。
+
+    纯函数、不丢数据：只是把超出部分从本轮拿出，由调用方提示用户“顺延到下一次”。
+    """
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    queue = [("主推", x) for x in (main or [])] + [("跟进", x) for x in (follow or [])]
+    picked, deferred = queue[:limit], queue[limit:]
+    return ([x for t, x in picked if t == "主推"],
+            [x for t, x in picked if t == "跟进"], len(deferred))
 
 
 def _onsite_entries(main: list[str], follow: list[str]) -> list[tuple[str, str]]:
@@ -648,16 +755,24 @@ def run(args) -> dict:
         # 排除不落铁律：黑名单/明确拒绝不推也不落池
         survivors = [b for b in candidates if not is_excluded_from_onsite(b)]
         excluded = len(candidates) - len(survivors)
+        # 同一家公司只留一条（现场接口会重复；之前一连推十几条同样名单）
+        deduped = dedupe_buyers(survivors)
+        duplicates = len(survivors) - len(deduped)
+        survivors = deduped
         main, follow = [], []
         for b in survivors:
             tier, line = classify(b, keywords)
             (main if tier == "主推" else follow).append(line)
+        # 每个定时最多推 ONSITE_MAX_PER_RUN 家；超出部分顺延到下一次（不丢）
+        main, follow, deferred = cap_per_run(main, follow)
         pool = land_onsite_leads(company_id, exh, survivors, keywords,
                                  chat_id=chat_id, dry_run=args.dry_run)
         if pool.get("error"):
             print(f"[dc_onsite_recommend] 落池失败（明细照推）: {pool['error']}", file=sys.stderr)
         if main or follow or excluded:
-            header = f"📥 现场未邀约匹配买家（{exh.get('name') or exh['exhibitionId']}）"
+            header = f"📥 现场买家邀约（{exh.get('name') or exh['exhibitionId']}）"
+            # deferred 只进内部结果（results），**不写进推送**：用户不必知道顺延，
+            # 他想看更多时直接问「还有没有推荐的买家」即可。
             bubbles = build_onsite_bubbles(header, main, follow, pool_url=pool.get("url") or "")
             sent = sum(1 for text in bubbles if send_card(chat_id, text, dry_run=args.dry_run))
             results.append({"exhibitionId": exh["exhibitionId"], "candidates": len(candidates),
