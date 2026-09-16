@@ -308,8 +308,8 @@ export class CatalogReleaseService {
         );
         if (existing) {
           this.assertIdempotencySemantics(existing, requestFingerprint);
+          const taskId = await this.findTaskIdForRelease(existing.id, client);
           await client.query('ROLLBACK');
-          const taskId = await this.findTaskIdForRelease(existing.id);
           return { release: this.recordToView(existing), taskId };
         }
       }
@@ -396,10 +396,13 @@ export class CatalogReleaseService {
         // already created by a concurrent request. Roll back and return it.
         if (idempotencyKey && this.isUniqueViolation(insertError)) {
           await client.query('ROLLBACK');
-          const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
+          const existing = await this.findReleaseByIdempotencyKey(
+            idempotencyKey,
+            client,
+          );
           if (existing) {
             this.assertIdempotencySemantics(existing, requestFingerprint);
-            const taskId = await this.findTaskIdForRelease(existing.id);
+            const taskId = await this.findTaskIdForRelease(existing.id, client);
             return { release: this.recordToView(existing), taskId };
           }
         }
@@ -654,12 +657,15 @@ export class CatalogReleaseService {
       } catch (insertError: unknown) {
         if (idempotencyKey && this.isUniqueViolation(insertError)) {
           await client.query('ROLLBACK');
-          const existing = await this.findReleaseByIdempotencyKey(idempotencyKey);
+          const existing = await this.findReleaseByIdempotencyKey(
+            idempotencyKey,
+            client,
+          );
           if (existing) {
             this.assertIdempotencySemantics(existing, requestFingerprint);
             return {
               release: this.recordToView(existing),
-              taskId: await this.findTaskIdForRelease(existing.id),
+              taskId: await this.findTaskIdForRelease(existing.id, client),
             };
           }
         }
@@ -850,8 +856,11 @@ export class CatalogReleaseService {
   }
 
   /** Find the push task id associated with a release. */
-  private async findTaskIdForRelease(releaseId: string): Promise<string | null> {
-    const { rows } = await this.pool.query(
+  private async findTaskIdForRelease(
+    releaseId: string,
+    database: Pick<pg.Pool, 'query'> = this.pool,
+  ): Promise<string | null> {
+    const { rows } = await database.query(
       `SELECT id FROM llm_push_tasks WHERE release_id = $1 ORDER BY created_at LIMIT 1`,
       [releaseId],
     );

@@ -566,6 +566,19 @@ describe('CatalogReleaseService — atomicRestore', () => {
   });
 
   it('rolls back and replays restore after a concurrent idempotency conflict', async () => {
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      backupId: 'backup-1',
+      operation: 'restore',
+      rollout: { mode: 'no-rollout' },
+    })).digest('hex');
+    const existingRestore = {
+      id: 'existing-restore', version: 7, parent_id: null,
+      canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+      fingerprint: 'restored-fp', parent_fingerprint: null,
+      diff_summary: { releaseRequestFingerprint: requestFingerprint }, warnings: [],
+      actor: 'admin', actor_type: 'admin', status: 'rolled-back',
+      idempotency_key: 'restore-race', created_at: new Date(),
+    };
     const client = makeFakeClient();
     client.query = async (sql: string, params?: unknown[]) => {
       client.queries.push({ sql, params });
@@ -581,13 +594,14 @@ describe('CatalogReleaseService — atomicRestore', () => {
       if (sql.includes('INSERT INTO llm_catalog_releases')) {
         throw Object.assign(new Error('duplicate idempotency key'), { code: '23505' });
       }
+      if (sql.includes('idempotency_key = $1')) {
+        return { rows: [existingRestore], rowCount: 1 };
+      }
+      if (sql.includes('FROM llm_push_tasks WHERE release_id')) {
+        return { rows: [], rowCount: 0 };
+      }
       return { rows: [], rowCount: 0 };
     };
-    const requestFingerprint = createHash('sha256').update(JSON.stringify({
-      backupId: 'backup-1',
-      operation: 'restore',
-      rollout: { mode: 'no-rollout' },
-    })).digest('hex');
     let idempotencyLookups = 0;
     const pool = {
       connect: async () => client,
@@ -604,17 +618,7 @@ describe('CatalogReleaseService — atomicRestore', () => {
         if (sql.includes('idempotency_key = $1')) {
           idempotencyLookups += 1;
           if (idempotencyLookups === 1) return { rows: [], rowCount: 0 };
-          return {
-            rows: [{
-              id: 'existing-restore', version: 7, parent_id: null,
-              canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
-              fingerprint: 'restored-fp', parent_fingerprint: null,
-              diff_summary: { releaseRequestFingerprint: requestFingerprint }, warnings: [],
-              actor: 'admin', actor_type: 'admin', status: 'rolled-back',
-              idempotency_key: 'restore-race', created_at: new Date(),
-            }],
-            rowCount: 1,
-          };
+          return { rows: [existingRestore], rowCount: 1 };
         }
         if (sql.includes('FROM llm_push_tasks WHERE release_id')) {
           return { rows: [], rowCount: 0 };
