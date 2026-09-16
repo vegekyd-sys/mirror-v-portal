@@ -29,8 +29,22 @@ const BOOTSTRAP_REVISION_PATH = `${BOOTSTRAP_ROOT}/bootstrap-revision.txt`;
 // (>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0), and ensure() runs plain `node`.
 export const BOOTSTRAP_NODE_VERSION = "v24.21.0";
 export const BOOTSTRAP_OPENCLAW_VERSION = "2026.7.1";
+// Bump when the bootstrap recipe itself changes, so existing sandboxes re-run it.
+export const BOOTSTRAP_RECIPE_VERSION = "2";
 // A single 32MB write is rejected with InvalidArgumentError; 16MB is verified good.
 export const UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024;
+
+export function alibabaPayloadArchivePath(config: Config) {
+  return path.join(config.dataDir, "alibaba-build", "payload.tar");
+}
+
+// Single source of truth for "can we place a tenant on Alibaba": a custom template
+// embeds the runtime, otherwise base is bootstrapped at wake and needs the payload.
+export function alibabaReady(config: Config) {
+  const c = config.alibaba;
+  if (!c?.enabled || !c.apiKey) return false;
+  return !!c.templateId || fs.existsSync(alibabaPayloadArchivePath(config));
+}
 
 export class AlibabaSandbox implements RuntimeSandbox {
   status = "running";
@@ -80,7 +94,7 @@ export class AlibabaSandbox implements RuntimeSandbox {
 // path /vercel/sandbox is an image layout, not a request to Vercel.
 export class AlibabaProvider extends VercelProvider {
   protected payloadArchivePath() {
-    return path.join(this.config.dataDir, "alibaba-build", "payload.tar");
+    return alibabaPayloadArchivePath(this.config);
   }
   protected override checkConfiguration() {
     alibabaOptions(this.config);
@@ -100,7 +114,7 @@ export class AlibabaProvider extends VercelProvider {
   protected async bootstrap(box: AlibabaSandbox) {
     const archive = fs.readFileSync(this.payloadArchivePath());
     const revision = createHash("sha256")
-      .update(`${BOOTSTRAP_NODE_VERSION}|${BOOTSTRAP_OPENCLAW_VERSION}|`)
+      .update(`${BOOTSTRAP_RECIPE_VERSION}|${BOOTSTRAP_NODE_VERSION}|${BOOTSTRAP_OPENCLAW_VERSION}|`)
       .update(archive).digest("hex");
     const installed = await box.readFileToBuffer({ path: BOOTSTRAP_REVISION_PATH });
     if (installed?.toString() === revision) return { bootstrapped: false };
@@ -108,6 +122,15 @@ export class AlibabaProvider extends VercelProvider {
     await this.sh(box, "LAYOUT",
       `sudo -n mkdir -p ${BOOTSTRAP_RUNTIME} ${BOOTSTRAP_NODE_DIR} ${BOOTSTRAP_ROOT}/payload /vercel/sandbox/agent-data` +
       ` && sudo -n chown -R user:user /vercel`);
+    // boot.mjs records a baseline process tree with `ps` right after the gateway
+    // reports healthy, and that call sits inside a bare catch — without procps the
+    // health loop silently retries until it exits 1, with the gateway running fine.
+    // Debian 13 base ships no procps; node:24-bookworm did, which is why the image
+    // path never hit this.
+    await this.sh(box, "PACKAGES",
+      `command -v ps >/dev/null 2>&1 || sudo -n apt-get install -y -qq procps` +
+      ` || (sudo -n apt-get update -qq && sudo -n apt-get install -y -qq procps)`);
+
     await this.sh(box, "NODE",
       `curl -fsSL https://nodejs.org/dist/${BOOTSTRAP_NODE_VERSION}/node-${BOOTSTRAP_NODE_VERSION}-linux-x64.tar.xz` +
       ` | tar -xJ -C ${BOOTSTRAP_NODE_DIR} --strip-components=1` +

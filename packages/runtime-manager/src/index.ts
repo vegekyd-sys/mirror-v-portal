@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
 import { VercelProvider } from "./provider.js";
-import { AlibabaProvider } from "./alibaba-provider.js";
+import { AlibabaProvider, alibabaReady } from "./alibaba-provider.js";
 import { ProviderRouter } from "./provider-router.js";
 import { RuntimeManager } from "./manager.js";
 import { FeishuEdge } from "./feishu.js";
@@ -15,7 +15,7 @@ await store.init();
 const scheduler=new Scheduler(store);await scheduler.init();
 await store.createTenant(config.trialTenantId, "DealClaw 试用");
 const alibabaTrialId = config.alibaba?.trialTenantId || "alibaba-trial";
-if (config.alibaba?.enabled && config.alibaba.apiKey && config.alibaba.templateId)
+if (alibabaReady(config))
   await store.createTenant(alibabaTrialId, "DealClaw 阿里云试用", undefined, undefined, "alibaba");
 const edge = new FeishuEdge(store);
 const manager = new RuntimeManager(
@@ -92,7 +92,7 @@ app.post("/v1/tenants", async (req, res, next) => {
     if (!["vercel", "alibaba"].includes(runtimeProvider)) {
       res.status(400).json({ error: "INVALID_RUNTIME_PROVIDER" }); return;
     }
-    if (runtimeProvider === "alibaba" && (!config.alibaba?.enabled || !config.alibaba.apiKey || !config.alibaba.templateId)) {
+    if (runtimeProvider === "alibaba" && !alibabaReady(config)) {
       res.status(503).json({ error: "ALIBABA_NOT_CONFIGURED" }); return;
     }
     if (!botAppId || !botAppSecret) {
