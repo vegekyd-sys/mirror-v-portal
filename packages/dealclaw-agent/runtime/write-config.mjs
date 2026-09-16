@@ -304,6 +304,15 @@ const deniedTools = [
 ];
 
 const config = {
+  // openclaw 的配置保护机制（missing-meta-vs-last-good 检测）要求顶层存在
+  // meta.lastTouchedVersion / meta.lastTouchedAt 字段。write-config 直接写文件
+  // 绕过了 openclaw 的写入路径，若缺失 meta 会被判定为「外部 clobber」并回滚到
+  // last-good 快照，导致新绑定的渠道（企业微信/钉钉）配置永远无法生效。
+  // 详见 2026-09-16 企业微信扫码绑定排查（租户 a3f6ac0b…）。
+  meta: {
+    lastTouchedVersion: 'dealclaw-runtime',
+    lastTouchedAt: new Date().toISOString(),
+  },
   models: {
     mode: 'merge',
     providers,
