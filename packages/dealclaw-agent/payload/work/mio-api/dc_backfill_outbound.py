@@ -90,7 +90,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description="短期回填：Resend 直发 → email-facts outbound")
     p.add_argument("--company-id", required=True)
     p.add_argument("--from", dest="from_addr", required=True, help="代理发件邮箱裸地址")
-    p.add_argument("--account-id", default="resend_gs")
+    p.add_argument("--account-id", default="",
+                   help="真实邮箱账号 id；不传则按 --from 反查（查不到落空，不造假）")
     p.add_argument("--since", default="", help="起始时间 ISO（含）")
     p.add_argument("--until", default="", help="截止时间 ISO（含）")
     p.add_argument("--dry-run", action="store_true")
@@ -103,6 +104,20 @@ def main() -> int:
 
     from_filter = args.from_addr.strip().lower()
     store = EmailStore()
+
+    # 2026-09-16 修复：不再写死 resend_gs（假账号 → 回信永远配不上）。
+    # 显式传 --account-id 优先；否则按 --from 发件地址反查本租户真实账号，查不到落空。
+    account_id = str(args.account_id or "").strip()
+    if not account_id:
+        try:
+            from dc_record_outbound import resolve_account_id  # noqa: PLC0415
+
+            account_id = resolve_account_id(store, args.from_addr)
+        except Exception:  # noqa: BLE001
+            account_id = ""
+    if not account_id:
+        print(json.dumps({"warning": "account_id unresolved from sender address",
+                          "from": from_filter}, ensure_ascii=False))
 
     emails = _list_emails(api_key, args.since, args.until)
     candidates = []
@@ -128,7 +143,7 @@ def main() -> int:
         to_list = e.get("to") or []
         rec = {
             "direction": "outbound",
-            "account_id": args.account_id,
+            "account_id": account_id,
             "sender": e.get("from") or "",
             "recipients": to_list,
             "subject": e.get("subject") or "",
