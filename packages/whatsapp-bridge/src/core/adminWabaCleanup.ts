@@ -2,33 +2,26 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 
 /**
- * 测试期 WhatsApp Bridge 数据清理。
+ * 测试期 WhatsApp Bridge 一键清库。
  *
- * 默认清的都是运行期数据：消息、会话、买家、webhook 幂等记录、WABA/手机号绑定。
+ * 口径：测试阶段临时接口，**不做请求侧校验** —— 调用即执行（空 body 也能直接清）。
+ * 默认清运行期数据：消息、飞书话题映射、会话、买家、webhook 幂等记录、WABA/手机号绑定。
  * 默认**不清** FeishuApp / AppSetting（它们存凭据或全局配置，误删会让整套桥接失联）。
  *
- * 安全分层：
- *   1) 路由层要求 WHATSAPP_ALLOW_DB_CLEANUP=1 + 独立 X-WhatsApp-Cleanup-Token；
- *   2) 本模块默认 dryRun=true，只返回会删多少；
- *   3) 真删必须 confirm 精确匹配；includeConfig 有更强确认串；
- *   4) 可传 supplierId，只清一个测试租户，避免把其他人的测试一锅端。
+ * 可选参数（都不是校验，只是选择范围/模式）：
+ *   - supplierId  只清一个测试租户，避免把别人的测试一锅端；
+ *   - dryRun:true 只要预览数量，不删（默认就是真删）；
+ *   - includeConfig:true 连飞书凭据/全局设置一起清，只允许全局范围。
+ *
+ * 应急关闭在路由层：WHATSAPP_DISABLE_DB_CLEANUP=1（不需要重建镜像）。
+ * 测试结束请把接口连同本模块一起删除。
  */
-
-export const CLEANUP_CONFIRM = "DELETE_WHATSAPP_TEST_DATA";
-export const CLEANUP_WITH_CONFIG_CONFIRM = "DELETE_WHATSAPP_TEST_DATA_AND_CONFIG";
 
 export class AdminWabaCleanupError extends Error {
   readonly statusCode: number;
-  readonly code:
-    | "CLEANUP_INVALID_INPUT"
-    | "CLEANUP_CONFIRMATION_REQUIRED"
-    | "CLEANUP_CONFIG_REQUIRES_GLOBAL";
+  readonly code: "CLEANUP_INVALID_INPUT" | "CLEANUP_CONFIG_REQUIRES_GLOBAL";
 
-  constructor(
-    code: AdminWabaCleanupError["code"],
-    message: string,
-    statusCode: number,
-  ) {
+  constructor(code: AdminWabaCleanupError["code"], message: string, statusCode: number) {
     super(message);
     this.name = "AdminWabaCleanupError";
     this.code = code;
@@ -81,16 +74,18 @@ function emptyCounts(): WhatsappCleanupCounts {
   };
 }
 
+/** 空 body（含完全没有 body）按 `{}` 处理，保证「一键」就是一条 POST。 */
 function normalizeCleanupInput(input: unknown): NormalizedCleanup {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+  const raw = input === undefined || input === null ? {} : input;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new AdminWabaCleanupError(
       "CLEANUP_INVALID_INPUT",
-      "request body must be a JSON object",
+      "request body must be a JSON object (or empty)",
       400,
     );
   }
-  const body = input as Record<string, unknown>;
-  const allowed = new Set(["supplierId", "dryRun", "confirm", "includeConfig"]);
+  const body = raw as Record<string, unknown>;
+  const allowed = new Set(["supplierId", "dryRun", "includeConfig"]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
     throw new AdminWabaCleanupError(
       "CLEANUP_INVALID_INPUT",
@@ -121,11 +116,7 @@ function normalizeCleanupInput(input: unknown): NormalizedCleanup {
       400,
     );
   }
-  if (body.confirm !== undefined && typeof body.confirm !== "string") {
-    throw new AdminWabaCleanupError("CLEANUP_INVALID_INPUT", "confirm must be string", 400);
-  }
 
-  const dryRun = body.dryRun !== false;
   const includeConfig = body.includeConfig === true;
   if (includeConfig && supplierId) {
     throw new AdminWabaCleanupError(
@@ -135,18 +126,7 @@ function normalizeCleanupInput(input: unknown): NormalizedCleanup {
     );
   }
 
-  if (!dryRun) {
-    const expected = includeConfig ? CLEANUP_WITH_CONFIG_CONFIRM : CLEANUP_CONFIRM;
-    if (body.confirm !== expected) {
-      throw new AdminWabaCleanupError(
-        "CLEANUP_CONFIRMATION_REQUIRED",
-        `set confirm to ${expected} before destructive cleanup`,
-        400,
-      );
-    }
-  }
-
-  return { supplierId: supplierId || undefined, dryRun, includeConfig };
+  return { supplierId: supplierId || undefined, dryRun: body.dryRun === true, includeConfig };
 }
 
 function scopeWhere(supplierId?: string) {
@@ -206,7 +186,7 @@ async function deleteData(
     })
   ).count;
 
-  // 凭据与全局 KV 默认保留；只有全局清理 + 更强确认串时才进这里。
+  // 凭据与全局 KV 默认保留；只有 includeConfig 时才进这里。
   if (input.includeConfig) {
     deleted.feishuApps = (await db.feishuApp.deleteMany()).count;
     deleted.appSettings = (await db.appSetting.deleteMany()).count;
@@ -216,8 +196,8 @@ async function deleteData(
 }
 
 /**
- * 预览或执行 WhatsApp Bridge 数据清理。
- * 路由层负责环境开关与 cleanup token；本模块只负责输入、确认串、事务与删除顺序。
+ * 执行（或预览）WhatsApp Bridge 数据清理。
+ * 路由层只负责应急开关；本模块负责输入归一化、事务与删除顺序。
  */
 export async function cleanupWhatsappData(input: unknown) {
   const normalized = normalizeCleanupInput(input);
@@ -231,7 +211,7 @@ export async function cleanupWhatsappData(input: unknown) {
       scope,
       includeConfig: normalized.includeConfig,
       wouldDelete: preview,
-      note: "dry-run only; send dryRun:false with the required confirm string to delete",
+      note: "dry-run only; send without dryRun (or dryRun:false) to actually delete",
     };
   }
 

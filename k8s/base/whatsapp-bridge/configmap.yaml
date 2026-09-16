@@ -25,9 +25,10 @@ data:
   WHATSAPP_BRIDGE_BASE_URL: "https://dealclaw.datathink.com/whatsapp"
   PROVISIONING_SERVICE_URL: "http://provisioning-service:8082"
 
-  # 测试期 DB 清理接口默认**关闭**。测试 overlay 才可显式覆写为 "true"；
-  # 即使开启仍必须携带 Secret 中的 WHATSAPP_CLEANUP_TOKEN + confirm 确认串。
-  WHATSAPP_ALLOW_DB_CLEANUP: "false"
+  # 测试期临时接口：POST /api/admin/whatsapp/cleanup（调用即清 bridge 运行数据，无请求侧校验）。
+  # 默认即可用；要临时关掉就把下面这行放开为 "true" 再 rollout restart（不需重新构建镜像）。
+  # 测试结束请连同代码里的接口一起删除。
+  WHATSAPP_DISABLE_DB_CLEANUP: "false"
 
   # 租户标识不进入桥接进程环境：每个租户请求必须显式传 partnerCustomerId / supplierId。
 

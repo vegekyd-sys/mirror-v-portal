@@ -23,7 +23,6 @@
 | `YCLOUD_API_KEY` | 是 | 业务（YCloud 控制台） | 调 YCloud 发消息 / 列号 / 列模板 / 建 onboarding link |
 | `YCLOUD_WEBHOOK_SECRET` | 生产必填 | 业务（与 YCloud Webhook Secret 同一份） | 校验 `ycloud-signature` 请求头 |
 | `WHATSAPP_BRIDGE_ADMIN_TOKEN` | 是 | 运维安全生成 | 管理员现有 WABA 导入接口；仅放服务端 Secret，不分发给租户智能体 |
-| `WHATSAPP_CLEANUP_TOKEN` | 测试环境必填 | 运维安全生成 | 测试期 `POST /api/admin/whatsapp/cleanup` 的独立 token；请求头 `X-WhatsApp-Cleanup-Token`。生产默认关闭（ConfigMap `WHATSAPP_ALLOW_DB_CLEANUP=false`），不得复用 webhook / app / provisioning token |
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY` | 可空 | 业务 | 「单应用模式」兜底；多应用走 `POST /api/feishu/apps` 登记进 `FeishuApp` 表，这 4 个可不填 |
 
 **数据库连接**不走 `whatsapp-bridge-secret`，而是和 `credits-ledger` / `email-webhook` 共用 `dealclaw-db` Secret 的 `DATABASE_URL` key（见 `deployment.yaml` 里的 `secretKeyRef`）。
@@ -36,19 +35,28 @@
 模式下，一个 WABA 可被多个 tenant 共享，但手机号只能归一家；号码归属冲突时事务整体拒绝。
 该接口及凭据不得进入日常 agent skill，响应也不返回 WABA 标识。
 
-### 测试期一键清库
+### 测试期一键清库（临时接口）
 
-`POST /api/admin/whatsapp/cleanup` 只供测试环境重置 Bridge 数据。必须同时满足：
+`POST /api/admin/whatsapp/cleanup` 是**测试阶段的临时接口**，按测试期口径**不做请求侧校验**：
+直接 POST 即执行，空 body 也能清全量运行数据。测完请连同代码一起删除。
 
-1. ConfigMap 显式 `WHATSAPP_ALLOW_DB_CLEANUP=true`（base 默认 `false`）；
-2. Secret 配置 `WHATSAPP_CLEANUP_TOKEN`，请求头传 `X-WhatsApp-Cleanup-Token`；
-3. 默认 `dryRun=true`，只返回各表预览数量；真删传 `dryRun:false` 与
-   `confirm:"DELETE_WHATSAPP_TEST_DATA"`。
+默认清 `Message` / `PlatformThread` / `Conversation` / `Customer` / `WebhookEvent` /
+`WabaPhone` / `WabaOnboarding`（按 FK 顺序：消息/话题映射 → 会话 → 买家）；
+**默认保留** `FeishuApp` 与 `AppSetting`（凭据与全局配置）。
 
-默认清消息、会话、买家、webhook 事件、WABA/手机号绑定及飞书线程；**保留** `FeishuApp`
-和 `AppSetting`。若确实要连凭据/全局设置一并清掉，只能做全局清理，传 `includeConfig:true`
-和更强确认串 `DELETE_WHATSAPP_TEST_DATA_AND_CONFIG`。按 `supplierId` 可只清一个测试租户，
-该范围下禁止删除共享配置。
+可选参数：
+
+| 参数 | 作用 |
+|---|---|
+| `dryRun: true` | 只返回各表预览数量，不删 |
+| `supplierId` | 只清一个测试租户，避免误清其他人的测试 |
+| `includeConfig: true` | 连 `FeishuApp`/`AppSetting` 一起清；只允许全局范围 |
+
+应急关闭：ConfigMap 设 `WHATSAPP_DISABLE_DB_CLEANUP: "true"` 再 `rollout restart`，
+接口立即返回 403（不需要重新构建镜像）。
+
+⚠️ 该 host 对外可达（YCloud/飞书 webhook 必须能进来），而这个接口**无鉴权且会删数据**——
+只应作为测试期短时存在，验完立即删除。
 
 Skill 绑定已有 WABA 使用 provisioning 已为每个租户随机生成、注入
 `dealclaw-agent-config-<tenant>` 的 `OPENCLAW_GATEWAY_TOKEN` 签发短时用途隔离 HMAC。

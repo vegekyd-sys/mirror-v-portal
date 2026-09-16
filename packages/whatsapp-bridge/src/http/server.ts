@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { config } from "../config";
 import { prisma } from "../prisma";
@@ -66,15 +65,6 @@ function header(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name.toLowerCase()];
   if (Array.isArray(value)) return value[0];
   return value;
-}
-
-function cleanupTokenMatches(request: FastifyRequest): boolean {
-  const expected = config.admin.cleanupToken;
-  const supplied = header(request, "x-whatsapp-cleanup-token");
-  if (!expected || !supplied) return false;
-  const left = Buffer.from(expected);
-  const right = Buffer.from(supplied);
-  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function publicBaseUrl(request: FastifyRequest): string {
@@ -290,24 +280,18 @@ export async function buildServer() {
       });
 
       /**
-       * 测试期一键清理 bridge 运行数据。
+       * 测试期一键清理 bridge 运行数据（临时接口）。
        *
-       * 现有 import/unbind 是受 YCloud 事实校验保护的窄操作；清库不同，若裸露在公网会
-       * 直接造成全量数据丢失。因此必须同时满足：环境开关 + 独立 token + dry-run/确认串。
-       * 默认保留 FeishuApp/AppSetting（凭据/全局配置），全量清它们要 includeConfig:true
-       * 和更强确认串。
+       * 按测试期口径**不做请求侧校验**：POST 即执行，空 body 也能直接清全量运行数据。
+       * 默认保留 FeishuApp/AppSetting（凭据/全局配置），要连它们一起清得传
+       * includeConfig:true（只允许全局范围）；传 supplierId 可只清一个测试租户。
+       * 应急关闭：ConfigMap 设 WHATSAPP_DISABLE_DB_CLEANUP=1 → 403（不必重建镜像）。
        */
       scope.post("/api/admin/whatsapp/cleanup", async (request, reply) => {
-        if (!config.admin.allowDbCleanup || !config.admin.cleanupToken) {
+        if (config.admin.dbCleanupDisabled) {
           return reply.code(403).send({
             code: "CLEANUP_DISABLED",
-            error: "WhatsApp DB cleanup is disabled; set WHATSAPP_ALLOW_DB_CLEANUP=1 and WHATSAPP_CLEANUP_TOKEN",
-          });
-        }
-        if (!cleanupTokenMatches(request)) {
-          return reply.code(401).send({
-            code: "CLEANUP_UNAUTHORIZED",
-            error: "missing or invalid X-WhatsApp-Cleanup-Token",
+            error: "WhatsApp DB cleanup is disabled by WHATSAPP_DISABLE_DB_CLEANUP",
           });
         }
         try {
