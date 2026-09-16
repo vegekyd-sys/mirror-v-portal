@@ -26,6 +26,8 @@ import {
   applyTenantLlmConfig,
   type LlmProvidersConfig,
 } from './llm-providers.js';
+import { CatalogRolloutService } from './catalog-rollout-service.js';
+import { snapshotFingerprint } from './model-catalog.js';
 import type { ProvisioningConfig } from '../config.js';
 import type { SseBroker } from './sse-broker.js';
 import type {
@@ -496,6 +498,18 @@ export async function resumeRolloutBatch(
   return rowCount ?? 0;
 }
 
+/** Fetch the release fingerprint for applied-status tracking. */
+async function getReleaseFingerprint(
+  pool: pg.Pool,
+  releaseId: string,
+): Promise<string | null> {
+  const { rows } = await pool.query<{ fingerprint: string }>(
+    `SELECT fingerprint FROM llm_catalog_releases WHERE id = $1`,
+    [releaseId],
+  );
+  return rows[0]?.fingerprint ?? null;
+}
+
 /** Full run of one claimed task. Publishes snapshot/item/task/done to SSE. */
 export async function executeTask(
   pool: pg.Pool,
@@ -508,6 +522,17 @@ export async function executeTask(
   try {
     const prevLibrary = decryptLibraryOrThrow(task.prev_library);
     const nextLibrary = decryptLibraryOrThrow(task.next_library);
+
+    // Fetch the release fingerprint for applied-status tracking. Only tasks
+    // linked to a Catalog Release carry a release_id; older push tasks (legacy
+    // save/delete) don't, and their applied status is not tracked.
+    let releaseFingerprint: string | null = null;
+    if (task.release_id) {
+      releaseFingerprint = await getReleaseFingerprint(pool, task.release_id);
+    }
+    const rolloutService = task.release_id && releaseFingerprint
+      ? new CatalogRolloutService(pool)
+      : null;
 
     if ((await countItems(pool, taskId)) === 0) {
       await enumerateTargets(pool, task);
@@ -554,6 +579,37 @@ export async function executeTask(
         task.scope,
       );
       await recordItemResult(pool, taskId, item.tenant_id, outcome);
+
+      // Update the per-tenant release applied status. This runs immediately
+      // after recordItemResult (same pool, sequential) so that the release
+      // status reflects the actual delivery outcome. If the worker crashes
+      // between the two, a re-claim re-runs the item idempotently and
+      // updates both. The retry guard in the SQL prevents overwriting an
+      // already-delivered status for the same release.
+      if (rolloutService) {
+        const delivered = outcome.ok && !outcome.skipped;
+        const deliveryStatus = delivered
+          ? ('delivered' as const)
+          : outcome.skipped
+            ? ('skipped' as const)
+            : ('failed' as const);
+        const restartReason = outcome.restarted
+          ? 'image-diff'
+          : outcome.gatewayRestarted
+            ? 'env-diff'
+            : outcome.skipRestart
+              ? 'skip-restart'
+              : null;
+        await rolloutService.updateTenantAppliedStatus({
+          tenantId: item.tenant_id,
+          releaseId: task.release_id!,
+          fingerprint: releaseFingerprint!,
+          deliveryStatus,
+          restartReason,
+          error: outcome.error ?? null,
+        });
+      }
+
       await renewLease(pool, taskId, config.llmPushLeaseSeconds);
 
       broker.publish(taskId, 'item', {
@@ -589,6 +645,14 @@ export async function executeTask(
               : 'partial';
       }
       await finishTask(pool, taskId, finalStatus, finalError);
+    }
+
+    // After all items are processed, mark tenants with external agent
+    // endpoints as 'unsupported' for this release. These tenants are never
+    // enumerated as push task items (enumerateTargets filters them out),
+    // but they may have pending release status rows from initTenantReleaseStatus.
+    if (rolloutService && task.release_id) {
+      await rolloutService.markExternalAgentsUnsupported(task.release_id);
     }
 
     const done = await getTaskById(pool, taskId);

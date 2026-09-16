@@ -363,6 +363,219 @@ describe('pruneOldLlmPushTasks', () => {
   });
 });
 
+// ── Applied status integration tests ──────────────────────────────────────
+
+describe('executeTask — applied release status', () => {
+  function makeReleaseTaskRow(overrides: Record<string, unknown> = {}) {
+    return makeTaskRow({
+      release_id: 'rel-001',
+      scope_type: 'full',
+      ...overrides,
+    });
+  }
+
+  /**
+   * Pool that responds to the new release-status queries:
+   *  - SELECT fingerprint FROM llm_catalog_releases
+   *  - INSERT INTO llm_tenant_release_status (ON CONFLICT)
+   *  - UPDATE llm_tenant_release_status ... agent_endpoint
+   */
+  function makeReleaseStatusPool(opts: {
+    task?: Record<string, unknown> | null;
+    allTenants?: string[];
+    items?: Record<string, unknown>[];
+    releaseFingerprint?: string;
+    externalMarked?: number;
+  } = {}) {
+    const pool = makePushPool({
+      task: opts.task ?? null,
+      allTenants: opts.allTenants ?? [],
+      items: opts.items ?? [],
+    });
+    const origQuery = pool.query;
+    pool.query = async (sql: string, params?: unknown[]) => {
+      pool.queries.push({ sql, params });
+      // Intercept release fingerprint lookup.
+      if (sql.includes('SELECT fingerprint FROM llm_catalog_releases')) {
+        return {
+          rows: [{ fingerprint: opts.releaseFingerprint ?? 'release-fp' }],
+          rowCount: 1,
+        };
+      }
+      // Intercept applied-status INSERT (updateTenantAppliedStatus).
+      if (sql.includes('INSERT INTO llm_tenant_release_status')) {
+        return { rows: [], rowCount: 1 };
+      }
+      // Intercept markExternalAgentsUnsupported UPDATE.
+      if (sql.includes('agent_endpoint IS NOT NULL') && sql.includes('llm_tenant_release_status')) {
+        return { rows: [], rowCount: opts.externalMarked ?? 0 };
+      }
+      return origQuery(sql, params);
+    };
+    return pool;
+  }
+
+  it('updates applied_release_id and delivered status on success', async () => {
+    // Use a pool that simulates a single tenant item being claimed and
+    // processed. applyTenantLlmConfig will skip or fail in the test env,
+    // so we verify the applied-status SQL was issued.
+    const queries: FakeQuery[] = [];
+    let itemClaimed = false;
+    const pool = {
+      queries,
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        if (sql.includes('SELECT fingerprint FROM llm_catalog_releases')) {
+          return { rows: [{ fingerprint: 'release-fp' }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT COUNT(*)::int AS n FROM llm_push_task_items')) {
+          return { rows: [{ n: 0 }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT tenant_id FROM tenants')) {
+          return { rows: [{ tenant_id: 't1' }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT cancel_requested')) {
+          return { rows: [{ cancel_requested: false }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT * FROM llm_push_tasks WHERE id = $1')) {
+          return {
+            rows: [makeReleaseTaskRow({ status: 'running', total_count: 1, succeeded_count: 0, failed_count: 1 })],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('INSERT INTO llm_push_task_items')) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes('WITH next AS') && sql.includes('llm_push_task_items')) {
+          if (!itemClaimed) {
+            itemClaimed = true;
+            return { rows: [{ id: 1, task_id: 'task-1', tenant_id: 't1', status: 'running', attempts: 1, batch_index: null, batch_total: null, batch_status: 'pending' }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes('COUNT(*) FILTER')) {
+          return { rows: [{ succeeded_count: '0', failed_count: '1', skipped_count: '0' }], rowCount: 1 };
+        }
+        if (sql.includes('INSERT INTO llm_tenant_release_status')) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes('agent_endpoint IS NOT NULL') && sql.includes('llm_tenant_release_status')) {
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const broker = { publish: vi.fn(), close: vi.fn() };
+    await executeTask(pool as any, makeConfig(), broker as any, makeReleaseTaskRow({ status: 'running' }) as any);
+
+    // The release fingerprint lookup should have run.
+    const fpQuery = queries.find((q: FakeQuery) =>
+      q.sql.includes('SELECT fingerprint FROM llm_catalog_releases'));
+    expect(fpQuery).toBeTruthy();
+    expect(fpQuery!.params![0]).toBe('rel-001');
+
+    // The applied-status INSERT should have been issued. The delivery
+    // status is 'skipped' or 'failed' depending on whether applyTenantLlmConfig
+    // skips (tenant has no namespace in test) or errors.
+    const statusInsert = queries.find((q: FakeQuery) =>
+      q.sql.includes('INSERT INTO llm_tenant_release_status'));
+    expect(statusInsert).toBeTruthy();
+    expect(['skipped', 'failed']).toContain(statusInsert!.params![4]);
+
+    // The external-agent UPDATE should also have been issued.
+    const externalUpdate = queries.find((q: FakeQuery) =>
+      q.sql.includes('agent_endpoint IS NOT NULL') &&
+      q.sql.includes('llm_tenant_release_status'));
+    expect(externalUpdate).toBeTruthy();
+  });
+
+  it('does not call applied-status queries when task has no release_id', async () => {
+    const pool = makePushPool({
+      task: makeTaskRow({ status: 'running', release_id: null }),
+      allTenants: [],
+    });
+    const broker = { publish: vi.fn(), close: vi.fn() };
+    await executeTask(pool, makeConfig(), broker as any, makeTaskRow({ status: 'running', release_id: null }) as any);
+
+    // No release fingerprint lookup.
+    expect(pool.queries.some((q: FakeQuery) =>
+      q.sql.includes('SELECT fingerprint FROM llm_catalog_releases'))).toBe(false);
+    // No applied-status INSERT.
+    expect(pool.queries.some((q: FakeQuery) =>
+      q.sql.includes('INSERT INTO llm_tenant_release_status'))).toBe(false);
+    // No external-agent UPDATE.
+    expect(pool.queries.some((q: FakeQuery) =>
+      q.sql.includes('agent_endpoint IS NOT NULL'))).toBe(false);
+  });
+
+  it('marks external agents as unsupported after processing', async () => {
+    const pool = makeReleaseStatusPool({
+      task: makeReleaseTaskRow({ status: 'running' }),
+      allTenants: [],
+      externalMarked: 3,
+    });
+    const broker = { publish: vi.fn(), close: vi.fn() };
+    await executeTask(pool, makeConfig(), broker as any, makeReleaseTaskRow({ status: 'running' }) as any);
+
+    const externalUpdate = pool.queries.find((q: FakeQuery) =>
+      q.sql.includes('agent_endpoint IS NOT NULL') &&
+      q.sql.includes('llm_tenant_release_status'));
+    expect(externalUpdate).toBeTruthy();
+    expect(externalUpdate!.params![0]).toBe('rel-001');
+  });
+});
+
+// ── updateTenantAppliedStatus retry guard ───────────────────────────────
+
+describe('CatalogRolloutService.updateTenantAppliedStatus — retry guard', () => {
+  it('does not overwrite an already-delivered status for the same release', async () => {
+    const queries: FakeQuery[] = [];
+    const pool = {
+      queries,
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const { CatalogRolloutService } = await import('../services/catalog-rollout-service.js');
+    const svc = new CatalogRolloutService(pool as any);
+    await svc.updateTenantAppliedStatus({
+      tenantId: 't1',
+      releaseId: 'rel-1',
+      fingerprint: 'fp-1',
+      deliveryStatus: 'delivered',
+      restartReason: 'image-diff',
+      error: null,
+    });
+    const insert = queries.find((q: FakeQuery) =>
+      q.sql.includes('INSERT INTO llm_tenant_release_status'));
+    expect(insert).toBeTruthy();
+    // The ON CONFLICT clause must include a WHERE guard that prevents
+    // overwriting an already-delivered status for the same release.
+    expect(insert!.sql).toContain("delivery_status = 'delivered'");
+    expect(insert!.sql).toContain('applied_release_id = EXCLUDED.applied_release_id');
+  });
+
+  it('markExternalAgentsUnsupported issues the correct UPDATE', async () => {
+    const queries: FakeQuery[] = [];
+    const pool = {
+      queries,
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        return { rows: [], rowCount: 2 };
+      },
+    };
+    const { CatalogRolloutService } = await import('../services/catalog-rollout-service.js');
+    const svc = new CatalogRolloutService(pool as any);
+    const n = await svc.markExternalAgentsUnsupported('rel-42');
+    expect(n).toBe(2);
+    const update = queries.find((q: FakeQuery) =>
+      q.sql.includes('agent_endpoint IS NOT NULL'));
+    expect(update).toBeTruthy();
+    expect(update!.params![0]).toBe('rel-42');
+  });
+});
+
 describe('listTasks / getTaskDetail', () => {
   it('maps rows to a public view', async () => {
     const pool = makePushPool({

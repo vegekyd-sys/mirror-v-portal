@@ -383,7 +383,11 @@ export class CatalogRolloutService {
          delivery_status = EXCLUDED.delivery_status,
          error = EXCLUDED.error,
          attempts = llm_tenant_release_status.attempts + 1,
-         updated_at = NOW()`,
+         updated_at = NOW()
+       WHERE NOT (
+         llm_tenant_release_status.delivery_status = 'delivered'
+         AND llm_tenant_release_status.applied_release_id = EXCLUDED.applied_release_id
+       )`,
       [
         params.tenantId,
         params.releaseId,
@@ -393,6 +397,28 @@ export class CatalogRolloutService {
         params.error,
       ],
     );
+  }
+
+  /**
+   * Mark tenants with external agent endpoints as 'unsupported' for a given
+   * release. Called by the push task worker after all items are processed.
+   * Only affects tenants whose release status is still 'pending' and that
+   * have a non-null agent_endpoint in the tenants table.
+   */
+  async markExternalAgentsUnsupported(releaseId: string): Promise<number> {
+    const { rowCount } = await this.pool.query(
+      `UPDATE llm_tenant_release_status trs
+       SET delivery_status = 'unsupported',
+           error = 'external agent endpoint',
+           updated_at = NOW()
+       FROM tenants t
+       WHERE trs.desired_release_id = $1
+         AND trs.delivery_status = 'pending'
+         AND trs.tenant_id = t.tenant_id
+         AND t.agent_endpoint IS NOT NULL`,
+      [releaseId],
+    );
+    return rowCount ?? 0;
   }
 
   /**
