@@ -105,6 +105,9 @@ def main() -> int:
     record = {
         "direction": "outbound",
         "account_id": account_id,
+        # 显式渠道标记：GS 直发（Resend API）。quality_metrics 优先读它，
+        # 不再靠 account_id == resend_gs 推断（2026-09-16 已取消写死假账号）。
+        "send_channel": "growth_send",
         "sender": args.from_addr,
         "recipients": to_list,
         "subject": args.subject,

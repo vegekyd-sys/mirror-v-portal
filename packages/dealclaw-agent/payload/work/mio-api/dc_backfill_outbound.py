@@ -144,6 +144,8 @@ def main() -> int:
         rec = {
             "direction": "outbound",
             "account_id": account_id,
+            # 显式渠道标记：回填的同样是 GS 直发事实（见 dc_record_outbound.py）
+            "send_channel": "growth_send",
             "sender": e.get("from") or "",
             "recipients": to_list,
             "subject": e.get("subject") or "",
