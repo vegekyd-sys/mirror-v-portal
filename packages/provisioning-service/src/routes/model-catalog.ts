@@ -712,6 +712,13 @@ export function createModelCatalogRoutes(
       }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('STALE_REVISION')) return staleRevision(res);
+      if (message.includes('DANGLING_MODEL_REFERENCE')) {
+        res.status(422).json({
+          code: 'BACKFILL_NOT_READY',
+          message: 'Catalog references changed before the policy could be applied',
+        });
+        return;
+      }
       console.error('model catalog global policy backfill failed:', error);
       internalError(res, 'GLOBAL_POLICY_BACKFILL_FAILED');
     }

@@ -33,6 +33,7 @@ export interface GlobalPolicyBackfillPreview {
   ambiguousRefs: GlobalPolicyAmbiguousReference[];
   disabledRefs: GlobalPolicyDisabledReference[];
   currentPolicy: GlobalModelPolicyRecord | null;
+  legacyAvailable: boolean;
   ready: boolean;
   equivalent: boolean;
   overwriteBlocked: boolean;
@@ -159,7 +160,10 @@ export class GlobalPolicyBackfillService {
       .map((ref) => resolve('fallbackModels', ref))
       .filter((id): id is string => id !== null);
 
-    const referencesReady = missingRefs.length === 0 && ambiguousRefs.length === 0 &&
+    // A missing/corrupt Legacy document is not an intentional empty policy.
+    // Fail closed so force=true can never erase a configured Catalog policy.
+    const legacyAvailable = legacy !== null;
+    const referencesReady = legacyAvailable && missingRefs.length === 0 && ambiguousRefs.length === 0 &&
       disabledRefs.length === 0;
     // Never call a partially resolved policy equivalent: unresolved refs are represented
     // as null/filtered values and could otherwise accidentally equal an empty policy.
@@ -172,6 +176,7 @@ export class GlobalPolicyBackfillService {
       ambiguousRefs,
       disabledRefs,
       currentPolicy,
+      legacyAvailable,
       ready: referencesReady && !overwriteBlocked,
       equivalent,
       overwriteBlocked,

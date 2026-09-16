@@ -62,7 +62,7 @@ function catalog() {
 }
 
 function setup(options: {
-  legacy?: LlmProvidersConfig;
+  legacy?: LlmProvidersConfig | null;
   current?: GlobalModelPolicyRecord | null;
   catalog?: ReturnType<typeof catalog>;
 } = {}) {
@@ -76,7 +76,7 @@ function setup(options: {
     getGlobalModelPolicy: vi.fn(async () => options.current === undefined ? emptyCurrent : options.current),
     updateGlobalModelPolicy: update,
   };
-  const loadLegacy = vi.fn(async () => options.legacy ?? legacy);
+  const loadLegacy = vi.fn(async () => options.legacy === undefined ? legacy : options.legacy);
   const service = new GlobalPolicyBackfillService(
     {} as pg.Pool,
     repository,
@@ -170,6 +170,26 @@ describe('GlobalPolicyBackfillService', () => {
   it('rejects apply when any reference is unresolved', async () => {
     const { service, update } = setup({ legacy: { ...legacy, defaultModel: 'missing/model' } });
     await expect(service.apply({ dryRun: false })).rejects.toMatchObject({
+      code: 'BACKFILL_NOT_READY',
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing Legacy data even with force instead of clearing a policy', async () => {
+    const current = {
+      ...emptyCurrent,
+      defaultModel: 'lpm_chat',
+      revision: 9,
+    };
+    const { service, update } = setup({ current, legacy: null });
+    const preview = await service.preview(true);
+    expect(preview).toMatchObject({
+      legacyAvailable: false,
+      ready: false,
+      equivalent: false,
+      overwriteBlocked: false,
+    });
+    await expect(service.apply({ dryRun: false, force: true })).rejects.toMatchObject({
       code: 'BACKFILL_NOT_READY',
     });
     expect(update).not.toHaveBeenCalled();
