@@ -7,7 +7,9 @@ RUN git --version && python3 --version && curl --version && test -s /etc/ssl/cer
 RUN corepack enable
 RUN npm install --omit=dev --no-save --legacy-peer-deps \
     --prefix /opt/nexus-manager/plugins/feishu @openclaw/feishu@2026.9.4 \
-    && chown -R node:node /opt/nexus-manager
+    && test ! -e /app/dist/extensions/feishu \
+    && cp -a /opt/nexus-manager/plugins/feishu/node_modules/@openclaw/feishu /app/dist/extensions/feishu \
+    && chown -R node:node /opt/nexus-manager /app/dist/extensions/feishu
 COPY runtime /opt/nexus-manager/runtime
 COPY payload /opt/nexus-manager/payload
 RUN mkdir -p /data && chown node:node /data

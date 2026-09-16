@@ -231,7 +231,7 @@ k8s/nexus-manager/                              工作负载、网络、NAS 静�
 
 - 官方 amd64 镜像固定 digest：`sha256:6bc0bf3117e1c5074db8a064084a5f9d41ece1aa2a16369a82f53207b846a5c3`。
 - 内部 ACR 标签：`dealclaw-acr-registry.cn-hangzhou.cr.aliyuncs.com/dealclaw-nexus/openclaw:2026.9.4`。
-- 飞书插件同步升级为 `@openclaw/feishu@2026.9.4`，避免宿主与插件版本错配。
+- 飞书插件同步升级为 `@openclaw/feishu@2026.9.4`，并放入 OpenClaw bundled extension 目录，使 durable ingress queue 将其识别为受信任插件；启动时会移除旧版 `/opt` 自定义加载路径并刷新插件注册表，避免宿主与插件版本或来源错配。
 - 2026.7.1 的历史验证记录保留作为旧版本基线。
 - 2026.9.4 镜像已构建并实际启动，`openclaw --version` 返回 `OpenClaw 2026.9.4 (3a9d69d)`；`readyz` 返回 200，`/nexus-manager/openclaw/` 返回带正确 `data-openclaw-control-ui-base-path` 的原生 UI。
 - 按 2026.9.4 的代理来源校验要求，仅信任容器内回环代理；代理删除外部传入的身份及转发头，再根据直连对端重建来源。Kubelet 健康检查不附带转发头，以本地控制流量进入 Gateway。

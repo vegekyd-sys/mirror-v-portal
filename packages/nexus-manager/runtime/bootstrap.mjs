@@ -13,22 +13,38 @@ export function normalizeUiBasePath(value = '') {
   return value.replace(/\/$/, '');
 }
 
-function reconcileUiRouting(configPath, uiOrigin, uiBasePath) {
+function reconcileDeploymentConfig(configPath, uiOrigin, uiBasePath) {
   let config;
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
-  catch { return; }
+  catch { return { changed: false, pluginRegistryRefreshRequired: false }; }
   const controlUi = config?.gateway?.controlUi;
-  if (!controlUi || typeof controlUi !== 'object' || Array.isArray(controlUi)) return;
   const expectedOrigins = [uiOrigin];
-  const originsChanged = JSON.stringify(controlUi.allowedOrigins) !== JSON.stringify(expectedOrigins);
-  const pathChanged = uiBasePath ? controlUi.basePath !== uiBasePath : Object.hasOwn(controlUi, 'basePath');
-  if (!originsChanged && !pathChanged) return;
-  controlUi.allowedOrigins = expectedOrigins;
-  if (uiBasePath) controlUi.basePath = uiBasePath;
-  else delete controlUi.basePath;
+  let changed = false;
+  if (controlUi && typeof controlUi === 'object' && !Array.isArray(controlUi)) {
+    const originsChanged = JSON.stringify(controlUi.allowedOrigins) !== JSON.stringify(expectedOrigins);
+    const pathChanged = uiBasePath ? controlUi.basePath !== uiBasePath : Object.hasOwn(controlUi, 'basePath');
+    if (originsChanged) { controlUi.allowedOrigins = expectedOrigins; changed = true; }
+    if (pathChanged) {
+      if (uiBasePath) controlUi.basePath = uiBasePath;
+      else delete controlUi.basePath;
+      changed = true;
+    }
+  }
+  const legacyFeishuPath = '/opt/nexus-manager/plugins/feishu/node_modules/@openclaw/feishu';
+  const loadPaths = config?.plugins?.load?.paths;
+  const filteredPaths = Array.isArray(loadPaths) ? loadPaths.filter(value => value !== legacyFeishuPath) : loadPaths;
+  const pluginRegistryRefreshRequired = Array.isArray(loadPaths) && filteredPaths.length !== loadPaths.length;
+  if (pluginRegistryRefreshRequired) {
+    changed = true;
+    if (filteredPaths.length) config.plugins.load.paths = filteredPaths;
+    else if (Object.keys(config.plugins.load).length === 1) delete config.plugins.load;
+    else delete config.plugins.load.paths;
+  }
+  if (!changed) return { changed: false, pluginRegistryRefreshRequired: false };
   const temporaryPath = `${configPath}.routing-${process.pid}`;
   fs.writeFileSync(temporaryPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
   fs.renameSync(temporaryPath, configPath);
+  return { changed: true, pluginRegistryRefreshRequired };
 }
 
 export function bootstrap(env = process.env, payload = '/opt/nexus-manager/payload') {
@@ -50,7 +66,7 @@ export function bootstrap(env = process.env, payload = '/opt/nexus-manager/paylo
     if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) throw new Error('Model endpoint must use HTTPS without credentials');
     if (!env.NEXUS_MODEL_ID) throw new Error('Initial model ID is missing');
     const config = {
-      plugins: { allow: ['feishu'], load: { paths: ['/opt/nexus-manager/plugins/feishu/node_modules/@openclaw/feishu'] } },
+      plugins: { allow: ['feishu'], entries: { feishu: { enabled: true } } },
       gateway: { mode: 'local', bind: 'loopback', port: 18790,
         // The embed adapter is the only network listener. It strips caller-supplied
         // forwarding/identity headers before rebuilding X-Forwarded-* locally.
@@ -66,8 +82,8 @@ export function bootstrap(env = process.env, payload = '/opt/nexus-manager/paylo
     };
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   }
-  // Routing is deployment-owned and may change independently of native UI
-  // configuration. Reconcile only these fields for existing NAS state.
-  reconcileUiRouting(configPath, uiOrigin, uiBasePath);
-  return { adminOrigin, uiOrigin, uiBasePath };
+  // Deployment-owned routing and legacy image plugin paths may change
+  // independently. Preserve native model, channel and agent configuration.
+  const reconciliation = reconcileDeploymentConfig(configPath, uiOrigin, uiBasePath);
+  return { adminOrigin, uiOrigin, uiBasePath, ...reconciliation };
 }

@@ -19,6 +19,7 @@ test('restart preserves native configuration, work and identity; secrets remain 
     const initial = fs.readFileSync(env.OPENCLAW_CONFIG_PATH, 'utf8');
     assert.equal(JSON.parse(initial).gateway.controlUi.basePath, '/nexus-manager/openclaw');
     assert.deepEqual(JSON.parse(initial).gateway.controlUi.allowedOrigins, ['https://admin.example.com']);
+    assert.deepEqual(JSON.parse(initial).plugins, { allow: ['feishu'], entries: { feishu: { enabled: true } } });
     assert.deepEqual(JSON.parse(initial).gateway.trustedProxies, ['127.0.0.1', '::1']);
     assert.equal(JSON.parse(initial).memory.search.enabled, false);
     assert.equal(JSON.parse(initial).agents.defaults.memorySearch, undefined);
@@ -56,18 +57,21 @@ test('startup migrates only deployment-owned UI routing for existing state', () 
     const configPath = `${state}/openclaw.json`;
     fs.writeFileSync(configPath, JSON.stringify({
       gateway: { controlUi: { allowedOrigins: ['https://manager.example.com'], basePath: '/old', theme: 'dark' } },
+      plugins: { allow: ['feishu'], load: { paths: ['/custom/plugin', '/opt/nexus-manager/plugins/feishu/node_modules/@openclaw/feishu'] } },
       channels: { feishu: { enabled: true } },
     }));
     const env = { NEXUS_ADMIN_ORIGIN: 'https://admin.example.com', NEXUS_UI_ORIGIN: 'https://admin.example.com',
       OPENCLAW_GATEWAY_TOKEN: 'a'.repeat(40), OPENCLAW_HOME: `${root}/home`, OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: `${root}/workspace`,
       NEXUS_MODEL_BASE_URL: 'https://models.example.com/v1', NEXUS_MODEL_ID: 'model', NEXUS_UI_BASE_PATH: '/nexus-manager/openclaw' };
-    bootstrap(env, path.resolve(import.meta.dirname, '../payload'));
+    const result = bootstrap(env, path.resolve(import.meta.dirname, '../payload'));
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(config.gateway.controlUi.allowedOrigins, ['https://admin.example.com']);
     assert.equal(config.gateway.controlUi.basePath, '/nexus-manager/openclaw');
     assert.equal(config.gateway.controlUi.theme, 'dark');
+    assert.deepEqual(config.plugins.load.paths, ['/custom/plugin']);
     assert.deepEqual(config.channels, { feishu: { enabled: true } });
+    assert.equal(result.pluginRegistryRefreshRequired, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
