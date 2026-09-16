@@ -7,7 +7,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import type {
   CreateTenantResponse,
-  MioSupplierCreateResponse,
+  // MioSupplierCreateResponse,  // 2026-09-16 暂时停用「新建供应商」(quickRegister)，恢复时取消注释
   MioSupplierOption,
   MioSupplierSearchResponse,
   Tenant,
@@ -207,19 +207,36 @@ export default function AgentsPage() {
     setMioSelected(mioItems.find((i) => i.id === id) || null);
   };
 
-  /** 打开「新建供应商」子表单，默认沿用当前公司名 + 手机号。 */
-  const openNewSupplier = () => {
-    setNewSupplier({
-      companyName: addForm.companyName.trim(),
-      mobile: addForm.contactPhone.replace(/[^0-9]/g, ''),
-      intDialingCode: addForm.contactPhoneCode.trim() || '+86',
-    });
-    setNewSupplierErr('');
-    setShowNewSupplier(true);
-  };
+  /**
+   * 2026-09-16 暂时停用：「新建供应商」入口（openNewSupplier）。
+   *
+   * 原因：该入口 → createMioSupplier → 米奥 quickRegister，而 quickRegister 必填手机号，
+   * 与本次「联系人手机改回非必填」的口径冲突；且注册供应商与建租户本就该分开
+   * （先在米奥侧建好，再在本页「搜索供应商」选中绑定）。
+   *
+   * 恢复方式：取消下面注释，并恢复 JSX 里的「新建供应商」按钮 + import 的
+   * MioSupplierCreateResponse + createMioSupplier 的原始实现。
+   */
+  // const openNewSupplier = () => {
+  //   setNewSupplier({
+  //     companyName: addForm.companyName.trim(),
+  //     mobile: addForm.contactPhone.replace(/[^0-9]/g, ''),
+  //     intDialingCode: addForm.contactPhoneCode.trim() || '+86',
+  //   });
+  //   setNewSupplierErr('');
+  //   setShowNewSupplier(true);
+  // };
 
-  /** 调 POST /v1/admin/mio-suppliers 快速创建；米奥错误原文展示。 */
+  /**
+   * 2026-09-16 暂时停用：调用米奥 quickRegister 注册供应商。
+   *
+   * 原实现（POST /v1/admin/mio-suppliers）保留在下方注释里，恢复时取回即可。
+   */
   const createMioSupplier = async () => {
+    setNewSupplierBusy(true);
+    setNewSupplierErr('本页暂不支持新建米奥供应商：请先在米奥侧创建，再用「搜索供应商」选中绑定。');
+    setNewSupplierBusy(false);
+    /* 原实现（暂时停用）：
     const companyName = (newSupplier.companyName || addForm.companyName).trim();
     const mobile = newSupplier.mobile.trim();
     const intDialingCode = newSupplier.intDialingCode.trim() || '+86';
@@ -256,6 +273,7 @@ export default function AgentsPage() {
     } finally {
       setNewSupplierBusy(false);
     }
+    */
   };
 
   const addAgent = async () => {
@@ -263,7 +281,9 @@ export default function AgentsPage() {
     const body = {
       companyName: addForm.companyName.trim(),
       contactEmail: addForm.contactEmail.trim(),
-      contactPhone: `${addForm.contactPhoneCode.trim() || '+86'}${phoneDigits}`,
+      // 手机号可选（2026-09-16 改回非必填）：留空时提交空串，后端存 null；
+      // 不再拼出只有区号的 "+86"。
+      contactPhone: phoneDigits ? `${addForm.contactPhoneCode.trim() || '+86'}${phoneDigits}` : '',
       planTier: addForm.planTier,
       quotaAgents: Number(addForm.quotaAgents) || 1,
       quotaCreditsMonthly: Number(addForm.quotaCreditsMonthly) || 1000000,
@@ -275,11 +295,8 @@ export default function AgentsPage() {
       setAddErr('请填写公司名称（企业标识）');
       return;
     }
-    // 联系人手机必填：米奥侧新建供应商 / 后续对接都需要真实联系方式。
-    if (!phoneDigits) {
-      setAddErr('请填写联系人手机号（含国际区号）');
-      return;
-    }
+    // 联系人手机：2026-09-16 改回**非必填**（本页不再代米奥注册供应商后，
+    // 手机号不再是创建阻塞项；留空提交空串，后端存 null）。
     // Requirement (2026-08-27): creating an Agent REQUIRES Feishu bot
     // credentials — without them the backend refuses to provision agent
     // workloads (no creds → customer-only record). Enforce here so the
@@ -571,10 +588,9 @@ export default function AgentsPage() {
             )}
             {mioSearched && mioItems.length === 0 && !mioErr && (
               <div className="msg msg-warn">
-                米奥未找到「{addForm.companyName.trim()}」的供应商，可在米奥侧新建后自动绑定。
-                <button className="btn-secondary btn-sm" style={{ marginLeft: 8 }} onClick={openNewSupplier}>
-                  新建供应商
-                </button>
+                米奥未找到「{addForm.companyName.trim()}」的供应商：请先在米奥侧新建，再回到本页重新搜索选中绑定。
+                {/* 2026-09-16 暂时停用「新建供应商」（quickRegister）；恢复时取消注释： */}
+                {/* <button className="btn-secondary btn-sm" style={{ marginLeft: 8 }} onClick={openNewSupplier}>新建供应商</button> */}
               </div>
             )}
             {showNewSupplier && (
@@ -646,7 +662,7 @@ export default function AgentsPage() {
                 type="text"
                 value={addForm.contactPhone}
                 onChange={(e) => setAddForm({ ...addForm, contactPhone: e.target.value })}
-                placeholder="必填，如 13800000000"
+                placeholder="可选，如 13800000000"
               />
             </div>
             <div className="form-row">
