@@ -8,6 +8,7 @@ import { TENANT_STATUSES, type ImageRelease, type StatusLogEntry, type Tenant } 
 import { PlanBadge, StatusBadge, fmtNum, fmtTime } from '../components/badges';
 import FeishuAppScanModal from '../components/FeishuAppScanModal';
 import WeComAppScanModal from '../components/WeComAppScanModal';
+import DingTalkAppScanModal from '../components/DingTalkAppScanModal';
 import WeChatScanModal from '../components/WeChatScanModal';
 import PodLogsModal from '../components/PodLogsModal';
 import PodTerminalModal from '../components/PodTerminalModal';
@@ -2225,6 +2226,7 @@ function DingTalkBindingSection({ tenantId, onFlash }: { tenantId: string; onFla
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [busy, setBusy] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const loadBinding = useCallback(async () => {
     try {
@@ -2317,6 +2319,14 @@ function DingTalkBindingSection({ tenantId, onFlash }: { tenantId: string; onFla
                 onChange={(e) => setClientSecret(e.target.value)}
                 placeholder="Client Secret（仅提交时传输）"
               />
+              <button
+                className="btn-secondary"
+                disabled={busy}
+                onClick={() => setScanOpen(true)}
+                title="客户扫码一键创建机器人并自动回填凭据"
+              >
+                <IconRefresh /> 扫码获取凭据
+              </button>
               <button className="btn-primary" disabled={busy} onClick={() => void bind()}>
                 <IconChat /> {busy ? '处理中…' : '绑定'}
               </button>
@@ -2328,6 +2338,15 @@ function DingTalkBindingSection({ tenantId, onFlash }: { tenantId: string; onFla
           </div>
         </div>
       </div>
+      <DingTalkAppScanModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onCredentials={(cid, cs) => {
+          setClientId(cid);
+          setClientSecret(cs);
+          onFlash('已获取钉钉机器人凭据，请确认后点击「绑定」');
+        }}
+      />
     </>
   );
 }

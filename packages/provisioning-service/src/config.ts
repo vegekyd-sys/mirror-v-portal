@@ -117,6 +117,19 @@ export interface ProvisioningConfig {
    * linux=3/其他=0）。
    */
   wecomScanPlat?: number;
+  /**
+   * 钉钉扫码授权 source 来源标识（env DINGTALK_SCAN_SOURCE，默认
+   * 'DING_DWS_CLAW'，与官方 OpenClaw 钉钉 connector 一致）。钉钉的
+   * registration 设备授权流（oapi.dingtalk.com/app/registration/*）用该
+   * 字段标识调用方；后续若向钉钉申请独立品牌标识，通过 env 覆盖即可。
+   */
+  dingtalkScanSource?: string;
+  /**
+   * 钉钉扫码授权 base URL（env DINGTALK_SCAN_BASE_URL，默认
+   * 'https://oapi.dingtalk.com'）。预留：钉钉若有专有/内网接入点，通过
+   * env 覆盖，无需改代码。
+   */
+  dingtalkScanBaseUrl?: string;
 }
 
 export function loadConfig(): ProvisioningConfig {
@@ -158,5 +171,7 @@ export function loadConfig(): ProvisioningConfig {
       process.env.WECOM_SCAN_PLAT !== undefined && process.env.WECOM_SCAN_PLAT !== ''
         ? Number(process.env.WECOM_SCAN_PLAT)
         : undefined,
+    dingtalkScanSource: process.env.DINGTALK_SCAN_SOURCE || 'DING_DWS_CLAW',
+    dingtalkScanBaseUrl: process.env.DINGTALK_SCAN_BASE_URL || 'https://oapi.dingtalk.com',
   };
 }
