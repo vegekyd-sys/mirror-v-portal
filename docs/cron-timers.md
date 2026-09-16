@@ -74,19 +74,36 @@ entrypoint 启动后，等 gateway 就绪，依次调用 5 个 cron 注册脚本
 | delivery | `none` |
 | declaration-key | `dealclaw-buyer-onsite-monitor` |
 
-### 5. dealclaw-onsite-recommend-{10,14,16}h（现场未邀约买家推荐）
+### 5. dealclaw-onsite-recommend（现场未邀约买家推荐）
 
 注册脚本：`dc-cron-onsite-recommend.sh`
 
+> **2026-09-16 改造**：从「3 条固定北京时间 cron」改成「1 条每小时 cron + 运行时按展会当地时间判断」。
+> 旧的 `dealclaw-onsite-recommend-{10,14,16}h` 三条由注册脚本自动删除。
+
 | 字段 | 值 |
 |---|---|
-| cron | 展会**当地时间** 10:00 / 14:00 / 16:00（脚本内换算成北京时间注册）|
-| command | `python3 dc_onsite_recommend.py run` |
+| cron | `0 * * * *`（每小时轮询；**不代表推荐时点**）|
+| command | `python3 dc_onsite_recommend.py run --slot-gate` |
 | cwd | `/data/workspace/work/mio-api` |
 | env | `MIO_CDP_SUPPLIER_ID=<租户>`、`MIO_V_OPEN_ID=<open_id>`、`OPENCLAW_WORKSPACE_DIR=/data/workspace` |
 | delivery | `none` |
-| declaration-key | `dealclaw-onsite-recommend-{10,14,16}h` |
-| 说明 | 时区从当前展会国家（`orderRecords state=3`）映射；脚本内判断当天是否开展，未开展则 NO_RUN |
+| timeout | 900s |
+| declaration-key | `dealclaw-onsite-recommend` |
+
+真正的推荐时点由脚本按展会当地时间判断，顺序：
+
+1. 有没有 `state=3` 的在售展会 → 没有就 NO_RUN
+2. 取展会国家 → 映射 IANA 时区（表在 `dc_onsite_recommend.py` 的 `COUNTRY_TZ`）
+3. 用展会**当地日期**判断今天是否在展期内
+4. 展会当地小时 ∈ 推荐时点（默认 10/14/16，可用 `DEALCLAW_ONSITE_SLOTS` 覆盖）→ 不是就 NO_RUN
+5. 命中才拉现场买家、落池、发卡
+
+**为什么每小时够**：北京每小时一次 = 任何时区每小时正好一次，每个「当地小时」恰好覆盖一次，
+天然不重复推送。印度这类 +5:30 时区，北京整点对应当地 :30，小时值仍正确。
+
+**API 成本**：`state=3` 展会记录在 py 侧有 6 小时缓存（空结果同样缓存），实际约 4 次/天，
+和改造前 3 次/天基本持平。
 
 ---
 
@@ -134,7 +151,7 @@ entrypoint 启动后，等 gateway 就绪，依次调用 5 个 cron 注册脚本
 
 ### dc_onsite_recommend.py（现场推荐）
 
-调用：`python3 dc_onsite_recommend.py run`
+调用：`python3 dc_onsite_recommend.py run`（cron 额外带 `--slot-gate`）
 
 | 参数 | 说明 |
 |---|---|
@@ -143,6 +160,13 @@ entrypoint 启动后，等 gateway 就绪，依次调用 5 个 cron 注册脚本
 | `--exhibition-id` | 指定展会 ID（跳过自动判断当前展会）|
 | `--chat-id` | 群 chat_id（缺省读 dc_notify routes default）|
 | `--dry-run` | 只打印不执行 |
+| `--slot-gate` | **cron 专用**：按展会当地时间判断是否到推荐时点，不到就 NO_RUN |
+| `--slots` | 推荐时点，展会当地整点，逗号分隔（默认 `10,14,16`），仅配合 `--slot-gate` 生效 |
+| `--no-cache` | 跳过展会记录缓存，强制重新拉取 |
+
+> ⚠️ skill `dealclaw-onsite-recommend` 调的是同一条命令但**不带 `--slot-gate`**，
+> 所以用户现场主动喊「搜现场买家」任何时间都能跑，行为和改造前一致。加时点闸门时
+> 务必保持这个默认关闭，否则手动触发会被挡掉。
 
 ---
 

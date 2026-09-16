@@ -1,16 +1,31 @@
 #!/bin/bash
-# dc-cron-onsite-recommend.sh — 幂等注入 DealClaw 现场推荐 cron（当地时间 10/14/16 点）
+# dc-cron-onsite-recommend.sh — 幂等注入 DealClaw 现场推荐 cron（每小时一次，时点判断在脚本里）
 #
-# 展会开展期间，每天展会当地时间 10:00 / 14:00 / 16:00 各跑一次「现场未邀约匹配买家推荐」。
-# 时区从当前展会国家（orderRecords state=3）映射；10/14/16 点当地时间转成北京时间注册 cron。
-# 脚本内部会判断当天是否正在开展，没有则 NO_RUN 直接跳过。
+# 2026-09-16 改造：时区判断从「注册时」搬到「运行时」。
+#
+# 旧做法：注册时查一次展会国家 → 把当地 10/14/16 点换算成北京时间 → 注册 3 条 cron。
+# 两个问题：
+#   1. 只在容器启动时解析一次。巴西展换成美国展，pod 不重启就一直按巴西时间跑。
+#   2. 换算探针写死 1 月 1 日，美国/欧洲展会在夏令时期间偏 1 小时（波兰/德国/
+#      土耳其/俄罗斯同样中招；巴西 2019 年废除夏令时，不受影响）。
+#
+# 新做法：注册 1 条每小时的 cron，带 --slot-gate。dc_onsite_recommend.py 自己按
+# 「有没有在展展会 → 哪个国家 → 展会当地几点」判断要不要跑，不到点就 NO_RUN。
+# 展会换国家立即生效，夏令时由 ZoneInfo 自动处理，国家→时区表已搬进 py。
+#
+# 为什么每小时够：北京每小时一次，等价于任何时区每小时正好一次，每个「当地小时」
+# 恰好覆盖一次，天然不会重复推送。印度这类 +5:30 的时区，北京整点对应当地 :30，
+# 小时值仍然正确（10:30 的 hour 是 10），照样命中。
+#
+# API 成本：py 侧对 state=3 展会记录做了 6 小时缓存（空结果也缓存），实际 API 调用
+# 约 4 次/天，和改造前 3 次/天基本持平。
 #
 # 用法:
-#   dc-cron-onsite-recommend.sh            # 自动从当前展会国家映射时区
-#   dc-cron-onsite-recommend.sh --tz Europe/Berlin
+#   dc-cron-onsite-recommend.sh
 #
 # 环境变量:
-#   DEALCLAW_MIO_DIR        mio-api 目录（默认 /data/workspace/work/mio-api）
+#   DEALCLAW_MIO_DIR              mio-api 目录（默认 /data/workspace/work/mio-api）
+#   DEALCLAW_ONSITE_SLOTS         推荐时点（展会当地整点，逗号分隔；默认 py 侧的 10,14,16）
 
 set -euo pipefail
 
@@ -18,123 +33,75 @@ MIO_DIR="${DEALCLAW_MIO_DIR:-/data/workspace/work/mio-api}"
 SUPPLIER_ID="${MIO_CDP_SUPPLIER_ID:-}"
 OPEN_ID="${MIO_V_OPEN_ID:-}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}"
-DECL_KEY_PREFIX="dealclaw-onsite-recommend"
-XIAOYUAN="$(command -v xiaoyuan 2>/dev/null || echo /opt/xiaoyuan-venv/bin/xiaoyuan)"
+DECL_KEY="dealclaw-onsite-recommend"
+SLOTS="${DEALCLAW_ONSITE_SLOTS:-}"
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
 
-# 国家 → IANA 时区（覆盖米奥主要展会国家）
-COUNTRY_TZ='{
-  "Brazil": "America/Sao_Paulo",
-  "India": "Asia/Kolkata",
-  "Saudi Arabia": "Asia/Riyadh",
-  "Indonesia": "Asia/Jakarta",
-  "Vietnam": "Asia/Ho_Chi_Minh",
-  "South Africa": "Africa/Johannesburg",
-  "Mexico": "America/Mexico_City",
-  "Poland": "Europe/Warsaw",
-  "United Arab Emirates": "Asia/Dubai",
-  "Dubai": "Asia/Dubai",
-  "Japan": "Asia/Tokyo",
-  "United States": "America/New_York",
-  "Germany": "Europe/Berlin",
-  "Turkey": "Europe/Istanbul",
-  "Russia": "Europe/Moscow",
-  "Egypt": "Africa/Cairo",
-  "Kazakhstan": "Asia/Almaty"
-}'
-
-# 解析时区：显式 --tz 优先；否则从当前展会国家映射；兜底 Asia/Shanghai
-resolve_tz() {
-  local arg1="${1:-}"
-  local arg2="${2:-}"
-  if [[ "$arg1" == --tz=* ]]; then
-    echo "${arg1#--tz=}"; return
-  elif [[ "$arg1" == --tz ]]; then
-    echo "${arg2:-Asia/Shanghai}"; return
-  fi
-  if [[ -n "$OPEN_ID" && -n "$SUPPLIER_ID" ]]; then
-    local country
-    country=$("$XIAOYUAN" --open-id "$OPEN_ID" --supplier-id "$SUPPLIER_ID" company info 2>/dev/null | python3 -c "
-import sys, json
+# ── 清理旧的三条（10h/14h/16h）──────────────────────────────────
+# declarationKey 变了，旧 job 不会自动消失，不删就会和新的每小时 job 重复推送。
+# 用 cron list 按 declarationKey 反查 id 再删；查不到就跳过（全新租户/已清理过）。
+cleanup_legacy() {
+  local legacy_keys="${DECL_KEY}-10h ${DECL_KEY}-14h ${DECL_KEY}-16h"
+  local listing
+  listing="$(openclaw cron list --all --json 2>/dev/null)" || {
+    echo "[dc-cron-onsite-recommend] 无法读取 cron 列表，跳过旧 job 清理（下次启动重试）" >&2
+    return 0
+  }
+  local ids
+  ids="$(printf '%s' "$listing" | LEGACY_KEYS="$legacy_keys" python3 -c "
+import json, os, sys
 try:
-    d = json.load(sys.stdin)
-    ors = (d.get('response', {}).get('data', {}) or {}).get('orderRecords') or []
-    for r in ors:
-        if r.get('state') == 3 and r.get('websiteCountry'):
-            print(r['websiteCountry']); break
+    payload = json.load(sys.stdin)
 except Exception:
-    pass
-")
-    if [[ -n "$country" ]]; then
-      echo "$COUNTRY_TZ" | python3 -c "
-import sys, json
-tzmap = json.load(sys.stdin)
-print(tzmap.get('''$country'''.strip(), 'Asia/Shanghai'))
-"
-      return
+    sys.exit(0)
+jobs = payload.get('jobs') if isinstance(payload, dict) else payload
+if not isinstance(jobs, list):
+    sys.exit(0)
+legacy = set(os.environ.get('LEGACY_KEYS', '').split())
+for job in jobs:
+    if isinstance(job, dict) and job.get('declarationKey') in legacy and job.get('id'):
+        print(job['id'])
+")"
+  [[ -z "$ids" ]] && return 0
+  while read -r id; do
+    [[ -z "$id" ]] && continue
+    if openclaw cron rm "$id" >/dev/null 2>&1; then
+      echo "[dc-cron-onsite-recommend] 已删除旧 job: $id"
+    else
+      echo "[dc-cron-onsite-recommend] 旧 job 删除失败（不阻断）: $id" >&2
     fi
-  fi
-  echo "Asia/Shanghai"
+  done <<< "$ids"
 }
 
-# set -u 下必须给位置参数兜底：entrypoint 是不带参数调用的，裸 "$1" 会直接
-# unbound variable 退出，三条 cron 一条都注册不上（失败还被 entrypoint 的
-# `|| echo 失败` 吞掉，只在启动日志留一行）。
-TZ="$(resolve_tz "${1:-}" "${2:-}")"
+cleanup_legacy
 
-# 校验时区合法
-python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
-  || { echo "[dc-cron-onsite-recommend] 非法时区: $TZ" >&2; exit 1; }
+# ── schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）──
+# 注意：这里的 schedule 现在只是「多久轮询一次」，不再是「几点推荐」。
+# 推荐时点由 --slots / DEALCLAW_ONSITE_SLOTS 控制，属于 payload，会随镜像覆盖。
+if ! sched_env="$(python3 "$CONVERGE" resolve --decl-key "$DECL_KEY" --cron "0 * * * *" --tz "Asia/Shanghai")"; then
+  echo "[dc-cron-onsite-recommend] schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+  exit 1
+fi
+eval "$sched_env"
 
-# 10/14/16 点当地时间 → 北京时间 cron「分 时」列表
-BJ_CRONS=$(python3 - "$TZ" <<'PY'
-import sys, datetime, zoneinfo
-tz = sys.argv[1]
-t = zoneinfo.ZoneInfo(tz)
-bj = zoneinfo.ZoneInfo("Asia/Shanghai")
-for hh in ("10", "14", "16"):
-    local = datetime.datetime(2026, 1, 1, int(hh), 0, tzinfo=t)
-    bjdt = local.astimezone(bj)
-    print(f"{bjdt.minute} {bjdt.hour}")
-PY
-)
+CMD="python3 dc_onsite_recommend.py run --slot-gate"
+[[ -n "$SLOTS" ]] && CMD="$CMD --slots $SLOTS"
 
-# 注册 3 条 cron（对应当地时间 10/14/16 点；add 自带 converge，幂等）
-CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
-# 单条失败不阻断其余两条
-failed=0
-idx=0
-for slot in 10 14 16; do
-  idx=$((idx + 1))
-  read -r M H <<< "$(echo "$BJ_CRONS" | sed -n "${idx}p")"
-  decl_key="${DECL_KEY_PREFIX}-${slot}h"
-  # schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）
-  if ! sched_env="$(python3 "$CONVERGE" resolve --decl-key "$decl_key" --cron "${M} ${H} * * *" --tz "Asia/Shanghai")"; then
-    echo "[dc-cron-onsite-recommend] ${slot}h: schedule 解析失败，跳过（下次启动重试）" >&2
-    failed=1
-    continue
-  fi
-  eval "$sched_env"
+openclaw cron add \
+  --cron "$DC_CRON_EXPR" \
+  --tz "$DC_CRON_TZ" \
+  --command "$CMD" \
+  --command-cwd "$MIO_DIR" \
+  --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
+  --command-env "MIO_V_OPEN_ID=$OPEN_ID" \
+  --command-env "OPENCLAW_WORKSPACE_DIR=$WORKSPACE_DIR" \
+  --no-deliver \
+  --timeout-seconds 900 \
+  --declaration-key "$DECL_KEY" \
+  --name "dealclaw-onsite-recommend" \
+  --description "DealClaw 现场推荐（每小时轮询，展会当地 ${SLOTS:-10,14,16} 点命中才推）"
 
-  openclaw cron add \
-    --cron "$DC_CRON_EXPR" \
-    --tz "$DC_CRON_TZ" \
-    --command "python3 dc_onsite_recommend.py run" \
-    --command-cwd "$MIO_DIR" \
-    --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
-    --command-env "MIO_V_OPEN_ID=$OPEN_ID" \
-    --command-env "OPENCLAW_WORKSPACE_DIR=$WORKSPACE_DIR" \
-    --no-deliver \
-    --timeout-seconds 900 \
-    --declaration-key "$decl_key" \
-    --name "dealclaw-onsite-recommend-${slot}h" \
-    --description "DealClaw 现场推荐（展会当地时间 ${slot}:00 @ ${TZ}，实际 ${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
+python3 "$CONVERGE" record --decl-key "$DECL_KEY" --cron "0 * * * *" --tz "Asia/Shanghai" \
+  || echo "[dc-cron-onsite-recommend] 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
 
-  # 注册成功后才记录基线
-  python3 "$CONVERGE" record --decl-key "$decl_key" --cron "${M} ${H} * * *" --tz "Asia/Shanghai" \
-    || echo "[dc-cron-onsite-recommend] ${slot}h: 基线记录失败（下次升级可能误判）" >&2
-
-  echo "[dc-cron-onsite-recommend] 已同步 ${slot}h（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"
-done
-
-echo "[dc-cron-onsite-recommend] 完成（时区: $TZ）"
-exit "$failed"
+echo "[dc-cron-onsite-recommend] 已同步（${DC_CRON_EXPR}，时点 ${SLOTS:-10,14,16} 按展会当地时间判断，schedule 来源: ${DC_CRON_SOURCE}）"

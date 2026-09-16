@@ -14,11 +14,20 @@
   6. 落本展会线索池（来源「展中推荐」，与企业主池分开）
   7. 分批气泡推群（复用 dc_notify routes chat_id；明细分批全发，不折叠；总>10 先发汇总+池入口）
 
-触发：定时任务（展会期间当地时间 10:00 / 14:00 / 16:00），脚本内判断当天是否有
-正在开展的展会，没有则 NO_RUN。
+触发：cron 每小时跑一次并带 --slot-gate，由本脚本用【展会当地时间】判断是否到点。
+判断顺序（2026-09-16 调整）：
+  ① 有没有 state=3 的在售展会 → 没有就 NO_RUN
+  ② 取展会国家 → 映射 IANA 时区
+  ③ 用展会【当地日期】判断今天是否在展期内（不能用容器的北京日期，展期尾日下午会误判成已结束）
+  ④ 展会当地小时是否落在推荐时点（默认 10/14/16）→ 不是就 NO_RUN
+  ⑤ 命中才跑真正的推荐（拉现场买家、落池、发卡）
+
+--slot-gate 只给 cron 用。skill 手动触发（skills/dealclaw-onsite-recommend）不带这个
+参数，任何时间都能跑，行为和改造前一致。
 
 用法：
   python3 dc_onsite_recommend.py run [--company-id <sid>] [--dry-run] [--exhibition-id <id>]
+  python3 dc_onsite_recommend.py run --slot-gate            # cron 用：不到点就 NO_RUN
 """
 
 from __future__ import annotations
@@ -31,6 +40,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _XIAOYUAN = shutil.which("xiaoyuan") or "/opt/xiaoyuan-venv/bin/xiaoyuan"
 
@@ -77,10 +87,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _today_yyyymmdd() -> str:
-    return datetime.now().strftime("%Y%m%d")
-
-
 def _xiaoyuan(*args: str) -> dict:
     cmd = [
         _XIAOYUAN,
@@ -95,10 +101,126 @@ def _xiaoyuan(*args: str) -> dict:
         return {"_raw": (proc.stdout or proc.stderr)[:500]}
 
 
+# ── 0. 展会时区 / 时点闸门 ──────────────────────────────────────
+
+# 国家 → IANA 时区。原先这张表在 runtime/dc-cron-onsite-recommend.sh 里，用于把当地
+# 10/14/16 点换算成北京时间注册 cron；换算写死 1 月 1 日，美国/欧洲夏令时会偏 1 小时。
+# 改成运行时判断后表搬到这里，换算整段删除，夏令时由 ZoneInfo 自动处理。
+COUNTRY_TZ = {
+    "Brazil": "America/Sao_Paulo",
+    "India": "Asia/Kolkata",
+    "Saudi Arabia": "Asia/Riyadh",
+    "Indonesia": "Asia/Jakarta",
+    "Vietnam": "Asia/Ho_Chi_Minh",
+    "South Africa": "Africa/Johannesburg",
+    "Mexico": "America/Mexico_City",
+    "Poland": "Europe/Warsaw",
+    "United Arab Emirates": "Asia/Dubai",
+    "Dubai": "Asia/Dubai",
+    "Japan": "Asia/Tokyo",
+    "United States": "America/New_York",
+    "Germany": "Europe/Berlin",
+    "Turkey": "Europe/Istanbul",
+    "Russia": "Europe/Moscow",
+    "Egypt": "Africa/Cairo",
+    "Kazakhstan": "Asia/Almaty",
+}
+
+DEFAULT_SLOTS = (10, 14, 16)
+FALLBACK_TZ = "Asia/Shanghai"
+
+
+def tz_for_country(country: str) -> str:
+    """国家名 → IANA 时区；未收录的国家兜底回 Asia/Shanghai 并出提示。"""
+    name = (country or "").strip()
+    tz = COUNTRY_TZ.get(name)
+    if tz:
+        return tz
+    if name:
+        print(f"[dc_onsite_recommend] 国家未收录于 COUNTRY_TZ: {name!r}，按 {FALLBACK_TZ} 处理",
+              file=sys.stderr)
+    return FALLBACK_TZ
+
+
+def local_now(tz_name: str) -> datetime:
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001 — 非法时区不该让整条链路挂掉
+        print(f"[dc_onsite_recommend] 非法时区 {tz_name!r}，按 {FALLBACK_TZ} 处理", file=sys.stderr)
+        return datetime.now(ZoneInfo(FALLBACK_TZ))
+
+
+def parse_slots(raw: str) -> tuple[int, ...]:
+    if not (raw or "").strip():
+        return DEFAULT_SLOTS
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit() or not (0 <= int(part) <= 23):
+            raise SystemExit(f"[dc_onsite_recommend] 非法推荐时点: {part!r}（应为 0-23 的整数）")
+        out.append(int(part))
+    return tuple(dict.fromkeys(out)) or DEFAULT_SLOTS
+
+
 # ── 1. 当前开展展会 ─────────────────────────────────────────────
 
-def current_exhibitions() -> list[dict]:
+_RECORDS_CACHE_TTL_S = 6 * 3600
+
+
+def _records_cache_path(company_id: str) -> Path:
+    return _workspace_root() / "data" / "memory" / company_id / "onsite-exhibitions-cache.json"
+
+
+def _load_records_cache(company_id: str) -> list[dict] | None:
+    """缓存的是 state=3 展会的原始记录（国家、展期），不含日期过滤结果。
+
+    展期和国家几乎不变，但「今天是否在展期内」每次都要按展会当地日期现算，
+    所以只缓存原始记录。cron 每小时跑一次，6 小时 TTL 把 API 调用压到 ~4 次/天，
+    和改造前 3 次/天基本持平。空结果同样缓存 —— 绝大多数时候租户没有在展展会，
+    不缓存的话这条路径会白打 24 次 API。
+    """
+    if not company_id:
+        return None
+    path = _records_cache_path(company_id)
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 缓存不可读一律当未命中
+        return None
+    if not isinstance(d, dict):
+        return None
+    fetched_at = d.get("fetchedAt")
+    if not isinstance(fetched_at, (int, float)):
+        return None
+    if datetime.now(timezone.utc).timestamp() - fetched_at > _RECORDS_CACHE_TTL_S:
+        return None
+    records = d.get("records")
+    return records if isinstance(records, list) else None
+
+
+def _save_records_cache(company_id: str, records: list[dict]) -> None:
+    if not company_id:
+        return
+    path = _records_cache_path(company_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"fetchedAt": datetime.now(timezone.utc).timestamp(), "records": records},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:  # noqa: BLE001 — 缓存写不了不该影响主流程
+        print(f"[dc_onsite_recommend] 展会缓存写入失败（不影响本次）: {e}", file=sys.stderr)
+
+
+def current_exhibitions(company_id: str = "", use_cache: bool = True) -> list[dict]:
     """orderRecords state=3 → selectAllExhibition 对账 → 今天正在开展的展会。"""
+    if use_cache:
+        cached = _load_records_cache(company_id)
+        if cached is not None:
+            return _filter_inshow_today(cached)
+
     info = _xiaoyuan("company", "info")
     order_records = (info.get("response", {}).get("data", {}) or {}).get("orderRecords") or []
     state3_ids = [r.get("sourceId") for r in order_records if r.get("state") == 3 and r.get("sourceId")]
@@ -117,19 +239,45 @@ def current_exhibitions() -> list[dict]:
         if need.issubset(by_id):
             break
 
-    today = _today_yyyymmdd()
-    out = []
+    records = []
     for sid in dict.fromkeys(state3_ids):
         r = by_id.get(sid)
-        if not r:
+        if r:
+            records.append({
+                "exhibitionId": sid,
+                "name": r.get("name") or r.get("nameCn") or "",
+                "countryName": (r.get("countryName") or "").strip(),
+                "inshowStartDate": (r.get("inshowStartDate") or "").strip(),
+                "inshowEndDate": (r.get("inshowEndDate") or "").strip(),
+            })
+    _save_records_cache(company_id, records)
+    return _filter_inshow_today(records)
+
+
+def _filter_inshow_today(records: list[dict]) -> list[dict]:
+    """按【展会当地日期】筛出今天正在开展的展会，并带出时区。"""
+    out = []
+    for r in records:
+        sid = r.get("exhibitionId")
+        if not sid:
             continue
         inshow_start = (r.get("inshowStartDate") or "").strip()
         inshow_end = (r.get("inshowEndDate") or "").strip()
-        if inshow_start and inshow_end and inshow_start <= today <= inshow_end:
+        if not (inshow_start and inshow_end):
+            continue
+        country = (r.get("countryName") or "").strip()
+        tz_name = tz_for_country(country)
+        # 展期日期是展会当地日期，必须拿【当地今天】比对。容器 TZ=Asia/Shanghai，
+        # 直接用北京日期会在展期尾日下午误判成「展会已结束」而漏跑：巴西差 11 小时、
+        # 美国差 12-13 小时，当地下午时北京已经跨到次日。
+        local_today = local_now(tz_name).strftime("%Y%m%d")
+        if inshow_start <= local_today <= inshow_end:
             out.append({
                 "exhibitionId": sid,
-                "name": r.get("name") or r.get("nameCn") or "",
-                "country": r.get("countryName") or "",
+                "name": r.get("name") or "",
+                "country": country,
+                "tz": tz_name,
+                "localToday": local_today,
                 "inshowStartDate": inshow_start,
                 "inshowEndDate": inshow_end,
             })
@@ -466,12 +614,28 @@ def run(args) -> dict:
     # 确定当前开展展会
     if args.exhibition_id:
         exhs = [{"exhibitionId": args.exhibition_id, "name": "", "country": "",
-                 "inshowStartDate": "", "inshowEndDate": ""}]
+                 "tz": FALLBACK_TZ, "inshowStartDate": "", "inshowEndDate": ""}]
     else:
-        exhs = current_exhibitions()
+        exhs = current_exhibitions(company_id, use_cache=not args.no_cache)
     if not exhs:
         print("NO_RUN")
         return {"action": "onsite_recommend", "status": "no_exhibition", "count": 0}
+
+    # 时点闸门：只有 cron 带 --slot-gate 才启用。skill 手动触发不带，任何时间都能跑。
+    # 放在这里而不是更早，是因为要先知道展会国家才知道该用哪个时区判断「现在几点」。
+    if args.slot_gate:
+        slots = parse_slots(args.slots)
+        due = [e for e in exhs if local_now(e.get("tz") or FALLBACK_TZ).hour in slots]
+        if not due:
+            snapshot = [
+                {"exhibitionId": e["exhibitionId"], "tz": e.get("tz"),
+                 "localTime": local_now(e.get("tz") or FALLBACK_TZ).strftime("%Y-%m-%d %H:%M")}
+                for e in exhs
+            ]
+            print("NO_RUN")
+            return {"action": "onsite_recommend", "status": "not_in_slot",
+                    "slots": list(slots), "exhibitions": snapshot, "count": 0}
+        exhs = due
 
     keywords = load_products(company_id)
     invited = load_invited_cdp_ids(company_id)
@@ -513,6 +677,12 @@ def main() -> None:
     p.add_argument("--exhibition-id", default="", help="指定展会 ID（跳过自动判断当前展会）")
     p.add_argument("--chat-id", default="", help="群 chat_id（缺省读 dc_notify routes default）")
     p.add_argument("--dry-run", action="store_true", help="只打印不执行")
+    p.add_argument("--slot-gate", action="store_true",
+                   help="按展会当地时间判断是否到推荐时点，不到就 NO_RUN（cron 专用；skill 手动触发别带）")
+    p.add_argument("--slots", default="",
+                   help="推荐时点，展会当地整点，逗号分隔（默认 10,14,16），仅配合 --slot-gate 生效")
+    p.add_argument("--no-cache", action="store_true",
+                   help="跳过展会记录缓存，强制重新拉取")
     args = p.parse_args()
 
     result = run(args)
