@@ -186,26 +186,41 @@ afterEach(() => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('legacy llm-providers read-only protection', () => {
-  it('PUT returns 410 when legacyLlmProvidersReadonly=true', async () => {
-    // The 410 check happens before any DB query — a throwing pool proves no DB access.
-    const pool = { query: async () => { throw new Error('must not query') } } as unknown as pg.Pool
+  it('PUT returns 410 and writes a body-free blocked audit when readonly=true', async () => {
+    const pool = makeRuntimePool()
     const config = createConfig({ legacyLlmProvidersReadonly: true })
     const app = createRuntimeApp(pool, config)
 
-    const res = await request(app).put('/v1/admin/llm-providers').send(goodDoc)
+    const res = await request(app)
+      .put('/v1/admin/llm-providers')
+      .set('x-request-id', 'req-blocked-put')
+      .send(goodDoc)
     expect(res.status).toBe(410)
     expect(res.body.code).toBe('LEGACY_LLM_PROVIDERS_DISABLED')
     expect(res.body.catalogUrl).toBe('/catalog')
+
+    const audit = pool.queries.find((q) => q.sql.includes('INSERT INTO audit_logs'))
+    expect(audit?.params?.[2]).toBe('llm-provider.legacy-write-blocked')
+    expect(audit?.params?.[3]).toBe('PUT')
+    expect(audit?.params?.[10]).toBe(410)
+    expect(audit?.params?.[13]).toBe('req-blocked-put')
+    expect(JSON.stringify(audit?.params)).not.toContain('sk-qwen')
   })
 
-  it('DELETE returns 410 when legacyLlmProvidersReadonly=true', async () => {
-    const pool = { query: async () => { throw new Error('must not query') } } as unknown as pg.Pool
+  it('DELETE returns 410 and writes a queryable blocked audit when readonly=true', async () => {
+    const pool = makeRuntimePool()
     const config = createConfig({ legacyLlmProvidersReadonly: true })
     const app = createRuntimeApp(pool, config)
 
     const res = await request(app).delete('/v1/admin/llm-providers')
     expect(res.status).toBe(410)
     expect(res.body.code).toBe('LEGACY_LLM_PROVIDERS_DISABLED')
+
+    const audit = pool.queries.find((q) => q.sql.includes('INSERT INTO audit_logs'))
+    expect(audit?.params?.[2]).toBe('llm-provider.legacy-write-blocked')
+    expect(audit?.params?.[3]).toBe('DELETE')
+    expect(audit?.params?.[10]).toBe(410)
+    expect(audit?.params?.[8]).toBeNull()
   })
 
   it('PUT still works (200) when legacyLlmProvidersReadonly is false (default)', async () => {
@@ -229,15 +244,48 @@ describe('legacy llm-providers read-only protection', () => {
     expect(res.body.ok).toBe(true)
   })
 
-  it('GET /v1/admin/llm-providers is NOT affected by readonly flag', async () => {
-    const pool = makeRuntimePool({ globalLlmRow: [] })
+  it('GET /v1/admin/llm-providers remains available and audits metadata without secrets', async () => {
+    const pool = makeRuntimePool({
+      globalLlmRow: [{ encrypted_value: `enc:${JSON.stringify(goodDoc)}` }],
+    })
     const config = createConfig({ legacyLlmProvidersReadonly: true })
     const app = createRuntimeApp(pool, config)
 
-    const res = await request(app).get('/v1/admin/llm-providers')
+    const res = await request(app)
+      .get('/v1/admin/llm-providers')
+      .set('x-request-id', 'req-read')
+      .set('user-agent', 'catalog-protection-test')
     expect(res.status).toBe(200)
-    expect(res.body).toMatchObject({ config: null, effectiveModel: null })
+    expect(res.body.config.providers[0].apiKey).toBe('sk-qwen')
+
+    await vi.waitFor(() => {
+      expect(pool.queries.some((q) => q.sql.includes('INSERT INTO audit_logs'))).toBe(true)
+    })
+    const audit = pool.queries.find((q) => q.sql.includes('INSERT INTO audit_logs'))
+    expect(audit?.params?.[2]).toBe('llm-provider.legacy-read')
+    expect(audit?.params?.[3]).toBe('GET')
+    expect(audit?.params?.[10]).toBe(200)
+    expect(audit?.params?.[13]).toBe('req-read')
+    expect(audit?.params?.[9]).toContain('catalog-protection-test')
+    expect(JSON.stringify(audit?.params)).not.toContain('sk-qwen')
+    expect(JSON.stringify(audit?.params)).not.toContain('dashscope.aliyuncs.com')
   })
+
+  it.each(['get', 'put'] as const)(
+    'selection %s remains reachable while global legacy writes are readonly',
+    async (method) => {
+      const pool = makeRuntimePool({ globalLlmRow: [] })
+      const config = createConfig({ legacyLlmProvidersReadonly: true })
+      const app = createRuntimeApp(pool, config)
+
+      const res = method === 'get'
+        ? await request(app).get('/v1/admin/llm-providers/selection').query({ tenantId: 'missing' })
+        : await request(app).put('/v1/admin/llm-providers/selection').send({ tenantId: 'missing' })
+      expect(res.status).toBe(404)
+      expect(res.body.code).toBe('NOT_FOUND')
+      expect(pool.queries.some((q) => q.sql.includes('SELECT 1 FROM tenants'))).toBe(true)
+    },
+  )
 })
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -322,6 +370,21 @@ describe('catalog publish freeze during break-glass', () => {
       .send({ fingerprint: 'abc123' })
     expect(res.status).toBe(503)
     expect(res.body.code).toBe('CATALOG_PUBLISH_FROZEN')
+  })
+
+  it('snapshot-restore returns 503 before body or database access when catalogBreakGlass=true', async () => {
+    const pool = { query: async () => { throw new Error('must not query') } } as unknown as pg.Pool
+    const config = createConfig({
+      modelCatalogSnapshotWrite: true,
+      catalogBreakGlass: true,
+    })
+    const app = createCatalogApp(pool, config)
+
+    const res = await request(app)
+      .post('/v1/admin/model-catalog/snapshot-restore')
+      .send({ backupId: 'backup-must-not-be-read' })
+    expect(res.status).toBe(503)
+    expect(res.body.code).toBe('CATALOG_RESTORE_FROZEN')
   })
 
   it('snapshot-publish does NOT freeze when catalogBreakGlass is false', async () => {

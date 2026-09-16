@@ -248,6 +248,16 @@ export function createModelCatalogRoutes(
 
   router.post('/v1/admin/model-catalog/snapshot-restore', async (req, res) => {
     if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    // Restore mutates the same runtime projection as publish. During emergency
+    // legacy writes, freeze it before reading either the request body or DB so
+    // the two authorities cannot race.
+    if (config.catalogBreakGlass === true) {
+      res.status(503).json({
+        code: 'CATALOG_RESTORE_FROZEN',
+        message: 'Break-glass 模式已激活，Catalog Restore 已冻结。请先解除 break-glass 再恢复。',
+      });
+      return;
+    }
     const backupId = typeof req.body?.backupId === 'string' ? req.body.backupId : '';
     if (!backupId) {
       res.status(400).json({ code: 'VALIDATION', message: 'backupId is required' });

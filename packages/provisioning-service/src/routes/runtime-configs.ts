@@ -64,6 +64,32 @@ export function createRuntimeConfigRoutes(
     return writeAuditLog(pool, { ...entry, actor, actorType });
   };
 
+  /** Record only request metadata for legacy provider access; never payloads. */
+  const auditLegacyProviderAccess = (
+    req: Request,
+    action: 'llm-provider.legacy-read' | 'llm-provider.legacy-write-blocked',
+    statusCode: number,
+    tenantId: string | null,
+  ): void => {
+    const requestIdHeader = req.headers['x-request-id'];
+    const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+    void auditFor(req, {
+      action,
+      method: req.method,
+      path: req.path,
+      resourceType: 'llm_provider_library',
+      resourceId: 'global',
+      tenantId: tenantId ?? undefined,
+      statusCode,
+      ip: req.ip,
+      requestId,
+      newValue: {
+        tenantIdPresent: tenantId !== null,
+        userAgent: req.get('user-agent') ?? null,
+      },
+    });
+  };
+
   function masterKeyAvailable(): boolean {
     try {
       return getMasterKey() !== null;
@@ -286,9 +312,12 @@ export function createRuntimeConfigRoutes(
   // (decrypted for editing); with tenantId also that tenant's selection and
   // the effective model.
   router.get('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    const tenantId =
+      typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
+    res.once('finish', () => {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-read', res.statusCode, tenantId);
+    });
     try {
-      const tenantId =
-        typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
       if (tenantId && !(await tenantExists(tenantId))) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
@@ -313,6 +342,7 @@ export function createRuntimeConfigRoutes(
     // P0-5: 当 Catalog 权威已建立时，旧写 API 返回 410 引导到结构化目录。
     // Break-glass 模式下旁路此检查，但冻结 Catalog Publish 并记录审计。
     if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-write-blocked', 410, null);
       res.status(410).json({
         code: 'LEGACY_LLM_PROVIDERS_DISABLED',
         message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
@@ -423,6 +453,7 @@ export function createRuntimeConfigRoutes(
   router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
     // P0-5: 同 PUT，当 Catalog 权威已建立时旧 DELETE 也返回 410。
     if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-write-blocked', 410, null);
       res.status(410).json({
         code: 'LEGACY_LLM_PROVIDERS_DISABLED',
         message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
