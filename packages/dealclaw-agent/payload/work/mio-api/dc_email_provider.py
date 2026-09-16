@@ -185,14 +185,27 @@ class EmailProvider:
 
         无商机证据时，同级候选合并为「批量跟进」行动，不按读取顺序虚假选 Top3（待 OpportunityProvider 分层）。
         """
-        overdue = self._collect_overdue(outbounds, inbounds)
+        overdue = self._collect_overdue(outbounds, inbounds, context)
         if not overdue:
             return []
         return [self._make_batch_followup(context, overdue)]
 
-    def _collect_overdue(self, outbounds, inbounds) -> list[dict]:
-        """收集「超过等待期仍无回复」的买家（观察期内的不下结论）。"""
+    def _collect_overdue(self, outbounds, inbounds, context=None) -> list[dict]:
+        """收集「超过等待期仍无回复」的买家（观察期内的不下结论）。
+
+        到期时间与分层节奏统一走 dc_touch_rounds.due_at_for（单一来源）：
+          · 显式 followup_due_at 优先；
+          · 能分出 T1/T2（线索池「跟进优先级」）→ 分层节奏（T1 3/5 天，T2 7/10 天）；
+          · 分不出分层 → 兑底 FOLLOWUP_DUE_DAYS（默认 2 天），保持既有线上行为不变。
+        `touch_number` 0/1 都算 R1，避免把首触当成「下一轮」重复计数。
+        """
         now_ts = datetime.now(timezone.utc).timestamp()
+        try:
+            from dc_touch_rounds import (build_lead_index, current_round_of, due_at_for,
+                                         read_lead_pool, resolve_tier)
+            lead_index = build_lead_index(read_lead_pool(getattr(context, "company", "") or ""))
+        except Exception:
+            lead_index = None
         overdue: list[dict] = []
         for ob in outbounds:
             if ob.get("provider_status") != "delivered":
@@ -202,12 +215,19 @@ class EmailProvider:
                 continue
             if self._has_reply(ob, inbounds):
                 continue
-            touch = int(ob.get("touch_number", 0) or 0)
-            next_touch = touch + 1
+            if lead_index is None:
+                touch = int(ob.get("touch_number", 0) or 0)
+                next_touch = touch + 1
+                due_at = ob.get("followup_due_at") or _iso_add_days(
+                    ob.get("sent_at") or ob.get("created_at", ""), FOLLOWUP_DUE_DAYS)
+            else:
+                touch = current_round_of(ob)
+                next_touch = touch + 1
+                tier_info = resolve_tier(lead_index, ob)
+                due_at, _policy = due_at_for(ob, tier=tier_info["tier"], current_round=touch,
+                                             fallback_due_days=FOLLOWUP_DUE_DAYS)
             if next_touch > FOLLOWUP_MAX_ROUNDS:
                 continue
-            sent_at = ob.get("sent_at") or ob.get("created_at", "")
-            due_at = ob.get("followup_due_at") or _iso_add_days(sent_at, FOLLOWUP_DUE_DAYS)
             due_ts = _parse_iso_to_utc(due_at)
             if due_ts is None or now_ts < due_ts:
                 continue  # 仍在观察期，禁止提前下结论
@@ -292,7 +312,7 @@ class EmailProvider:
                                  evidence=EvidenceRef(type="query", source="email_metrics",
                                                       id=str(m.get("status") or "hidden"),
                                                       missing=reasons))
-        overdue_count = len(self._collect_overdue(outbounds, inbounds))
+        overdue_count = len(self._collect_overdue(outbounds, inbounds, context))
         if sent == 0:
             return self._insight(context, "暂无发送记录",
                                  evidence=EvidenceRef(type="query", source="email_facts",

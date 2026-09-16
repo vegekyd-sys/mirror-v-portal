@@ -230,6 +230,27 @@ def collect_due_followups(company_id: str) -> list[dict]:
     return list_followup_candidates(company_id)
 
 
+def collect_touch_round_queue(company_id: str, at: str = None) -> dict:
+    """多轮触达「待触达队列」（轮次/分层/应触达日期/内容角度）。失败返回 {}。"""
+    try:
+        from dc_touch_rounds import build_touch_queue
+        return build_touch_queue(company_id, at=at)
+    except Exception:
+        return {}
+
+
+def _touch_rounds_section(company_id: str, slot: str, queue: dict | None = None) -> str:
+    """早晚报「多轮触达」todo 区块（早报 + 晚报都要有；无数据也输出计数行）。"""
+    try:
+        from dc_touch_rounds import render_touch_rounds_section
+        q = queue if queue is not None else collect_touch_round_queue(company_id)
+        if not q:
+            return ""
+        return render_touch_rounds_section(q, slot=slot)
+    except Exception:
+        return ""
+
+
 def collect_opportunities(company_id: str) -> list[dict]:
     """新增机会（quote/sample/meeting 信号）。"""
     from dc_email_controller.dc_email_signals import list_signals
@@ -629,13 +650,24 @@ def _fmt_pipeline_evening(review, plan: dict) -> str:
     return "\n".join(lines)
 
 
+def _brief_card(text: str, *, title: str, link: str = "") -> dict | None:
+    """文本 → 飞书卡片（含按钮）。失败返回 None —— 不影响文本发送。"""
+    try:
+        from dc_brief_render import default_brief_actions, to_feishu_card  # noqa: PLC0415
+
+        return to_feishu_card(text, title=title, actions=default_brief_actions(link))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_morning_report(company_id: str) -> dict:
     """早报：只展示关键变化（漏斗 + 今日到期跟进 + 待确认草稿 + KB）。"""
     m = collect_metrics(company_id)
     drafts = collect_pending_drafts(company_id)
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
-    text = _format_morning(company_id, m, drafts, followups, funnel)
+    touch_queue = collect_touch_round_queue(company_id)
+    text = _format_morning(company_id, m, drafts, followups, funnel, touch_queue=touch_queue)
     brief = _pipeline_brief(company_id, "morning")
     if brief:
         text = (brief + "\n\n" + text) if text else brief
@@ -648,18 +680,25 @@ def build_morning_report(company_id: str) -> dict:
     evolution = _self_evolution_brief(company_id)
     if evolution:
         text += "\n\n" + evolution
-    return {
+    report = {
         "company_id": company_id,
         "slot": "morning",
         "metrics": m,
         "funnel": funnel,
         "pending_draft_count": len(drafts),
         "due_followup_count": len(followups),
+        "touch_round_due_count": len(touch_queue.get("due_rows") or []),
+        "touch_round_waiting_line": touch_queue.get("waiting_line", ""),
+        "touch_round_queue": touch_queue,
         "campaign": _campaign_brief(company_id),
         "kb": _kb_brief(company_id),
         "text": text,
         "generated_at": _now(),
     }
+    card = _brief_card(text, title="DealClaw 早报", link=_followup_table_url(company_id))
+    if card:
+        report["card"] = card
+    return report
 
 
 def build_evening_report(company_id: str) -> dict:
@@ -670,14 +709,16 @@ def build_evening_report(company_id: str) -> dict:
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
     strategy = _strategy(company_id)
-    text = _format_evening(company_id, m, drafts, followups, funnel, strategy)
+    touch_queue = collect_touch_round_queue(company_id)
+    text = _format_evening(company_id, m, drafts, followups, funnel, strategy,
+                           touch_queue=touch_queue)
     brief = _pipeline_brief(company_id, "evening")
     if brief:
         text = (brief + "\n\n" + text) if text else brief
     evolution = _self_evolution_brief(company_id)
     if evolution:
         text += "\n\n" + evolution
-    return {
+    report = {
         "company_id": company_id,
         "slot": "evening",
         "metrics": m,
@@ -685,12 +726,19 @@ def build_evening_report(company_id: str) -> dict:
         "strategy": strategy,
         "pending_draft_count": len(drafts),
         "due_followup_count": len(followups),
+        "touch_round_due_count": len(touch_queue.get("due_rows") or []),
+        "touch_round_waiting_line": touch_queue.get("waiting_line", ""),
+        "touch_round_queue": touch_queue,
         "text": text,
         "generated_at": _now(),
     }
+    card = _brief_card(text, title="DealClaw 晚报", link=_followup_table_url(company_id))
+    if card:
+        report["card"] = card
+    return report
 
 
-def _format_morning(company_id, m, drafts, followups, funnel) -> str:
+def _format_morning(company_id, m, drafts, followups, funnel, touch_queue=None) -> str:
     """早报：只做跟进情况总结（不再逐条列邮箱），明细跳转飞书跟进表。"""
     lines = []
     stage_line = _exhibition_stage_line(company_id)
@@ -700,14 +748,17 @@ def _format_morning(company_id, m, drafts, followups, funnel) -> str:
         _metrics_line(m),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
+    touch_block = _touch_rounds_section(company_id, "morning", queue=touch_queue)
+    if touch_block:
+        lines.append(touch_block)
     url = _followup_table_url(company_id)
     if url:
         lines.append(f"跟进明细 → {url}")
     return "\n".join(lines)
 
 
-def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
-    """晚报：今日发送/待跟进总结，明细跳转飞书跟进表。"""
+def _format_evening(company_id, m, drafts, followups, funnel, strategy, touch_queue=None) -> str:
+    """晚报：今日发送/待跟进总结 + 多轮触达核销/明日预告，明细跳转飞书跟进表。"""
     lines = []
     stage_line = _exhibition_stage_line(company_id)
     if stage_line:
@@ -716,6 +767,9 @@ def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
         _metrics_line(m, prefix="今日"),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
+    touch_block = _touch_rounds_section(company_id, "evening", queue=touch_queue)
+    if touch_block:
+        lines.append(touch_block)
     url = _followup_table_url(company_id)
     if url:
         lines.append(f"跟进明细 → {url}")

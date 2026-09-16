@@ -415,40 +415,65 @@ def list_signals(company_id: str, campaign_id: str = None, status: str = "active
 
 
 # ── no_reply_due 评估 ──────────────────────────────────────
-def evaluate_due(company_id: str, at: str = None, due_days: int = None) -> list[dict]:
+def evaluate_due(company_id: str, at: str = None, due_days: int = None,
+                 due_for=None, store=None) -> list[dict]:
     """生成 no_reply_due 信号（不执行跟进、不发送）。
 
     条件：outbound 已 delivered、当前 >= due_at、同 thread/contact 无真实 inbound reply、
     未退订/未 complained/未 bounced、没有相同 active no_reply_due。
+
+    due_for: 可选 `outbound -> (due_at, evidence_extra)`：让「到期」可按分层与轮次计算。
+    多轮触达引擎（dc_touch_rounds）用它把 no_reply_due 语义扩成「第 N 轮到期」；
+    **不传时行为与旧版逐字一致**（显式 followup_due_at 优先、否则 sent_at + due_days）。
+    传了 due_for 时去重键从 contact_id 换成 (contact_id, local_message_id)，
+    让同一买家的每一轮各有一条 no_reply_due（多轮场景必须按轮次区分）。
     """
     due_days = due_days if due_days is not None else DEFAULT_DUE_DAYS
     at_ts = _parse_ts(at) if at else time.time()
 
     from email_gateway.store import EmailStore
-    store = EmailStore()
+    store = store or EmailStore()
     outbounds = store.list_outbound_records(company_id=company_id)
     inbounds = store.list_inbound_records(company_id=company_id)
 
-    existing_due = {s.get("contact_id"): s for s in query_signals(company_id=company_id,
-                                                                  status="active",
-                                                                  signal_type="no_reply_due")}
+    active_due = query_signals(company_id=company_id, status="active",
+                               signal_type="no_reply_due")
+    if due_for:
+        existing_due = {(s.get("contact_id"), s.get("source_message_id")): s
+                        for s in active_due}
+    else:
+        existing_due = {s.get("contact_id"): s for s in active_due}
     produced = []
     for ob in outbounds:
         if ob.get("provider_status") != "delivered":
             continue
         sent_at = ob.get("sent_at") or ob.get("created_at", "")
-        due_at = ob.get("followup_due_at")
-        if not due_at:
-            due_at = _iso_add_days(sent_at, due_days)
+        extra: dict = {}
+        if due_for:
+            try:
+                resolved = due_for(ob)
+                due_at, extra = resolved if isinstance(resolved, tuple) else (resolved, {})
+            except Exception:  # noqa: BLE001 — 轮次解析失败回落到旧口径，不阻断出数
+                due_at, extra = None, {}
+            if not due_at:
+                due_at = ob.get("followup_due_at") or _iso_add_days(sent_at, due_days)
+        else:
+            due_at = ob.get("followup_due_at")
+            if not due_at:
+                due_at = _iso_add_days(sent_at, due_days)
         due_ts = _parse_ts(due_at)
         if due_ts is None or at_ts < due_ts:
             continue  # due_at 未到
         contact_id = ob.get("contact_id", "")
         thread_id = ob.get("thread_id") or ob.get("local_message_id", "")
         # 同 thread/contact 有真实 inbound reply？
-        if _has_reply(inbounds, thread_id, contact_id, ob.get("sent_at") or ob.get("created_at")):
+        if _has_reply(inbounds, thread_id, contact_id, ob.get("sent_at") or ob.get("created_at"),
+                      outbound=ob):
             continue
-        if contact_id in existing_due:
+        if due_for:
+            if (contact_id, ob.get("local_message_id", "")) in existing_due:
+                continue  # 该轮已有 active no_reply_due
+        elif contact_id in existing_due:
             continue  # 已有 active no_reply_due
         signal_id = stable_signal_id("no_reply_due", company_id, contact_id,
                                      ob.get("local_message_id", ""), due_at)
@@ -468,6 +493,7 @@ def evaluate_due(company_id: str, at: str = None, due_days: int = None) -> list[
                 "due_policy": "default" if not ob.get("followup_due_at") else "explicit",
                 "due_days": due_days,
                 "due_at": due_at,
+                **extra,
             },
             "occurred_at": _now(),
         }
@@ -493,7 +519,20 @@ def _iso_add_days(iso: str, days: int) -> str:
         return (datetime.now(timezone.utc) + __import__("datetime").timedelta(days=days)).isoformat()
 
 
-def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str) -> bool:
+def _has_reply(inbounds: list[dict], thread_id: str, contact_id: str, sent_at: str,
+               outbound: dict | None = None) -> bool:
+    """是否已收到人工回复（停止 due 判定的判据）。
+
+    保留旧 binding 路径；传了 outbound 时叠加与 dc_followup / 轮次引擎同一口径的
+    引用匹配（In-Reply-To / References / thread），避免只按 thread 匹配漏掉真实回复。
+    """
+    if outbound is not None:
+        try:
+            from dc_touch_rounds import has_reply as _round_has_reply
+            if _round_has_reply(outbound, inbounds):
+                return True
+        except Exception:  # noqa: BLE001 — 归属判定失败不阻断出数
+            pass
     for ib in inbounds:
         if ib.get("binding_status") != "bound":
             continue
