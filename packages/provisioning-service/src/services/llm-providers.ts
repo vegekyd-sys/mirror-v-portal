@@ -31,12 +31,22 @@ import {
   patchDeploymentEnvFromSecret,
 } from './k8s-client.js';
 import { ENV_FROM_ONLY_KEYS } from './skill-env.js';
+import {
+  renderAgentEnvelope,
+  renderGatewayPayload,
+} from './runtime-contract-v2.js';
 import type { ProvisioningConfig } from '../config.js';
 
 /** runtime_configs key holding the global provider JSON library. */
 export const LLM_PROVIDERS_KEY = 'LLM_PROVIDERS';
 /** runtime_configs key (tenant scope) holding a tenant's model selection. */
 export const LLM_MODEL_SELECTION_KEY = 'LLM_MODEL_SELECTION';
+/** tenant-config Secret key holding the V2 agent runtime envelope JSON. */
+export const LLM_RUNTIME_CONFIG_V2_KEY = 'LLM_RUNTIME_CONFIG_V2';
+/** tenant-config Secret key controlling which contract path the agent runs. */
+export const LLM_RUNTIME_CONTRACT_MODE_KEY = 'LLM_RUNTIME_CONTRACT_MODE';
+/** llm-proxy-config Secret key holding the V2 gateway routes JSON. */
+export const LLM_RUNTIME_ROUTES_V2_KEY = 'LLM_RUNTIME_ROUTES_V2';
 
 export interface LlmModelSpec {
   id: string;
@@ -821,6 +831,8 @@ export interface TenantPushOutcome {
   /** True when the Secret was materialised but no restart was needed (差分). */
   skipRestart: boolean;
   error?: string;
+  /** Non-fatal V2 dual-render warning (V1 still delivered). */
+  v2Warning?: string;
 }
 
 /**
@@ -902,12 +914,67 @@ export async function applyTenantLlmConfig(
     }
     if (proxyBlob) next[LLM_PROVIDERS_KEY] = proxyBlob;
     else delete next[LLM_PROVIDERS_KEY];
+
+    // ── V2 dual-render (shadow mode) ────────────────────────────────────
+    // Render V2 payloads alongside V1 and write them into the same Secrets.
+    // V2 failures do NOT block V1 delivery — the agent can still boot from
+    // the V1 blob. A V2 warning is recorded but the task stays 'delivered'.
+    let v2Warning: string | null = null;
+    if (globalConfig && blob) {
+      try {
+        const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
+        // Build a fake release provenance for the envelope. The real release
+        // id/fingerprint come from the push task; here we use synthetic values
+        // since the shadow-mode writer runs inside applyTenantLlmConfig and
+        // doesn't have direct access to the release record.
+        const releaseProvenance = {
+          id: 'shadow',
+          version: 0,
+          fingerprint: 'shadow',
+        };
+        const agentEnvelope = renderAgentEnvelope(
+          effectiveDoc,
+          rawSelection,
+          releaseProvenance,
+          tenantId,
+        );
+        next[LLM_RUNTIME_CONFIG_V2_KEY] = JSON.stringify(agentEnvelope);
+        next[LLM_RUNTIME_CONTRACT_MODE_KEY] = 'v1';
+      } catch (v2err) {
+        v2Warning = `V2 agent render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;
+        // Leave existing V2 keys untouched — don't delete on failure.
+      }
+    } else {
+      // No library → empty V2 payload, keep mode as v1.
+      next[LLM_RUNTIME_CONFIG_V2_KEY] = '{}';
+      next[LLM_RUNTIME_CONTRACT_MODE_KEY] = 'v1';
+    }
     await putSecret(namespace, 'tenant-config', next);
 
     // llm-proxy-config: the gateway's providerName → real baseUrl map.
-    await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, {
+    const proxySecretData: Record<string, string> = {
       LLM_UPSTREAMS: JSON.stringify(upstreams),
-    });
+    };
+    // V2 gateway routes — only in proxy mode (not directMode).
+    if (!directMode && globalConfig && blob) {
+      try {
+        const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
+        const gatewayPayload = renderGatewayPayload(effectiveDoc);
+        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = JSON.stringify(gatewayPayload);
+      } catch (v2err) {
+        if (!v2Warning) {
+          v2Warning = `V2 gateway render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;
+        }
+        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+      }
+    } else if (directMode) {
+      // directMode: do NOT write gateway V2 (agent bypasses the gateway).
+      proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+    } else {
+      // No library → empty V2 routes placeholder.
+      proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+    }
+    await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, proxySecretData);
 
     // 存量网关可能没有挂 llm-proxy-config envFrom——幂等补挂。
     await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
@@ -947,6 +1014,7 @@ export async function applyTenantLlmConfig(
       restarted,
       gatewayRestarted,
       skipRestart: !needsRestart,
+      ...(v2Warning ? { v2Warning } : {}),
     };
   } catch (err) {
     return {

@@ -828,12 +828,17 @@ describe('pushLlmProviders', () => {
     });
     const r = await pushLlmProviders(pool, prodConfig, 't123');
     expect(r.tenants[0].ok).toBe(true);
-    // envFrom-only keys = {LLM_PROVIDERS} only; DEEPSEEK_API_KEY is
-    // deprecated and stripped — the secret is rewritten empty.
-    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {});
+    // envFrom-only keys = {LLM_PROVIDERS, LLM_RUNTIME_CONFIG_V2, LLM_RUNTIME_CONTRACT_MODE};
+    // DEEPSEEK_API_KEY is deprecated and stripped. When the library is empty,
+    // V2 keys get their empty/default values.
+    expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'tenant-config', {
+      LLM_RUNTIME_CONFIG_V2: '{}',
+      LLM_RUNTIME_CONTRACT_MODE: 'v1',
+    });
     // stale upstream mappings must not linger in llm-proxy-config
     expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'llm-proxy-config', {
       LLM_UPSTREAMS: '{}',
+      LLM_RUNTIME_ROUTES_V2: '{}',
     });
   });
 

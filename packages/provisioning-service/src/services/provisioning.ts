@@ -263,7 +263,14 @@ export async function provisionTenant(
         'Runtime config has no envFrom-only key (大模型供应商页的提供商库) — the agent will boot without any model configured',
       );
     }
-    await k8sCreateSecret(nsName, runtimeSecretName, envFromData);
+    await k8sCreateSecret(nsName, runtimeSecretName, {
+      ...envFromData,
+      // P2-3: bootstrap V2 shadow-mode keys so the agent knows the contract
+      // mode is v1 and has an empty V2 envelope placeholder. Subsequent
+      // applyTenantLlmConfig calls fill these with real rendered payloads.
+      LLM_RUNTIME_CONFIG_V2: '{}',
+      LLM_RUNTIME_CONTRACT_MODE: 'v1',
+    });
     result.secrets.push(runtimeSecretName);
 
     // 1c. skill-env Secret — the single `.env` file mounted at
@@ -281,7 +288,11 @@ export async function provisionTenant(
     // points at the gateway's /v1/llm/<provider> route, so this mapping is
     // what lets the gateway forward to the real upstream.
     const llmProxyConfigName = 'llm-proxy-config';
-    await k8sCreateSecret(nsName, llmProxyConfigName, { LLM_UPSTREAMS: '{}' });
+    await k8sCreateSecret(nsName, llmProxyConfigName, {
+      LLM_UPSTREAMS: '{}',
+      // P2-3: bootstrap V2 gateway routes placeholder.
+      LLM_RUNTIME_ROUTES_V2: '{}',
+    });
     result.secrets.push(llmProxyConfigName);
 
     // 2. nexus-gateway Deployment + Service — created for EVERY tenant
