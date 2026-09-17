@@ -254,7 +254,12 @@ def _push_enabled(company_id: str) -> tuple[bool, str]:
     _notify_allowed_raw = os.getenv("DC_NOTIFY_ALLOWED_COMPANIES", "").strip()
     notify_allowed = ({x.strip() for x in _notify_allowed_raw.split(",") if x.strip()}
                       if _notify_allowed_raw else None)
-    if not signal_ok or notify_mode not in ("feishu", "weixin") or not notify_enabled:
+    if not signal_ok or not notify_enabled:
+        return False, "push_disabled"
+    # 多通道并存：DC_NOTIFY_SENDER_MODE 支持逗号列表（weixin,wecom）；
+    # 任一项不认识就视为配置错（宁可不发，不发错通道）。
+    notify_modes = {x.strip() for x in notify_mode.split(",") if x.strip()}
+    if not notify_modes or not notify_modes <= {"feishu", "weixin", "wecom"}:
         return False, "push_disabled"
     if allowed and company_id not in allowed:
         return False, "not_whitelisted"

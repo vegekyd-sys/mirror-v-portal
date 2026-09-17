@@ -37,6 +37,7 @@ def plan_channels(binding: dict | None, mode: str = "", *, fallback_webhook: str
 
     - ``app_bot``：飞书应用机器人（``FeishuSender``，支持 ``oc_`` 群与 ``ou_`` 私聊）
     - ``weixin``：微信应用机器人（``WeixinSender``，目标形如 ``<…>@im.wechat``）
+    - ``wecom``：企业微信应用机器人（``WecomSender``，目标形如 ``<…>@im.wecom``）
     - ``webhook``：群自定义机器人 webhook（旧路径，保留；仅飞书有）
 
     不存在的通道不会被排进计划；都不具备时返回空列表（由调用方报错）。
@@ -52,7 +53,7 @@ def plan_channels(binding: dict | None, mode: str = "", *, fallback_webhook: str
     # 群自定义机器人 webhook 只有飞书有，微信侧不排该通道。
     im_channel = im_channel_for(chat_id)
     has_app_bot = bool(im_channel)
-    has_webhook = bool(webhook_url) and im_channel != "weixin"
+    has_webhook = bool(webhook_url) and im_channel not in ("weixin", "wecom")
 
     if resolved == "webhook_only":
         return ["webhook"] if has_webhook else []
@@ -69,17 +70,20 @@ def plan_channels(binding: dict | None, mode: str = "", *, fallback_webhook: str
 
 
 WEIXIN_TARGET_SUFFIX = "@im.wechat"
+WECOM_TARGET_SUFFIX = "@im.wecom"   # 2026-09-17 新增：企业微信通道（回信能回、通知送不到）
 
 
 def im_channel_for(target: str) -> str:
-    """目标形态 → IM 通道名（飞书 ``app_bot`` / 微信 ``weixin``）。
+    """目标形态 → IM 通道名（飞书 ``app_bot`` / 微信 ``weixin`` / 企业微信 ``wecom``）。
 
     认不出来返回空串（视为不具备应用机器人通道）。取信/投递两侧共用这一处判断，
-    避免飞书看前缀、微信看后缀各写一套。
+    避免飞书看前缀、微信/企微看后缀各写一套。
     """
     value = str(target or "").strip()
     if not value:
         return ""
+    if value.endswith(WECOM_TARGET_SUFFIX):
+        return "wecom"
     if value.endswith(WEIXIN_TARGET_SUFFIX):
         return "weixin"
     if value.startswith(("oc_", "ou_")):
@@ -101,6 +105,13 @@ def _default_weixin_sender():
     return WeixinSender()
 
 
+def _default_wecom_sender():
+    """企业微信应用机器人发送器（同 dc_notify.WecomSender，走 openclaw wecom 通道）。"""
+    from dc_notify import WecomSender  # noqa: PLC0415
+
+    return WecomSender()
+
+
 def deliver(
     binding: dict | None,
     *,
@@ -111,6 +122,7 @@ def deliver(
     webhook_secret: str = "",
     sender: Any = None,
     weixin_sender: Any = None,
+    wecom_sender: Any = None,
     webhook_send: Callable[[str, str, dict], None] | None = None,
 ) -> dict:
     """按计划通道投递一条通知，失败自动回退。**本函数不抛异常。**
@@ -150,11 +162,13 @@ def deliver(
         return result
 
     for index, channel in enumerate(channels):
-        if channel in ("app_bot", "weixin"):
+        if channel in ("app_bot", "weixin", "wecom"):
             body = text or _card_to_text(card)
             try:
                 if channel == "weixin":
                     s = weixin_sender if weixin_sender is not None else _default_weixin_sender()
+                elif channel == "wecom":
+                    s = wecom_sender if wecom_sender is not None else _default_wecom_sender()
                 else:
                     s = sender if sender is not None else _default_sender()
                 res = s.send(str((binding or {}).get("chat_id") or ""), body)
