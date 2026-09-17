@@ -23,6 +23,7 @@
 | `dc-cron-onsite-recommend.sh` | 1 | `dealclaw-onsite-recommend` |
 | `dc-cron-reflection.sh` | 1 | `dealclaw-reflection-heartbeat` |
 | `dc-cron-pending-send.sh` | 1 | `dealclaw-pending-send` |
+| `dc-cron-ai-hunter.sh` | 1 | `dealclaw-ai-hunter-daily` |
 | `dc-ensure-agent-preload.sh` | 0（非 cron）| agent 预加载画像+线索池 |
 
 **② payload 层（`work/mio-api/inject_*_cron.sh`）** —— 人工按租户开，**entrypoint 不会自动挂**。
@@ -290,3 +291,23 @@ command `python3 scripts/heartbeat.py`，cwd 为 workspace 根。
 | 入队即承诺 | `payload/AGENTS.md` 的 Proactive-Agent Rules 加「系统 crontab 一律不可用」「入队 ≠ 会发」两条 |
 
 回归测试：`work/mio-api/tests/test_cron_registration.py`（19 条，拿假 `openclaw` 跑真脚本）。
+
+---
+
+### 附：dealclaw-ai-hunter-daily（AI猎客每日推送）
+
+注册脚本：`dc-cron-ai-hunter.sh`（镜像层，entrypoint `init_runtime()` 每次启动 converge）
+
+| 字段 | 值 |
+|---|---|
+| cron | `0 10 * * *`（每天 10:00）|
+| 时区 | `Asia/Shanghai`（`DEALCLAW_CRON_TZ` / `--tz` 可覆盖）|
+| 任务类型 | **agent-turn**（`--session isolated`）—— AI猎客是 V4.4「纯适配器版」技能，payload 里没有可调脚本，能力全在适配器 HTTP 端点上，所以任务本体是一段 prompt 而不是 shell 命令 |
+| 闸门 | prompt 第一步调 `hunter-status-get`（`POST {ADAPTER}/agent/company/getHunterStatus.json`）：`status != 1`（未开启 / 已停用 / 无记录）→ 直接 NO_RUN，不推送、不发消息 |
+| 命中后 | 按 `dealclaw-ai-hunter` 技能的「每日九维打分推送」流程：拉候选 → 九维打分卡片 → 推送已绑定飞书群 → 补一条收尾消息（定制询盘引导 + 运营二维码，整批只发一次）|
+| 硬约束 | 不得调用 `lead-contact-detail`（解锁扣 360 点，必须用户明确确认）；不得编造点数/画像/二维码/联系方式；无候选时不发空卡片、不发噪声消息 |
+| delivery | `none`（`--no-deliver`；推送由智能体按技能自己完成）|
+| timeout | 1800 秒 |
+| declaration-key | `dealclaw-ai-hunter-daily` |
+
+「开启即生效、停用即静默」：不需要为每个租户改注册 —— job 每天都在，闸门在运行时判断。
