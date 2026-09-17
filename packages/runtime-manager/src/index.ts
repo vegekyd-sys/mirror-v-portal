@@ -11,6 +11,7 @@ import { RuntimeManager } from "./manager.js";
 import { FeishuEdge } from "./feishu.js";
 import { EdgeRouter } from "./channel-edge.js";
 import { WeixinEdge } from "./weixin.js";
+import { WeixinLogin } from "./weixin-login.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
@@ -21,6 +22,7 @@ if (alibabaReady(config))
   await store.createTenant(alibabaTrialId, "DealClaw 阿里云试用", undefined, undefined, "alibaba");
 const feishu = new FeishuEdge(store);
 const weixin = new WeixinEdge(store);
+const weixinLogin = new WeixinLogin(weixin);
 // One edge per surface the runtime serves; the manager stays channel-agnostic.
 const edge = new EdgeRouter([feishu, weixin]);
 const manager = new RuntimeManager(
@@ -89,6 +91,53 @@ app.use("/onboard", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
+});
+// ── WeChat (iLink) QR binding ─────────────────────────────────────────────
+// The scan must happen where the poll will live, so it runs here rather than
+// inside the sandbox, which is asleep between messages.
+app.post("/v1/channels/weixin/login", async (req, res, next) => {
+  try {
+    const tenantId = req.body?.tenantId || config.trialTenantId;
+    if (!(await store.tenant(tenantId))) {
+      res.status(404).json({ error: "TENANT_NOT_FOUND" });
+      return;
+    }
+    const session = await weixinLogin.start(tenantId);
+    res.json({
+      ok: true,
+      sessionId: session.id,
+      qrImage: session.qrImage,
+      expiresIn: Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000)),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+app.get("/v1/channels/weixin/login/:sessionId", (req, res) => {
+  const session = weixinLogin.status(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: "SESSION_NOT_FOUND" });
+    return;
+  }
+  res.json({
+    status: session.status,
+    needVerifyCode: !!session.needVerifyCode,
+    accountId: session.accountId,
+    error: session.error,
+    expiresIn: Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000)),
+  });
+});
+app.post("/v1/channels/weixin/login/:sessionId/verify", (req, res) => {
+  const code = String(req.body?.code || "").trim();
+  if (!code) {
+    res.status(400).json({ error: "CODE_REQUIRED" });
+    return;
+  }
+  res.json({ ok: weixinLogin.submitVerifyCode(req.params.sessionId, code) });
+});
+app.delete("/v1/channels/weixin/login/:sessionId", (req, res) => {
+  weixinLogin.cancel(req.params.sessionId);
+  res.json({ ok: true });
 });
 app.post("/v1/tenants", async (req, res, next) => {
   try {
