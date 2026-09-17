@@ -140,6 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
     html_group.add_argument("--html")
     html_group.add_argument("--html-file")
     send.add_argument("--reply-to")
+    # 附件：可重复传，每次一个文件路径（--attach a.pdf --attach b.png）。
+    # 不支持通配符展开——由调用方/shell 展开后逐个传，避免「以为发了 5 个其实发了 1 个」。
+    send.add_argument("--attach", action="append", default=[], metavar="PATH",
+                      help="附件文件路径，可重复；总大小上限见 DC_ATTACHMENT_SEND_MAX_BYTES")
     send.add_argument("--dry-run", action="store_true")
 
     # ── 默认邮箱懒创建 + 发信前置闸门（T2：可直接被 skill / 智能体调用）──
@@ -334,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
             campaign_id=args.campaign_id or "",
             lead_id=args.lead_id or "",
             contact_id=args.contact_id or "",
+            attachments=args.attach or [],
         )
         # 发信成功后落 outbound 事实：收信匹配的唯一依据，漏落 → 回信静默匹配不到。
         # best-effort：失败只在结果里标出，不影响发送结果。2026-09-15 修复。

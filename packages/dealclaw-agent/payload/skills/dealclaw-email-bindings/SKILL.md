@@ -266,7 +266,8 @@ python3 -m email_gateway.cli account-add \
 - `SecretResolutionError` → 授权码在 cron 环境读不到（见 secret-ref 三种形式）
 - `Unsafe Login` / IMAP 登录失败 → 163 需要客户端授权码（非登录密码），且已开启 IMAP/SMTP
 - 收不到通知 → 确认 binding 的 `--webhook` 填了、`notify_enabled` 为真、cron `dealclaw-email-sync-all` 在跑
-- 重复发信被 `duplicate idempotency key` 拦截 → 同一收件人默认幂等，需传 `content_version`/`campaign_id` 区分
+- 重复发信被 `duplicate idempotency key` 拦截 → 同一收件人默认幂等，需传 `content_version`/`campaign_id` 区分（换附件重发不受影响，附件指纹已算进幂等键）
+- 问「这个邮箱能不能发附件」→ 能，个人邮箱与代理邮箱都支持。**但发信不归本 skill 管**：怎么发见 `dealclaw-email-founder-direct` 的「带附件」一节（含绕过刹车/日志的补救清单），机制与上限见 `work/mio-api/email_gateway/README.md`
 
 ---
 

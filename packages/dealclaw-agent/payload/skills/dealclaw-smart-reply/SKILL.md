@@ -145,6 +145,35 @@ Excel 用 `python3` + openpyxl。读到的内容并入意图判断（例如对�
 
 不编、不猜——REDLINES 一「不假装看过」在附件上同样适用。
 
+## 四之三、回信带附件（买家索要资料时）
+
+上一节是**读**买家发来的附件，这节是**回**过去带附件 —— 买家说「catalog 发我一份」
+「把规格书发来」（意图表里的 📂 索要资料）时最常用。
+
+**怎么带**：草稿字典里塞 `attachments`（本地文件路径的列表），`confirm_and_send` 会自动透传给发信层：
+
+```python
+from dc_email_controller.dc_reply_draft import record_draft, confirm_and_send
+
+record_draft({
+    "draft_id": "...", "company_id": "<sid>", "buyer_email": "buyer@x.com",
+    "subject": "Re: catalog request", "text": "...",
+    "attachments": ["/本地路径/catalog-2026.pdf"],   # ← 就这一个键
+})
+confirm_and_send(draft_id, confirmed_by="ou_<用户open_id>")
+```
+
+**从哪拿路径**：资料库里的物料走 `dc_material_ingest` / 知识库资料层；
+买家先前发来、要原样转回去的，用上一节的 `--find` 拿 `path`。
+
+**规矩**：
+
+- 只认**本地文件路径**，不认 IM 的 file_key；拿不到本地路径就如实说做不了，别编一个路径塞进去
+- 总大小 15MB（原始字节）；超限 / 文件不存在 / 空文件 → **整封不发**，草稿标 `failed` 并带上原因，
+  **绝不会出现「说发了其实没带附件」**
+- 附件一样要用户确认 —— 发资料给外部买家是对外动作，「只出草稿」那条默认规则同样适用
+- 发出去的附件会进统一附件库并记进出站事实，案卷里能看到「我方发了什么」
+
 ## 五、退订追踪
 
 退订/拒绝发生时：

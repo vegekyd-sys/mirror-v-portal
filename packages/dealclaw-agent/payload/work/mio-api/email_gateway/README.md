@@ -95,6 +95,39 @@ excerpt capped at 200 Unicode characters. Longer bodies end with an ellipsis.
   header-only metadata and never store a body preview.
 - External send requires `--confirmed-by` matching the mailbox owner.
 
+## 发信附件
+
+两条链路都支持：个人邮箱走 SMTP MIME，代理邮箱走 Resend API 的 base64。
+统一入口 `--attach`，可重复传，每次一个文件：
+
+```bash
+python3 -m email_gateway.cli send \
+  --account-id ema_xxx --confirmed-by ou_xxx \
+  --to buyer@example.com --subject 'Quotation' --text '...' \
+  --attach /path/quote.pdf --attach /path/spec.png
+```
+
+口径（`email_gateway/attachments.py` 是唯一实现，两条链路共用）：
+
+- **fail closed**：文件找不到、是目录、空文件、超总量上限 → 抛 `AttachmentError`，
+  **一封都不发**。发信侧不允许静默少发附件——用户以为发了、买家没收到，比报错更糟。
+  收信侧相反（超限记一行 `skipped: too_large` 放过），两边口径不同是故意的。
+- **总量上限**默认 15MB 原始字节（编码后约 20.5MB，低于 Gmail 25MB 与 Resend 40MB
+  的整封上限）。`DC_ATTACHMENT_SEND_MAX_BYTES` 可覆盖，调高前先确认收件方服务商吃得下。
+- **幂等键**把附件指纹算进去：同一买家、同一段正文、换个附件重发是正常业务
+  （先发规格书再补报价单），不能被判成 duplicate。不带附件时键与历史逐字节一致。
+- **留痕**：发出去的附件落进统一附件库（与入站同一套目录/索引），出站事实的
+  `attachments` 字段记索引行，案卷里能看到「我方发了什么」。落盘 best-effort，
+  失败只丢原件不影响发送结果。
+- `--dry-run` 同样校验附件，问题在真发之前暴露。
+
+不支持通配符展开（`--attach '*.pdf'` 不会展开成多个）：由 shell 或调用方展开后逐个传，
+避免「以为发了 5 个其实发了 1 个」。
+
+FD 渠道（`scripts/founder-direct/send-direct.mjs`）**有意不支持附件**，见该脚本的
+README 与 `dealclaw-email-founder-direct` skill：附件是批量发信者的识别特征，
+与它「纯文本真人手写信」的定位冲突。要发附件走本网关或 GS。
+
 ## Lazy default mailbox + send gate (T2)
 
 `email_gateway/provision.py` adds lazy default-mailbox creation and a pre-send
