@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import type { ChannelEdge } from "./channel-edge.js";
 import { isSilentReply } from "./reply-sentinel.js";
+import type { MediaFile } from "./provider.js";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { TypingReaction } from "./typing-reaction.js";
 import { StreamingReply } from "./streaming-reply.js";
@@ -31,6 +33,63 @@ export class FeishuEdge implements ChannelEdge {
       this.streams.set(run.id, stream);
     }
     return stream;
+  }
+  /**
+   * Upload and post the files the agent attached.
+   *
+   * Feishu takes media by key, not by bytes on the message, so each file is
+   * uploaded first and then referenced. Images and other files use different
+   * APIs and different message types, and a failure on one file must not cost
+   * the others — or the text reply, which is delivered separately.
+   */
+  media(run: Run, files: MediaFile[]) {
+    if (run.channel !== this.channel || !run.message_id || !files.length) return;
+    const api = this.clients.get(run.tenant_id)?.api;
+    if (!api) return;
+    void (async () => {
+      for (const file of files) {
+        try {
+          const name = file.ref.split("/").pop() || "file";
+          let content: Record<string, string>;
+          let msgType: string;
+          if (file.kind === "image") {
+            const upload = await api.im.image.create({
+              data: { image_type: "message", image: Readable.from(file.buffer) as any },
+            });
+            const key = (upload as any)?.data?.image_key;
+            if (!key) throw Error(`FEISHU_IMAGE_UPLOAD_${(upload as any)?.code ?? "FAILED"}`);
+            content = { image_key: key };
+            msgType = "image";
+          } else {
+            // Feishu distinguishes stream/opus/mp4 from generic files; the kind
+            // decides which, and anything unknown rides as a plain attachment.
+            const fileType = file.kind === "video" ? "mp4" : file.kind === "audio" ? "opus" : "stream";
+            const upload = await api.im.file.create({
+              data: { file_type: fileType as any, file_name: name, file: Readable.from(file.buffer) as any },
+            });
+            const key = (upload as any)?.data?.file_key;
+            if (!key) throw Error(`FEISHU_FILE_UPLOAD_${(upload as any)?.code ?? "FAILED"}`);
+            content = { file_key: key };
+            msgType = file.kind === "video" || file.kind === "audio" ? "media" : "file";
+          }
+          const sent = await api.im.message.reply({
+            path: { message_id: run.message_id! },
+            data: {
+              msg_type: msgType,
+              content: JSON.stringify(content),
+              uuid: createHash("sha256").update(`${run.id}:${file.ref}`).digest("hex").slice(0, 40),
+            },
+          });
+          if ((sent as any)?.code !== 0) throw Error(`FEISHU_MEDIA_SEND_${(sent as any)?.code}`);
+          await this.store.event(run.tenant_id, "feishu-media-sent", { ref: file.ref, kind: file.kind, bytes: file.buffer.length }, run.id);
+        } catch (error: any) {
+          await this.store.event(run.tenant_id, "feishu-media-failed", {
+            ref: file.ref,
+            message: String(error?.message ?? error).slice(0, 200),
+          }, run.id).catch(() => {});
+        }
+      }
+    })();
   }
   delta(run: Run, text: string) { this.stream(run)?.push(text); }
   progress(run: Run, kind: string, data: any) {

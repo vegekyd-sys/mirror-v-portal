@@ -38,6 +38,8 @@ try {
       // Tell the runtime which surface this turn came from. Absent it, every
       // turn looks like webchat and the agent describes itself accordingly.
       ...(request.channel ? { "x-openclaw-message-channel": request.channel } : {}),
+      // Comma-separated; absent means the agent assumes text only.
+      ...(request.caps ? { "x-openclaw-client-caps": request.caps } : {}),
     },
     body: JSON.stringify({
       model: "openclaw/dealclaw",

@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
+import { parseReply, resolveRef, mediaKind } from "./media-directive.js";
 import type { Config } from "./config.js";
 import type { Tenant } from "./store.js";
 
@@ -30,11 +31,26 @@ export interface RuntimeProvider {
     text: string,
     onEvent: (kind: string, data: any) => Promise<void>,
     context?: TurnContext,
-  ): Promise<string>;
+  ): Promise<ExecuteResult>;
   stop(
     tenant: Tenant,
   ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
 }
+
+/** Reply text plus whatever the agent asked to deliver alongside it. */
+export interface ExecuteResult {
+  output: string;
+  media: MediaFile[];
+}
+
+/** A file the agent asked to deliver, already read out of the sandbox. */
+export interface MediaFile {
+  ref: string;
+  kind: "image" | "video" | "audio" | "file";
+  buffer: Buffer;
+}
+/** Beyond this, channels reject the upload anyway; reading it would only waste time. */
+const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
 
 /** What the agent needs to know about where this turn came from. */
 export interface TurnContext {
@@ -55,6 +71,20 @@ const OPENCLAW_CHANNEL: Record<string, string> = {
 };
 export const openclawChannel = (channel?: string) =>
   channel ? (OPENCLAW_CHANNEL[channel] ?? channel) : undefined;
+
+/**
+ * What each surface can actually deliver, sent as x-openclaw-client-caps.
+ *
+ * Declared only where the edge really uploads attachments. Claiming a
+ * capability the edge cannot honour is worse than claiming none: the agent
+ * would emit MEDIA: believing the file was sent, and the user would receive
+ * nothing. The other channels stay text-only until their upload path exists.
+ */
+const CHANNEL_CAPS: Record<string, string[]> = {
+  feishu: ["media", "images", "files"],
+};
+export const channelCaps = (channel?: string) =>
+  (channel && CHANNEL_CAPS[channel]?.join(",")) || undefined;
 
 export interface RuntimeSandbox {
   name: string;
@@ -196,7 +226,7 @@ export class VercelProvider implements RuntimeProvider {
     text: string,
     onEvent: (kind: string, data: any) => Promise<void>,
     context?: TurnContext,
-  ): Promise<string> {
+  ): Promise<ExecuteResult> {
     const executeStart = Date.now();
     const sbx =
       this.config.optimizeRuntime === false
@@ -281,6 +311,7 @@ export class VercelProvider implements RuntimeProvider {
             sessionKey,
             text,
             channel: openclawChannel(context?.channel),
+            caps: channelCaps(context?.channel),
           }),
         ).toString("base64"),
       },
@@ -337,7 +368,43 @@ export class VercelProvider implements RuntimeProvider {
             await onEvent("model-timing", timing);
         } catch {}
       }
-    return output;
+    // The sandbox is about to go idle and its filesystem with it, so anything
+    // the agent asked to deliver has to be read out now, while it still exists.
+    const media = await this.collectMedia(sbx, output, onEvent);
+    if (media.length) await onEvent("media-ready", { count: media.length, refs: media.map((m) => m.ref) });
+    return { output, media };
+  }
+
+  private async collectMedia(
+    sbx: RuntimeSandbox,
+    output: string,
+    onEvent: (kind: string, data: any) => Promise<void>,
+  ): Promise<MediaFile[]> {
+    const { media } = parseReply(output);
+    const files: MediaFile[] = [];
+    for (const directive of media) {
+      // A URL needs no upload: the channel can reference it directly.
+      if (directive.remote) continue;
+      const path = resolveRef(directive.ref);
+      try {
+        const buffer = await sbx.readFileToBuffer({ path });
+        if (!buffer) {
+          await onEvent("media-missing", { ref: directive.ref, path });
+          continue;
+        }
+        if (buffer.length > MAX_MEDIA_BYTES) {
+          await onEvent("media-too-large", { ref: directive.ref, bytes: buffer.length });
+          continue;
+        }
+        files.push({ ref: directive.ref, kind: mediaKind(directive.ref), buffer });
+      } catch (error: any) {
+        await onEvent("media-read-failed", {
+          ref: directive.ref,
+          message: String(error?.message ?? error).slice(0, 200),
+        });
+      }
+    }
+    return files;
   }
   async stop(tenant: Tenant) {
     if (!tenant.sandbox_name) return { stopped: true };

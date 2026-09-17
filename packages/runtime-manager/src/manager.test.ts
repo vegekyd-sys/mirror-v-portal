@@ -22,7 +22,7 @@ afterAll(async () => {
   await admin.end();
 }, 30000);
 const provider = (
-  execute: RuntimeProvider["execute"] = async () => "ok",
+  execute: RuntimeProvider["execute"] = async () => ({ output: "ok", media: [] }),
   stop: RuntimeProvider["stop"] = async () => ({ stopped: true }),
 ) => ({
   ensure: async () => ({
@@ -58,7 +58,7 @@ test("serializes turns and does not release while tools run", async () => {
         calls++;
         started();
         await hold;
-        return "ok";
+        return { output: "ok", media: [] };
       },
       async () => {
         stops++;
@@ -109,7 +109,7 @@ test("does not replay a turn after ambiguous controller failure", async () => {
     s,
     provider(async () => {
       executions++;
-      return "ok";
+      return { output: "ok", media: [] };
     }),
   );
   await m.process(r.id);
@@ -148,13 +148,13 @@ test("real queue drains concurrent messages in tenant order", async () => {
   const m = new RuntimeManager(
     s,
     provider(async (_t, _session, text) => {
-      if (_t.id !== t.id) return text;
+      if (_t.id !== t.id) return { output: text, media: [] };
       active++;
       max = Math.max(max, active);
       seen.push(text);
       await new Promise((r) => setTimeout(r, 25));
       active--;
-      return text;
+      return { output: text, media: [] };
     }),
   );
   const runs = [];
@@ -186,7 +186,7 @@ test("queued message recovers interrupted idle release without being marked unce
  const t=await tenant(),r=await s.enqueue(t.id,'idle-crash','session','hihi');
  await s.pool.query("UPDATE elastic_tenants SET state='quiescing' WHERE id=$1",[t.id]);
  let stops=0,executions=0;
- const m=new RuntimeManager(s,provider(async()=>{executions++;return 'hi';},async()=>{stops++;return {stopped:true};}));
+ const m=new RuntimeManager(s,provider(async()=>{executions++;return {output:'hi',media:[]};},async()=>{stops++;return {stopped:true};}));
  await m.process(r.id);
  expect(stops).toBe(1);expect(executions).toBe(1);
  expect((await s.run(r.id)).status).toBe('succeeded');

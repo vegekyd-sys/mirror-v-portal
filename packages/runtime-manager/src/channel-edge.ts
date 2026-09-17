@@ -1,4 +1,5 @@
 import type { Run, Tenant } from "./store.js";
+import type { MediaFile } from "./provider.js";
 
 /**
  * A messaging surface the elastic runtime can serve.
@@ -20,6 +21,11 @@ export interface ChannelEdge {
   delta(run: Run, text: string): void;
   /** Report execution progress (typing, tool steps, completion). */
   progress(run: Run, kind: string, data: unknown): void;
+  /**
+   * Deliver files the agent attached to this turn, already read out of the
+   * sandbox. Optional: a surface that cannot carry attachments simply omits it.
+   */
+  media?(run: Run, files: MediaFile[]): void;
   /** Release connections; the process is shutting down. */
   close(): void;
 }
@@ -58,6 +64,9 @@ export class EdgeRouter {
   }
   progress(run: Run, kind: string, data: unknown) {
     this.byChannel.get(run.channel)?.progress(run, kind, data);
+  }
+  media(run: Run, files: MediaFile[]) {
+    this.byChannel.get(run.channel)?.media?.(run, files);
   }
   close() {
     for (const edge of this.byChannel.values()) edge.close();

@@ -34,6 +34,7 @@ const manager = new RuntimeManager(
   new ProviderRouter({ vercel: new VercelProvider(config), alibaba: new AlibabaProvider(config) }),
   (run, text) => edge.delta(run, text),
   (run, kind, data) => edge.progress(run, kind, data),
+  (run, media) => edge.media(run, media),
 );
 await edge.start();
 await manager.start();

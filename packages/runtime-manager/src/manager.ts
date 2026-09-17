@@ -1,6 +1,6 @@
 import { Scheduler } from './scheduler.js';
 import type { Store, Run } from "./store.js";
-import type { RuntimeProvider } from "./provider.js";
+import type { RuntimeProvider , MediaFile } from "./provider.js";
 
 export class RuntimeManager {
   private timer?: NodeJS.Timeout;
@@ -10,6 +10,7 @@ export class RuntimeManager {
     readonly provider: RuntimeProvider,
     readonly onDelta?: (run: Run, text: string) => void,
     readonly onProgress?: (run: Run, kind: string, data: any) => void,
+    readonly onMedia?: (run: Run, media: MediaFile[]) => void,
   ) {}
   async start() {
     await this.store.boss.work<{ runId: string }>(
@@ -116,7 +117,7 @@ export class RuntimeManager {
           runId,
         );
         submitted = true;
-        const output = await this.provider.execute(
+        const { output, media } = await this.provider.execute(
           tenant,
           current.session_key,
           current.text,
@@ -133,6 +134,9 @@ export class RuntimeManager {
           },
           { channel: current.channel },
         );
+        // Hand files to the edge before the reply is marked deliverable, so the
+        // attachment and the text arrive together rather than in two turns.
+        if (media?.length) this.onMedia?.(current, media);
         await db.query("BEGIN");
         try {
           await db.query(
