@@ -23,6 +23,15 @@ export interface Tenant {
   snapshot_id: string | null;
   runtime_provider?: "vercel" | "alibaba";
 }
+export interface ChannelBinding {
+  tenant_id: string;
+  channel: string;
+  external_id: string | null;
+  credentials: string;
+  cursor: string | null;
+  state: string;
+  last_error: string | null;
+}
 export interface Run {
   schedule_id?: string;
   schedule_kind?: string;
@@ -86,6 +95,24 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS elastic_events_run ON elastic_events(run_id,seq);
       CREATE INDEX IF NOT EXISTS elastic_events_tenant ON elastic_events(tenant_id,seq DESC);
+      -- Credentials for surfaces other than Feishu, whose app_id/secret live on
+      -- the tenant row. One binding per tenant per channel; the cursor carries
+      -- protocol state that must survive a manager restart (e.g. the iLink
+      -- long-poll position), so a restart does not replay or skip messages.
+      CREATE TABLE IF NOT EXISTS elastic_channel_bindings (
+        tenant_id text NOT NULL REFERENCES elastic_tenants(id) ON DELETE CASCADE,
+        channel text NOT NULL,
+        external_id text,
+        credentials text NOT NULL,
+        cursor text,
+        state text NOT NULL DEFAULT 'active' CHECK (state IN ('active','revoked')),
+        last_error text,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, channel)
+      );
+      CREATE INDEX IF NOT EXISTS elastic_channel_bindings_active
+        ON elastic_channel_bindings(channel) WHERE state = 'active';
     `);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS runtime_provider text NOT NULL DEFAULT 'vercel' CHECK (runtime_provider IN ('vercel','alibaba'))`);
     await this.boss.start();
@@ -104,6 +131,54 @@ export class Store {
       retryDelay: 10,
       expireInSeconds: 90,
     });
+  }
+  /** Credentials are sealed with the same key as tenant secrets; never stored plain. */
+  async bindChannel(
+    tenantId: string,
+    channel: string,
+    credentials: Record<string, unknown>,
+    externalId?: string,
+  ) {
+    const { rows } = await this.pool.query<ChannelBinding>(
+      `INSERT INTO elastic_channel_bindings(tenant_id,channel,external_id,credentials,state,last_error,updated_at)
+       VALUES($1,$2,$3,$4,'active',NULL,now())
+       ON CONFLICT (tenant_id,channel) DO UPDATE
+         SET external_id=EXCLUDED.external_id, credentials=EXCLUDED.credentials,
+             state='active', last_error=NULL, updated_at=now()
+       RETURNING *`,
+      [tenantId, channel, externalId ?? null, this.seal(JSON.stringify(credentials))],
+    );
+    return rows[0];
+  }
+  async channelBindings(channel: string) {
+    const { rows } = await this.pool.query<ChannelBinding>(
+      "SELECT * FROM elastic_channel_bindings WHERE channel=$1 AND state='active'",
+      [channel],
+    );
+    return rows;
+  }
+  async channelBinding(tenantId: string, channel: string) {
+    const { rows } = await this.pool.query<ChannelBinding>(
+      "SELECT * FROM elastic_channel_bindings WHERE tenant_id=$1 AND channel=$2",
+      [tenantId, channel],
+    );
+    return rows[0];
+  }
+  channelCredentials<T = Record<string, unknown>>(binding: ChannelBinding): T {
+    return JSON.parse(this.unseal(binding.credentials)) as T;
+  }
+  /** Persist protocol position. Kept separate from credentials: it changes every poll. */
+  async saveChannelCursor(tenantId: string, channel: string, cursor: string) {
+    await this.pool.query(
+      "UPDATE elastic_channel_bindings SET cursor=$3, updated_at=now() WHERE tenant_id=$1 AND channel=$2",
+      [tenantId, channel, cursor],
+    );
+  }
+  async revokeChannel(tenantId: string, channel: string, reason?: string) {
+    await this.pool.query(
+      "UPDATE elastic_channel_bindings SET state='revoked', last_error=$3, updated_at=now() WHERE tenant_id=$1 AND channel=$2",
+      [tenantId, channel, reason ?? null],
+    );
   }
   seal(value: string): string {
     const iv = randomBytes(12);

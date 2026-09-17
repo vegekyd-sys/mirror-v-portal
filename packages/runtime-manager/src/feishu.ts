@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import type { ChannelEdge } from "./channel-edge.js";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { TypingReaction } from "./typing-reaction.js";
 import { StreamingReply } from "./streaming-reply.js";
 import type { Run, Store, Tenant } from "./store.js";
-export class FeishuEdge {
+export class FeishuEdge implements ChannelEdge {
+  readonly channel = "feishu";
   clients = new Map<string, { ws: lark.WSClient; api: lark.Client }>();
   streams = new Map<string, StreamingReply>();
   private connectionTimer?: NodeJS.Timeout;

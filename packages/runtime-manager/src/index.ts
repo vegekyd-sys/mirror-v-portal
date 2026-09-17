@@ -9,6 +9,8 @@ import { AlibabaProvider, alibabaReady } from "./alibaba-provider.js";
 import { ProviderRouter } from "./provider-router.js";
 import { RuntimeManager } from "./manager.js";
 import { FeishuEdge } from "./feishu.js";
+import { EdgeRouter } from "./channel-edge.js";
+import { WeixinEdge } from "./weixin.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
@@ -17,7 +19,10 @@ await store.createTenant(config.trialTenantId, "DealClaw 试用");
 const alibabaTrialId = config.alibaba?.trialTenantId || "alibaba-trial";
 if (alibabaReady(config))
   await store.createTenant(alibabaTrialId, "DealClaw 阿里云试用", undefined, undefined, "alibaba");
-const edge = new FeishuEdge(store);
+const feishu = new FeishuEdge(store);
+const weixin = new WeixinEdge(store);
+// One edge per surface the runtime serves; the manager stays channel-agnostic.
+const edge = new EdgeRouter([feishu, weixin]);
 const manager = new RuntimeManager(
   store,
   new ProviderRouter({ vercel: new VercelProvider(config), alibaba: new AlibabaProvider(config) }),
