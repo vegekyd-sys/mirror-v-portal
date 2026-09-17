@@ -1,4 +1,5 @@
 import type * as lark from "@larksuiteoapi/node-sdk";
+import { mayBecomeSilent } from "./reply-sentinel.js";
 import type { Store } from "./store.js";
 export class StreamingReply {
   private text = "";
@@ -39,7 +40,14 @@ export class StreamingReply {
     this.scheduled = true;
     this.work = this.work.then(async () => {
       try {
-        while (!this.closed && this.content() && this.content() !== this.sent) {
+        while (
+          !this.closed &&
+          this.content() &&
+          this.content() !== this.sent &&
+          // Hold back while the text could still resolve to a silence marker;
+          // once published it cannot be unsaid.
+          !(this.text && mayBecomeSilent(this.text) && !this.publicSnapshot && !this.status)
+        ) {
           const delay = Math.max(0, 150 - (Date.now() - this.lastFlushAt));
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
           if (this.closed) break;
@@ -147,6 +155,17 @@ export class StreamingReply {
       { at: Date.now(), characters: content.length, sequence },
       this.runId,
     );
+  }
+  /**
+   * Abandon the reply without publishing anything.
+   *
+   * Used when the agent's answer turns out to be a silence marker. Any in-flight
+   * work is awaited so a queued flush cannot land after the decision to stay
+   * quiet; nothing further is sent because `closed` gates every write.
+   */
+  async discard(): Promise<void> {
+    this.closed = true;
+    await this.work.catch(() => {});
   }
   async finish(output: string): Promise<boolean> {
     this.closed = true;

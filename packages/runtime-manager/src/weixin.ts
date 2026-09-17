@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelEdge } from "./channel-edge.js";
 import type { Run, Store, Tenant } from "./store.js";
+import { isSilentReply } from "./reply-sentinel.js";
 
 /**
  * Personal WeChat via iLink (Tencent's official ClawBot protocol).
@@ -201,6 +202,12 @@ export class WeixinEdge implements ChannelEdge {
     const text = (buffer ?? []).join("").trim();
     const target = decodeReplyTarget(run.message_id);
     if (!text || !target) return;
+    // The agent asked to stay silent; delivering the marker would put the word
+    // "NO_REPLY" in the user's chat.
+    if (isSilentReply(text, run.schedule_kind)) {
+      await this.store.event(run.tenant_id, "reply-suppressed", { marker: text.slice(0, 32) }, run.id);
+      return;
+    }
     const binding = await this.store.channelBinding(run.tenant_id, this.channel);
     if (!binding || binding.state !== "active") return;
     const { botToken } = this.store.channelCredentials<WeixinCredentials>(binding);

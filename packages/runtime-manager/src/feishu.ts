@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChannelEdge } from "./channel-edge.js";
+import { isSilentReply } from "./reply-sentinel.js";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { TypingReaction } from "./typing-reaction.js";
 import { StreamingReply } from "./streaming-reply.js";
@@ -80,7 +81,7 @@ export class FeishuEdge implements ChannelEdge {
           const client = this.clients.get(run.tenant_id);
           if (!client) throw new Error("FEISHU_NOT_CONNECTED");
           if(run.schedule_id && run.chat_id) {
-            const quiet=run.status==='succeeded' && run.schedule_kind==='heartbeat' && /^(HEARTBEAT_OK|NO_REPLY)[.!。\s]*$/.test(run.output.trim());
+            const quiet=run.status==='succeeded' && isSilentReply(run.output, run.schedule_kind);
             if(!quiet) {
               const text=run.status==='succeeded'?run.output:'定时任务未能完成，请检查 Nexus 任务状态。';
               const chars=Array.from(text);
@@ -96,6 +97,14 @@ export class FeishuEdge implements ChannelEdge {
           const text =
             run.output ||
             "本次执行未能安全完成，请在 Nexus 试用页查看状态。为避免重复操作，系统没有自动重做。";
+          // The agent asked to stay silent — mark the turn delivered and send nothing.
+          if (run.status === "succeeded" && isSilentReply(text, run.schedule_kind)) {
+            await this.streams.get(run.id)?.discard();
+            this.streams.delete(run.id);
+            await this.store.pool.query("UPDATE elastic_runs SET delivery='sent' WHERE id=$1", [run.id]);
+            await this.store.event(run.tenant_id, "reply-suppressed", { marker: text.trim().slice(0, 32) }, run.id);
+            continue;
+          }
           const stream =
             this.streams.get(run.id) ||
             new StreamingReply(
