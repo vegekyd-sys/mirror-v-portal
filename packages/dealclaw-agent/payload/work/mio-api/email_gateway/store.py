@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -41,6 +42,33 @@ def _day(dt: str | None) -> str:
     if not dt:
         dt = utc_now()
     return dt[:10] if len(dt) >= 10 else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _record_addresses(rec: dict) -> set[str]:
+    """一条事实记录上出现的全部邮箱地址（小写裸地址）。
+
+    口径唯一来源是 ``dc_tenant_mailboxes.rec_addresses``；import 不到时本地兜底，
+    保证 ``email_gateway`` 单独使用（测试 / 独立脚本）也不会因此放行全部记录。
+    """
+    try:
+        from dc_tenant_mailboxes import rec_addresses
+        return rec_addresses(rec)
+    except Exception:  # noqa: BLE001
+        out: set[str] = set()
+        for key in ("sender", "from", "recipients", "to", "cc", "bcc", "reply_to"):
+            value = rec.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (str, dict)):
+                value = [value]
+            for item in value:
+                if isinstance(item, dict):
+                    item = item.get("email") or item.get("address") or ""
+                for _, addr in getaddresses([str(item or "")]):
+                    addr = addr.strip().strip("<>").strip().lower()
+                    if addr:
+                        out.add(addr)
+        return out
 
 
 def _hash_key(s: str) -> str:
@@ -643,17 +671,35 @@ class MarkdownEmailStore:
             out.append(rec)
         return out
 
-    def list_inbound_records(self, company_id: str = None) -> list[dict]:
-        canonical = company_id
+    def list_inbound_records(self, company_id: str = None, *,
+                             mailboxes: "set[str] | None" = None) -> list[dict]:
+        """入站事实列表；``company_id`` 给定时只返回**该租户**的记录。
+
+        2026-09-17 串租户事故后收紧两处：
+
+        1. **归属不明的不认领**：记录上 ``company_id`` 为空（落在 ``inbound/_unmatched/``）
+           的，以前会被 ``canonical_company_id("")`` 归到「当前 supplier_id」——等于谁读就
+           归谁，每个租户都会把这些信念成自己的。现在一律跳过。
+        2. **可按收发地址二次核验**：传 ``mailboxes``（本租户绑定邮箱）时，地址里没有
+           本租户邮箱的记录一律不返回，挡住历史已经写进本租户目录的污染记录。
+        """
+        _canon = lambda value: value  # noqa: E731
         try:
             from enterprise_ids import canonical_company_id
-            canonical = canonical_company_id(company_id) if company_id else None
+            _canon = canonical_company_id
         except ImportError:
-            canonical_company_id = lambda value: value  # noqa: E731
+            pass
+        canonical = _canon(company_id) if company_id else None
+        verify = {str(m).strip().lower() for m in (mailboxes or set()) if str(m).strip()}
         out = []
         for rec in _list_snapshots(self._inbound):
-            record_company = canonical_company_id(rec.get("company_id", ""))
-            if canonical and record_company != canonical:
+            raw_company = str(rec.get("company_id", "") or "").strip()
+            if canonical:
+                if not raw_company:
+                    continue                      # 归属不明：不认领
+                if _canon(raw_company) != canonical:
+                    continue
+            if mailboxes is not None and not (_record_addresses(rec) & verify):
                 continue
             out.append(rec)
         return out

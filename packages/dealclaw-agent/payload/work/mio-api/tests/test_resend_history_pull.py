@@ -64,8 +64,19 @@ class PullCountingTests(unittest.TestCase):
         r = self._pull(items, [True, False, True], all_tenants=True)
         self.assertEqual(r["sides"]["sent"],
                          {"fetched": 3, "existing": 0, "written": 2,
-                          "skipped": 1, "failed": 0})
+                          "skipped": 1, "failed": 0,
+                          # 2026-09-17 起每侧都报租户收口结果：跳了几封别家的、这轮有没有收口
+                          "foreign_skipped": 0, "tenant_scoped": False})
         self.assertEqual(r["written"], 2)
+
+    def test_refuses_without_tenant_scope(self):
+        """没有租户口径就不许拉：共用 Resend 账号，不收口 = 把全平台的信写成本租户的。"""
+        items = [{"id": "a"}]
+        r = self._pull(items, [True])          # company_id="" 且没有 all_tenants
+        self.assertFalse(r["ok"])
+        self.assertEqual(r.get("code"), "tenant_scope_unknown")
+        self.assertEqual(r.get("written"), 0)
+        self.assertEqual(r.get("sides"), {})
 
     def test_known_ids_are_skipped_without_refetching(self):
         """已落库的邮件不能再去拉详情（回拉预算要花在新增上，且要能收敛）。"""

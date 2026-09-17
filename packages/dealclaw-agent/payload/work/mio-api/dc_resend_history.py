@@ -205,6 +205,29 @@ def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
     key = _key(key)
     if not key:
         return {"ok": False, "error": "缺少 RESEND_API_KEY"}
+
+    # ── 租户闸门（fail-closed，2026-09-17）────────────────────────────
+    # Resend 是全平台共用的一个账号：/emails/receiving 返回的是**所有租户**的信。
+    # 查不到本租户绑定邮箱 = 判定不了归属，必须拒绝拉取；绝不能像以前那样退化成
+    # 「不过滤」——那等于把别家租户的回信写成本租户的事实，早报会照着念出来。
+    # --all-tenants 是运维显式越权（跨租户归位工具用），走另一条路。
+    boxes = None
+    if not all_tenants:
+        try:
+            from dc_tenant_mailboxes import (
+                TenantScopeUnknown, belongs_to_tenant, filter_tenant_records,
+                rec_addresses, require_tenant_mailboxes,
+            )
+        except ImportError as e:  # 口径模块都加载不了 → 宁可不拉，也不瞎拉
+            msg = f"租户口径模块不可用，已拒绝拉取：{e}"
+            return {"ok": False, "code": "tenant_scope_unavailable", "error": msg,
+                    "written": 0, "sides": {}, "errors": [{"error": msg}]}
+        try:
+            boxes = require_tenant_mailboxes(company_id)
+        except TenantScopeUnknown as e:
+            return {"ok": False, "code": "tenant_scope_unknown", "error": str(e),
+                    "written": 0, "sides": {}, "errors": [{"error": str(e)}]}
+
     sides = ["sent", "received"] if direction == "both" else [direction]
     report = {"ok": True, "dry_run": dry_run, "sides": {}, "written": 0, "errors": []}
     for side in sides:
@@ -220,14 +243,17 @@ def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
             report["sides"][side] = {"fetched": 0, "error": str(e)[:200]}
             report["errors"].append({"side": side, "error": str(e)[:200]})
             continue
-        # 租户收口：只保留与本租户绑定邮箱有往来的邮件（田耕郡 2026-09-13）
-        try:
-            from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
-            boxes = tenant_mailboxes(company_id)
-            if boxes and not all_tenants:
-                items = [it for it in items if belongs_to_tenant(it, boxes)]
-        except Exception:
-            pass
+        # 租户收口：只保留与本租户绑定邮箱有往来的邮件（田耕郡 2026-09-13）。
+        # 列表条目自带 from/to，先筛一遍能省掉逐封取详情的开销；缺地址的条目
+        # 会被筛掉，交给下面「取完详情再判一次」兜住（不会因为列表字段缺就漏信）。
+        foreign = 0
+        undecided: list[dict] = []
+        if boxes is not None:
+            keep, dropped = filter_tenant_records(items, boxes)
+            # 列表条目里压根没有任何地址字段的，不能算「别家的」，留给详情再判
+            undecided = [it for it in dropped if not rec_addresses(it)]
+            foreign = len(dropped) - len(undecided)
+            items = keep + undecided
         written = 0
         skipped = 0
         failed = 0
@@ -253,6 +279,12 @@ def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
                 details = fetch_details(side, key, chunk, workers=concurrency)
                 for it, det in zip(chunk, details):
                     eid = it.get("id") or ""
+                    # 第二道闸：列表条目可能缺 from/to，只有详情才全。落库前按
+                    # 「列表 + 详情」合并后的地址再判一次；判不出归属就不写。
+                    if boxes is not None and not belongs_to_tenant(
+                            {**it, **(det if isinstance(det, dict) else {})}, boxes):
+                        foreign += 1
+                        continue
                     fact = to_fact(it, det, side, company_id)
                     try:
                         if store.insert_message(fact):
@@ -264,7 +296,9 @@ def pull(*, direction: str = "both", limit: int = 100, company_id: str = "",
                         report["errors"].append({"side": side, "id": eid, "error": str(e)[:160]})
         report["sides"][side] = {"fetched": already + len(items) if not dry_run else len(items),
                                  "existing": already, "written": written,
-                                 "skipped": skipped, "failed": failed}
+                                 "skipped": skipped, "failed": failed,
+                                 "foreign_skipped": foreign,
+                                 "tenant_scoped": boxes is not None}
         report["written"] += written
     return report
 

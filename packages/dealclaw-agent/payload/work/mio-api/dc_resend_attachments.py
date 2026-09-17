@@ -291,15 +291,26 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
-    # 租户收口：只处理与本租户绑定邮箱有往来的邮件
+    # 租户收口（fail-closed，2026-09-17）：Resend 是全平台共用账号，列表里是所有租户的信。
+    # 查不到本租户邮箱 = 判定不了归属 → 拒绝下载，绝不退化成「不过滤」（那会把别家
+    # 买家发来的报价单/证书下载进本租户的附件库）。
     try:
-        from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
-        boxes = tenant_mailboxes(company_id)
-        if boxes:
-            items = [it for it in items if belongs_to_tenant(it, boxes)]
-    except Exception:
-        pass
-    report = {"ok": True, "scanned": len(items), "messages_with_att": 0,
+        from dc_tenant_mailboxes import (
+            TenantScopeUnknown, belongs_to_tenant, rec_addresses, require_tenant_mailboxes,
+        )
+    except ImportError as e:
+        return {"ok": False, "code": "tenant_scope_unavailable",
+                "error": f"租户口径模块不可用，已拒绝拉取：{e}"}
+    try:
+        boxes = require_tenant_mailboxes(company_id, data_dir)
+    except TenantScopeUnknown as e:
+        return {"ok": False, "code": "tenant_scope_unknown", "error": str(e)}
+    # 列表条目缺 from/to 的不算「别家的」，留给取完详情后的第二道闸判
+    kept = [it for it in items if belongs_to_tenant(it, boxes) or not rec_addresses(it)]
+    foreign = len(items) - len(kept)
+    items = kept
+    report = {"ok": True, "scanned": len(items), "foreign_skipped": foreign,
+              "messages_with_att": 0,
               "attachments": 0, "downloaded": 0, "skipped": 0, "failed": [], "apply": apply}
     ym = _month()
     index_lines: list[dict] = []
@@ -309,6 +320,10 @@ def pull(*, company_id: str, limit: int = 30, apply: bool = False,
             det = _api(f"/emails/{'receiving/' if side == 'received' else ''}{mid}")
         except Exception as e:
             report["failed"].append({"message": mid, "error": str(e)[:120]})
+            continue
+        # 第二道闸：列表条目可能缺 from/to，按详情再判一次归属
+        if not belongs_to_tenant({**it, **(det if isinstance(det, dict) else {})}, boxes):
+            report["foreign_skipped"] += 1
             continue
         atts = det.get("attachments") or []
         if not atts:

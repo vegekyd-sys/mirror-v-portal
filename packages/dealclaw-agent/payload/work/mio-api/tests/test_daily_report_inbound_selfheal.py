@@ -10,6 +10,7 @@
   ② 自愈失败/超时不影响日报出数（best-effort）
   ③ 开关 DC_DAILY_INBOUND_SELFHEAL=0 时不调用
   ④ 幂等：一天早晚两报重复跑不会重复计数
+  ⑤ 租户闸门：查不到本租户绑定邮箱时**根本不拉**（共用 Resend 账号，不过滤就会串租户）
 
 运行：
   cd work/mio-api && python3 -m unittest tests.test_daily_report_inbound_selfheal -v
@@ -42,6 +43,14 @@ class DailyReportSelfHealTest(unittest.TestCase):
         os.environ.pop("DC_DAILY_INBOUND_SELFHEAL", None)
         os.environ.pop("DC_DAILY_INBOUND_SELFHEAL_TIMEOUT", None)
         self.order = []
+
+        # 自愈要拉共用 Resend 账号的收信，必须先有「本租户绑定邮箱」这个口径，
+        # 否则闸门 fail-closed 直接不拉（见 test_selfheal_refuses_without_tenant_scope）
+        from email_gateway.store import EmailStore
+        EmailStore().add_account(
+            enterprise_id=COMPANY, owner_open_id="ou_selfheal_owner",
+            email_address=AGENT_EMAIL, provider="resend",
+            secret_ref="env:RESEND_API_KEY", mailbox_kind="dealclaw_proxy")
 
         import dc_daily_report as dr
         import dc_resend_history as hist
@@ -139,6 +148,18 @@ class DailyReportSelfHealTest(unittest.TestCase):
 
         self.assertEqual(self.order, ["read"], "关闭开关时不应回填")
         self.assertEqual(self._inbound_count(), 0)
+
+    def test_selfheal_refuses_without_tenant_scope(self):
+        """查不到本租户邮箱 → 一次 pull 都不许发（否则拉回来的是全平台的信）。"""
+        empty = tempfile.mkdtemp(prefix="dc-selfheal-noscope-")
+        os.environ["DC_DATA_DIR"] = empty
+        self.hist.pull = self._fake_pull_writes
+        self.svc.read_email_metrics = self._fake_read
+
+        out = self.dr.collect_metrics(COMPANY)
+
+        self.assertEqual(self.order, ["read"], "口径未知时不得拉取共用账号的收信")
+        self.assertEqual(out.get("status"), "ok", "拒绝拉取不影响出数")
 
     def test_selfheal_is_idempotent(self):
         self.hist.pull = self._fake_pull_writes

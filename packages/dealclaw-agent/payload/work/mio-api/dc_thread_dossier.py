@@ -87,8 +87,10 @@ def _rec_time(rec: dict) -> str:
 
 
 def load_facts(data_dir=None, company_id: str = "") -> list[dict]:
+    # 数据根必须与 EmailStore 同一口径（<mio-api>/data）：以前写成 HERE.parent.parent，
+    # DC_DATA_DIR 没设时会指到一个不存在的目录，查不到 accounts → 租户收口静默失效。
     base = Path(data_dir) if data_dir else Path(os.environ.get("DC_DATA_DIR")
-                                                or (HERE.parent.parent / "data"))
+                                                or (HERE / "data"))
     out: list[dict] = []
     for direction in ("outbound", "inbound"):
         pat = str(base / f"email-facts/{direction}/{company_id}/**/*.md") if company_id \
@@ -104,15 +106,21 @@ def load_facts(data_dir=None, company_id: str = "") -> list[dict]:
                 continue
             rec["_direction"] = direction
             out.append(rec)
-    # 租户收口：只并本租户绑定邮箱的往来（不串租户）
+    # 租户收口（fail-closed，2026-09-17）：只并本租户绑定邮箱的往来。
+    # 查不到本租户邮箱 = 判定不了归属 → 返回空，绝不退化成「不过滤」：事实层里可能
+    # 还躺着历史串租户写入的记录，不过滤就会把别家的往来并进本租户案卷。
     if company_id:
         try:
             from dc_tenant_mailboxes import belongs_to_tenant, tenant_mailboxes
             boxes = tenant_mailboxes(company_id, base)
-            if boxes:
-                out = [r for r in out if belongs_to_tenant(r, boxes)]
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"[dc_thread_dossier] 租户口径不可用，已拒绝返回事实：{e}", file=sys.stderr)
+            return []
+        if not boxes:
+            print(f"[dc_thread_dossier] 查不到租户 {company_id} 的绑定邮箱（data_dir={base}），"
+                  "已拒绝返回事实（防串租户）", file=sys.stderr)
+            return []
+        out = [r for r in out if belongs_to_tenant(r, boxes)]
     return out
 
 

@@ -143,6 +143,15 @@ def _ensure_recent_inbound(company_id: str, limit: int | None = None) -> dict:
     if lim <= 0:
         return {"ok": True, "skipped_reason": "limit_disabled"}
 
+    # 租户闸门（fail-closed，2026-09-17）：Resend 是全平台共用账号，拉回来的是所有
+    # 租户的收信。查不到本租户绑定邮箱就别拉了——历史上这里会退化成「不过滤」，
+    # 把别家租户的回信写成本租户事实，早报照着念出来（串租户事故）。
+    try:
+        from dc_tenant_mailboxes import TenantScopeUnknown, require_tenant_mailboxes
+        require_tenant_mailboxes(company_id)
+    except Exception as e:  # noqa: BLE001 - 含 TenantScopeUnknown 与 import 失败
+        return {"ok": False, "skipped_reason": "tenant_scope_unknown", "error": str(e)[:200]}
+
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
 
     try:
@@ -280,7 +289,7 @@ def _sender_parts(raw: str) -> tuple[str, str]:
 
 
 def collect_reply_intent_rows(company_id: str, *, hours: int = 24,
-                             store=None) -> list[dict]:
+                             store=None, mailboxes=None, stats: dict = None) -> list[dict]:
     """窗口内的回信（入站事实）+ 其信号，供「采购意图」推理段使用（只读，不发送）。
 
     数据源：``email-facts/inbound``（事实层，Resend/IMAP 两条路都会落）+
@@ -291,10 +300,20 @@ def collect_reply_intent_rows(company_id: str, *, hours: int = 24,
     if store is None:
         from email_gateway.store import EmailStore
         store = EmailStore()
+    # 租户收口：传了本租户邮箱就按**收发地址**再核一遍，挡住历史已写进本租户目录的
+    # 污染记录（早报是客户直接看的，绝不能出现别家租户的往来）。
     try:
         inbounds = store.list_inbound_records(company_id=company_id) or []
     except Exception:
         return []
+    if mailboxes is not None:
+        try:
+            from dc_tenant_mailboxes import filter_tenant_records
+            inbounds, foreign = filter_tenant_records(inbounds, mailboxes)
+        except Exception:  # noqa: BLE001 - 口径不可用 → 一封都不展示
+            inbounds, foreign = [], inbounds
+        if stats is not None:
+            stats["withheld_foreign"] = len(foreign)
     by_mid: dict[str, list[dict]] = {}
     try:
         for s in (list_signals(company_id) or []):
@@ -328,15 +347,31 @@ def collect_reply_intent_rows(company_id: str, *, hours: int = 24,
 def _reply_intent_section(company_id: str, slot: str, store=None) -> str:
     """早晚报「回信采购意图」段（两类清单都不省；无回信时也输出 0 计数，证明段落没被省）。"""
     try:
-        from dc_daily_brief import classify_reply_purchase_intent, render_reply_intent_section
+        from dc_daily_brief import (REPLY_SECTION_TITLE, classify_reply_purchase_intent,
+                                    render_reply_intent_section)
         if slot == "morning":
             hours = 24
         else:
             now_local = datetime.now(timezone.utc).astimezone(ZoneInfo(BUSINESS_TZ))
             elapsed = (now_local - now_local.replace(hour=0, minute=0, second=0, microsecond=0))
             hours = max(1, int(elapsed.total_seconds() // 3600) + 1)
-        rows = collect_reply_intent_rows(company_id, hours=hours, store=store)
-        return render_reply_intent_section(classify_reply_purchase_intent(rows))
+        # 口径未知就明说，不拿未经核验的邮件凑数（宁可少一段，也不串租户）
+        try:
+            from dc_tenant_mailboxes import require_tenant_mailboxes
+            boxes = require_tenant_mailboxes(company_id)
+        except Exception:  # noqa: BLE001
+            return (f"{REPLY_SECTION_TITLE}\n"
+                    "■ 本段暂不可用：查不到本企业的绑定邮箱\n"
+                    "  · 为避免把别的企业的回信算成你的，这里不展示未经核验的邮件\n"
+                    "  · 处理：绑定/补齐本企业发信邮箱后自动恢复")
+        stats: dict = {}
+        rows = collect_reply_intent_rows(company_id, hours=hours, store=store,
+                                         mailboxes=boxes, stats=stats)
+        text = render_reply_intent_section(classify_reply_purchase_intent(rows))
+        withheld = int(stats.get("withheld_foreign") or 0)
+        if withheld:
+            text += f"\n  · （另有 {withheld} 封往来不属于本企业邮箱，已按租户隔离过滤，不计入上述两类）"
+        return text
     except Exception:
         return ""
 
