@@ -167,16 +167,18 @@ function parseLegacyRef(
 
 /**
  * Resolve a model reference using tenant override if a selection is provided.
- * When `selection` is non-null, the tenant's value (even if null) overrides
- * the global. When `selection` is null, the global is used.
+ * When `selection` is non-null, the tenant's value overrides the global
+ * *only if* the tenant value is non-null — otherwise it falls back to the
+ * global, matching V1's `effectiveImageRefIn` / `effectiveRefIn` behavior.
+ * When `selection` is null, the global is used.
  */
 function resolveRefWithTenant(
   globalRef: string | null,
   tenantRef: string | null | undefined,
   hasSelection: boolean,
 ): RuntimeModelRefV2 | null {
-  if (hasSelection) {
-    return parseLegacyRef(tenantRef ?? null);
+  if (hasSelection && tenantRef != null) {
+    return parseLegacyRef(tenantRef);
   }
   return parseLegacyRef(globalRef);
 }

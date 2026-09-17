@@ -123,6 +123,14 @@ export interface TenantModelSelection {
    * accounting stay active. Used to A/B-isolate gateway-induced latency.
    */
   directMode: boolean;
+  /**
+   * Controls which runtime contract path the agent + gateway run:
+   *  - 'v1'     → use only the legacy V1 payload (default, safest).
+   *  - 'shadow' → dual-read V2 alongside V1 for comparison (no behavioral change).
+   *  - 'v2'    → fully switch to the V2 runtime contract payload.
+   * Defaults to 'v1' when the field is absent in the stored JSON blob.
+   */
+  runtimeContractMode: 'v1' | 'shadow' | 'v2';
 }
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -638,13 +646,19 @@ export async function getTenantModelSelection(
       const compactionModel =
         typeof parsed.compactionModel === 'string' ? parsed.compactionModel.trim() || null : null;
       const directMode = parsed.directMode === true;
+      // Per-tenant runtime contract mode: 'v1' (default), 'shadow', or 'v2'.
+      // Unknown / missing values default to 'v1' for backward compatibility.
+      const runtimeContractMode =
+        parsed.runtimeContractMode === 'shadow' || parsed.runtimeContractMode === 'v2'
+          ? parsed.runtimeContractMode
+          : 'v1';
       // Array (even empty) = tenant's own chain; anything else = follow global.
       const fallbackModels = Array.isArray(parsed.fallbackModels)
         ? (parsed.fallbackModels as unknown[])
             .filter((r): r is string => typeof r === 'string' && r.trim() !== '')
             .map((r: string) => r.trim())
         : null;
-      return { defaultModel, imageModel, compactionModel, fallbackModels, directMode };
+      return { defaultModel, imageModel, compactionModel, fallbackModels, directMode, runtimeContractMode };
     }
     return null;
   } catch {
@@ -871,6 +885,8 @@ export async function applyTenantLlmConfig(
     const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId, nowLibrary);
     const rawSelection = await getTenantModelSelection(pool, tenantId);
     const directMode = rawSelection?.directMode === true;
+    // Per-tenant runtime contract mode: read from the selection, default 'v1'.
+    const contractMode = rawSelection?.runtimeContractMode ?? 'v1';
 
     // Differential roll: tenant-scoped writes always roll (their selection
     // just changed); global writes only roll when the tenant's live model
@@ -939,15 +955,15 @@ export async function applyTenantLlmConfig(
           tenantId,
         );
         next[LLM_RUNTIME_CONFIG_V2_KEY] = JSON.stringify(agentEnvelope);
-        next[LLM_RUNTIME_CONTRACT_MODE_KEY] = 'v1';
+        next[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
       } catch (v2err) {
         v2Warning = `V2 agent render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;
         // Leave existing V2 keys untouched — don't delete on failure.
       }
     } else {
-      // No library → empty V2 payload, keep mode as v1.
+      // No library → empty V2 payload, keep mode as contractMode.
       next[LLM_RUNTIME_CONFIG_V2_KEY] = '{}';
-      next[LLM_RUNTIME_CONTRACT_MODE_KEY] = 'v1';
+      next[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
     }
     await putSecret(namespace, 'tenant-config', next);
 
@@ -955,6 +971,10 @@ export async function applyTenantLlmConfig(
     const proxySecretData: Record<string, string> = {
       LLM_UPSTREAMS: JSON.stringify(upstreams),
     };
+    // Gap 1: Write the runtime contract mode to llm-proxy-config so the
+    // gateway (which reads env vars via envFrom from this Secret) can see
+    // it. Without this, the gateway always defaults to 'v1'.
+    proxySecretData[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
     // V2 gateway routes — only in proxy mode (not directMode).
     if (!directMode && globalConfig && blob) {
       try {

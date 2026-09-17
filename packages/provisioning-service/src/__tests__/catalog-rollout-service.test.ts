@@ -83,6 +83,7 @@ const defaultSelection: TenantModelSelection = {
   compactionModel: null,
   fallbackModels: null,
   directMode: false,
+  runtimeContractMode: 'v1',
 };
 
 // ── Fake pool ──

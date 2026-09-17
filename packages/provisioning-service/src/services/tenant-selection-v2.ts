@@ -114,6 +114,7 @@ export class TenantSelectionV2Service {
         .map((id) => convert(id))
         .filter((ref): ref is string => ref !== null),
       directMode: v2.directMode,
+      runtimeContractMode: 'v1',
     };
   }
 
@@ -205,6 +206,7 @@ export class TenantSelectionV2Service {
           .map((id) => convert(id))
           .filter((ref): ref is string => ref !== null),
         directMode,
+        runtimeContractMode: 'v1',
       };
       await upsertRuntimeConfig(client, {
         tenantId,

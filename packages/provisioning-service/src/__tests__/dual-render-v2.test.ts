@@ -121,6 +121,9 @@ describe('applyTenantLlmConfig — V2 dual-render', () => {
     expect(proxyConfigWrite).toBeTruthy();
     const proxyData = proxyConfigWrite![2] as Record<string, string>;
     expect(proxyData[LLM_RUNTIME_ROUTES_V2_KEY]).toBeTruthy();
+    // Gap 1: contract mode must also be written to llm-proxy-config so the
+    // gateway (which reads envFrom from this Secret) can see it.
+    expect(proxyData[LLM_RUNTIME_CONTRACT_MODE_KEY]).toBe('v1');
   });
 
   it('V2 fingerprint is deterministic for the same config', async () => {

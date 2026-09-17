@@ -55,6 +55,7 @@ const tenantSelection: TenantModelSelection = {
   compactionModel: null,
   fallbackModels: ['qwen/qwen-max'],
   directMode: true,
+  runtimeContractMode: 'v1',
 };
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -230,8 +231,12 @@ describe('RuntimeContractV2 — tenant selection override', () => {
     expect(payload.fallbacks).toEqual([
       { providerId: 'qwen', modelId: 'qwen/qwen-max' },
     ]);
-    // Image is overridden to null.
-    expect(payload.image).toBeNull();
+    // Image: tenant's imageModel is null → falls back to global imageModel
+    // (matches V1 effectiveImageRefIn behavior after Gap 4 fix).
+    expect(payload.image).toEqual({
+      providerId: 'qwen',
+      modelId: 'qwen/qwen-vl',
+    });
   });
 
   it('null selection uses global defaults', () => {
@@ -253,6 +258,7 @@ describe('RuntimeContractV2 — tenant selection override', () => {
       compactionModel: null,
       fallbackModels: null,
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const payload = renderAgentPayload(snapshot, sel);
     expect(payload.fallbacks).toEqual([

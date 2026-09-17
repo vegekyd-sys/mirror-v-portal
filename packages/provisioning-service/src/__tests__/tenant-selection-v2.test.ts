@@ -444,6 +444,7 @@ describe('TenantSelectionV2Service — backfillFromLegacy', () => {
       compactionModel: null,
       fallbackModels: null,
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       tenants: [{ tenant_id: 'tenant-1' }, { tenant_id: 'tenant-2' }],
@@ -478,6 +479,7 @@ describe('TenantSelectionV2Service — backfillFromLegacy', () => {
       compactionModel: null,
       fallbackModels: null,
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       tenants: [{ tenant_id: 'tenant-1' }],
@@ -503,6 +505,7 @@ describe('TenantSelectionV2Service — backfillFromLegacy', () => {
       compactionModel: null,
       fallbackModels: ['provider1/model2'],
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       v2Rows,
@@ -548,6 +551,7 @@ describe('TenantSelectionV2Service — compareSelections', () => {
       compactionModel: null,
       fallbackModels: ['provider1/model2'],
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       v2Rows: [{
@@ -577,6 +581,7 @@ describe('TenantSelectionV2Service — compareSelections', () => {
       compactionModel: null,
       fallbackModels: null,
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       v2Rows: [{
@@ -607,6 +612,7 @@ describe('TenantSelectionV2Service — compareSelections', () => {
       compactionModel: null,
       fallbackModels: null,
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       v2Rows: [{
@@ -649,6 +655,7 @@ describe('TenantSelectionV2Service — compareSelections', () => {
       compactionModel: null,
       fallbackModels: ['provider1/model1'],
       directMode: false,
+      runtimeContractMode: 'v1',
     };
     const pool = makeFakePool({
       v2Rows: [{
@@ -687,6 +694,7 @@ describe('TenantSelectionV2Service — backfill report stats', () => {
           compactionModel: null,
           fallbackModels: null,
           directMode: false,
+          runtimeContractMode: 'v1',
         })],
         ['tenant-missing', encodeLegacySelection({
           defaultModel: 'gone/model-x',
@@ -694,6 +702,7 @@ describe('TenantSelectionV2Service — backfill report stats', () => {
           compactionModel: null,
           fallbackModels: null,
           directMode: false,
+          runtimeContractMode: 'v1',
         })],
       ]),
       catalog: makeCatalog(),

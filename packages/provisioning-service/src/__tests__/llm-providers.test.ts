@@ -349,24 +349,24 @@ describe('effectiveFallbacksFor', () => {
 
   it('null selection falls back to the library chain', () => {
     expect(effectiveFallbacksFor(doc, null)).toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
-    expect(effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: null, directMode: false }))
+    expect(effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: null, directMode: false, runtimeContractMode: 'v1' }))
       .toEqual(['glm/glm-4.5', 'qwen/qwq-plus']);
   });
 
   it('a tenant chain overrides the library chain (even when empty)', () => {
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: ['qwen/qwen-vl-plus'], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: ['qwen/qwen-vl-plus'], directMode: false, runtimeContractMode: 'v1' }),
     ).toEqual(['qwen/qwen-vl-plus']);
     // empty own chain = never fall back
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [], directMode: false, runtimeContractMode: 'v1' }),
     ).toEqual([]);
   });
 
   it('filters the tenant primary and unresolvable refs out of the tenant chain', () => {
     // primary = glm → dropped from chain; stale 'qwen/nope' dropped defensively
     expect(
-      effectiveFallbacksFor(doc, { defaultModel: 'glm/glm-4.5', imageModel: null, compactionModel: null, fallbackModels: ['glm/glm-4.5', 'qwen/nope', 'qwen/qwq-plus'], directMode: false }),
+      effectiveFallbacksFor(doc, { defaultModel: 'glm/glm-4.5', imageModel: null, compactionModel: null, fallbackModels: ['glm/glm-4.5', 'qwen/nope', 'qwen/qwq-plus'], directMode: false, runtimeContractMode: 'v1' }),
     ).toEqual(['qwen/qwq-plus']);
   });
 });
@@ -560,6 +560,7 @@ describe('resolveEffectiveLlmProviders', () => {
         compactionModel: 'qwen/qwq-plus',
         fallbackModels: null,
         directMode: false,
+        runtimeContractMode: 'v1',
       }),
     ).toBe(false);
   });
@@ -629,7 +630,7 @@ describe('tenantNeedsLlmRestart', () => {
     imageModel: string | null = null,
     fallbackModels: string[] | null = null,
     compactionModel: string | null = null,
-  ) => ({ defaultModel, imageModel, compactionModel, fallbackModels, directMode: false });
+  ) => ({ defaultModel, imageModel, compactionModel, fallbackModels, directMode: false, runtimeContractMode: 'v1' as const });
 
   it('adding an unrelated provider does NOT require a restart', () => {
     expect(tenantNeedsLlmRestart(prev, withExtraProvider, null)).toBe(false);
@@ -835,10 +836,12 @@ describe('pushLlmProviders', () => {
       LLM_RUNTIME_CONFIG_V2: '{}',
       LLM_RUNTIME_CONTRACT_MODE: 'v1',
     });
-    // stale upstream mappings must not linger in llm-proxy-config
+    // stale upstream mappings must not linger in llm-proxy-config.
+    // LLM_RUNTIME_CONTRACT_MODE is also written here so the gateway can read it.
     expect(k8sMocks.putSecret).toHaveBeenCalledWith('dealclaw-t123', 'llm-proxy-config', {
       LLM_UPSTREAMS: '{}',
       LLM_RUNTIME_ROUTES_V2: '{}',
+      LLM_RUNTIME_CONTRACT_MODE: 'v1',
     });
   });
 
