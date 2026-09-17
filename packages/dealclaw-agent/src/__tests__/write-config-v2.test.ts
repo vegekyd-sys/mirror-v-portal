@@ -182,7 +182,10 @@ describe('write-config shadow mode (V1 active, V2 compared)', () => {
     expect(combined).not.toContain('mismatch');
   });
 
-  it('logs mismatch when V2 has a different baseUrl', () => {
+  it('does NOT log mismatch when V2 has a different baseUrl (by design)', () => {
+    // V1 stores a proxy URL (nexus-gateway:8080/v1/llm/<name>) while V2
+    // stores the real upstream URL. This intentional divergence must NOT
+    // produce a drift warning — comparing them was a false positive.
     const v2 = makeV2Envelope({
       providers: [
         {
@@ -190,7 +193,7 @@ describe('write-config shadow mode (V1 active, V2 compared)', () => {
           runtimeKey: 'deepseek',
           routeAliases: [],
           displayName: '',
-          baseUrl: 'https://DIFFERENT.example.test/v1', // ← mismatch
+          baseUrl: 'https://DIFFERENT.example.test/v1', // ← intentionally different
           apiKey: 'sk-v1-test',
           models: [
             {
@@ -217,12 +220,13 @@ describe('write-config shadow mode (V1 active, V2 compared)', () => {
       LLM_RUNTIME_CONFIG_V2: v2,
     });
     expect(status).toBe(0);
-    // V1 is still the source of truth — config uses V1 baseUrl
+    // V1 is still the source of truth
     expect(config.models.providers.deepseek.models[0].id).toBe('deepseek-chat');
-    // Shadow mismatch logged
+    // baseUrl difference must NOT produce a drift warning
     const combined = stdout + stderr;
-    expect(combined).toContain('baseUrl');
-    expect(combined).toContain('mismatch');
+    expect(combined).toContain('no drift detected');
+    expect(combined).not.toContain('baseUrl');
+    expect(combined).not.toContain('mismatch');
   });
 
   it('logs mismatch when V2 has a different defaultModel', () => {

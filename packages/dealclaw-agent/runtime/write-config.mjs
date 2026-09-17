@@ -211,7 +211,8 @@ function normalizeV2ToLlmDoc(envelope) {
  * Compare a V1 llmDoc with a V2-normalised llmDoc for structural drift.
  * Returns an array of human-readable mismatch descriptions (empty = match).
  * Only compares fields that have a V2 equivalent; extra V1-only fields
- * (e.g. maxReasoningTokens) are not flagged.
+ * (e.g. maxReasoningTokens) are not flagged. baseUrl is intentionally NOT
+ * compared — see the in-loop comment below for the rationale.
  * @param {any} v1Doc
  * @param {any} v2Doc
  * @returns {string[]}
@@ -228,13 +229,13 @@ function compareLlmDocs(v1Doc, v2Doc) {
     mismatches.push(`provider set: v1=[${v1Names.join(',')}] v2=[${v2Names.join(',')}]`);
   }
 
-  // Per-provider baseUrl + model list
+  // Per-provider model list (baseUrl intentionally NOT compared)
   for (const v2Prov of v2.providers || []) {
     const v1Prov = (v1.providers || []).find((p) => p.name === v2Prov.name);
     if (!v1Prov) continue; // already flagged in provider set
-    if (v1Prov.baseUrl !== v2Prov.baseUrl) {
-      mismatches.push(`provider ${v2Prov.name} baseUrl: v1=${v1Prov.baseUrl} v2=${v2Prov.baseUrl}`);
-    }
+    // NOTE: baseUrl is intentionally NOT compared. V1 stores the proxy URL
+    // (nexus-gateway:8080/v1/llm/<name>) for the agent to call the gateway,
+    // while V2 stores the real upstream URL. This is by design — not drift.
     const v1ModelIds = (v1Prov.models || []).map((m) => m.id).sort();
     const v2ModelIds = (v2Prov.models || []).map((m) => m.id).sort();
     if (JSON.stringify(v1ModelIds) !== JSON.stringify(v2ModelIds)) {
