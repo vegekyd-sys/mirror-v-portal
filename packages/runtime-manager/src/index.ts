@@ -12,6 +12,7 @@ import { FeishuEdge } from "./feishu.js";
 import { EdgeRouter } from "./channel-edge.js";
 import { WeixinEdge } from "./weixin.js";
 import { WeixinLogin } from "./weixin-login.js";
+import { DingtalkEdge } from "./dingtalk.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
@@ -23,8 +24,9 @@ if (alibabaReady(config))
 const feishu = new FeishuEdge(store);
 const weixin = new WeixinEdge(store);
 const weixinLogin = new WeixinLogin(weixin);
+const dingtalk = new DingtalkEdge(store);
 // One edge per surface the runtime serves; the manager stays channel-agnostic.
-const edge = new EdgeRouter([feishu, weixin]);
+const edge = new EdgeRouter([feishu, weixin, dingtalk]);
 const manager = new RuntimeManager(
   store,
   new ProviderRouter({ vercel: new VercelProvider(config), alibaba: new AlibabaProvider(config) }),
@@ -88,6 +90,43 @@ app.use("/onboard", async (req, res, next) => {
       .status(response.status)
       .type(response.headers.get("content-type") || "text/html")
       .send(await response.text());
+  } catch (e) {
+    next(e);
+  }
+});
+// ── DingTalk (Stream Mode) binding ────────────────────────────────────────
+// Stream Mode dials out, so DingTalk needs no inbound callback URL and this
+// works without a filed domain — but the socket must live in the manager,
+// since the sandbox is asleep between messages.
+app.post("/v1/channels/dingtalk/bind", async (req, res, next) => {
+  try {
+    const tenantId = req.body?.tenantId || config.trialTenantId;
+    const clientId = String(req.body?.clientId || "").trim();
+    const clientSecret = String(req.body?.clientSecret || "").trim();
+    if (!clientId || !clientSecret) {
+      res.status(400).json({ error: "CREDENTIALS_REQUIRED" });
+      return;
+    }
+    if (!(await store.tenant(tenantId))) {
+      res.status(404).json({ error: "TENANT_NOT_FOUND" });
+      return;
+    }
+    await dingtalk.bind(tenantId, clientId, clientSecret);
+    res.json({ ok: true, tenantId, clientId });
+  } catch (e) {
+    next(e);
+  }
+});
+app.get("/v1/channels/:channel/status", async (req, res, next) => {
+  try {
+    const tenantId = String(req.query.tenantId || config.trialTenantId);
+    const binding = await store.channelBinding(tenantId, req.params.channel);
+    res.json({
+      bound: !!binding && binding.state === "active",
+      state: binding?.state ?? null,
+      externalId: binding?.external_id ?? null,
+      lastError: binding?.last_error ?? null,
+    });
   } catch (e) {
     next(e);
   }
