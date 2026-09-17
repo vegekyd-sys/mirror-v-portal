@@ -162,17 +162,26 @@ test("real queue drains concurrent messages in tenant order", async () => {
     runs.push(await s.enqueue(t.id, "q" + i, "session", String(i)));
   await m.start();
   try {
-    for (let i = 0; i < 200; i++) {
-      if ((await s.run(runs[4].id)).status === "succeeded") break;
+    // Waits on the whole batch reaching a terminal state, not just the last row:
+    // under a full-suite run this shares postgres with other files and the
+    // queue drains slower than a fixed poll count assumed. On timeout the
+    // actual statuses are surfaced so a real regression is not read as flake.
+    const deadline = Date.now() + 40_000;
+    let statuses: string[] = [];
+    while (Date.now() < deadline) {
+      statuses = await Promise.all(runs.map(async (r) => (await s.run(r.id)).status));
+      if (statuses.every((st) => st === "succeeded" || st === "failed")) break;
       await new Promise((r) => setTimeout(r, 100));
     }
-    expect((await s.run(runs[4].id)).status).toBe("succeeded");
+    expect(statuses, `runs did not drain in time: ${statuses.join(",")}`).toEqual(
+      ["succeeded", "succeeded", "succeeded", "succeeded", "succeeded"],
+    );
     expect(max).toBe(1);
     expect(seen).toEqual(["0", "1", "2", "3", "4"]);
   } finally {
     m.stopTimer();
   }
-}, 25000);
+}, 60000);
 test("queued message recovers interrupted idle release without being marked uncertain",async()=>{
  const t=await tenant(),r=await s.enqueue(t.id,'idle-crash','session','hihi');
  await s.pool.query("UPDATE elastic_tenants SET state='quiescing' WHERE id=$1",[t.id]);
