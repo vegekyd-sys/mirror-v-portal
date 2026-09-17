@@ -33,9 +33,9 @@ export interface RegistrationSession {
 // the agent is seeded with — a shipped name that contradicts the payload is worse
 // than either one alone.
 const APP_PRESET = {
-  name: process.env.FEISHU_APP_NAME || 'V',
+  name: process.env.FEISHU_APP_NAME || 'V from Versa',
   desc: process.env.FEISHU_APP_DESC
-    || 'A thinking partner, not a tool — 有记忆、有观点，会跟你一起想',
+    || '公司级 OpenClaw 智能助理 — 把上下文变成可落地的成果',
 };
 
 export async function startFeishuRegistration(
