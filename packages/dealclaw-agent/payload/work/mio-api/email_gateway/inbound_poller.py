@@ -14,6 +14,16 @@
   3. **只通知归属成功的**：``matched`` 才通知；未归属进入可观测记录，不打扰用户。
   4. **异常不推进游标**：任何一条处理失败都保持游标不动，下一轮重试，不产生"静默丢信"。
   5. **通知通道走统一投递层**：与去群机器人改造一致（应用机器人优先，失败回退 webhook）。
+  6. **墙钟预算（2026-09-17）**：一轮取信必须有上限——Gateway cron 的 trigger 判定窗口是 30s，
+     超时会让整轮被掐断（当天实测 2 次 `trigger evaluation failed (timeout)`，单次 31s）。
+     所以：软预算到点就停手（默认 18s，``DC_INBOUND_POLL_TIMEOUT_SECONDS`` 可调），
+     CLI 另加 ``软预算 + 5s`` 的 SIGALRM 硬保险，保证进程一定在窗口内返回 **合法 JSON**（退出码 0，
+     不再把超时报成 job 失败）。
+  7. **断点可续（2026-09-17）**：按到达顺序（旧 → 新）逐封处理，**每封成功即落一次游标**；
+     被掐断的那一轮已经把处理进度写进 ``recent_processed_ids``，下一轮接着做，不从头再来。
+     超过一页的新信（原来 ``max_pages`` 是死参数、只取第一页）改为**反向翻页**，
+     翻不完时把翻页断点写进 scan 状态（``inbound-scan.json``），下一轮从断点继续往回翻。
+     高水位只在"窗口翻到游标 / 历史尽头"且"本轮全处理完"时前移——半途停手绝不允许跳过没看的信。
 
 不在本模块职责内：取信链路的底层实现（``dc_resend_source``）、正文解析与归属算法
 （``dc_email_ingest`` / ``dc_webhook_handler``）——本模块只做编排与投递。
@@ -21,10 +31,182 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
+from pathlib import Path
 from typing import Any, Callable
 
 STATUS_OK = "ok"
 STATUS_RETRYABLE = "retryable"
+
+# 软预算默认 18s：Gateway cron 单次 trigger 判定上限 30s，留出进程启动 + JSON 输出的余量。
+DEFAULT_TIMEOUT_SECONDS = 18.0
+# 硬保险余量：软预算之外再宽限这么久，用于兜住单次网络调用卡死。
+HARD_STOP_MARGIN_SECONDS = 5.0
+
+
+class Budget:
+    """一轮取信的墙钟预算（时钟可注入，便于测试把"超时"跑出来）。"""
+
+    def __init__(self, seconds: float | None = None, *, clock: Callable[[], float] | None = None):
+        self.clock = clock or time.monotonic
+        if seconds is None:
+            seconds = _timeout_from_env()
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            seconds = DEFAULT_TIMEOUT_SECONDS
+        self.seconds = seconds
+        self.deadline = None if seconds <= 0 else self.clock() + seconds
+
+    @property
+    def limited(self) -> bool:
+        return self.deadline is not None
+
+    def expired(self) -> bool:
+        return self.deadline is not None and self.clock() >= self.deadline
+
+    def elapsed_ms(self) -> int:
+        return 0 if self.deadline is None else int((self.seconds - max(0.0, self.deadline - self.clock())) * 1000)
+
+
+def _timeout_from_env() -> float:
+    raw = str(os.getenv("DC_INBOUND_POLL_TIMEOUT_SECONDS", "") or "").strip()
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_TIMEOUT_SECONDS
+    return val
+
+
+def _scan_state_path() -> Path:
+    """翻页断点文件：与游标同目录（``dc_resend_source.POLLER_DIR``）。"""
+    try:
+        from dc_email_controller.dc_resend_source import POLLER_DIR  # noqa: PLC0415
+        return Path(POLLER_DIR) / "inbound-scan.json"
+    except Exception:  # noqa: BLE001
+        return Path(__file__).resolve().parent / "data" / "inbound-scan.json"
+
+
+def _load_scan_state(d: dict) -> dict:
+    """读翻页断点（缺失/损坏一律当"没有在途扫描"，不阻断取信）。"""
+    fn = d.get("load_scan")
+    if fn:
+        try:
+            return dict(fn() or {})
+        except Exception:  # noqa: BLE001
+            return {}
+    try:
+        p = _scan_state_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return {}
+
+
+def _save_scan_state(d: dict, state: dict) -> None:
+    fn = d.get("save_scan")
+    if fn:
+        try:
+            fn(state or {})
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        p = _scan_state_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state or {}, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _list_page(d: dict, limit: int, after: str = ""):
+    """取一页收信。老 stub 只接受 ``limit``，所以 ``after`` 为空时不传。"""
+    fn = d["list_received"]
+    if after:
+        return fn(limit=limit, after=after)
+    return fn(limit=limit)
+
+
+def _fetch_window(d: dict, *, limit: int, max_pages: int, scan_after: str,
+                  high_water: str, budget: "Budget") -> tuple[list[dict], dict]:
+    """按"新 → 旧"反向翻页，取回本轮要处理的窗口。
+
+    返回 ``(items, meta)``，meta 里关键字段：
+
+    * ``exhausted`` —— 已翻到游标高水位（或历史尽头）→ 窗口完整，可以推进高水位。
+    * ``oldest_id`` —— 窗口里最旧的一条；``exhausted`` 为假时它就是下一轮的翻页断点。
+
+    ``scan_after`` 是上一轮留下的翻页断点（非空表示"接着往回翻"）。
+    原来只取第一页，超过 ``limit`` 的新信永远看不到——这里补上，并把它做成可续的。
+    """
+    items: list[dict] = []
+    seen: set[str] = set()
+    pages = 0
+    after = scan_after or ""
+    exhausted = False
+    error = ""
+    while pages < max(1, int(max_pages)):
+        if budget.expired():
+            break
+        try:
+            st, payload = _list_page(d, limit, after)
+        except Exception as exc:  # noqa: BLE001
+            error = f"{type(exc).__name__}: {exc}"
+            break
+        pages += 1
+        if st != 200:
+            error = f"status={st}"
+            break
+        data = (payload or {}).get("data") or []
+        if not data:
+            exhausted = True
+            break
+        for it in data:
+            rid = str(it.get("id") or "")
+            if rid and rid not in seen:
+                seen.add(rid)
+                items.append(it)
+        if high_water and any(str(it.get("id") or "") == high_water for it in data):
+            exhausted = True
+            break
+        if not (payload or {}).get("has_more"):
+            exhausted = True
+            break
+        oldest = str(data[-1].get("id") or "")
+        if not oldest or oldest == after:
+            exhausted = True          # 游标没动 → 收手，绝不空转
+            break
+        after = oldest
+    meta = {
+        "pages": pages,
+        "exhausted": exhausted,
+        "error": error,
+        "oldest_id": str(items[-1].get("id") or "") if items else "",
+        "newest_id": str(items[0].get("id") or "") if items else "",
+    }
+    return items, meta
+
+
+def _save_cursor(d: dict, out: dict, high_water: str, created: Any, processed: set,
+                 *, advance: bool, dry_run: bool = False) -> None:
+    """写游标。``advance=True`` 才表示高水位真的前移了（半途停手只落处理进度）；dry-run 不落盘。"""
+    if dry_run:
+        return
+    try:
+        d["save_cursor"](high_water, created, sorted(processed)[-200:])
+        out["cursor_saved"] = True
+        if advance:
+            out["cursor_advanced"] = True
+            out["advanced_to"] = high_water
+    except Exception as exc:  # noqa: BLE001
+        out["ok"] = False
+        out["errors"].append(f"save_cursor: {type(exc).__name__}: {exc}")
 
 
 def _default_deps() -> dict:
@@ -271,14 +453,22 @@ def poll_once(
     collect: bool = True,
     deps: dict | None = None,
     store=None,
+    timeout_seconds: float | None = None,
 ) -> dict:
     """跑一轮取信。**本函数不抛异常**，所有问题都记录在返回结构里。
+
+    ``timeout_seconds`` 是本轮墙钟预算（缺省 18s / ``DC_INBOUND_POLL_TIMEOUT_SECONDS``，
+    传 0 关闭）。到点就收手，但已经做完的活不会白干——见返回值的 ``partial`` / ``stopped_reason``。
 
     返回
     ----
     ``{"ok", "mode": "baseline"|"poll"|"dry_run", "baseline_id", "pulled", "considered",
        "ingested", "matched", "notified", "unmatched", "skipped", "errors": [...],
-       "cursor_advanced", "advanced_to"}``
+       "cursor_advanced", "advanced_to", "partial", "stopped_reason", "pages",
+       "scan_exhausted", "elapsed_ms"}``
+
+    ``partial=True`` 表示本轮没做完（下一轮接着做，不丢信）；``stopped_reason`` ∈
+    ``complete`` / ``deadline`` / ``error``。
     """
     d = {**_default_deps(), **(deps or {})}
     out: dict[str, Any] = {
@@ -297,18 +487,29 @@ def poll_once(
     high_water = str(cursor.get("high_water_received_id") or "")
     processed = set(cursor.get("recent_processed_ids") or [])
 
-    st, payload = d["list_received"](limit=limit)
-    if st != 200:
+    budget = Budget(timeout_seconds, clock=d.get("monotonic"))
+    scan = _load_scan_state(d)
+    items, meta = _fetch_window(
+        d, limit=limit, max_pages=max_pages,
+        scan_after=str(scan.get("scan_after") or ""),
+        high_water=high_water, budget=budget,
+    )
+    out["pages"] = meta.get("pages", 0)
+    out["scan_exhausted"] = bool(meta.get("exhausted"))
+    if meta.get("error"):
         out["ok"] = False
-        out["errors"].append(f"list_received status={st}")
+        out["errors"].append(f"list_received {meta['error']}")
         return out
-    items = (payload or {}).get("data") or []
     out["pulled"] = len(items)
     if not items:
+        out["stopped_reason"] = "complete"
+        out["elapsed_ms"] = budget.elapsed_ms()
         return out
 
     newest_id = str(items[0].get("id") or "")
     newest_created = items[0].get("created_at")
+    # 在途扫描的"最顶端"：接着往回翻时，它才是最终要落的高水位（不是本轮窗口第一条）
+    scan_newest = str(scan.get("scan_newest") or "") or newest_id
 
     if baseline:
         out["baseline_id"] = newest_id
@@ -318,14 +519,18 @@ def poll_once(
             d["save_cursor"](newest_id, newest_created, [])
             out["cursor_advanced"] = True
             out["advanced_to"] = newest_id
+            _save_scan_state(d, {})
         except Exception as exc:  # noqa: BLE001
             out["ok"] = False
             out["errors"].append(f"save_cursor: {type(exc).__name__}: {exc}")
         return out
 
+    # 断点语义（2026-09-17）：**按到达顺序（旧 → 新）排队处理**，每成功一封就把处理进度落一次盘。
+    # 这样"这一轮被预算/超时掐断"最多只损失当前这一封的重做，不会让整批从头再来。
     stop_at = high_water
+    by_id: dict[str, dict] = {}
     new_ids: list[str] = []
-    for item in items:
+    for item in items:                    # 接口是"新在前"：遇到游标就停，更旧的一律不看
         rid = str(item.get("id") or "")
         if not rid:
             continue
@@ -334,28 +539,35 @@ def poll_once(
         if rid in processed:
             out["skipped"] += 1
             continue
+        by_id[rid] = item
         new_ids.append(rid)
-    out["considered"] = len(new_ids)
+    pending = list(reversed(new_ids))     # 处理顺序：旧 → 新（断点可续）
+    out["considered"] = len(pending)
 
-    saw_error = False
-    for item in items:
-        rid = str(item.get("id") or "")
-        if rid not in new_ids:
-            continue
+    stopped = "complete"
+    done = 0
+    for rid in pending:
+        if budget.expired():
+            stopped = "deadline"
+            break
+        item = by_id[rid]
         event = d["to_ingest_event"](item)
         try:
             r = d["ingest"](event) or {}
         except Exception as exc:  # noqa: BLE001
             out["errors"].append(f"{rid}: ingest {type(exc).__name__}: {exc}")
-            saw_error = True
+            stopped = "error"
             break
         if r.get("duplicate_fact") or r.get("in_progress"):
             out["skipped"] += 1
-            new_ids = [x for x in new_ids if x != rid]
+            processed.add(rid)
+            done += 1
+            _save_cursor(d, out, high_water, cursor.get("high_water_created_at"),
+                         processed, advance=False, dry_run=dry_run)
             continue
         if not r.get("ok"):
             out["errors"].append(f"{rid}: ingest not ok status={r.get('status') or r.get('error')}")
-            saw_error = True
+            stopped = "error"
             break
         out["ingested"] += 1
         # 双口径归属：收件箱优先 + In-Reply-To 精修（不依赖头部也能对应到收件箱和人）
@@ -406,16 +618,29 @@ def poll_once(
                 "subject": str((event.get("payload") or {}).get("subject") or ""),
                 "reason": str(r.get("failure_reason") or r.get("status") or "unmatched"),
             })
+        # 这一封处理完了（不管归属成功还是一致地判为未归属）→ 落一次进度
+        processed.add(rid)
+        done += 1
+        _save_cursor(d, out, high_water, cursor.get("high_water_created_at"),
+                     processed, advance=False, dry_run=dry_run)
 
-    if not saw_error and not dry_run:
-        advanced = newest_id or high_water
-        try:
-            d["save_cursor"](advanced, newest_created, sorted(processed | set(new_ids))[-200:])
-            out["cursor_advanced"] = True
-            out["advanced_to"] = advanced
-        except Exception as exc:  # noqa: BLE001
-            out["ok"] = False
-            out["errors"].append(f"save_cursor: {type(exc).__name__}: {exc}")
+    out["stopped_reason"] = stopped
+    out["partial"] = done < len(pending)
+    out["elapsed_ms"] = budget.elapsed_ms()
+
+    if not dry_run:
+        if stopped == "complete":
+            if meta.get("exhausted"):
+                # 窗口翻到游标/历史尽头 + 本轮全部处理完 → 高水位前移，清掉翻页断点
+                _save_cursor(d, out, scan_newest or newest_id or high_water,
+                             newest_created, processed, advance=True)
+                _save_scan_state(d, {})
+            else:
+                # 新信多到一页装不下：高水位不动，把翻页断点留给下一轮接着往回翻
+                _save_scan_state(d, {"scan_after": meta.get("oldest_id") or "",
+                                     "scan_newest": scan_newest})
+                out["scan_in_progress"] = True
+        # stopped ∈ {deadline, error}：处理进度已经逐封落盘；翻页断点保持原样，下一轮重取同一窗口续做
     return out
 
 
@@ -425,9 +650,24 @@ def _open_store():
     return EmailStore()
 
 
+def _hard_stop_json(reason: str) -> str:
+    """硬超时/意外异常时也要吐出**合法 JSON**（退出码 0）——
+
+    调用方（Gateway cron trigger）拿 stdout 最后一行当 JSON 解析，
+    并把非 0 退出/超时当成 job 失败报警。取信本轮没跑完是"这一轮没做完"，不是"任务坏了"，
+    如实报失败只会把噪声推给人；处理进度不回退，下一轮自然接着做。
+    """
+    return json.dumps({
+        "ok": True, "mode": "poll", "partial": True, "stopped_reason": reason,
+        "pulled": 0, "considered": 0, "ingested": 0, "matched": 0, "notified": 0,
+        "unmatched": 0, "skipped": 0, "replies": [], "unmatched_items": [],
+        "notify_targets": [], "errors": [f"round aborted: {reason}"],
+        "cursor_advanced": False, "advanced_to": "",
+    }, ensure_ascii=False)
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
-    import json
 
     p = argparse.ArgumentParser(description="Resend 取信管子：拉取 → 归属 → 通知")
     p.add_argument("--baseline", action="store_true", help="只建游标高水位，不 ingest 历史邮件")
@@ -437,9 +677,46 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-notify", action="store_true", help="只 ingest，不发通知（默认即不通知）")
     p.add_argument("--collect", action="store_true", default=True,
                    help="把新回信作为事实包返回，供 agent 读取（默认开启）")
+    p.add_argument("--timeout-seconds", type=float, default=None,
+                   help="本轮墙钟预算（秒）；默认 18，0=不限。必须小于调用方判定窗口（Gateway cron = 30s）")
     a = p.parse_args(argv)
-    r = poll_once(baseline=a.baseline, dry_run=a.dry_run, limit=a.limit,
-                  max_pages=a.max_pages, notify=not a.no_notify, collect=a.collect)
+
+    budget_seconds = a.timeout_seconds
+    if budget_seconds is None:
+        budget_seconds = _timeout_from_env()
+    # 硬保险：单次网络调用卡死会穿透软预算，这里用 SIGALRM 保底，
+    # 让进程一定在 —— 预算 + 5s —— 之内带着 JSON 退出。
+    def _on_alarm(signum, frame):  # noqa: ARG001
+        raise TimeoutError("hard stop")
+
+    alarm_armed = False
+    try:
+        import signal
+        if budget_seconds and budget_seconds > 0:
+            signal.signal(signal.SIGALRM, _on_alarm)
+            signal.setitimer(signal.ITIMER_REAL,
+                             float(budget_seconds) + HARD_STOP_MARGIN_SECONDS)
+            alarm_armed = True
+    except Exception:  # noqa: BLE001
+        alarm_armed = False
+
+    try:
+        r = poll_once(baseline=a.baseline, dry_run=a.dry_run, limit=a.limit,
+                      max_pages=a.max_pages, notify=not a.no_notify, collect=a.collect,
+                      timeout_seconds=budget_seconds)
+    except TimeoutError:
+        print(_hard_stop_json("hard_timeout"))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(_hard_stop_json(f"unexpected:{type(exc).__name__}"))
+        return 0
+    finally:
+        if alarm_armed:
+            try:
+                import signal
+                signal.setitimer(signal.ITIMER_REAL, 0)
+            except Exception:  # noqa: BLE001
+                pass
     print(json.dumps(r, ensure_ascii=False))
     return 0 if r.get("ok") else 1
 

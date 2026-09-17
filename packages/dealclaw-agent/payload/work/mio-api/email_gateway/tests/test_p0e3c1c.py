@@ -115,5 +115,115 @@ class ResendSourceTests(unittest.TestCase):
             self.assertEqual(mock_ingest2.call_count, 0)
 
 
+class ResendPollerBudgetTests(unittest.TestCase):
+    """墙钟预算 + 断点（2026-09-17）：到点收手不丢进度，积压不再报 cursor_gap 卡死。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmp.name) / "data"
+        os.environ["DC_DATA_DIR"] = str(self.data_dir)
+        from dc_email_controller import dc_resend_source
+        importlib.reload(dc_resend_source)
+        self.src = dc_resend_source
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("DC_RESEND_SCAN_MAX_PAGES", None)
+
+    @staticmethod
+    def _item(rid, created="2026-08-16T03:00:00Z"):
+        return {"id": rid, "created_at": created, "from": "a@b.com",
+                "to": ["x@y.com"], "subject": "S"}
+
+    def test_deadline_stops_but_keeps_progress(self):
+        self.src.save_cursor("A", "2026-08-16T01:00:00Z", [])
+        ticks = {"n": 0}
+
+        def fake_clock():
+            ticks["n"] += 1
+            return ticks["n"] * 5.0
+
+        with patch("dc_email_controller.dc_resend_source.list_received") as mock_list, \
+                patch.object(self.src, "_clock", fake_clock), \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest:
+            mock_list.return_value = (200, {"data": [self._item("C"), self._item("B"), self._item("A")],
+                                            "has_more": False})
+            mock_ingest.return_value = {"ok": True}
+            r = self.src.poll_received_once(timeout_seconds=15)
+        self.assertEqual(r["stopped_reason"], "deadline")
+        self.assertTrue(r["partial"])
+        self.assertEqual([x["received_id"] for x in r["results"]], ["C"])
+        self.assertFalse(r["advanced"])
+        self.assertEqual(self.src.load_cursor()["high_water_received_id"], "A")  # 高水位不动
+        self.assertIn("C", self.src.load_cursor()["recent_processed_ids"])      # 但进度落盘了
+
+    def test_next_round_finishes_the_job(self):
+        self.src.save_cursor("A", "2026-08-16T01:00:00Z", ["C"])
+        with patch("dc_email_controller.dc_resend_source.list_received") as mock_list, \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest:
+            mock_list.return_value = (200, {"data": [self._item("C"), self._item("B"), self._item("A")],
+                                            "has_more": False})
+            mock_ingest.return_value = {"ok": True}
+            r = self.src.poll_received_once(timeout_seconds=120)
+        self.assertEqual([x["received_id"] for x in r["results"]], ["B"])   # C 已被上轮做过
+        self.assertEqual(r["high_water_received_id"], "C")
+        self.assertTrue(r["advanced"])
+
+    def test_backlog_scan_persists_and_resumes(self):
+        self.src.save_cursor("A", "2026-08-16T01:00:00Z", [])
+
+        def pager(limit=50, after=None):
+            if after is None:
+                return 200, {"data": [self._item("C"), self._item("B")], "has_more": True}
+            if after == "B":
+                return 200, {"data": [self._item("D"), self._item("E")], "has_more": True}
+            # 第二轮：从断点（E）接着往回翻，终于碰到游标
+            return 200, {"data": [self._item("F"), self._item("A")], "has_more": False}
+
+        with patch("dc_email_controller.dc_resend_source.list_received", side_effect=pager), \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest:
+            mock_ingest.return_value = {"ok": True}
+            r1 = self.src.poll_received_once(limit=2, max_pages=2, timeout_seconds=120)
+        self.assertTrue(r1["ok"])
+        self.assertTrue(r1["scan_in_progress"])
+        self.assertFalse(r1["advanced"])
+        self.assertEqual(self.src.load_scan()["resume_after"], "E")
+        self.assertEqual(self.src.load_scan()["resume_newest"], "C")
+
+        with patch("dc_email_controller.dc_resend_source.list_received", side_effect=pager), \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest2:
+            mock_ingest2.return_value = {"ok": True}
+            r2 = self.src.poll_received_once(limit=2, max_pages=2, timeout_seconds=120)
+        self.assertTrue(r2["advanced"])
+        self.assertEqual(r2["high_water_received_id"], "C")   # 扫完才推到窗口最顶端
+        self.assertEqual(self.src.load_scan(), {})
+
+    def test_scan_gives_up_after_max_pages(self):
+        os.environ["DC_RESEND_SCAN_MAX_PAGES"] = "2"
+        self.src.save_cursor("A", "2026-08-16T01:00:00Z", [])
+
+        def pager(limit=50, after=None):
+            base = "Z" if after is None else after
+            return 200, {"data": [self._item(f"{base}1"), self._item(f"{base}2")], "has_more": True}
+
+        with patch("dc_email_controller.dc_resend_source.list_received", side_effect=pager), \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest:
+            mock_ingest.return_value = {"ok": True}
+            r = self.src.poll_received_once(limit=2, max_pages=2, timeout_seconds=120)
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["cursor_gap"])
+        self.assertEqual(self.src.load_scan(), {})
+
+    def test_zero_budget_means_no_limit(self):
+        self.src.save_cursor("A", "2026-08-16T01:00:00Z", [])
+        with patch("dc_email_controller.dc_resend_source.list_received") as mock_list, \
+                patch("dc_email_controller.dc_email_ingest.ingest_resend_event") as mock_ingest:
+            mock_list.return_value = (200, {"data": [self._item("B"), self._item("A")], "has_more": False})
+            mock_ingest.return_value = {"ok": True}
+            r = self.src.poll_received_once(timeout_seconds=0)
+        self.assertEqual(r["stopped_reason"], "complete")
+        self.assertEqual(r["high_water_received_id"], "B")
+
+
 if __name__ == "__main__":
     unittest.main()
