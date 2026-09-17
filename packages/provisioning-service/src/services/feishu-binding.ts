@@ -291,7 +291,11 @@ export async function bindTenantFeishuApp(
   // tolerates 409 and KEEPS the existing content — pushLlmProviders is the
   // authoritative writer; this just guarantees the Secret exists so the
   // gateway's envFrom reference resolves.
-  await createSecret(gatewayNs, LLM_PROXY_CONFIG_SECRET, { LLM_UPSTREAMS: '{}' });
+  await createSecret(gatewayNs, LLM_PROXY_CONFIG_SECRET, {
+    LLM_UPSTREAMS: '{}',
+    // P2-3: bootstrap V2 gateway routes placeholder.
+    LLM_RUNTIME_ROUTES_V2: '{}',
+  });
 
   // 4. Gateway Deployment + Service. Prefer the promoted rollout target so a
   // freshly created gateway picks up the same version the fleet runs; a pinned

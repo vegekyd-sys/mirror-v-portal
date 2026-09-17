@@ -46,6 +46,18 @@ import { runWithFeishuApp, withFeishuApp } from "../platform/feishu/context";
 import { addChatBots } from "../platform/feishu/client";
 import { findThreadByFeishuId, diagnoseFeishu } from "../platform/feishu/adapter";
 import { importExistingWaba, AdminWabaImportError } from "../core/adminWabaImport";
+import {
+  AdminWabaCleanupError,
+  cleanupWhatsappData,
+} from "../core/adminWabaCleanup";
+import {
+  AdminWabaUnbindError,
+  unbindWabaTenant,
+} from "../core/adminWabaUnbind";
+import {
+  AdminDebugTablesError,
+  listAllDebugTables,
+} from "../core/adminDebugTables";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -253,6 +265,83 @@ export async function buildServer() {
           });
         }
       });
+
+      /**
+       * 解绑 supplierId ↔ wabaId（WABA 级归属，回滚后的口径）。
+       *
+       * 只把该租户在这个 WABA 上的 CONNECTED 行置为 DISCONNECTED；**不碰手机号**
+       * （不删 WabaPhone、不调 YCloud/Meta 释放号码）；按 partnerCustomerId 收范围，
+       * 只能解自己的绑定；重复调用幂等。
+       */
+      scope.post("/api/admin/whatsapp/unbind-waba", async (request, reply) => {
+        try {
+          return await unbindWabaTenant(request.body);
+        } catch (error) {
+          if (error instanceof AdminWabaUnbindError) {
+            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+          }
+          request.log.error({ err: error }, "WABA unbind failed");
+          return reply.code(500).send({
+            error: "failed to unbind WhatsApp WABA",
+            code: "ADMIN_UNBIND_FAILED",
+          });
+        }
+      });
+
+      /**
+       * 测试期一键清理 bridge 运行数据（临时接口）。
+       *
+       * 按测试期口径**不做请求侧校验**：POST 即执行，空 body 也能直接清全量运行数据。
+       * 默认保留 FeishuApp/AppSetting（凭据/全局配置），要连它们一起清得传
+       * includeConfig:true（只允许全局范围）；传 supplierId 可只清一个测试租户。
+       * 应急关闭：ConfigMap 设 WHATSAPP_DISABLE_DB_CLEANUP=1 → 403（不必重建镜像）。
+       */
+      scope.post("/api/admin/whatsapp/debugCleanup", async (request, reply) => {
+        if (config.admin.dbCleanupDisabled) {
+          return reply.code(403).send({
+            code: "CLEANUP_DISABLED",
+            error: "WhatsApp DB cleanup is disabled by WHATSAPP_DISABLE_DB_CLEANUP",
+          });
+        }
+        try {
+          return await cleanupWhatsappData(request.body);
+        } catch (error) {
+          if (error instanceof AdminWabaCleanupError) {
+            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+          }
+          request.log.error({ err: error }, "WhatsApp DB cleanup failed");
+          return reply.code(500).send({
+            error: "failed to clean WhatsApp bridge data",
+            code: "CLEANUP_FAILED",
+          });
+        }
+      });
+
+      /**
+       * 测试期只读调试（临时接口）：把 9 张业务表的数据汇总成一个 JSON，按表名分组。
+       * 顶层 key 就是表名，`_meta` 放计数/脱敏字段等元信息。
+       * 凭据字段固定脱敏（FeishuApp.appSecret/verificationToken/encryptKey、
+       * WabaOnboarding.onboardingUrl）—— 无鉴权接口不应整包吐密钥。
+       * 可选：?tables=Customer,Message & limit=100
+       */
+      const debugTableListHandler = async (request: FastifyRequest, reply: FastifyReply) => {
+        const query = (request.query as Record<string, unknown>) || {};
+        const body = (request.body as Record<string, unknown>) || {};
+        try {
+          return await listAllDebugTables({ ...query, ...body });
+        } catch (error) {
+          if (error instanceof AdminDebugTablesError) {
+            return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+          }
+          request.log.error({ err: error }, "debug table list failed");
+          return reply.code(500).send({
+            error: "failed to dump WhatsApp bridge tables",
+            code: "DEBUG_TABLES_FAILED",
+          });
+        }
+      };
+      scope.get("/api/admin/whatsapp/debugTableList", debugTableListHandler);
+      scope.post("/api/admin/whatsapp/debugTableList", debugTableListHandler);
 
     scope.post("/api/feishu/apps", async (request, reply) => {
       const body = (request.body || {}) as {

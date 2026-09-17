@@ -55,6 +55,30 @@ export interface LlmPushTaskRecord {
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
+  /** Release this push task belongs to (P0-2 atomic publish). */
+  release_id: string | null;
+  /** Scope granularity for the push (full / allowlist / single / etc.). */
+  scope_type: string;
+  /** Idempotency key for de-duplication. */
+  idempotency_key: string | null;
+  /** Batch size (0 = unbatched, all tenants at once). */
+  batch_size: number;
+  /** Total number of batches (0 = unbatched). */
+  batch_total: number;
+  /** Observation window between batches in milliseconds (0 = no wait). */
+  batch_interval_ms: number;
+  /** Serialised AutoPauseThresholds JSON, or NULL when unbatched. */
+  auto_pause_thresholds: AutoPauseThresholds | null;
+}
+
+/** Thresholds for automatic batch pausing during a scoped rollout. */
+export interface AutoPauseThresholds {
+  /** Failure rate (0-1) above which subsequent batches are paused. Default 0.3. */
+  maxFailureRate?: number;
+  /** 5xx error rate (0-1) above which subsequent batches are paused. Default 0.2. */
+  maxErrorRate?: number;
+  /** Minimum succeeded+failed count before threshold checking begins. Default 3. */
+  minSuccessCount?: number;
 }
 
 /** Raw row shape returned by PostgreSQL for llm_push_task_items. */
@@ -71,6 +95,12 @@ export interface LlmPushItemRecord {
   started_at: Date | null;
   finished_at: Date | null;
   updated_at: Date;
+  /** 0-based batch index within the task (NULL for unbatched tasks). */
+  batch_index: number | null;
+  /** Total batches for this task (NULL for unbatched tasks). */
+  batch_total: number | null;
+  /** Batch lifecycle: 'pending' (claimable) | 'paused' (held back) | 'completed'. */
+  batch_status: string;
 }
 
 /** Shape of the JSON body written to an SSE frame's `data:` line. */

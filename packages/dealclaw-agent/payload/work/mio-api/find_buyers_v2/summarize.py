@@ -31,7 +31,8 @@ except Exception:  # pragma: no cover
         return f"buyer_{digest[:12]}"
 
 FIXTURE_KEYS = ("candidate_id", "industry", "profile", "products", "buyer_type",
-                "size", "exhibitions", "country", "score", "page", "position")
+                "size", "exhibitions", "country", "score", "page", "position",
+                "ai_hunter_marked", "ai_hunter_types")
 
 _CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 
@@ -50,6 +51,8 @@ def model_summary(norms: list[dict], *, profile_chars: int = 400,
             "buyer_type": n.get("buyer_type", ""),
             "size": n.get("size", ""),
             "exhibitions": n.get("exhibitions") or [],
+            "ai_hunter_marked": bool(n.get("ai_hunter_marked")),
+            "ai_hunter_types": n.get("ai_hunter_types") or [],
         })
     return rows
 
@@ -81,6 +84,8 @@ def redact_for_fixture(norms: list[dict]) -> list[dict]:
             "score": n.get("score"),
             "page": n.get("page"),
             "position": n.get("position"),
+            "ai_hunter_marked": bool(n.get("ai_hunter_marked")),
+            "ai_hunter_types": n.get("ai_hunter_types") or [],
         }
         out.append({k: v for k, v in full.items() if k in FIXTURE_KEYS})
     return out

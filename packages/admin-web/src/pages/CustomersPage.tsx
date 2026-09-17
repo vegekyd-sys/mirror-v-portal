@@ -2,7 +2,7 @@
 // 数据：credits-ledger GET /v1/admin/customers；租户状态与开通来自 provisioning-service
 // GET /v1/tenants；创建客户走 provisioning POST /v1/tenants（真实开通 K8s + 计费账户）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import type { Tenant } from '../lib/types';
 import { fmtNum } from '../components/badges';
@@ -517,7 +517,7 @@ export default function CustomersPage() {
         <div className="hint">
           创建客户：填飞书凭据 → 同时开通 Agent（openclaw 直连平面）；<b>不填飞书凭据 →
           仅创建客户记录与计费账户，不创建 Agent</b>，稍后可到「Agents 管理」该客户详情页补充凭据一键开通。
-          前置条件：需先在「模型供应商」页配好全局大模型提供商（LLM_PROVIDERS）。
+          前置条件：需先在<Link to="/catalog">「模型目录」</Link>配置 Provider、Model 和 Global Policy，并发布 Release。
         </div>
         <div className="form-row" style={{ marginTop: 12 }}>
           <button className="btn-primary" onClick={() => void createCustomer()} disabled={creating}>

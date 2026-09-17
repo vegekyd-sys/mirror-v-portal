@@ -16,6 +16,30 @@ from .providers import get_provider
 from .secrets import resolve_secret
 from .store import EmailStore, utc_now
 
+# 退信（NDR）识别/解析/分类：dc_bounce_detect.py 位于 work/mio-api/ 根目录
+# （与 enterprise_ids 同模式）。cwd 不在根目录时（cron/服务）把根目录挂上 sys.path 再试，
+# 仍失败则降级为「永不判退信」，绝不因缺模块中断收信。
+try:
+    from dc_bounce_detect import (
+        is_bounce, classify_bounce, extract_bounced_recipient, body_text,
+    )
+except Exception:  # noqa: BLE001
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _root = str(_Path(__file__).resolve().parents[1])
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from dc_bounce_detect import (
+            is_bounce, classify_bounce, extract_bounced_recipient, body_text,
+        )
+    except Exception:  # noqa: BLE001
+        is_bounce = lambda msg, sender="", subject="": False  # noqa: E731
+        classify_bounce = lambda text="": "unknown"  # noqa: E731
+        extract_bounced_recipient = lambda msg: ""  # noqa: E731
+        body_text = lambda msg, limit=4000: ""  # noqa: E731
+
 
 def _decode(value: str | None) -> str:
     if not value:
@@ -53,6 +77,81 @@ def _body_preview(msg: Message, limit: int = 1000) -> str:
     text = "\n".join(candidates)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
+
+
+def _canonical_company(account: dict) -> str:
+    """入站事实的 company_id：canonical(enterprise_id)，与 Resend webhook 链路口径一致。
+
+    2026-09-15 修复：两个 insert_message 都没带 company_id → 个人邮箱（SMTP/IMAP）的
+    收发记录全落到 inbound 的 `_unmatched/` 目录，按企业过滤的查询（邮件日志/案卷/
+    dashboard/email-quality）一条都看不到。
+    """
+    raw = str((account or {}).get("enterprise_id", "") or "").strip()
+    if not raw:
+        return ""
+    try:
+        from enterprise_ids import canonical_company_id
+        return canonical_company_id(raw) or raw
+    except Exception:  # noqa: BLE001 - 根目录不在 sys.path 时退回原值，不阻断收信
+        return raw
+
+
+def _extract_attachments(msg: Message) -> list[tuple[str, str, bytes]]:
+    """从 MIME 里取出附件 (filename, content_type, bytes)。
+
+    判定口径：Content-Disposition 为 attachment，或任何带 filename 的 part（很多客户端
+    把图片发成 inline + filename，买家的 logo/产品图常走这条）。正文 part（无 filename
+    的 text/plain、text/html）不算附件。
+    """
+    out: list[tuple[str, str, bytes]] = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        disp = (part.get("Content-Disposition") or "").lower()
+        filename = part.get_filename()
+        if "attachment" not in disp and not filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001 - 单个坏 part 不该中断整封信
+            continue
+        if not payload:
+            continue
+        try:
+            filename = str(make_header(decode_header(filename))) if filename else ""
+        except Exception:  # noqa: BLE001
+            filename = filename or ""
+        out.append((filename or "attachment", part.get_content_type() or "", payload))
+    return out
+
+
+def _store_attachments(msg: Message, *, message_id: str, company_id: str,
+                       received_at: str = "") -> list[dict]:
+    """落盘到统一附件库（与 Resend 入站同一套目录/索引约定）。失败不中断收信。"""
+    items = _extract_attachments(msg)
+    if not items:
+        return []
+    try:
+        from dc_resend_attachments import store_bytes, append_index, _month
+    except Exception:  # noqa: BLE001 - 根目录不在 sys.path 时降级为不存附件
+        return []
+    ym = _month(received_at)
+    rows = []
+    for filename, content_type, blob in items:
+        try:
+            rows.append(store_bytes(company_id=company_id, message_id=message_id or "no-message-id",
+                                    filename=filename, content_type=content_type,
+                                    data=blob, ym=ym))
+        except Exception as e:  # noqa: BLE001
+            rows.append({"message_id": message_id, "filename": filename,
+                         "stored": False, "error": str(e)[:120]})
+    try:
+        append_index(rows, company_id=company_id, ym=ym)
+    except Exception:  # noqa: BLE001
+        pass
+    return rows
 
 
 def _parse_uidvalidity(client: imaplib.IMAP4_SSL, select_data: list[bytes] | None) -> int:
@@ -122,10 +221,10 @@ class ImapSynchronizer:
         self.secret_resolver = secret_resolver
 
     def _record_reply_fact(self, account, bound, buyer_email, reply_text, inbound_message_id):
-        """把已绑定的入站回复写入七信号（统一信号入口）。"""
+        """把已绑定的入站回复写入七信号（统一信号入口）+ 按「信」推送决策。"""
         try:
             from dc_email_controller.dc_email_signals import analyze_reply, process_reply
-            from dc_email_controller.dc_signal_push import evaluate_for_push
+            from dc_email_controller.dc_signal_push import evaluate_reply_for_push
             from enterprise_ids import canonical_company_id
             _company = canonical_company_id(bound.get("company_id", "") or account.get("enterprise_id", ""))
             _buyer = (buyer_email.split("@")[-1].lower() if "@" in buyer_email else buyer_email)
@@ -137,7 +236,15 @@ class ImapSynchronizer:
                 lead_id=bound.get("lead_id", ""), contact_id=bound.get("contact_id", ""),
                 iq_intent=_a["intent"], requested_materials=_a["requested_materials"],
                 missing_fields=_a["missing_fields"], confidence=_a["confidence"])
-            evaluate_for_push([s["signal_id"] for s in _res.get("signals", [])])
+            # 2026-09-16 口径：零信号回信也要推（旧调用 evaluate_for_push 只认信号）。
+            evaluate_reply_for_push(
+                inbound_message_id, intent=_a.get("intent", ""), text=reply_text or "",
+                company_id=_company, signals=_res.get("signals", []),
+                campaign_id=bound.get("campaign_id", ""),
+                lead_id=bound.get("lead_id", ""),
+                contact_id=bound.get("contact_id", ""),
+                thread_id=bound.get("thread_id") or bound.get("local_message_id", ""),
+                trigger="imap_sync")
         except Exception as e:
             print(f"[imap_sync] signal failed: {e}")
 
@@ -238,10 +345,7 @@ class ImapSynchronizer:
                 sender = ", ".join(address for _, address in getaddresses(msg.get_all("From", [])))
                 from_addresses = [address for _, address in getaddresses(msg.get_all("From", []))]
                 first_from = from_addresses[0] if from_addresses else sender
-                related = self.store.has_outbound_reference(account_id, reference_candidates)
-                if not related:
-                    # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
-                    related = self.store.find_outbound_by_contact(account_id, first_from) is not None
+                subject = _decode(msg.get("Subject"))
                 recipients = [address for _, address in getaddresses(msg.get_all("To", []))]
                 sent_at = None
                 if msg.get("Date"):
@@ -249,16 +353,67 @@ class ImapSynchronizer:
                         sent_at = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
                     except Exception:
                         sent_at = None
+
+                # 退信分流：NDR 不当买家回复，而是把原 outbound 标成 bounced
+                if is_bounce(msg, first_from, subject):
+                    bounced_email = extract_bounced_recipient(msg) or ""
+                    category = classify_bounce(body_text(msg))
+                    if bounced_email:
+                        self.store.mark_bounced_by_contact(account_id, bounced_email, category)
+                    self.store.insert_message({
+                        "account_id": account_id, "direction": "inbound",
+                        "company_id": _canonical_company(account),
+                        "folder": folder, "uidvalidity": uidvalidity, "uid": uid,
+                        "message_id": message_id, "in_reply_to": in_reply_to,
+                        "references": references, "sender": sender,
+                        "recipients": recipients, "subject": subject,
+                        "sent_at": sent_at, "text_preview": _body_preview(msg, limit=500),
+                        "related": False, "status": "received", "created_at": utc_now(),
+                    })
+                    result.fetched += 1
+                    last_uid = uid
+                    self.store.update_sync_state(
+                        account_id=account_id, folder=folder,
+                        uidvalidity=uidvalidity, last_uid=last_uid,
+                    )
+                    continue
+
+                related = self.store.has_outbound_reference(account_id, reference_candidates)
+                outbound_row = None
+                if not related:
+                    # 腾讯企业邮等回信不带 In-Reply-To/References → 按发件人邮箱回退匹配
+                    outbound_row = self.store.find_outbound_by_contact(account_id, first_from)
+                    related = outbound_row is not None
                 stored_preview = _body_preview(msg) if related else ""
+
+                # 附件只对「关联到已知 outbound」的邮件落盘：与正文保留口径一致，
+                # 不囤积用户私人邮件的附件（REDLINES 七·数据主权）。
+                attachments = []
+                if related:
+                    if outbound_row is None:
+                        outbound_row = self.store.find_outbound_by_reference(
+                            account_id, reference_candidates) or {}
+                    attachments = _store_attachments(
+                        msg, message_id=message_id,
+                        company_id=outbound_row.get("company_id", "") if outbound_row else "",
+                        received_at=sent_at or "",
+                    )
                 notification_preview = (
                     stored_preview[:200]
                     if related
                     else (_body_preview(msg, limit=200) if emit_all else "")
                 )
+                # 归属：关联到 outbound 就用它的身份（回信必须落回买家所在企业），
+                # 否则退回账号的 enterprise_id。两条链路（Resend/IMAP）口径必须一致。
+                _ident = outbound_row or {}
                 stored = self.store.insert_message(
                     {
                         "account_id": account_id,
                         "direction": "inbound",
+                        "company_id": _ident.get("company_id") or _canonical_company(account),
+                        "campaign_id": _ident.get("campaign_id", ""),
+                        "lead_id": _ident.get("lead_id", ""),
+                        "contact_id": _ident.get("contact_id", ""),
                         "folder": folder,
                         "uidvalidity": uidvalidity,
                         "uid": uid,
@@ -267,12 +422,13 @@ class ImapSynchronizer:
                         "references": references,
                         "sender": sender,
                         "recipients": recipients,
-                        "subject": _decode(msg.get("Subject")),
+                        "subject": subject,
                         "sent_at": sent_at,
                         # Header-only notifications for unrelated personal mail.
                         # Bodies are retained only for messages tied to a known
                         # DealClaw outbound reference.
                         "text_preview": stored_preview,
+                        "attachments": attachments,
                         "related": related,
                         "status": "received" if (related or emit_all) else "filtered",
                         "created_at": utc_now(),
@@ -280,6 +436,7 @@ class ImapSynchronizer:
                 )
                 if stored:
                     result.fetched += 1
+                    bound = None
                     if related:
                         result.related += 1
                         # 绑定原 outbound（In-Reply-To / References），复制 company/campaign/lead/contact 身份，写 log_reply
@@ -293,6 +450,14 @@ class ImapSynchronizer:
                     if not related and not emit_all:
                         result.filtered += 1
                     if related or emit_all:
+                        # 通知目标：发信会话优先（与 Resend 取信链路同一口径），
+                        # account 级绑定作为回退；去重后发信会话排最前。
+                        explicit = str(
+                            ((bound or outbound_row) or {}).get("origin_notify_target") or ""
+                        ).strip()
+                        chat_ids = [row["chat_id"] for row in bindings]
+                        if explicit and explicit not in chat_ids:
+                            chat_ids = [explicit, *chat_ids]
                         result.events.append(
                             {
                                 "type": "mail.received",
@@ -300,12 +465,13 @@ class ImapSynchronizer:
                                 "enterprise_id": account["enterprise_id"],
                                 "owner_open_id": account["owner_open_id"],
                                 "email_address": account["email_address"],
-                                "chat_ids": [row["chat_id"] for row in bindings],
+                                "chat_ids": chat_ids,
                                 "uid": uid,
                                 "message_id": message_id,
                                 "from": sender,
                                 "subject": _decode(msg.get("Subject")),
                                 "preview": notification_preview,
+                                "attachments": attachments,
                                 "related": related,
                             }
                         )

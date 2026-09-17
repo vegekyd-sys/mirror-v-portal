@@ -31,12 +31,22 @@ import {
   patchDeploymentEnvFromSecret,
 } from './k8s-client.js';
 import { ENV_FROM_ONLY_KEYS } from './skill-env.js';
+import {
+  renderAgentEnvelope,
+  renderGatewayPayload,
+} from './runtime-contract-v2.js';
 import type { ProvisioningConfig } from '../config.js';
 
 /** runtime_configs key holding the global provider JSON library. */
 export const LLM_PROVIDERS_KEY = 'LLM_PROVIDERS';
 /** runtime_configs key (tenant scope) holding a tenant's model selection. */
 export const LLM_MODEL_SELECTION_KEY = 'LLM_MODEL_SELECTION';
+/** tenant-config Secret key holding the V2 agent runtime envelope JSON. */
+export const LLM_RUNTIME_CONFIG_V2_KEY = 'LLM_RUNTIME_CONFIG_V2';
+/** tenant-config Secret key controlling which contract path the agent runs. */
+export const LLM_RUNTIME_CONTRACT_MODE_KEY = 'LLM_RUNTIME_CONTRACT_MODE';
+/** llm-proxy-config Secret key holding the V2 gateway routes JSON. */
+export const LLM_RUNTIME_ROUTES_V2_KEY = 'LLM_RUNTIME_ROUTES_V2';
 
 export interface LlmModelSpec {
   id: string;
@@ -113,6 +123,14 @@ export interface TenantModelSelection {
    * accounting stay active. Used to A/B-isolate gateway-induced latency.
    */
   directMode: boolean;
+  /**
+   * Controls which runtime contract path the agent + gateway run:
+   *  - 'v1'     → use only the legacy V1 payload (default, safest).
+   *  - 'shadow' → dual-read V2 alongside V1 for comparison (no behavioral change).
+   *  - 'v2'    → fully switch to the V2 runtime contract payload.
+   * Defaults to 'v1' when the field is absent in the stored JSON blob.
+   */
+  runtimeContractMode: 'v1' | 'shadow' | 'v2';
 }
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -445,80 +463,135 @@ export function modelSpecSignature(
   });
 }
 
+/** Detailed restart analysis with human/machine-readable reason codes. */
+export interface RestartAnalysis {
+  restart: boolean;
+  reasons: string[];
+}
+
+/**
+ * Detailed version of tenantNeedsLlmRestart that also returns the list of
+ * reason codes explaining WHY a restart is needed. The reason codes are
+ * stable identifiers (not user-facing strings) suitable for the impact
+ * manifest:
+ *
+ *   default_model_ref_changed        — effective primary model ref changed
+ *   default_model_credential_changed — same ref, provider baseUrl/apiKey changed
+ *   default_model_spec_changed       — same ref, in-place model spec edited
+ *   image_model_ref_changed          — effective image model ref changed
+ *   image_model_spec_changed         — same ref, in-place model spec edited
+ *   image_model_credential_changed   — same ref, provider credentials changed
+ *   compaction_model_ref_changed     — effective compaction model ref changed
+ *   compaction_model_spec_changed    — same ref, in-place model spec edited
+ *   compaction_model_credential_changed — same ref, provider credentials changed
+ *   fallback_chain_changed           — fallback chain membership/order changed
+ *   fallback_model_credential_changed — credential behind a fallback model changed
+ *   fallback_model_spec_changed      — in-place spec of a fallback model changed
+ */
+export function analyzeTenantLlmRestart(
+  prev: LlmProvidersConfig | null,
+  now: LlmProvidersConfig | null,
+  selection: TenantModelSelection | null,
+): RestartAnalysis {
+  const reasons: string[] = [];
+  const selDefault = selection?.defaultModel ?? null;
+  const selImage = selection?.imageModel ?? null;
+  const selCompaction = selection?.compactionModel ?? null;
+
+  // ── Default (primary) model ──
+  const beforeRef = effectiveRefIn(prev, selDefault);
+  const afterRef = effectiveRefIn(now, selDefault);
+  if (beforeRef !== afterRef) {
+    reasons.push('default_model_ref_changed');
+  } else {
+    if (
+      providerCredentialSignature(prev, beforeRef) !==
+      providerCredentialSignature(now, afterRef)
+    ) {
+      reasons.push('default_model_credential_changed');
+    }
+    if (modelSpecSignature(prev, beforeRef) !== modelSpecSignature(now, afterRef)) {
+      reasons.push('default_model_spec_changed');
+    }
+  }
+
+  // ── Image (vision) model ──
+  const beforeImage = effectiveImageRefIn(prev, selImage);
+  const afterImage = effectiveImageRefIn(now, selImage);
+  if (beforeImage !== afterImage) {
+    reasons.push('image_model_ref_changed');
+  } else {
+    if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
+      reasons.push('image_model_spec_changed');
+    }
+    if (
+      providerCredentialSignature(prev, beforeImage) !==
+      providerCredentialSignature(now, afterImage)
+    ) {
+      reasons.push('image_model_credential_changed');
+    }
+  }
+
+  // ── Compaction model (tenant override → global → primary fallback) ──
+  const beforeCompaction = effectiveCompactionRefIn(prev, selCompaction)
+    ?? effectiveRefIn(prev, selDefault);
+  const afterCompaction = effectiveCompactionRefIn(now, selCompaction)
+    ?? effectiveRefIn(now, selDefault);
+  if (beforeCompaction !== afterCompaction) {
+    reasons.push('compaction_model_ref_changed');
+  } else {
+    if (
+      modelSpecSignature(prev, beforeCompaction) !==
+      modelSpecSignature(now, afterCompaction)
+    ) {
+      reasons.push('compaction_model_spec_changed');
+    }
+    if (
+      providerCredentialSignature(prev, beforeCompaction) !==
+      providerCredentialSignature(now, afterCompaction)
+    ) {
+      reasons.push('compaction_model_credential_changed');
+    }
+  }
+
+  // ── Fallback chain (tenant override-aware) ──
+  const beforeFallbacks = effectiveFallbacksFor(prev, selection);
+  const afterFallbacks = effectiveFallbacksFor(now, selection);
+  if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) {
+    reasons.push('fallback_chain_changed');
+  } else {
+    for (const ref of afterFallbacks) {
+      if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
+        reasons.push('fallback_model_credential_changed');
+        break;
+      }
+      if (modelSpecSignature(now, ref) !== modelSpecSignature(prev, ref)) {
+        reasons.push('fallback_model_spec_changed');
+        break;
+      }
+    }
+  }
+
+  return { restart: reasons.length > 0, reasons };
+}
+
 /**
  * True when a library change actually affects a tenant: its effective model
  * changed (selection no longer resolves / default switched / provider removed),
  * its effective image model changed, or the credentials behind either model
  * changed. Adding an unrelated provider or model does NOT require a restart —
  * the tenant's live config is untouched.
+ *
+ * This is a thin wrapper around {@link analyzeTenantLlmRestart} that preserves
+ * the original boolean return type for backward compatibility with existing
+ * callers (e.g. applyTenantLlmConfig).
  */
 export function tenantNeedsLlmRestart(
   prev: LlmProvidersConfig | null,
   now: LlmProvidersConfig | null,
   selection: TenantModelSelection | null,
 ): boolean {
-  const selDefault = selection?.defaultModel ?? null;
-  const selImage = selection?.imageModel ?? null;
-  const selCompaction = selection?.compactionModel ?? null;
-
-  const beforeRef = effectiveRefIn(prev, selDefault);
-  const afterRef = effectiveRefIn(now, selDefault);
-  if (beforeRef !== afterRef) return true;
-  if (
-    providerCredentialSignature(prev, beforeRef) !==
-    providerCredentialSignature(now, afterRef)
-  ) {
-    return true;
-  }
-  // In-place model edits (reasoning/vision flags) also require a restart.
-  if (modelSpecSignature(prev, beforeRef) !== modelSpecSignature(now, afterRef)) {
-    return true;
-  }
-
-  const beforeImage = effectiveImageRefIn(prev, selImage);
-  const afterImage = effectiveImageRefIn(now, selImage);
-  if (beforeImage !== afterImage) return true;
-  if (modelSpecSignature(prev, beforeImage) !== modelSpecSignature(now, afterImage)) {
-    return true;
-  }
-  if (
-    providerCredentialSignature(prev, beforeImage) !==
-    providerCredentialSignature(now, afterImage)
-  ) {
-    return true;
-  }
-
-  // Compaction model (tenant override → global → primary fallback chain).
-  const beforeCompaction = effectiveCompactionRefIn(prev, selCompaction)
-    ?? effectiveRefIn(prev, selDefault);
-  const afterCompaction = effectiveCompactionRefIn(now, selCompaction)
-    ?? effectiveRefIn(now, selDefault);
-  if (beforeCompaction !== afterCompaction) return true;
-  if (modelSpecSignature(prev, beforeCompaction) !== modelSpecSignature(now, afterCompaction)) {
-    return true;
-  }
-  if (
-    providerCredentialSignature(prev, beforeCompaction) !==
-    providerCredentialSignature(now, afterCompaction)
-  ) {
-    return true;
-  }
-
-  // Fallback chain (tenant override-aware): a changed chain (or changed
-  // credentials behind any of its models) must re-materialise the agent's
-  // fallbacks at boot.
-  const beforeFallbacks = effectiveFallbacksFor(prev, selection);
-  const afterFallbacks = effectiveFallbacksFor(now, selection);
-  if (JSON.stringify(beforeFallbacks) !== JSON.stringify(afterFallbacks)) return true;
-  for (const ref of afterFallbacks) {
-    if (providerCredentialSignature(now, ref) !== providerCredentialSignature(prev, ref)) {
-      return true;
-    }
-    if (modelSpecSignature(now, ref) !== modelSpecSignature(prev, ref)) {
-      return true;
-    }
-  }
-  return false;
+  return analyzeTenantLlmRestart(prev, now, selection).restart;
 }
 
 /**
@@ -573,13 +646,19 @@ export async function getTenantModelSelection(
       const compactionModel =
         typeof parsed.compactionModel === 'string' ? parsed.compactionModel.trim() || null : null;
       const directMode = parsed.directMode === true;
+      // Per-tenant runtime contract mode: 'v1' (default), 'shadow', or 'v2'.
+      // Unknown / missing values default to 'v1' for backward compatibility.
+      const runtimeContractMode =
+        parsed.runtimeContractMode === 'shadow' || parsed.runtimeContractMode === 'v2'
+          ? parsed.runtimeContractMode
+          : 'v1';
       // Array (even empty) = tenant's own chain; anything else = follow global.
       const fallbackModels = Array.isArray(parsed.fallbackModels)
         ? (parsed.fallbackModels as unknown[])
             .filter((r): r is string => typeof r === 'string' && r.trim() !== '')
             .map((r: string) => r.trim())
         : null;
-      return { defaultModel, imageModel, compactionModel, fallbackModels, directMode };
+      return { defaultModel, imageModel, compactionModel, fallbackModels, directMode, runtimeContractMode };
     }
     return null;
   } catch {
@@ -766,6 +845,8 @@ export interface TenantPushOutcome {
   /** True when the Secret was materialised but no restart was needed (差分). */
   skipRestart: boolean;
   error?: string;
+  /** Non-fatal V2 dual-render warning (V1 still delivered). */
+  v2Warning?: string;
 }
 
 /**
@@ -804,6 +885,8 @@ export async function applyTenantLlmConfig(
     const { globalConfig, blob } = await resolveEffectiveLlmProviders(pool, tenantId, nowLibrary);
     const rawSelection = await getTenantModelSelection(pool, tenantId);
     const directMode = rawSelection?.directMode === true;
+    // Per-tenant runtime contract mode: read from the selection, default 'v1'.
+    const contractMode = rawSelection?.runtimeContractMode ?? 'v1';
 
     // Differential roll: tenant-scoped writes always roll (their selection
     // just changed); global writes only roll when the tenant's live model
@@ -847,12 +930,76 @@ export async function applyTenantLlmConfig(
     }
     if (proxyBlob) next[LLM_PROVIDERS_KEY] = proxyBlob;
     else delete next[LLM_PROVIDERS_KEY];
+
+    // ── V2 dual-render (shadow mode) ────────────────────────────────────
+    // Render V2 payloads alongside V1 and write them into the same Secrets.
+    // V2 failures do NOT block V1 delivery — the agent can still boot from
+    // the V1 blob. A V2 warning is recorded but the task stays 'delivered'.
+    // Build release provenance for V2 envelopes. The real release
+    // id/fingerprint come from the push task; here we use synthetic values
+    // since the shadow-mode writer runs inside applyTenantLlmConfig and
+    // doesn't have direct access to the release record.
+    const releaseProvenance = {
+      id: 'shadow',
+      version: 0,
+      fingerprint: 'shadow',
+    };
+    let v2Warning: string | null = null;
+    if (globalConfig && blob) {
+      try {
+        const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
+        const agentEnvelope = renderAgentEnvelope(
+          effectiveDoc,
+          rawSelection,
+          releaseProvenance,
+          tenantId,
+        );
+        next[LLM_RUNTIME_CONFIG_V2_KEY] = JSON.stringify(agentEnvelope);
+        next[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
+      } catch (v2err) {
+        v2Warning = `V2 agent render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;
+        // Leave existing V2 keys untouched — don't delete on failure.
+      }
+    } else {
+      // No library → empty V2 payload, keep mode as contractMode.
+      next[LLM_RUNTIME_CONFIG_V2_KEY] = '{}';
+      next[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
+    }
     await putSecret(namespace, 'tenant-config', next);
 
     // llm-proxy-config: the gateway's providerName → real baseUrl map.
-    await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, {
+    const proxySecretData: Record<string, string> = {
       LLM_UPSTREAMS: JSON.stringify(upstreams),
-    });
+    };
+    // Gap 1: Write the runtime contract mode to llm-proxy-config so the
+    // gateway (which reads env vars via envFrom from this Secret) can see
+    // it. Without this, the gateway always defaults to 'v1'.
+    proxySecretData[LLM_RUNTIME_CONTRACT_MODE_KEY] = contractMode;
+    // V2 gateway routes — only in proxy mode (not directMode).
+    if (!directMode && globalConfig && blob) {
+      try {
+        const effectiveDoc = JSON.parse(blob) as LlmProvidersConfig;
+        const gatewayPayload = renderGatewayPayload(effectiveDoc);
+        // Include releaseId as a top-level field in the V2 routes JSON so
+        // the gateway can attach it to stable usage attribution (Step 8).
+        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = JSON.stringify({
+          ...gatewayPayload,
+          releaseId: releaseProvenance.id,
+        });
+      } catch (v2err) {
+        if (!v2Warning) {
+          v2Warning = `V2 gateway render failed: ${v2err instanceof Error ? v2err.message : String(v2err)}`;
+        }
+        proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+      }
+    } else if (directMode) {
+      // directMode: do NOT write gateway V2 (agent bypasses the gateway).
+      proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+    } else {
+      // No library → empty V2 routes placeholder.
+      proxySecretData[LLM_RUNTIME_ROUTES_V2_KEY] = '{}';
+    }
+    await putSecret(namespace, LLM_PROXY_CONFIG_SECRET, proxySecretData);
 
     // 存量网关可能没有挂 llm-proxy-config envFrom——幂等补挂。
     await patchDeploymentEnvFromSecret(namespace, `nexus-gateway-${tenantId}`, LLM_PROXY_CONFIG_SECRET);
@@ -892,6 +1039,7 @@ export async function applyTenantLlmConfig(
       restarted,
       gatewayRestarted,
       skipRestart: !needsRestart,
+      ...(v2Warning ? { v2Warning } : {}),
     };
   } catch (err) {
     return {

@@ -47,6 +47,16 @@ export const config = {
   },
   databaseUrl: process.env.DATABASE_URL || "",
   bridgeBaseUrl: optional("WHATSAPP_BRIDGE_BASE_URL"),
+  admin: {
+    /**
+     * 测试期清库接口的**应急关闭**开关（测试阶段的临时接口）。
+     *
+     * `POST /api/admin/whatsapp/cleanup` 按测试期口径不做请求侧校验：调用即执行。
+     * 设 `WHATSAPP_DISABLE_DB_CLEANUP=1` 可让它立即返回 403，不必改代码或重建镜像；
+     * 测试结束请把接口连同本开关一起删除。
+     */
+    dbCleanupDisabled: flag("WHATSAPP_DISABLE_DB_CLEANUP"),
+  },
   ycloud: {
     apiKey: optional("YCLOUD_API_KEY"),
     webhookSecret: optional("YCLOUD_WEBHOOK_SECRET"),

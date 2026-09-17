@@ -18,19 +18,22 @@ import { getToken } from '../lib/api';
 type TermPhase = 'connecting' | 'connected' | 'closed' | 'error';
 
 interface PodTerminalModalProps {
-  tenantId: string;
   pod: string;
   containers: string[];
   initialContainer?: string;
   onClose: () => void;
+  /** Tenant terminal endpoint, or the fixed Nexus Manager endpoint. */
+  tenantId?: string;
+  execPath?: string;
 }
 
 export default function PodTerminalModal({
-  tenantId,
   pod,
   containers,
   initialContainer,
   onClose,
+  tenantId,
+  execPath,
 }: PodTerminalModalProps) {
   const [container, setContainer] = useState(initialContainer || containers[0] || '');
   const [phase, setPhase] = useState<TermPhase>('connecting');
@@ -107,7 +110,8 @@ export default function PodTerminalModal({
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const q = new URLSearchParams({ pod, container, cmd: '/bin/sh' });
-    const url = `${proto}://${window.location.host}/v1/tenants/${encodeURIComponent(tenantId)}/exec?${q}`;
+    const path = execPath ?? `/v1/tenants/${encodeURIComponent(tenantId || '')}/exec`;
+    const url = `${proto}://${window.location.host}${path}?${q}`;
 
     let ws: WebSocket;
     try {
@@ -175,7 +179,7 @@ export default function PodTerminalModal({
     };
 
     term.focus();
-  }, [tenantId, pod, container, disconnect]);
+  }, [tenantId, execPath, pod, container, disconnect]);
 
   // 弹窗打开且终端就绪后自动连接；切换容器自动重连。
   useEffect(() => {

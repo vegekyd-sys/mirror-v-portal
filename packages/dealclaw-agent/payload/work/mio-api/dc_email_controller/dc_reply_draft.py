@@ -325,6 +325,10 @@ def confirm_and_send(draft_id: str, confirmed_by: str = "", store=None) -> dict:
             touch_number=touch,
             content_version="reply",
             thread_id=draft.get("related_reply_id", "") or draft.get("related_reply_id", ""),
+            # 回信带附件（买家索要目录/报价单最常见）。草稿是自由字典，这个键
+            # 由生成方按需写入；不合法（找不到/超限）会抛 AttachmentError，
+            # 走下面的 except 把草稿标 failed，不会假装发成功。
+            attachments=draft.get("attachments") or [],
         )
         resend_id = r.get("resend_id") or ""
         update_draft(draft_id, status="sent", message_id=resend_id,

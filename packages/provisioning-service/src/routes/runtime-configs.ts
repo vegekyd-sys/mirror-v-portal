@@ -25,6 +25,9 @@ import {
   modelExistsIn,
   visionModelExistsIn,
 } from '../services/llm-providers.js';
+import { TenantSelectionV2Service } from '../services/tenant-selection-v2.js';
+import { legacyRefToModelRowId } from '../services/model-catalog.js';
+import { CatalogRepository } from '../services/model-catalog.js';
 import type { ProvisioningConfig } from '../config.js';
 import { actorFromRequest, writeAuditLog, type AuditEntry } from '../services/audit.js';
 import { enqueueLlmPush } from '../services/llm-push-task.js';
@@ -59,6 +62,32 @@ export function createRuntimeConfigRoutes(
   const auditFor = (req: Request, entry: Omit<AuditEntry, 'actor' | 'actorType'>) => {
     const { actor, actorType } = actorFromRequest(req);
     return writeAuditLog(pool, { ...entry, actor, actorType });
+  };
+
+  /** Record only request metadata for legacy provider access; never payloads. */
+  const auditLegacyProviderAccess = (
+    req: Request,
+    action: 'llm-provider.legacy-read' | 'llm-provider.legacy-write-blocked',
+    statusCode: number,
+    tenantId: string | null,
+  ): void => {
+    const requestIdHeader = req.headers['x-request-id'];
+    const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+    void auditFor(req, {
+      action,
+      method: req.method,
+      path: req.path,
+      resourceType: 'llm_provider_library',
+      resourceId: 'global',
+      tenantId: tenantId ?? undefined,
+      statusCode,
+      ip: req.ip,
+      requestId,
+      newValue: {
+        tenantIdPresent: tenantId !== null,
+        userAgent: req.get('user-agent') ?? null,
+      },
+    });
   };
 
   function masterKeyAvailable(): boolean {
@@ -283,9 +312,12 @@ export function createRuntimeConfigRoutes(
   // (decrypted for editing); with tenantId also that tenant's selection and
   // the effective model.
   router.get('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    const tenantId =
+      typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
+    res.once('finish', () => {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-read', res.statusCode, tenantId);
+    });
     try {
-      const tenantId =
-        typeof req.query.tenantId === 'string' && req.query.tenantId ? req.query.tenantId : null;
       if (tenantId && !(await tenantExists(tenantId))) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant not found' });
         return;
@@ -307,6 +339,17 @@ export function createRuntimeConfigRoutes(
 
   // PUT /v1/admin/llm-providers — save the GLOBAL library + push all tenants
   router.put('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    // P0-5: 当 Catalog 权威已建立时，旧写 API 返回 410 引导到结构化目录。
+    // Break-glass 模式下旁路此检查，但冻结 Catalog Publish 并记录审计。
+    if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-write-blocked', 410, null);
+      res.status(410).json({
+        code: 'LEGACY_LLM_PROVIDERS_DISABLED',
+        message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
+        catalogUrl: '/catalog',
+      });
+      return;
+    }
     try {
       const { providers, defaultModel, imageModel, compactionModel, fallbackModels } = req.body ?? {};
 
@@ -365,6 +408,26 @@ export function createRuntimeConfigRoutes(
         statusCode: 200,
       });
 
+      // Break-glass 路径：写入成功后记录审计并创建 reconcile 待办。
+      if (config.catalogBreakGlass === true) {
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, old_value, new_value, ip)
+           VALUES ($1, $2, 'llm-providers.break-glass.write', 'llm-providers', $3, $4, $5)`,
+          [
+            actor,
+            actorType === 'external' ? 'service' : actorType,
+            prevLibrary ? JSON.stringify({ providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }) : null,
+            JSON.stringify({ providers: doc.providers.length, defaultModel: doc.defaultModel }),
+            req.ip ?? null,
+          ],
+        );
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, new_value, ip)
+           VALUES ('system', 'service', 'catalog.reconcile.pending', 'llm-providers', $1, '127.0.0.1')`,
+          [JSON.stringify({ reason: 'break-glass write detected', timestamp: new Date().toISOString() })],
+        );
+      }
+
       res.json({
         ok: true,
         taskId,
@@ -388,6 +451,16 @@ export function createRuntimeConfigRoutes(
 
   // DELETE /v1/admin/llm-providers — clear the global library + push all tenants
   router.delete('/v1/admin/llm-providers', async (req: Request, res: Response) => {
+    // P0-5: 同 PUT，当 Catalog 权威已建立时旧 DELETE 也返回 410。
+    if (config.legacyLlmProvidersReadonly === true && config.catalogBreakGlass !== true) {
+      auditLegacyProviderAccess(req, 'llm-provider.legacy-write-blocked', 410, null);
+      res.status(410).json({
+        code: 'LEGACY_LLM_PROVIDERS_DISABLED',
+        message: '模型供应商管理已迁移到结构化目录。请使用 /v1/admin/model-catalog/providers 进行管理。',
+        catalogUrl: '/catalog',
+      });
+      return;
+    }
     try {
       const prevLibrary = await getGlobalLlmProviders(pool);
       const deleted = await deleteRuntimeConfig(pool, null, LLM_PROVIDERS_KEY);
@@ -419,6 +492,26 @@ export function createRuntimeConfigRoutes(
         newValue: { taskId, async: true },
         statusCode: 200,
       });
+
+      // Break-glass 路径：写入成功后记录审计并创建 reconcile 待办。
+      if (config.catalogBreakGlass === true) {
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, old_value, new_value, ip)
+           VALUES ($1, $2, 'llm-providers.break-glass.write', 'llm-providers', $3, $4, $5)`,
+          [
+            actor,
+            actorType === 'external' ? 'service' : actorType,
+            prevLibrary ? JSON.stringify({ providers: prevLibrary.providers.length, defaultModel: prevLibrary.defaultModel }) : null,
+            JSON.stringify({ cleared: true }),
+            req.ip ?? null,
+          ],
+        );
+        await pool.query(
+          `INSERT INTO audit_logs (actor, actor_type, action, resource_type, new_value, ip)
+           VALUES ('system', 'service', 'catalog.reconcile.pending', 'llm-providers', $1, '127.0.0.1')`,
+          [JSON.stringify({ reason: 'break-glass delete detected', timestamp: new Date().toISOString() })],
+        );
+      }
 
       res.json({
         ok: true,
@@ -639,6 +732,32 @@ export function createRuntimeConfigRoutes(
         },
         statusCode: 200,
       });
+
+      // Selection V2 dual-write: convert legacy refs to stable IDs and write
+      // the V2 row. Non-fatal during the transition period — legacy write has
+      // already succeeded.
+      try {
+        const v2Service = new TenantSelectionV2Service(pool);
+        const currentV2 = await v2Service.getSelection(tenantId);
+        const expectedRev = currentV2?.revision ?? 0;
+        const catalog = await new CatalogRepository(pool).listRuntimeCatalog();
+        await v2Service.updateSelection(
+          tenantId,
+          {
+            defaultModelId: nextDefault ? legacyRefToModelRowId(catalog, nextDefault) : null,
+            imageModelId: nextImage ? legacyRefToModelRowId(catalog, nextImage) : null,
+            compactionModelId: nextCompaction ? legacyRefToModelRowId(catalog, nextCompaction) : null,
+            fallbackModelIds: (nextFallbacks ?? [])
+              .map((ref) => legacyRefToModelRowId(catalog, ref))
+              .filter((id): id is string => id !== null),
+            directMode: nextDirect,
+          },
+          expectedRev,
+          actorFromRequest(req).actor ?? null,
+        );
+      } catch (err) {
+        console.warn('Selection V2 dual-write failed (non-fatal):', err);
+      }
 
       res.json({
         ok: true,

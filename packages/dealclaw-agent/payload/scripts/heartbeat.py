@@ -359,6 +359,114 @@ def step_reflection_analysis(config, tracker: MemoryUsageTracker | None = None) 
         return f"Reflection analysis: error"
 
 
+def step_profile_distill(config, tracker: MemoryUsageTracker | None = None) -> str:
+    """把日常事实沉淀进企业画像 / 长期规则 / 反思（2026-09-17 加）。
+
+    背景：反思/记忆四套存储都在，但"会话 → 存储"没有自动通道，写入全靠 agent 自觉，
+    结果聊了很多天 kb.json profile 仍是空的。这里挂到**既有心跳**（interval_hours=6）
+    上复用 dc_session_distill（幂等、非破坏合并），不新增定时任务。
+
+    best-effort：失败只记录，不影响心跳主流程。
+    """
+    log("Step 1b: Profile / memory distillation")
+    workspace = Path(__file__).resolve().parent.parent
+    tool = workspace / "work" / "mio-api" / "dc_session_distill.py"
+    if not tool.exists():
+        return "Profile distill: dc_session_distill.py not found"
+
+    company_id = (os.environ.get("MIO_CDP_SUPPLIER_ID") or "").strip()
+    if not company_id:
+        envf = workspace / "work" / "mio-api" / ".env"
+        try:
+            if envf.exists():
+                for line in envf.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("MIO_CDP_SUPPLIER_ID="):
+                        company_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+    if not company_id:
+        log("  no company id, skipping")
+        return "Profile distill: skipped (no company id)"
+
+    # 先消费 agent 在会话里抽取好的事实（有就落库并归档），再跑规则兜底 sweep
+    routed = ""
+    pending = workspace / "data" / "memory" / company_id / "pending_facts.json"
+    if pending.exists():
+        try:
+            proc0 = subprocess.run(
+                [sys.executable, str(tool), "route", "--company-id", company_id,
+                 "--facts-file", str(pending), "--source", "session", "--apply"],
+                capture_output=True, text=True, timeout=60, cwd=str(tool.parent),
+            )
+            if proc0.returncode == 0:
+                pending.rename(pending.with_suffix(".json.done"))
+                routed = "routed session facts"
+                log("  consumed pending_facts.json")
+            else:
+                log(f"  route failed: {(proc0.stderr or proc0.stdout)[:200]}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  route error: {e}")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(tool), "sweep", "--company-id", company_id, "--apply"],
+            capture_output=True, text=True, timeout=60, cwd=str(tool.parent),
+        )
+        raw = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            log(f"  distill failed: {(proc.stderr or raw)[:200]}")
+            return f"Profile distill: failed ({(proc.stderr or raw)[:120]})"
+        data = json.loads(raw) if raw else {}
+        prof = (data.get("profile") or {})
+        changed = prof.get("changed") or {}
+        if prof.get("wrote"):
+            summary = f"Profile distill: wrote {sorted(changed.keys())}"
+        else:
+            summary = f"Profile distill: {prof.get('reason', 'no change')}"
+        log(f"  {summary}")
+        if routed:
+            summary = f"{summary} | {routed}"
+
+        # 显化（2026-09-17 田耕郡：要给用户积极汇报，不能只在后台沉淀）
+        # 有新东西 → 主动发一条「我更懂你了」；24h 限频、无新增不发（不刷屏）。
+        enabled = True
+        try:
+            enabled = bool(((config or {}).get("learning_report") or {}).get("enabled", True))
+        except Exception:  # noqa: BLE001
+            enabled = True
+        digest_tool = workspace / "work" / "mio-api" / "dc_learning_digest.py"
+        if enabled and digest_tool.exists():
+            try:
+                proc2 = subprocess.run(
+                    [sys.executable, str(digest_tool), "run", "--company-id", company_id, "--apply"],
+                    capture_output=True, text=True, timeout=60, cwd=str(digest_tool.parent),
+                )
+                data2 = json.loads((proc2.stdout or "").strip() or "{}")
+                st = data2.get("status", "unknown")
+                summary = f"{summary} | learning report: {st}"
+                if st == "sent":
+                    log("  learning digest sent")
+            except Exception as e:  # noqa: BLE001
+                log(f"  learning digest error: {e}")
+                summary = f"{summary} | learning report: error"
+
+        if tracker:
+            tracker.record_external(
+                "work/mio-api/dc_session_distill.py",
+                trigger="heartbeat profile distillation",
+                effect=summary,
+                follow_up="none",
+            )
+        return summary
+    except subprocess.TimeoutExpired:
+        log("  distill timed out")
+        return "Profile distill: timed out"
+    except Exception as e:
+        log(f"  distill error: {e}")
+        return f"Profile distill: error ({str(e)[:100]})"
+
+
 def step_memory_scan(config, tracker: MemoryUsageTracker | None = None) -> str:
     """Check memory freshness without forcing noisy core-doc churn.
 
@@ -1020,6 +1128,9 @@ def main():
     tasks = heartbeat_cfg.get("tasks", ["reflection_analysis", "memory_scan", "log_compress", "skill_dashboard", "project_queue", "token_budget_check"])
     if heartbeat_cfg.get("daily_review_feishu_replies", {}).get("enabled", True) and "daily_review_feishu_replies" not in tasks:
         tasks.append("daily_review_feishu_replies")
+    # 画像/记忆沉淀：默认开启（除非显式 disabled），即使 config 显式列了 tasks 也补上
+    if heartbeat_cfg.get("profile_distill", {}).get("enabled", True) and "profile_distill" not in tasks:
+        tasks.append("profile_distill")
     if "skill_dashboard" not in tasks and "v_learning_loop_dashboard" not in tasks:
         # Auto-include skill dashboard unless explicitly excluded or disabled
         skill_dashboard_enabled = heartbeat_cfg.get("skill_dashboard", {}).get("enabled", True)
@@ -1030,6 +1141,9 @@ def main():
 
     if "reflection_analysis" in tasks:
         results.append(step_reflection_analysis(config, tracker))
+
+    if "profile_distill" in tasks:
+        results.append(step_profile_distill(config, tracker))
 
     if "memory_scan" in tasks:
         results.append(step_memory_scan(config, tracker))

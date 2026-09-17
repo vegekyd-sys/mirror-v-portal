@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -41,6 +42,33 @@ def _day(dt: str | None) -> str:
     if not dt:
         dt = utc_now()
     return dt[:10] if len(dt) >= 10 else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _record_addresses(rec: dict) -> set[str]:
+    """一条事实记录上出现的全部邮箱地址（小写裸地址）。
+
+    口径唯一来源是 ``dc_tenant_mailboxes.rec_addresses``；import 不到时本地兜底，
+    保证 ``email_gateway`` 单独使用（测试 / 独立脚本）也不会因此放行全部记录。
+    """
+    try:
+        from dc_tenant_mailboxes import rec_addresses
+        return rec_addresses(rec)
+    except Exception:  # noqa: BLE001
+        out: set[str] = set()
+        for key in ("sender", "from", "recipients", "to", "cc", "bcc", "reply_to"):
+            value = rec.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (str, dict)):
+                value = [value]
+            for item in value:
+                if isinstance(item, dict):
+                    item = item.get("email") or item.get("address") or ""
+                for _, addr in getaddresses([str(item or "")]):
+                    addr = addr.strip().strip("<>").strip().lower()
+                    if addr:
+                        out.add(addr)
+        return out
 
 
 def _hash_key(s: str) -> str:
@@ -422,6 +450,9 @@ class MarkdownEmailStore:
             "text": message.get("text") or message.get("text_preview", "") or "",
             "html": message.get("html", "") or "",
             "company_id": message.get("company_id", ""),
+            # 附件索引行（[{filename, content_type, size, path, sha256}]）。_normalize 是
+            # 白名单：不在这里列出的字段会被静默丢弃，入站附件正是这样丢了很久。
+            "attachments": message.get("attachments") or [],
             "campaign_id": message.get("campaign_id", ""),
             "lead_id": message.get("lead_id", ""),
             "contact_id": message.get("contact_id", ""),
@@ -436,6 +467,11 @@ class MarkdownEmailStore:
                 # 不是本地 make_msgid 生成的占位 ID；多供应商时再抽象为 provider_message_id（本轮不改字段名）。
                 "smtp_message_id": message.get("smtp_message_id", "") or "",
                 "thread_id": message.get("thread_id", "") or "",
+                # origin_notify_target：「发这封邮件的会话」（oc_ 群 / ou_ 私聊）。
+                # 回信默认投递回这里，account 级人工绑定只作回退（2026-09-15 起）。
+                # _normalize 是白名单：不在此列出的字段会被静默丢弃；旧记录缺该字段
+                # 读到的是空串，不报错。
+                "origin_notify_target": message.get("origin_notify_target", "") or "",
                 "sent_at": message.get("sent_at") or message.get("created_at", utc_now()),
                 "status": message.get("status", "sent"),
                 "provider_status": message.get("provider_status", "") or "",
@@ -444,6 +480,11 @@ class MarkdownEmailStore:
                 "touch_number": int(message.get("touch_number", 0)),
                 "content_version": message.get("content_version", "") or "",
                 "legacy": int(bool(message.get("legacy", False))),
+                # send_channel：**显式渠道标记**（growth_send / founder_direct）。
+                # 2026-09-16：dc_record_outbound 不再写死 resend_gs 假账号（回信匹配不上的根因），
+                # 渠道归属改为显式字段优先；旧记录缺该字段读到空串，quality_metrics 回退旧规则推断。
+                # _normalize 是白名单：不列在这里的字段会被静默丢弃。
+                "send_channel": message.get("send_channel", "") or "",
             })
         else:
             base.update({
@@ -581,6 +622,40 @@ class MarkdownEmailStore:
                 out.append(rec)
         return out
 
+    def mark_bounced_by_contact(self, account_id: str, buyer_email: str,
+                                category: str = "unknown") -> bool:
+        """个人邮箱退信回写：按「账号+收件人」定位最近一封 outbound，标 bounced。"""
+        matches = self.find_outbounds_by_contact(account_id, buyer_email)
+        if not matches:
+            return False
+        target = max(matches, key=lambda r: (r.get("sent_at") or r.get("created_at") or ""))
+        if target.get("provider_status") in _TERMINAL:
+            return False
+        rec = dict(target)
+        rec["provider_status"] = "bounced"
+        reason = (f"[{category}] bounced (IMAP NDR)" if category and category != "unknown"
+                  else "bounced (IMAP NDR)")
+        rec["failure_reason"] = reason[:500]
+        rec["updated_at"] = utc_now()
+        rel = self._locate_outbound_path(target)
+        path = self.root / rel
+        if not path.exists():
+            key = self._record_key("outbound", {
+                "account_id": target.get("account_id", ""),
+                "local_message_id": target.get("local_message_id", ""),
+                "created_at": target.get("created_at", ""),
+            })
+            ym = _ym(target.get("sent_at") or target.get("created_at"))
+            rel = self._record_path("outbound", target.get("company_id", ""), ym, key)
+            path = self.root / rel
+        if not path.exists():
+            return False
+        with self._record_lock(f"bounce:{account_id}:{buyer_email.strip().lower()}"):
+            _write_snapshot(path, rec)
+            self._append_delivery_event(target.get("resend_id") or buyer_email,
+                                        "bounced", rec["failure_reason"])
+        return True
+
     def list_outbound_records(self, company_id: str = None) -> list[dict]:
         canonical = company_id
         try:
@@ -596,17 +671,35 @@ class MarkdownEmailStore:
             out.append(rec)
         return out
 
-    def list_inbound_records(self, company_id: str = None) -> list[dict]:
-        canonical = company_id
+    def list_inbound_records(self, company_id: str = None, *,
+                             mailboxes: "set[str] | None" = None) -> list[dict]:
+        """入站事实列表；``company_id`` 给定时只返回**该租户**的记录。
+
+        2026-09-17 串租户事故后收紧两处：
+
+        1. **归属不明的不认领**：记录上 ``company_id`` 为空（落在 ``inbound/_unmatched/``）
+           的，以前会被 ``canonical_company_id("")`` 归到「当前 supplier_id」——等于谁读就
+           归谁，每个租户都会把这些信念成自己的。现在一律跳过。
+        2. **可按收发地址二次核验**：传 ``mailboxes``（本租户绑定邮箱）时，地址里没有
+           本租户邮箱的记录一律不返回，挡住历史已经写进本租户目录的污染记录。
+        """
+        _canon = lambda value: value  # noqa: E731
         try:
             from enterprise_ids import canonical_company_id
-            canonical = canonical_company_id(company_id) if company_id else None
+            _canon = canonical_company_id
         except ImportError:
-            canonical_company_id = lambda value: value  # noqa: E731
+            pass
+        canonical = _canon(company_id) if company_id else None
+        verify = {str(m).strip().lower() for m in (mailboxes or set()) if str(m).strip()}
         out = []
         for rec in _list_snapshots(self._inbound):
-            record_company = canonical_company_id(rec.get("company_id", ""))
-            if canonical and record_company != canonical:
+            raw_company = str(rec.get("company_id", "") or "").strip()
+            if canonical:
+                if not raw_company:
+                    continue                      # 归属不明：不认领
+                if _canon(raw_company) != canonical:
+                    continue
+            if mailboxes is not None and not (_record_addresses(rec) & verify):
                 continue
             out.append(rec)
         return out
@@ -668,6 +761,31 @@ class MarkdownEmailStore:
             path = self.root / rel
             _write_snapshot(path, rec)
             self._write_index("message-id", smtp_message_id, rel)
+            return True
+
+    def set_outbound_notify_target(self, resend_id: str, notify_target: str) -> bool:
+        """把「发信会话」补写到**已落库**的 outbound 事实（回信默认投递目标）。
+
+        与 :meth:`backfill_smtp_message_id` 同构：按 resend_id 定位 + 定点更新 + 幂等。
+        为什么必须定点更新而不是重新 insert：GS 直发的 outbound 事实是在 node 侧由
+        ``dc_record_outbound.py`` 落的，发信入口拿到 ``--receipt-target`` 时事实已经存在，
+        再 insert 会写出第二条 outbound 事实（回信匹配出现两个候选）。
+
+        返回是否发生变更；找不到事实返回 False（调用方按 best-effort 处理，不得回滚发送）。
+        """
+        if not resend_id or not notify_target:
+            return False
+        with self._record_lock(f"notifytarget:{resend_id}"):
+            outbound = self.find_outbound_by_resend_id(resend_id)
+            if outbound is None:
+                return False
+            if outbound.get("origin_notify_target") == notify_target:
+                return False
+            rec = dict(outbound)
+            rec["origin_notify_target"] = notify_target
+            rec["updated_at"] = utc_now()
+            rel = self._locate_outbound_path(rec)
+            _write_snapshot(self.root / rel, rec)
             return True
 
     def remove_outbound(self, resend_id: str) -> dict:

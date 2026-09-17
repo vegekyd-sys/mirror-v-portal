@@ -115,10 +115,12 @@ function tenantIdFromPath(pathName: string): string | undefined {
   return undefined;
 }
 
-/** Fire-and-forget audit write; failures are logged, never thrown. */
-export async function writeAuditLog(pool: pg.Pool, entry: AuditEntry): Promise<void> {
-  try {
-    await pool.query(
+/** Strict audit insert for callers that require transactional failure semantics. */
+export async function writeAuditLogStrict(
+  database: Pick<pg.Pool, 'query'>,
+  entry: AuditEntry,
+): Promise<void> {
+  await database.query(
       `INSERT INTO audit_logs
          (actor, actor_type, action, method, path, resource_type, resource_id,
           tenant_id, old_value, new_value, status_code, duration_ms, ip, request_id)
@@ -140,6 +142,12 @@ export async function writeAuditLog(pool: pg.Pool, entry: AuditEntry): Promise<v
         entry.requestId ?? null,
       ],
     );
+}
+
+/** Fire-and-forget audit write; failures are logged, never thrown. */
+export async function writeAuditLog(pool: pg.Pool, entry: AuditEntry): Promise<void> {
+  try {
+    await writeAuditLogStrict(pool, entry);
   } catch (err: unknown) {
     console.error(
       '[audit] failed to write audit log:',

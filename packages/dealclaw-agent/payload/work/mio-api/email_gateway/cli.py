@@ -8,6 +8,15 @@ from pathlib import Path
 
 from .imap_sync import ImapSynchronizer
 from .providers import PROVIDERS, get_provider
+from .provision import (
+    EXIT_ERROR,
+    EXIT_NOT_READY,
+    EXIT_OK,
+    ProvisionError,
+    check_send_ready,
+    ensure_mailbox,
+    mailbox_readiness,
+)
 from .smtp_send import SmtpSender
 from .store import EmailStore
 from .verify import AccountVerifier
@@ -113,6 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
     send = sub.add_parser("send")
     send.add_argument("--account-id", required=True)
     send.add_argument("--confirmed-by", required=True)
+    # 归属信息：不传 --enterprise 时从 account 的 enterprise_id 兜底（用户/agent 不必知道企业号）
+    send.add_argument("--enterprise", default="", help="企业号；缺省取 account 的 enterprise_id")
+    send.add_argument("--campaign-id", default="")
+    send.add_argument("--lead-id", default="")
+    send.add_argument("--contact-id", default="")
+    send.add_argument("--origin-notify-target", default="",
+                      help="发信会话（oc_ 群 / ou_ 私聊）：买家回信默认投递回这里")
     send.add_argument("--to", required=True, help="comma-separated recipients")
     send.add_argument("--cc", default="")
     send.add_argument("--bcc", default="")
@@ -124,7 +140,56 @@ def build_parser() -> argparse.ArgumentParser:
     html_group.add_argument("--html")
     html_group.add_argument("--html-file")
     send.add_argument("--reply-to")
+    # 附件：可重复传，每次一个文件路径（--attach a.pdf --attach b.png）。
+    # 不支持通配符展开——由调用方/shell 展开后逐个传，避免「以为发了 5 个其实发了 1 个」。
+    send.add_argument("--attach", action="append", default=[], metavar="PATH",
+                      help="附件文件路径，可重复；总大小上限见 DC_ATTACHMENT_SEND_MAX_BYTES")
     send.add_argument("--dry-run", action="store_true")
+
+    # ── 默认邮箱懒创建 + 发信前置闸门（T2：可直接被 skill / 智能体调用）──
+    mb = sub.add_parser("mailbox-ensure", help="幂等懒创建租户默认邮箱")
+    mb.add_argument("--enterprise", default=None)
+    mb.add_argument("--company-name", default="")
+    mb.add_argument("--brand-name-en", default="")
+    mb.add_argument("--short-name-en", default="")
+    mb.add_argument("--pinyin-abbr", default="")
+    mb.add_argument("--slug", default="", help="已解析的地址短名（可选）")
+    mb.add_argument("--owner-open-id", default="")
+    mb.add_argument("--notify-target", default="", help="oc_ 群 / ou_ DM（可选）")
+    mb.add_argument("--activate", action="store_true", help="reserved → active")
+
+    ms = sub.add_parser("mailbox-status", help="默认邮箱发信就绪度")
+    ms.add_argument("--enterprise", default=None)
+    ms.add_argument("--address", default="")
+
+    sg = sub.add_parser("send-gate", help="发信前置闸门检查（未就绪退出码 3）")
+    sg.add_argument("--enterprise", default=None)
+    sg.add_argument("--from-address", required=True)
+
+    # ── 发信质量与用量（T7：只读指标入口，人工查看用）──
+    q = sub.add_parser("email-quality", help="发信质量与用量指标（只读：6 指标分渠道 + 退信/投诉率 + 两套账）")
+    q.add_argument("--enterprise", required=True, help="企业 id / slug（必填，租户隔离）")
+    q.add_argument("--start", default="", help="业务日起（YYYY-MM-DD，租户时区，含）")
+    q.add_argument("--end", default="", help="业务日止（YYYY-MM-DD，租户时区，含）")
+    q.add_argument("--tenant", default=None, help="租户 slug（口径/时区解析用）")
+    q.add_argument("--line", action="store_true", help="只打印一行人读摘要")
+    q.add_argument("--provider-cost", action="store_true", help="只打印 Provider 成本账")
+
+    # ── 发信刹车开关 + 阈值告警（T8：平台总开关 / 租户隔离 / 阈值可见）──
+    sws = sub.add_parser("send-switch-status", help="查看发信刹车开关状态（平台 + 各租户）")
+    sws.add_argument("--enterprise", default="", help="只判定该租户（可选）")
+
+    swp = sub.add_parser("send-switch-platform", help="平台级总开关：一键停/恢复全部对外发信")
+    swp.add_argument("--action", required=True, choices=["pause", "resume"])
+    swp.add_argument("--reason", default="", help="停机原因（会写入状态并回显给被拒发信方）")
+    swp.add_argument("--by", default="", help="操作人（谁停的/谁恢复的）")
+
+    swt = sub.add_parser("send-switch-tenant", help="单租户隔离开关：只停/恢复一个 enterprise_id")
+    swt.add_argument("--enterprise", required=True, help="企业 id / slug")
+    swt.add_argument("--action", required=True, choices=["pause", "resume"])
+    swt.add_argument("--reason", default="")
+    swt.add_argument("--by", default="")
+
     return parser
 
 
@@ -212,6 +277,32 @@ def main(argv: list[str] | None = None) -> int:
             print(format_notifications(results))
         else:
             emit(results)
+    elif args.command == "mailbox-ensure":
+        try:
+            emit(ensure_mailbox(
+                args.enterprise or "",
+                company_name=args.company_name,
+                brand_name_en=args.brand_name_en,
+                short_name_en=args.short_name_en,
+                pinyin_abbr=args.pinyin_abbr,
+                slug=args.slug,
+                owner_open_id=args.owner_open_id,
+                notify_target=args.notify_target,
+                activate=args.activate,
+                data_dir=args.data_dir,
+            ))
+        except ProvisionError as exc:
+            emit(exc.as_dict())
+            return EXIT_ERROR
+    elif args.command == "mailbox-status":
+        emit(mailbox_readiness(enterprise_id=args.enterprise or "",
+                               address=args.address, data_dir=args.data_dir))
+    elif args.command == "send-gate":
+        gate = check_send_ready(enterprise_id=args.enterprise or "",
+                                from_address=args.from_address,
+                                data_dir=args.data_dir)
+        emit(gate)
+        return EXIT_OK if gate["allowed"] else EXIT_NOT_READY
     elif args.command == "send":
         text = ""
         if args.text_file:
@@ -225,20 +316,83 @@ def main(argv: list[str] | None = None) -> int:
             html = args.html
         if not text and not html:
             raise ValueError("provide at least one of --text/--text-file or --html/--html-file")
-        emit(
-            SmtpSender(store).send(
-                account_id=args.account_id,
-                confirmed_by=args.confirmed_by,
-                to=_csv(args.to),
-                cc=_csv(args.cc),
-                bcc=_csv(args.bcc),
-                subject=args.subject,
-                text=text,
-                html=html or None,
-                reply_to=args.reply_to,
-                dry_run=args.dry_run,
-            )
+        # 归属：优先显式 --enterprise，其次 account 的 enterprise_id（不必让用户填）
+        acct = {}
+        try:
+            acct = store.get_account(args.account_id) or {}
+        except Exception:  # noqa: BLE001
+            acct = {}
+        company_id = (args.enterprise or acct.get("enterprise_id", "") or "").strip()
+        send_result = SmtpSender(store).send(
+            account_id=args.account_id,
+            confirmed_by=args.confirmed_by,
+            to=_csv(args.to),
+            cc=_csv(args.cc),
+            bcc=_csv(args.bcc),
+            subject=args.subject,
+            text=text,
+            html=html or None,
+            reply_to=args.reply_to,
+            dry_run=args.dry_run,
+            company_id=company_id,
+            campaign_id=args.campaign_id or "",
+            lead_id=args.lead_id or "",
+            contact_id=args.contact_id or "",
+            attachments=args.attach or [],
         )
+        # 发信成功后落 outbound 事实：收信匹配的唯一依据，漏落 → 回信静默匹配不到。
+        # best-effort：失败只在结果里标出，不影响发送结果。2026-09-15 修复。
+        fact = {"ok": False, "error": "skipped"}
+        # 闸门不能只看 resend_id：SMTP 直发（个人邮箱）永远没有 resend_id，只有真实 RFC Message-ID。
+        # 2026-09-15 修复：此前 SMTP 发信永不落事实 → 回信匹配不到、邮件日志/案卷查不到。
+        if not args.dry_run and isinstance(send_result, dict) and (
+            send_result.get("resend_id") or send_result.get("message_id")
+        ):
+            from email_gateway.outbound_facts import land_outbound_fact
+
+            fact = land_outbound_fact(
+                from_addr=acct.get("email_address") or acct.get("email") or "",
+                to_list=_csv(args.to),
+                subject=args.subject,
+                resend_id=send_result.get("resend_id", ""),
+                message_id=send_result.get("message_id", ""),
+                enterprise=company_id or acct.get("enterprise_id", ""),
+                origin_notify_target=args.origin_notify_target or "",
+                store=store,
+            )
+        if isinstance(send_result, dict):
+            send_result["outbound_fact"] = fact
+        emit(send_result)
+    elif args.command == "email-quality":
+        from email_metrics.quality_metrics import format_quality_line, metrics_view
+        view = metrics_view(args.enterprise, start=args.start or None, end=args.end or None,
+                            tenant=args.tenant, store=store)
+        if args.provider_cost:
+            emit(view["provider_cost"])
+        elif args.line:
+            print(format_quality_line(view))
+        else:
+            emit(view)
+    elif args.command == "send-switch-status":
+        from email_gateway.send_control import switch_overview
+        emit(switch_overview(args.enterprise, data_dir=args.data_dir))
+    elif args.command == "send-switch-platform":
+        from email_gateway.send_control import set_platform_paused
+        state = set_platform_paused(args.action == "pause", reason=args.reason,
+                                    by=args.by, data_dir=args.data_dir)
+        emit({"ok": True, "scope": "platform", "action": args.action,
+              "paused": bool(state["platform"]["paused"]), "platform": state["platform"],
+              "updated_at": state.get("updated_at", "")})
+    elif args.command == "send-switch-tenant":
+        from email_gateway.send_control import normalize_tenant_id, set_tenant_paused
+        tenant = normalize_tenant_id(args.enterprise)
+        state = set_tenant_paused(args.enterprise, args.action == "pause",
+                                  reason=args.reason, by=args.by, data_dir=args.data_dir)
+        emit({"ok": True, "scope": "tenant", "action": args.action,
+              "enterprise_id": args.enterprise, "tenant_id": tenant,
+              "paused": bool((state.get("tenants") or {}).get(tenant, {}).get("paused")),
+              "tenants": state.get("tenants") or {},
+              "updated_at": state.get("updated_at", "")})
     return 0
 
 

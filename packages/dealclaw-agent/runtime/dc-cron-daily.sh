@@ -38,25 +38,44 @@ python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-daily] 非法时区: $TZ" >&2; exit 1; }
 
 # ── 注入单个 cron（add 自带 converge，幂等）──
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+
 ensure() {
   local name="$1" cron_expr="$2" slot="$3" decl_key="$4"
+  # schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）
+  local sched_env
+  sched_env="$(python3 "$CONVERGE" resolve --decl-key "$decl_key" --cron "$cron_expr" --tz "$TZ")" || {
+    echo "[dc-cron-daily] $name: schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+    return 1
+  }
+  eval "$sched_env"
+
   openclaw cron add \
-    --cron "$cron_expr" \
-    --tz "$TZ" \
+    --cron "$DC_CRON_EXPR" \
+    --tz "$DC_CRON_TZ" \
     --command "python3 -m dc_daily_cycle run --slot $slot --execute --dispatch" \
     --command-cwd "$MIO_DIR" \
     --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
     --command-env "DC_NOTIFY_ALLOWED_COMPANIES=$SUPPLIER_ID" \
     --command-env "DC_DATA_DIR=$MIO_DIR/data" \
     --no-deliver \
+    --timeout-seconds 1800 \
     --declaration-key "$decl_key" \
     --name "$name" \
-    --description "DealClaw ${slot} 报（${cron_expr} @ ${TZ}）"
-  echo "[dc-cron-daily] 已同步: $name（${cron_expr} @ ${TZ}）"
+    --description "DealClaw ${slot} 报（${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
+
+  # 注册成功后才记录基线：提前记录会让 add 失败时把现状误判成用户修改
+  python3 "$CONVERGE" record --decl-key "$decl_key" --cron "$cron_expr" --tz "$TZ" \
+    || echo "[dc-cron-daily] $name: 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
+
+  echo "[dc-cron-daily] 已同步: $name（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"
 }
 
 # ── 早晚报（时区统一走 $TZ）──
-ensure "dealclaw-morning" "30 9 * * *" "morning" "dealclaw-morning"
-ensure "dealclaw-evening" "30 17 * * *" "evening" "dealclaw-evening"
+# 单条失败不阻断另一条：宁可注册一半，也好过两条都没有
+failed=0
+ensure "dealclaw-morning" "30 9 * * *" "morning" "dealclaw-morning" || failed=1
+ensure "dealclaw-evening" "30 17 * * *" "evening" "dealclaw-evening" || failed=1
 
 echo "[dc-cron-daily] 完成（时区: $TZ）"
+exit "$failed"

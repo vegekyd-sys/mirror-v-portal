@@ -8,30 +8,38 @@ author: ""
 
 > 管理 DealClaw 的「邮箱 → 飞书群通知」绑定。共两类，**先按邮箱域名路由，再走对应流程**：
 >
-> - **resend 代理邮箱 webhook 绑定**：`xxx@mail.dealclaw.io` 代理邮箱，服务端 webhook 直接推送
+> - **resend 代理邮箱 webhook 绑定**：`xxx@*.dealclaw.io` 代理邮箱（`mail.` / `bde.` / `send.` … 任意子域），服务端 webhook 直接推送
 > - **个人邮箱通知绑定**：真实个人/企业邮箱（163、腾讯企业邮箱、gmail 等），本地 IMAP 轮询
 
 ---
 
 ## 路由判断（先判类型，再收集信息）
 
+### 代理邮箱判据（唯一定义，先记这一条）
+
+- **代理邮箱 = 域名是 `dealclaw.io` 或其任意子域**：`mail.dealclaw.io`、`bde.dealclaw.io`、`send.dealclaw.io` …（外加旧域 `mail.dealclaw.com`）。等价于 account 的 `provider=resend` / `mailbox_kind=dealclaw_proxy`。
+- **个人邮箱 = 其他所有域名**：163 / QQ / 腾讯企业邮箱 / gmail / 企业自建域名等。
+- 判据是**域名后缀**，不是子域白名单 —— 不要枚举 `mail.`，不要精确匹配某个子域（只认 `mail.dealclaw.io` 就是 09-14 那次漏判的根因）。
+- **禁用 MX 探测区分这两类**：代理收信域（如 `bde.dealclaw.io`）必然有 MX，按「有 MX → SMTP」判会把它错误归到个人邮箱。
+- 代码同源判据：`scripts/founder-direct/lib/email-routing.mjs`（`isResendProxyDomain`）；`preflight-email.mjs` / `send-direct.mjs` 与本文规则必须一致。
+
 看到「绑邮箱 / 绑定邮件通知 / 邮件通知绑定」类请求，先看用户给的**邮箱域名**：
 
 | 邮箱形态 | 类型 | 绑定方式 | 通知路径 |
 |---------|------|---------|---------|
-| `xxx@mail.dealclaw.io` | resend 代理邮箱 | `dealclaw.datathink.com/webhook/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
+| `xxx@*.dealclaw.io`（任意子域，如 `mail.` / `bde.` / `send.`） | resend 代理邮箱 | `dealclaw.datathink.com/webhook/bindings`（服务端） | resend webhook → 服务端 → 飞书 |
 | `@163.com` / `@qq.com` / `@gmail.com` 等真实邮箱 | 个人邮箱 | `email_gateway.cli`（本地） | cron IMAP 轮询 → 飞书 |
 
 判断规则：
-- 邮箱域名是 `mail.dealclaw.io` 且动词是「创建/建/新增」→ 走 **类型 C（登记代理邮箱）**
-- 邮箱域名是 `mail.dealclaw.io` 且动词是「绑定/绑」→ 走 **类型 A（代理 webhook 绑定）**
+- 邮箱域名是 `dealclaw.io` 或其任意子域（`mail.` / `bde.` / `send.` …）且动词是「创建/建/新增」→ 走 **类型 C（登记代理邮箱）**
+- 邮箱域名是 `dealclaw.io` 或其任意子域且动词是「绑定/绑」→ 走 **类型 A（代理 webhook 绑定）**
 - 其他真实邮箱（`@163.com` 等）→ 走 **类型 B（个人 IMAP）**
 
 - 用户没给邮箱，或只说「绑邮箱」没说是哪种 → 先问邮箱地址，拿到后按域名路由。
 - 用户同时提到「代理邮箱 / dealclaw 邮箱」→ 直接走 A。
 - 用户提到「个人邮箱 / 163 / QQ / gmail」→ 直接走 B。
 
-两类**不要混用**：个人邮箱走 `/bindings` 服务端接口是无意义的（服务端只认 `@mail.dealclaw.io` 的 resend webhook 事件）；代理邮箱也不需要本地 account/IMAP。
+两类**不要混用**：个人邮箱走 `/bindings` 服务端接口是无意义的（服务端只认 `dealclaw.io` 代理域发来的 resend webhook 事件，不认个人邮箱域）；代理邮箱也不需要本地 account/IMAP —— 本地 account 只是发信身份，不参与通知绑定。
 
 ---
 
@@ -42,7 +50,7 @@ author: ""
 
 ### 触发条件
 
-- 用户给的邮箱是 `xxx@mail.dealclaw.io`
+- 用户给的邮箱是 `xxx@*.dealclaw.io`（任意子域）
 - 或用户说「代理邮箱绑定」「dealclaw 邮箱通知绑定」
 
 ### 绑定需要什么
@@ -71,7 +79,7 @@ mention_open_id = 处理此绑定请求的应用机器人 open_id，不是用户
 
 收到代理邮箱绑定请求后，按顺序收集：
 
-1. **代理邮箱** → 先问，用户不知道格式给示例 `用户名@mail.dealclaw.io`
+1. **代理邮箱** → 先问，用户不知道格式给示例 `用户名@mail.dealclaw.io`（`*.dealclaw.io` 任意子域都算代理邮箱）
 2. **Webhook URL + 签名校验** → 用户给了邮箱后，同一轮就问两样：webhook 地址 + "你的机器人开签名校验了吗？开了给我验签码"。不要分成两轮。
 
 全部信息收集齐后再调用绑定接口。
@@ -209,14 +217,14 @@ python3 -m email_gateway.cli account-add ... --secret-ref "file:/data/workspace/
 
 ---
 
-## 类型 C：创建 resend 代理邮箱（`xxx@mail.dealclaw.io`）
+## 类型 C：创建 resend 代理邮箱（`xxx@*.dealclaw.io`）
 
-> 触发：用户说「创建代理邮箱 xxx@mail.dealclaw.io」「帮我建 resend 代理邮箱」。
-> 前提：mail.dealclaw.io 域名已在 Resend 验证（sending+receiving），@mail.dealclaw.io 通配收信，
+> 触发：用户说「创建代理邮箱 xxx@bde.dealclaw.io」「帮我建 resend 代理邮箱」。
+> 前提：该代理域已在 Resend 验证（sending+receiving）且配了通配收信，
 > 无需逐个别名创建，也无需再建域名。
 
 ### 判断规则
-- 邮箱域名是 `mail.dealclaw.io` 且动词是「创建/建/新增」→ 类型 C（登记代理邮箱）
+- 邮箱域名是 `dealclaw.io` 或其任意子域（`mail.` / `bde.` / `send.` …）且动词是「创建/建/新增」→ 类型 C（登记代理邮箱）
 - 动词是「绑定/绑」→ 类型 A（webhook 绑定）
 
 ### 一条命令
@@ -250,19 +258,23 @@ python3 -m email_gateway.cli account-add \
 - `via: "none"` → webhook URL 不对或签名校验不匹配
 - `400` → 缺少必填字段（`mention_open_id` 或漏传 `X-Supplier-Id`）
 - `401` → ADMIN_TOKEN 不对或过期
+- 代理邮箱被当个人邮箱处理（走了本地 `bind-group`/IMAP）→ 域名判据缺口（旧版只认 `mail.dealclaw.io`）：按「代理邮箱判据」重判，`xxx@任意子域.dealclaw.io` 一律走类型 A
+- 历史错误记录（`email-registry.json` 里代理域被写成 `smtp`）→ `node scripts/founder-direct/migrate-proxy-protocol.mjs`（先看报告，加 `--apply` 才写入，幂等）
 
 ### 类型 B（个人邮箱）
 
 - `SecretResolutionError` → 授权码在 cron 环境读不到（见 secret-ref 三种形式）
 - `Unsafe Login` / IMAP 登录失败 → 163 需要客户端授权码（非登录密码），且已开启 IMAP/SMTP
 - 收不到通知 → 确认 binding 的 `--webhook` 填了、`notify_enabled` 为真、cron `dealclaw-email-sync-all` 在跑
-- 重复发信被 `duplicate idempotency key` 拦截 → 同一收件人默认幂等，需传 `content_version`/`campaign_id` 区分
+- 重复发信被 `duplicate idempotency key` 拦截 → 同一收件人默认幂等，需传 `content_version`/`campaign_id` 区分（换附件重发不受影响，附件指纹已算进幂等键）
+- 问「这个邮箱能不能发附件」→ 能，个人邮箱与代理邮箱都支持。**但发信不归本 skill 管**：怎么发见 `dealclaw-email-founder-direct` 的「带附件」一节（含绕过刹车/日志的补救清单），机制与上限见 `work/mio-api/email_gateway/README.md`
 
 ---
 
 ## 脚本路径锚点（避免执行失败）
 
 - 本 skill 的绑定走 `work/mio-api` 下的 `email_gateway.cli` 和 `scripts/dc-bindings.sh`（相对工作区根），不要拼 `/data/workspace` 绝对路径。
+- 路由判据实现在 `scripts/founder-direct/lib/email-routing.mjs`；单个邮箱判定可自查：`node scripts/founder-direct/preflight-email.mjs --email <邮箱>`（退出码 0=READY）。
 - 不要 `ls`/list `scripts/founder-direct/`、`scripts/resend/` 目录来「确认发信脚本存在」——发信脚本归属 email-founder-direct / email-growth-send，且其 `accounts/`、`.env` 等运行时文件不在镜像里，列目录必失败。
 
 ## 限流

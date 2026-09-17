@@ -15,12 +15,15 @@ import RuntimeConfigsPage from './pages/RuntimeConfigsPage';
 import LlmProvidersPage from './pages/LlmProvidersPage';
 import LlmTokenPricingPage from './pages/LlmTokenPricingPage';
 import LlmPushTasksPage from './pages/LlmPushTasksPage';
+import RolloutTasksPage from './pages/RolloutTasksPage';
+import CatalogPage from './pages/CatalogPage';
 import UsersPage from './pages/UsersPage';
 import ExternalApiKeysPage from './pages/ExternalApiKeysPage';
 import ChatApiKeysPage from './pages/ChatApiKeysPage';
 import ImageReleasesPage from './pages/ImageReleasesPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import ChatPage from './pages/ChatPage';
+import SystemAgentPage from './pages/SystemAgentPage';
 
 // Router basename mirrors vite `base` (phase 3: '/' → empty basename).
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -50,10 +53,13 @@ export default function App() {
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:tenantId" element={<CustomerDetailPage />} />
             <Route path="agents" element={<AgentsPage />} />
+            <Route path="nexus-manager" element={<SystemAgentPage />} />
             <Route path="agents/:tenantId" element={<AgentDetailPage />} />
             <Route path="llm-providers" element={<LlmProvidersPage />} />
+            <Route path="catalog" element={<CatalogPage />} />
             <Route path="llm-token-pricing" element={<LlmTokenPricingPage />} />
             <Route path="llm-push-tasks" element={<LlmPushTasksPage />} />
+            <Route path="rollout-tasks" element={<RolloutTasksPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="pricing" element={<SkillPricesPage />} />

@@ -6,20 +6,28 @@ import { createTenantRoutes } from './routes/tenants.js';
 import { createRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { createAdminOpsRoutes } from './routes/admin-ops.js';
 import { createFeishuAppScanRoutes } from './routes/feishu-app-scan.js';
+import { createWeComAppScanRoutes } from './routes/wecom-app-scan.js';
+import { createDingTalkAppScanRoutes } from './routes/dingtalk-app-scan.js';
 import { createWeChatBindingRoutes } from './routes/wechat-binding.js';
+import { createWeComBindingRoutes } from './routes/wecom-binding.js';
+import { createDingTalkBindingRoutes } from './routes/dingtalk-binding.js';
 import { createExternalApiRoutes } from './routes/external-api.js';
 import { createConversationExternalRoutes } from './routes/conversation-external.js';
 import { createChatExternalRoutes } from './routes/chat-external.js';
 import { createPodConsoleRoutes } from './routes/pod-console.js';
 import { createChatMessageRoutes } from './routes/chat-messages.js';
 import { createLlmPushRoutes } from './routes/llm-push.js';
+import { createRolloutRoutes } from './routes/rollout.js';
 import type { ProvisioningConfig } from './config.js';
 import { SseBroker } from './services/sse-broker.js';
 import { createServiceOrAdminAuthMiddleware } from './middleware/auth.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { createAuditMiddleware } from './services/audit.js';
 import { createTenantMachineAssertionRoutes } from './routes/tenant-machine-assertions.js';
+import { createSystemAgentRoutes } from './routes/system-agent.js';
 import { createModelCatalogRoutes } from './routes/model-catalog.js';
+import { createCatalogRolloutRoutes } from './routes/catalog-rollout.js';
+import { CatalogReleaseService } from './services/catalog-release-service.js';
 
 export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: SseBroker = new SseBroker()) {
   const app = express();
@@ -70,12 +78,17 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // grants no binding authority and no secret is returned.
   app.use(createTenantMachineAssertionRoutes(pool, serviceAuth));
 
+  app.use('/v1/admin/system-agent', createSystemAgentRoutes(authAndAudit));
   app.use(createTenantRoutes(pool, config, authAndAudit, broker));
   app.use(createRuntimeConfigRoutes(pool, config, authAndAudit));
-  app.use(createModelCatalogRoutes(pool, config, authAndAudit));
+  app.use(createModelCatalogRoutes(pool, config, authAndAudit, new CatalogReleaseService(pool)));
+  app.use(createCatalogRolloutRoutes(pool, config, authAndAudit));
   // LLM push async task (SSE + REST) — worker publishes progress to the same
   // broker instance injected here from index.ts.
   app.use(createLlmPushRoutes(pool, broker, authAndAudit));
+  // Rollout batch async task (SSE + REST) — same worker/broker as LLM push;
+  // admin-facing list/detail/stream for deployment progress.
+  app.use(createRolloutRoutes(pool, broker, authAndAudit));
   app.use(createAdminOpsRoutes(pool, config, authAndAudit));
   // Pod logs (admin console) — GET /v1/tenants/:id/logs[/stream]. The pod
   // terminal (exec) is NOT here: it is a WebSocket and attaches to the HTTP
@@ -88,8 +101,18 @@ export function createApp(pool: pg.Pool, config: ProvisioningConfig, broker: Sse
   // Feishu app QR-scan (registerApp device flow) — credentials-only,
   // feeds the customer-creation / feishu-binding forms in the admin SPA.
   app.use(createFeishuAppScanRoutes(authAndAudit));
+  // WeCom (企业微信) bot QR-scan — one-click bot creation; credentials-only,
+  // feeds the wecom-binding form in the admin SPA.
+  app.use(createWeComAppScanRoutes(config, authAndAudit));
+  // DingTalk (钉钉) bot QR-scan — one-click bot creation; credentials-only,
+  // feeds the dingtalk-binding form in the admin SPA.
+  app.use(createDingTalkAppScanRoutes(config, authAndAudit));
   // WeChat (personal WeChat) binding — QR-login direct connection.
   app.use(createWeChatBindingRoutes(pool, config, authAndAudit));
+  // WeCom (企业微信) bot binding — credential-based direct connection.
+  app.use(createWeComBindingRoutes(pool, config, authAndAudit));
+  // DingTalk (钉钉) bot binding — credential-based direct connection.
+  app.use(createDingTalkBindingRoutes(pool, config, authAndAudit));
 
   // 404 fallback
   app.use((_req: Request, res: Response) => {

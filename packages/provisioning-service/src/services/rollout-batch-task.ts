@@ -47,6 +47,8 @@ export interface EnqueueRolloutBatchInput {
   tag: string;   // 期望 tag（展示用）
   actor: string | null;
   actorType: 'admin' | 'service';
+  /** 指定则退化为「单租户 pin」任务（scope 非空），只 recreate 该租户。 */
+  tenantId?: string;
 }
 
 interface RolloutBatchCountRow {
@@ -73,33 +75,40 @@ export async function enqueueRolloutBatch(
   pool: pg.Pool,
   input: EnqueueRolloutBatchInput,
 ): Promise<{ taskId: string; status: 'pending'; reused: boolean }> {
-  // Fast path: reuse an in-flight task for the same service+image.
-  const existing = await pool.query<{ id: string }>(
-    `SELECT id FROM rollout_batch_tasks
-     WHERE service = $1 AND image = $2 AND status IN ('pending','running')
-     ORDER BY created_at
-     LIMIT 1`,
-    [input.service, input.image],
-  );
-  if (existing.rows[0]) {
-    return { taskId: existing.rows[0].id, status: 'pending', reused: true };
+  const scope = input.tenantId ?? null;
+
+  // Idempotent reuse applies only to full-fleet rollouts (scope IS NULL).
+  // Single-tenant pins (scope non-null) always enqueue a fresh task — pin is an
+  // explicit per-tenant operation and must not be deduped against a fleet-wide
+  // rollout of the same image.
+  if (scope === null) {
+    const existing = await pool.query<{ id: string }>(
+      `SELECT id FROM rollout_batch_tasks
+       WHERE service = $1 AND image = $2 AND scope IS NULL AND status IN ('pending','running')
+       ORDER BY created_at
+       LIMIT 1`,
+      [input.service, input.image],
+    );
+    if (existing.rows[0]) {
+      return { taskId: existing.rows[0].id, status: 'pending', reused: true };
+    }
   }
 
   const taskId = randomUUID();
   const inserted = await pool.query<{ id: string }>(
-    `INSERT INTO rollout_batch_tasks (id, service, image, tag, actor, actor_type)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (service, image) WHERE status IN ('pending','running') DO NOTHING
+    `INSERT INTO rollout_batch_tasks (id, service, image, tag, scope, actor, actor_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (service, image) WHERE status IN ('pending','running') AND scope IS NULL DO NOTHING
      RETURNING id`,
-    [taskId, input.service, input.image, input.tag, input.actor, input.actorType],
+    [taskId, input.service, input.image, input.tag, scope, input.actor, input.actorType],
   );
   if (inserted.rows[0]) {
     return { taskId, status: 'pending', reused: false };
   }
-  // Lost a concurrent race — reuse the winner.
+  // Lost a concurrent race (full-fleet only) — reuse the winner.
   const winner = await pool.query<{ id: string }>(
     `SELECT id FROM rollout_batch_tasks
-     WHERE service = $1 AND image = $2 AND status IN ('pending','running')
+     WHERE service = $1 AND image = $2 AND scope IS NULL AND status IN ('pending','running')
      ORDER BY created_at
      LIMIT 1`,
     [input.service, input.image],
@@ -153,12 +162,23 @@ async function enumerateRolloutBatchTargets(
   pool: pg.Pool,
   task: RolloutBatchTaskRecord,
 ): Promise<number> {
+  // Single-tenant pin (scope non-null) enumerates only that tenant; a
+  // full-fleet rollout (scope null) enumerates every live tenant.
   const { rows } = await pool.query<{ tenant_id: string; k8s_namespace: string }>(
-    `SELECT tenant_id, k8s_namespace FROM tenants
-      WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL
-      ORDER BY created_at`,
+    task.scope
+      ? `SELECT tenant_id, k8s_namespace FROM tenants
+          WHERE tenant_id = $1 AND status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL
+          ORDER BY created_at`
+      : `SELECT tenant_id, k8s_namespace FROM tenants
+          WHERE status NOT IN ('destroyed') AND k8s_namespace IS NOT NULL
+          ORDER BY created_at`,
+    task.scope ? [task.scope] : [],
   );
-  const overrides = await getOverrideMap(pool, task.service);
+  // Pin overrides only matter for fleet-wide rollouts — a pinned tenant must
+  // not be touched. A single-tenant pin, by contrast, targets exactly the
+  // tenant whose override was just written, so it must be recreated (not
+  // skipped as `pinned`).
+  const overrides = task.scope === null ? await getOverrideMap(pool, task.service) : new Map<string, string>();
 
   for (const row of rows) {
     const pinned = overrides.has(row.tenant_id);
@@ -325,6 +345,7 @@ function toTaskView(t: RolloutBatchTaskRecord): RolloutBatchTaskView {
     service: t.service,
     image: t.image,
     tag: t.tag,
+    scope: t.scope,
     status: t.status,
     totalCount: t.total_count,
     succeededCount: t.succeeded_count,

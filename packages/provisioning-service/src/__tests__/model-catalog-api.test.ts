@@ -31,22 +31,32 @@ afterEach(() => {
   restoreCatalogEnv();
 });
 
-function createConfig(read: boolean, paramWrite = false): ProvisioningConfig {
+function createConfig(
+  read: boolean,
+  paramWrite = false,
+  snapshotWrite = false,
+): ProvisioningConfig {
   return {
     port: 0, databaseUrl: '', k8sDryRun: true, runtimeNamespace: 'test', imageRegistry: 'test',
     nexusGatewayImageTag: 'test', dealclawAgentImageTag: 'test', agentPvcSize: '1Gi',
     agentPvcStorageClass: 'test', agentPvcAccessMode: 'ReadWriteOnce', ossEndpoint: '', ossBucket: '',
     ossSecretName: '', backupImage: '', creditsLedgerUrl: '', creditsLedgerToken: '',
-    modelCatalogRead: read, modelCatalogShadowImport: false, modelCatalogSnapshotWrite: false,
+    modelCatalogRead: read, modelCatalogShadowImport: false,
+    modelCatalogSnapshotWrite: snapshotWrite,
     modelCatalogParamWrite: paramWrite,
     llmPushWorkerIntervalMs: 100, llmPushLeaseSeconds: 600,
   };
 }
 
-function createApp(pool: pg.Pool, read: boolean, paramWrite = false) {
+function createApp(
+  pool: pg.Pool,
+  read: boolean,
+  paramWrite = false,
+  snapshotWrite = false,
+) {
   const app = express();
   app.use(express.json());
-  app.use(createModelCatalogRoutes(pool, createConfig(read, paramWrite)));
+  app.use(createModelCatalogRoutes(pool, createConfig(read, paramWrite, snapshotWrite)));
   return app;
 }
 
@@ -146,11 +156,80 @@ describe('model catalog status API', () => {
     expect(response.body.code).toBe('MODEL_CATALOG_VALIDATION');
   });
 
+  it('requires valid override evidence without reaching the database', async () => {
+    const pool = { connect: async () => { throw new Error('must not connect'); } } as unknown as pg.Pool;
+    const missingEvidence = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({ expectedUpdatedAt: new Date(0).toISOString(), overrideParams: {} });
+    expect(missingEvidence.status).toBe(400);
+    expect(missingEvidence.body).toMatchObject({
+      code: 'MODEL_CATALOG_VALIDATION',
+      message: 'evidence is required',
+    });
+
+    const invalidEvidence = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({
+        expectedUpdatedAt: new Date(0).toISOString(),
+        overrideParams: {},
+        evidence: { sourceKind: 'manual-contract', observedAt: 'not-a-date', notes: 'test' },
+      });
+    expect(invalidEvidence.status).toBe(400);
+    expect(invalidEvidence.body).toMatchObject({
+      code: 'MODEL_CATALOG_VALIDATION',
+      message: 'evidence.observedAt must be ISO datetime',
+    });
+  });
+
+  it('keeps the write flag check before override evidence validation', async () => {
+    const pool = { connect: async () => { throw new Error('must not connect'); } } as unknown as pg.Pool;
+    const response = await request(createApp(pool, true, false))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({ expectedUpdatedAt: new Date(0).toISOString(), overrideParams: {} });
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('MODEL_CATALOG_PARAM_WRITE_DISABLED');
+  });
+
+  it('accepts valid override evidence and proceeds to model CAS validation', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('SELECT id,provider_instance_id')) return { rows: [{
+          id: 'model-id', provider_instance_id: 'provider-id', model_id: 'qwen3.7-plus',
+          discovered_params: {}, override_params: {}, effective_params: { inputModalities: ['text'] },
+          params_status: 'fallback', revision: '0', updated_at: new Date(0),
+        }] };
+        return { rows: [] };
+      },
+      release: () => undefined,
+    };
+    const pool = { connect: async () => client } as unknown as pg.Pool;
+    const response = await request(createApp(pool, true, true))
+      .patch('/v1/admin/model-catalog/models/model-id/override')
+      .send({
+        expectedUpdatedAt: new Date(1).toISOString(),
+        overrideParams: {},
+        evidence: {
+          sourceKind: 'manual-contract',
+          observedAt: new Date(0).toISOString(),
+          notes: 'approved test override',
+        },
+      });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('MODEL_CATALOG_REVISION_CONFLICT');
+    expect(queries.some((sql) => sql.includes('FOR UPDATE'))).toBe(true);
+    expect(queries).toContain('ROLLBACK');
+  });
+
   it('builds preview once and returns a diff and fingerprint for that snapshot', async () => {
     process.env.RUNTIME_CONFIG_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     let catalogReads = 0;
     const query = async (sql: string) => {
-      if (sql.includes('runtime_configs')) return { rows: [] };
+      if (sql.includes('runtime_configs')) return { rows: [{ encrypted_value: encryptValue(JSON.stringify({
+        providers: [{ name: 'provider', baseUrl: 'https://example.invalid', apiKey: 'secret', models: [{ id: 'chat-model' }] }],
+        defaultModel: 'provider/chat-model', imageModel: null, compactionModel: null, fallbackModels: [],
+      })) }] };
       if (sql.includes('llm_provider_instances')) {
         catalogReads += 1;
         return { rows: [{
@@ -161,7 +240,7 @@ describe('model catalog status API', () => {
             id: 'model-id', provider_instance_id: 'provider-id', model_id: 'chat-model',
             model_type: 'chat', runtime_enabled: true, effective_params: {
               contextWindow: 4096, maxOutputTokens: 1024, inputModalities: ['text'],
-            }, params_status: 'complete',
+            }, params_status: 'fallback', snapshot_approved: false,
           }],
         }] };
       }
@@ -180,7 +259,46 @@ describe('model catalog status API', () => {
       })),
     };
     expect(response.body.fingerprint).toBe(snapshotFingerprint(unredactedShape));
-    expect(response.body.diff.addedProviders).toEqual(['provider']);
-    expect(response.body.diff.addedModels).toEqual(['provider/chat-model']);
+    expect(response.body.diff.addedProviders).toEqual([]);
+    expect(response.body.diff.removedProviders).toEqual([]);
+    expect(response.body.diff.changedProviders).toEqual([]);
+    expect(response.body.diff.addedModels).toEqual([]);
+    expect(response.body.diff.removedModels).toEqual([]);
+    expect(response.body.diff.changedModels).toEqual([]);
+    expect(response.body.diff.fallbackWarnings).toEqual([{
+      providerName: 'provider', modelId: 'chat-model', fallbackFields: ['inputModalities', 'outputModalities'],
+    }]);
+  });
+
+  it('returns 409 when a restore idempotency key is reused for different semantics', async () => {
+    const query = async (sql: string) => {
+      if (sql.includes('idempotency_key = $1')) {
+        return {
+          rows: [{
+            id: 'existing-release', version: 1, parent_id: null,
+            canonical_snapshot: 'enc:snap', compat_payload: 'enc:compat',
+            fingerprint: 'existing-fp', parent_fingerprint: null,
+            diff_summary: { releaseRequestFingerprint: 'different-request' }, warnings: [],
+            actor: 'admin', actor_type: 'admin', status: 'rolled-back',
+            idempotency_key: 'reused-key', created_at: new Date(),
+          }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    };
+    const response = await request(createApp({ query } as unknown as pg.Pool, true, false, true))
+      .post('/v1/admin/model-catalog/snapshot-restore')
+      .send({
+        backupId: 'backup-2',
+        idempotencyKey: 'reused-key',
+        rollout: { mode: 'no-rollout' },
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      code: 'IDEMPOTENCY_KEY_REUSED',
+      message: 'Idempotency key was already used for a different release mutation',
+    });
   });
 });

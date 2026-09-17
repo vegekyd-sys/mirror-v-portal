@@ -169,6 +169,8 @@ class LeadStore:
                     )
                 except Exception as _hb_err:
                     print(f"[heartbeat] upsert_lead_status failed: {_hb_err}")
+                # 📮 触发 A：线索落池后懒建默认邮箱（best-effort）
+                self._ensure_default_mailbox(lead)
                 return "updated"
 
         # 新线索
@@ -192,7 +194,38 @@ class LeadStore:
             )
         except Exception as _hb_err:
             print(f"[heartbeat] upsert_lead_status failed: {_hb_err}")
+        # 📮 触发 A：线索落池后懒建默认邮箱（best-effort）
+        self._ensure_default_mailbox(lead)
         return "created"
+
+    def _ensure_default_mailbox(self, lead: dict) -> dict:
+        """触发 A：线索落池之后懒建本租户默认邮箱（best-effort，永不抛异常）。
+
+        轻量约定：
+          · 只在当前租户 supplier_id 可解析时才动作（未配置则完全 no-op）；
+          · 返回结构只作日志/上层观测用，**不影响** ``save_lead`` 的返回值；
+          · 任何失败都吞掉（默认邮箱是增强能力，不能拖垮线索入库）。
+        """
+        try:
+            from email_gateway.provision import resolve_tenant_id, try_ensure_mailbox
+            enterprise_id = resolve_tenant_id("")   # 只认租户配置，不从线索域名猜
+            if not enterprise_id:
+                return {"ok": False, "skipped": "no_tenant_configured"}
+            notify = str(lead.get("user_open_id", "") or "").strip()
+            result = try_ensure_mailbox(
+                enterprise_id,
+                company_name=str(lead.get("company_name", "") or ""),
+                owner_open_id=notify,
+                notify_target=notify if notify[:3] in ("ou_", "oc_") else "",
+            )
+            if not result.get("ok"):
+                print(f"[dc_ls_store] 默认邮箱懒建失败（不影响线索入库）："
+                      f"{result.get('code')}: {result.get('error')}")
+            return result
+        except Exception as exc:  # noqa: BLE001
+            print(f"[dc_ls_store] 默认邮箱懒建异常（不影响线索入库）："
+                  f"{type(exc).__name__}: {exc}")
+            return {"ok": False, "code": "internal_error", "error": str(exc)}
 
     def annotate(self, identifier: str, user_open_id: str, status: str,
                  reason: Optional[str] = None, enterprise: str = "",

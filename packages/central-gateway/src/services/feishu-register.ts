@@ -36,7 +36,7 @@ export interface RegistrationSession {
 const APP_PRESET = {
   name: process.env.FEISHU_APP_NAME || 'V from Versa',
   desc: process.env.FEISHU_APP_DESC
-    || '自进化智能体 — 镜像你的思维，预判你的下一步，补上你看不见的盲区',
+    || '自进化智能体',
 };
 
 export async function startFeishuRegistration(

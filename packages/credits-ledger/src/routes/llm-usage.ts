@@ -6,8 +6,9 @@
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
-import { query } from '../db/pool.js';
+import { query, getPool } from '../db/pool.js';
 import { calculatePricingAmount, LlmPricingService, subtractPricingAmounts, type PricingRepository } from '../services/llm-pricing.js';
+import { recordDriftAlert } from '../services/llm-pricing-admin.js';
 import type { PricePlanV1 } from '../domain/llm-pricing.js';
 
 const router = Router();
@@ -71,6 +72,17 @@ async function writePricingShadow(usageEventId: string): Promise<void> {
       resolution.amount ?? null, resolution.currency ?? null, legacyAmount, deltaAmount,
       JSON.stringify({ contractVersion: 1, resolution }), resolution.reason ?? null],
   );
+  // Delta threshold alert — record if the relative difference exceeds 1%
+  await recordDriftAlert(getPool(), {
+    usageEventId: usageEventId,
+    legacyAmount: legacyAmount,
+    newAmount: resolution.amount ?? null,
+    deltaAmount: deltaAmount,
+    provider: event.provider,
+    model: event.model,
+  }).catch((driftErr) => {
+    console.error('llm pricing drift alert failed:', driftErr);
+  });
 }
 
 const STATUSES = new Set(['ok', 'error', 'blocked', 'synthesized']);

@@ -266,6 +266,8 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@22.20.1)
 
+  packages/nexus-manager: {}
+
   packages/ops-agent:
     dependencies:
       express:

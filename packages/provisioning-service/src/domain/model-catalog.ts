@@ -104,7 +104,7 @@ function params(value: unknown): ModelRuntimeParamsV1 {
   return result;
 }
 export const ModelRuntimeParamsV1Schema = schema<ModelRuntimeParamsV1>(params);
-export interface ProviderModelRecord { id:string; providerInstanceId:string; modelId:string; displayName?:string; modelType:ModelType; runtimeEnabled:boolean; discoveredParams?:ModelRuntimeParamsV1; overrideParams?:ModelRuntimeParamsV1; effectiveParams:ModelRuntimeParamsV1; paramsStatus:ParamsStatus; schemaVersion:1 }
+export interface ProviderModelRecord { id:string; providerInstanceId:string; modelId:string; displayName?:string; modelType:ModelType; runtimeEnabled:boolean; discoveredParams?:ModelRuntimeParamsV1; overrideParams?:ModelRuntimeParamsV1; effectiveParams:ModelRuntimeParamsV1; paramsStatus:ParamsStatus; snapshotApproved?:boolean; schemaVersion:1; revision?:number; source?:string }
 export interface EffectiveParamsResult { effectiveParams:ModelRuntimeParamsV1; status:ParamsStatus; fallbackFields:string[] }
 const SAFE_FALLBACK: ModelRuntimeParamsV1 = { inputModalities:['text'], outputModalities:['text'] };
 function isPlain(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
@@ -132,3 +132,170 @@ export const ModelMutationSchema = schema<ModelMutation>((value) => {
   if(issues.length) throw new CatalogValidationError(issues);
   return { modelId:raw.modelId as string, modelType:raw.modelType as ModelType, runtimeEnabled:raw.runtimeEnabled===true, ...(discoveredParams?{discoveredParams}:{}), ...(overrideParams?{overrideParams}:{}) };
 });
+
+// ── Provider CRUD domain types ──────────────────────────────────────────
+
+export const PROVIDER_TEMPLATE_KEYS = ['custom-openai','anthropic-compatible','azure-openai','google-vertex','ollama'] as const
+export type ProviderTemplateKey = (typeof PROVIDER_TEMPLATE_KEYS)[number]
+export const PROVIDER_PROTOCOLS = ['openai-completions'] as const
+export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]
+
+export interface ProviderInstanceInput {
+  legacyProviderName: string
+  displayName?: string
+  templateKey: string
+  protocol: string
+  baseUrl: string
+  apiKey?: string
+  enabled: boolean
+  metadata?: Record<string, unknown>
+}
+
+export interface ProviderMutation {
+  displayName?: string
+  templateKey?: string
+  protocol?: string
+  baseUrl?: string
+  apiKey?: string
+  enabled?: boolean
+  metadata?: Record<string, unknown>
+}
+
+function optionalString(value: unknown, path: Array<string | number>, issues: ValidationIssue[], max = 256): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || value.length < 1 || value.length > max) {
+    issues.push({ path, message: `expected string length 1..${max}` })
+    return undefined
+  }
+  return value
+}
+
+function optionalBoolean(value: unknown, path: Array<string | number>, issues: ValidationIssue[]): boolean | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'boolean') {
+    issues.push({ path, message: 'expected boolean' })
+    return undefined
+  }
+  return value
+}
+
+function optionalRecord(value: unknown, path: Array<string | number>, issues: ValidationIssue[]): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    issues.push({ path, message: 'expected object' })
+    return undefined
+  }
+  return value as Record<string, unknown>
+}
+
+export const ProviderInstanceInputSchema = schema<ProviderInstanceInput>((value) => {
+  const issues: ValidationIssue[] = []
+  const raw = object(value, [], issues)
+  strict(raw, ['legacyProviderName','displayName','templateKey','protocol','baseUrl','apiKey','enabled','metadata'], [], issues)
+  if (typeof raw.legacyProviderName !== 'string' || raw.legacyProviderName.length < 1 || raw.legacyProviderName.length > 100)
+    issues.push({ path: ['legacyProviderName'], message: 'expected string length 1..100' })
+  const displayName = optionalString(raw.displayName, ['displayName'], issues, 256)
+  if (typeof raw.templateKey !== 'string' || !PROVIDER_TEMPLATE_KEYS.includes(raw.templateKey as ProviderTemplateKey))
+    issues.push({ path: ['templateKey'], message: `expected one of: ${PROVIDER_TEMPLATE_KEYS.join(', ')}` })
+  if (typeof raw.protocol !== 'string' || !PROVIDER_PROTOCOLS.includes(raw.protocol as ProviderProtocol))
+    issues.push({ path: ['protocol'], message: `expected one of: ${PROVIDER_PROTOCOLS.join(', ')}` })
+  const baseUrl = typeof raw.baseUrl === 'string' ? raw.baseUrl.replace(/\/+$/, '') : ''
+  if (typeof raw.baseUrl !== 'string' || !/^https?:\/\/[^\s]+$/.test(baseUrl))
+    issues.push({ path: ['baseUrl'], message: 'expected valid http(s):// URL' })
+  const apiKey = optionalString(raw.apiKey, ['apiKey'], issues, 4096)
+  if (typeof raw.enabled !== 'boolean')
+    issues.push({ path: ['enabled'], message: 'expected boolean' })
+  const metadata = optionalRecord(raw.metadata, ['metadata'], issues)
+  if (issues.length) throw new CatalogValidationError(issues)
+  return {
+    legacyProviderName: raw.legacyProviderName as string,
+    ...(displayName ? { displayName } : {}),
+    templateKey: raw.templateKey as string,
+    protocol: raw.protocol as string,
+    baseUrl,
+    ...(apiKey ? { apiKey } : {}),
+    enabled: raw.enabled as boolean,
+    ...(metadata ? { metadata } : {}),
+  }
+})
+
+export const ProviderMutationSchema = schema<ProviderMutation>((value) => {
+  const issues: ValidationIssue[] = []
+  const raw = object(value, [], issues)
+  strict(raw, ['displayName','templateKey','protocol','baseUrl','apiKey','enabled','metadata'], [], issues)
+  const displayName = optionalString(raw.displayName, ['displayName'], issues, 256)
+  let templateKey: string | undefined
+  if (raw.templateKey !== undefined) {
+    if (typeof raw.templateKey !== 'string' || !PROVIDER_TEMPLATE_KEYS.includes(raw.templateKey as ProviderTemplateKey))
+      issues.push({ path: ['templateKey'], message: `expected one of: ${PROVIDER_TEMPLATE_KEYS.join(', ')}` })
+    else templateKey = raw.templateKey
+  }
+  let protocol: string | undefined
+  if (raw.protocol !== undefined) {
+    if (typeof raw.protocol !== 'string' || !PROVIDER_PROTOCOLS.includes(raw.protocol as ProviderProtocol))
+      issues.push({ path: ['protocol'], message: `expected one of: ${PROVIDER_PROTOCOLS.join(', ')}` })
+    else protocol = raw.protocol
+  }
+  let baseUrl: string | undefined
+  if (raw.baseUrl !== undefined) {
+    const trimmed = typeof raw.baseUrl === 'string' ? raw.baseUrl.replace(/\/+$/, '') : ''
+    if (typeof raw.baseUrl !== 'string' || !/^https?:\/\/[^\s]+$/.test(trimmed))
+      issues.push({ path: ['baseUrl'], message: 'expected valid http(s):// URL' })
+    else baseUrl = trimmed
+  }
+  const apiKey = optionalString(raw.apiKey, ['apiKey'], issues, 4096)
+  const enabled = optionalBoolean(raw.enabled, ['enabled'], issues)
+  const metadata = optionalRecord(raw.metadata, ['metadata'], issues)
+  if (issues.length) throw new CatalogValidationError(issues)
+  return {
+    ...(displayName ? { displayName } : {}),
+    ...(templateKey ? { templateKey } : {}),
+    ...(protocol ? { protocol } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(apiKey ? { apiKey } : {}),
+    ...(enabled !== undefined ? { enabled } : {}),
+    ...(metadata ? { metadata } : {}),
+  }
+})
+
+// ── Global Model Policy domain types ─────────────────────────────────────
+
+export interface GlobalModelPolicyInput {
+  defaultModel: string | null
+  imageModel: string | null
+  compactionModel: string | null
+  fallbackModels: string[]
+}
+
+export interface GlobalModelPolicyRecord extends GlobalModelPolicyInput {
+  revision: number
+  updatedAt: Date
+}
+
+export const GlobalModelPolicyInputSchema = schema<GlobalModelPolicyInput>((value) => {
+  const issues: ValidationIssue[] = []
+  const raw = object(value, [], issues)
+  strict(raw, ['defaultModel','imageModel','compactionModel','fallbackModels'], [], issues)
+  const nullableString = (v: unknown, path: Array<string | number>): string | null => {
+    if (v === null || v === undefined) return null
+    if (typeof v !== 'string' || v.length < 1 || v.length > 128) {
+      issues.push({ path, message: 'expected string or null' })
+      return null
+    }
+    return v
+  }
+  const defaultModel = nullableString(raw.defaultModel, ['defaultModel'])
+  const imageModel = nullableString(raw.imageModel, ['imageModel'])
+  const compactionModel = nullableString(raw.compactionModel, ['compactionModel'])
+  let fallbackModels: string[] = []
+  if (raw.fallbackModels !== undefined) {
+    if (!Array.isArray(raw.fallbackModels) || raw.fallbackModels.length > 20 ||
+        raw.fallbackModels.some((item) => typeof item !== 'string' || item.length < 1 || item.length > 128)) {
+      issues.push({ path: ['fallbackModels'], message: 'expected array of non-empty strings (max 20)' })
+    } else {
+      fallbackModels = [...new Set(raw.fallbackModels as string[])]
+    }
+  }
+  if (issues.length) throw new CatalogValidationError(issues)
+  return { defaultModel, imageModel, compactionModel, fallbackModels }
+})

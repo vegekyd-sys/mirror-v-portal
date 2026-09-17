@@ -205,4 +205,27 @@ describe('LLM egress proxy', () => {
     expect(res.status).toBe(502);
     expect(h.reports[0].status).toBe('error');
   });
+
+  it('does not intercept a long sub-agent context containing 消耗 (regression)', async () => {
+    const h = makeHarness();
+    const longTask = '请搜索美国 LED 户外照明采购商 10 家，优先用 CDP 联系人接口拿联系人+邮箱，免费且不消耗 Apollo 额度，最终整理成买家清单返回。';
+    const res = await request(h.app).post('/v1/llm/qwen/chat/completions')
+      .set('content-type', 'application/json')
+      .send(chatBody({ messages: [{ role: 'user', content: longTask }] }));
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('你好'); // passed through to the real upstream
+    expect(h.upstreamCalls.length).toBe(1);
+    expect(h.reports[0].status).toBe('ok');
+  });
+
+  it('still synthesizes a balance reply for 本月消耗了多少 (short query)', async () => {
+    const h = makeHarness();
+    const res = await request(h.app).post('/v1/llm/qwen/chat/completions')
+      .set('content-type', 'application/json')
+      .send(chatBody({ messages: [{ role: 'user', content: '本月消耗了多少' }] }));
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('可用余额');
+    expect(h.upstreamCalls.length).toBe(0);
+    expect(h.reports[0].status).toBe('synthesized');
+  });
 });

@@ -366,5 +366,44 @@ class ScoreDiagnosticsTests(unittest.TestCase):
                 fbc.JOBS_DIR, fbc.SCORE_LOG = old_jobs, old_log
 
 
+class BuyerDetailTests(unittest.TestCase):
+    """2026-09-15：卡片买家明细不再静默截断（原为硬编码 buyers[:10]）。"""
+
+    @staticmethod
+    def _buyers(count):
+        return [
+            {
+                "name": f"买家{i}",
+                "website": f"https://buyer{i}.example",
+                "country": "巴西",
+                "need": "寻找供应商",
+                "reason": "产品对路",
+            }
+            for i in range(1, count + 1)
+        ]
+
+    def test_more_than_ten_buyers_all_rendered(self):
+        dsl = {"title": "找买家", "status": "已交付", "state": "done",
+               "buyers": self._buyers(12)}
+        body = json.dumps(render_card(dsl), ensure_ascii=False)
+        for index in range(1, 13):
+            self.assertIn(f"买家{index}", body)
+        self.assertNotIn("未在卡片展开", body)
+
+    def test_max_buyers_override_discloses_surplus(self):
+        dsl = {"title": "找买家", "status": "已交付", "state": "done",
+               "buyers": self._buyers(12), "max_buyers": 5}
+        body = json.dumps(render_card(dsl), ensure_ascii=False)
+        self.assertIn("买家5", body)
+        self.assertNotIn("买家6", body)
+        self.assertIn("另有 7 家未在卡片展开", body)
+
+    def test_invalid_max_buyers_falls_back_to_default(self):
+        dsl = {"title": "找买家", "status": "已交付", "state": "done",
+               "buyers": self._buyers(12), "max_buyers": -3}
+        body = json.dumps(render_card(dsl), ensure_ascii=False)
+        self.assertIn("买家12", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

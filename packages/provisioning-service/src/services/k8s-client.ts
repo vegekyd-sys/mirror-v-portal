@@ -423,6 +423,15 @@ export async function createDeployment(spec: DeploymentSpec): Promise<void> {
     spec: {
       replicas: spec.replicas ?? 1,
       selector: { matchLabels: spec.labels },
+      // Recreate (not the default RollingUpdate): a single-replica agent
+      // shares its RWO PVC (SQLite) with the pod that replaces it. Recreate
+      // makes the Deployment controller fully terminate the old pod before
+      // creating the new one, so two pods never contend for the same DB file.
+      // This replaces the old hand-rolled "scale 0 → patch → scale 1" dance
+      // in updateDeploymentImageRecreate/restartDeployment (see below).
+      strategy: {
+        type: 'Recreate',
+      },
       template: {
         metadata: { labels: spec.labels },
         spec: podSpec,
@@ -472,6 +481,32 @@ export async function patchDeploymentImage(spec: PatchImageSpec): Promise<void> 
     throw new Error(`patchDeployment ${spec.name} failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
   console.log(`[k8s] deployment patched (rolling update): ${spec.namespace}/${spec.name} -> ${spec.image}`);
+}
+
+/**
+ * Ensure a Deployment uses the Recreate strategy (idempotent). New Deployments
+ * are already created with Recreate (see createDeployment); this backfills
+ * pre-existing Deployments on first touch so that image/annotation patches
+ * trigger a native recreate (terminate old pod → start new) instead of a
+ * RollingUpdate that would overlap two pods on the shared RWO PVC (SQLite).
+ *
+ * `rollingUpdate: null` clears the default maxSurge/maxUnavailable sub-object,
+ * which is invalid alongside `type: Recreate` (K8s rejects the patch otherwise).
+ * Returns false when the Deployment does not exist (404) or is unavailable
+ * (out-of-cluster dry-run); throws on other API errors.
+ */
+export async function ensureRecreateStrategy(namespace: string, name: string): Promise<boolean> {
+  const patchRes = await k8sRequest(
+    'PATCH',
+    `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
+    { spec: { strategy: { type: 'Recreate', rollingUpdate: null } } },
+    'application/strategic-merge-patch+json',
+  );
+  if (!patchRes.ok) {
+    if (patchRes.status === 404 || patchRes.status === 0) return false;
+    throw new Error(`ensureRecreateStrategy ${name} failed: ${patchRes.status} ${JSON.stringify(patchRes.body)}`);
+  }
+  return true;
 }
 
 // ── Deployment Probe Patch ──
@@ -575,103 +610,58 @@ export async function scaleDeployment(spec: ScaleSpec): Promise<void> {
 // ── Deployment Image Update (recreate) ──
 
 /**
- * Update a Deployment's container image using a recreate (scale 0 → scale N)
- * strategy instead of the default RollingUpdate.
+ * Update a Deployment's container image via the Recreate strategy.
  *
- * Rationale: dealclaw-agent is single-replica and shares its PVC (SQLite)
+ * Rationale: dealclaw-agent is single-replica and shares its RWO PVC (SQLite)
  * with the pod that replaces it. A RollingUpdate spawns the new pod *before*
  * the old one terminates — the two concurrent agents contend for the same
  * SQLite file and neither passes startupProbe (and, on RWO volumes, the
- * second pod can't even attach the volume). Scaling to 0 first fully
- * terminates the old pod and releases the volume, then the image is patched
- * (no-op while at 0 replicas) and the pod is brought back up cleanly.
+ * second pod can't even attach the volume). The Recreate strategy makes the
+ * Deployment controller terminate the old pod fully before creating the new
+ * one, so we simply patch the image and let the controller do the serialization
+ * — no hand-rolled "scale 0 → poll → scale 1" dance (which was the source of
+ * the stranded-at-0 and 0-replicas-no-op bugs).
  *
- * Steps: GET (replicas + selector) → scale 0 → patch image → poll for pod
- * termination (≤30s) → scale back to the original replicas.
- * Returns false when the Deployment does not exist (404) or is unavailable
- * (out-of-cluster dry-run); throws on other API errors.
+ * `ensureRecreateStrategy` backfills pre-existing Deployments that were created
+ * before Recreate was the default. Returns false when the Deployment does not
+ * exist (404) or is unavailable (out-of-cluster dry-run); throws on other errors.
  */
 export async function updateDeploymentImageRecreate(
   namespace: string,
   name: string,
   image: string,
 ): Promise<boolean> {
-  // 1. Read the current deployment to get replica count + pod selector.
-  const getRes = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
-  if (getRes.status === 404 || getRes.status === 0) return false;
-  if (!getRes.ok) throw new Error(`updateDeploymentImageRecreate ${name} GET failed: ${getRes.status}`);
-  const deploy = getRes.body as Record<string, any>;
-  const replicas: number = deploy?.spec?.replicas ?? 1;
-  const matchLabels: Record<string, string> = deploy?.spec?.selector?.matchLabels ?? { app: name };
+  // Ensure Recreate strategy first (idempotent) so the image patch below
+  // triggers a native recreate, not a rolling update.
+  if (!(await ensureRecreateStrategy(namespace, name))) return false;
 
-  // 2. Scale to 0 first — terminates the old pod and releases its PVC before
-  //    the new image lands, so there is never a dual-pod overlap.
-  await scaleDeployment({ namespace, name, replicas: 0 });
+  await patchDeploymentImage({ namespace, name, image });
 
-  // 3-5. Patch the image, poll for pod termination, then scale back up. Any
-  //     failure after the scale-to-0 rolls the replica count back so the
-  //     tenant never stays stranded at 0 (the old pod returns on the
-  //     unchanged image).
-  try {
-    // 3. Patch the image while at 0 replicas (no rolling churn).
-    await patchDeploymentImage({ namespace, name, image });
-
-    // 4. Poll for pod termination (≤30s, 5s intervals) before scaling up.
-    const labelStr = Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(',');
-    const labelSelector = encodeURIComponent(labelStr);
-    for (let i = 0; i < 6; i++) {
-      await new Promise((r) => setTimeout(r, 5_000));
-      const podRes = await k8sRequest(
-        'GET',
-        `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`,
-      );
-      if (!podRes.ok) break; // best-effort — proceed to scale back regardless
-      const items = (podRes.body as Record<string, any>)?.items ?? [];
-      const active = items.filter(
-        (p: Record<string, any>) =>
-          p.metadata?.deletionTimestamp === undefined &&
-          p.status?.phase !== 'Succeeded' &&
-          p.status?.phase !== 'Failed',
-      );
-      if (active.length === 0) break;
-    }
-
-    // 5. Scale back to the original replicas (new image).
-    await scaleDeployment({ namespace, name, replicas });
-  } catch (err) {
-    // Best-effort rollback: restore the replica count so the deployment is
-    // never left at 0.
-    await scaleDeployment({ namespace, name, replicas }).catch(() => {});
-    throw err;
-  }
-
-  console.log(`[k8s] deployment image updated (recreate 0→${replicas}): ${namespace}/${name} -> ${image}`);
+  console.log(`[k8s] deployment image updated (recreate): ${namespace}/${name} -> ${image}`);
   return true;
 }
 
 // ── Deployment Restart (rollout) ──
 
 /**
- * Restart a Deployment safely by scaling to 0 then back to its original
- * replica count. This avoids the dual-pod overlap that a RollingUpdate
- * annotation-patch causes when the old pod shares a PVC (SQLite) with the
- * new one — two concurrent agents deadlock on the same DB file and neither
- * passes startupProbe.
+ * Restart a Deployment via the Recreate strategy.
  *
- * Steps: GET deployment → patch restarted-at annotation (observability) →
- * scale 0 → poll for pod termination (≤30s) → scale back to original.
+ * Patching the `restarted-at` annotation mutates the pod template, which under
+ * Recreate makes the Deployment controller terminate the old pod fully before
+ * creating the new one — no hand-rolled "scale 0 → poll → scale 1" (which had
+ * a missing-rollback bug that stranded Deployments at 0 replicas when the
+ * process was interrupted mid-restart, plus a `replicas === 0 → return` branch
+ * that silently refused to revive a stranded 0). `ensureRecreateStrategy`
+ * backfills pre-existing Deployments.
+ *
  * 404 is tolerated; dry-run (status 0) returns false.
  */
 export async function restartDeployment(namespace: string, name: string): Promise<boolean> {
-  // 1. Read current deployment to get replica count + pod selector.
-  const getRes = await k8sRequest('GET', `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
-  if (getRes.status === 404 || getRes.status === 0) return false;
-  if (!getRes.ok) throw new Error(`restartDeployment ${name} GET failed: ${getRes.status}`);
-  const deploy = getRes.body as Record<string, any>;
-  const replicas: number = deploy?.spec?.replicas ?? 1;
-  const matchLabels: Record<string, string> = deploy?.spec?.selector?.matchLabels ?? { app: name };
+  // Ensure Recreate strategy first (idempotent) so the annotation patch below
+  // triggers a native recreate, not a rolling update.
+  if (!(await ensureRecreateStrategy(namespace, name))) return false;
 
-  // 2. Patch the restarted-at annotation (observability + ensures RS turnover).
+  // Patch the restarted-at annotation (observability + ensures RS turnover).
   const patchRes = await k8sRequest(
     'PATCH',
     `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`,
@@ -691,39 +681,7 @@ export async function restartDeployment(namespace: string, name: string): Promis
     throw new Error(`restartDeployment ${name} patch failed: ${patchRes.status}`);
   }
 
-  // 3. If 0 replicas, annotation alone suffices — nothing to scale.
-  if (replicas === 0) {
-    console.log(`[k8s] deployment restarted (0 replicas): ${namespace}/${name}`);
-    return true;
-  }
-
-  // 4. Scale to 0 — breaks any dual-pod overlap / SQLite lock contention.
-  await scaleDeployment({ namespace, name, replicas: 0 });
-
-  // 5. Poll for pod termination (≤30s, 5s intervals).
-  const labelStr = Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(',');
-  const labelSelector = encodeURIComponent(labelStr);
-  for (let i = 0; i < 6; i++) {
-    await new Promise((r) => setTimeout(r, 5_000));
-    const podRes = await k8sRequest(
-      'GET',
-      `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`,
-    );
-    if (!podRes.ok) break; // best-effort — proceed to scale back regardless
-    const items = (podRes.body as Record<string, any>)?.items ?? [];
-    const active = items.filter(
-      (p: Record<string, any>) =>
-        p.metadata?.deletionTimestamp === undefined &&
-        p.status?.phase !== 'Succeeded' &&
-        p.status?.phase !== 'Failed',
-    );
-    if (active.length === 0) break;
-  }
-
-  // 6. Scale back to original replicas.
-  await scaleDeployment({ namespace, name, replicas });
-
-  console.log(`[k8s] deployment restarted (scale 0→${replicas}): ${namespace}/${name}`);
+  console.log(`[k8s] deployment restarted (recreate): ${namespace}/${name}`);
   return true;
 }
 
@@ -952,6 +910,14 @@ export async function getTenantPod(
   const owner = pod?.metadata?.labels?.['dealclaw.io/tenant-id'];
   if (owner !== tenantId) return null;
   return pod;
+}
+
+/** Verify that an exec target is the single Nexus Manager workload. */
+export async function getSystemAgentPod(namespace: string, podName: string): Promise<Record<string, any> | null> {
+  const res = await k8sRequest('GET', `/api/v1/namespaces/${namespace}/pods/${podName}`);
+  if (!res.ok) return null;
+  const pod = res.body as Record<string, any>;
+  return pod?.metadata?.labels?.['app.kubernetes.io/name'] === 'nexus-manager' ? pod : null;
 }
 
 export interface PodLogOptions {

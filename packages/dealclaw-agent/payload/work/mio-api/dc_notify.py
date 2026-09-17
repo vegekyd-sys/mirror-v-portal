@@ -317,22 +317,131 @@ class WeixinSender(Sender):
         return SendResult(ok=True, sent=True, backend="weixin", message_id=mid)
 
 
+class WecomSender(Sender):
+    """企业微信发送器：通过 OpenClaw message.send CLI 发到企业微信会话（2026-09-17 加）。
+
+    为什么需要它：回信已经取回、也匹配上了，但通知通道只有飞书/微信两个，
+    从企业微信进来的用户根本收不到（会话入口 ≠ 通知通道）。通道必须可换。
+
+    通道/账号可用环境变量覆盖：DC_NOTIFY_WECOM_CHANNEL（默认 wecom）、
+    DC_NOTIFY_WECOM_ACCOUNT。启用开关同其它发送器：DC_NOTIFY_SEND_ENABLED。
+    """
+
+    def __init__(self, enabled: bool | None = None):
+        if enabled is None:
+            enabled = os.getenv("DC_NOTIFY_SEND_ENABLED", "1") == "1"
+        self.enabled = bool(enabled)
+        self.sent: list[dict] = []
+        self.channel = (os.getenv("DC_NOTIFY_WECOM_CHANNEL", "") or "wecom").strip() or "wecom"
+        self.account = os.getenv("DC_NOTIFY_WECOM_ACCOUNT", "")
+
+    def send(self, target: str, message: str, idempotency_key: str | None = None) -> SendResult:
+        if not target or not str(target).strip():
+            return SendResult(ok=False, error="target required", backend="wecom")
+        if not message or not str(message).strip():
+            return SendResult(ok=False, error="message required", backend="wecom")
+        rec = {"target": target, "message": message, "idempotency_key": idempotency_key}
+        if not self.enabled:
+            self.sent.append({**rec, "dry_run": True})
+            return SendResult(ok=True, dry_run=True, sent=False, backend="wecom", message_id="")
+        return self._send_via_cli(rec)
+
+    def _send_via_cli(self, rec: dict) -> SendResult:
+        cmd = ["openclaw", "message", "send", "--channel", self.channel, "--json"]
+        if self.account:
+            cmd += ["--account", self.account]
+        cmd += ["--target", rec["target"], "--message", rec["message"]]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except FileNotFoundError:
+            return SendResult(ok=False, error="openclaw not found", backend="wecom")
+        except subprocess.TimeoutExpired:
+            return SendResult(ok=False, error="openclaw send timeout", backend="wecom")
+        if p.returncode != 0:
+            return SendResult(ok=False, backend="wecom", error=_cli_error(p.stdout, p.stderr))
+        self.sent.append({**rec, "dry_run": False})
+        mid = ""
+        try:
+            data = json.loads(p.stdout or "{}")
+            mid = str((data.get("data") or {}).get("message_id")
+                      or data.get("message_id") or data.get("messageId") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return SendResult(ok=True, sent=True, backend="wecom", message_id=mid)
+
+
+class RoutingSender(Sender):
+    """按**目标形态**选通道的多通道发送器（2026-09-17：微信与企业微信并存）。
+
+    DC_NOTIFY_SENDER_MODE 支持逗号列表（如 `weixin,wecom`）。同一租户里不同用户
+    可能从不同 IM 进来，通道不能二选一：
+
+      ``xxx@im.wecom`` → wecom ｜ ``xxx@im.wechat`` → weixin ｜ ``oc_``/``ou_`` → feishu
+
+    目标形态认不出通道时，用列表里第一个已配置的模式兜底。
+    命中通道**未配置**时如实报错，不静默换通道发到别的地方。
+    """
+
+    def __init__(self, senders: dict, order: list):
+        self.senders = dict(senders)
+        self.order = list(order)
+        self.fallback = self.order[0] if self.order else ""
+        self.sent: list = []
+
+    @staticmethod
+    def channel_for(target: str) -> str:
+        value = str(target or "").strip()
+        if value.endswith("@im.wecom"):
+            return "wecom"
+        if value.endswith("@im.wechat"):
+            return "weixin"
+        if value.startswith(("oc_", "ou_")):
+            return "feishu"
+        return ""
+
+    def send(self, target: str, message: str, idempotency_key: str | None = None) -> SendResult:
+        if not target or not str(target).strip():
+            return SendResult(ok=False, error="target required", backend="routing")
+        if not message or not str(message).strip():
+            return SendResult(ok=False, error="message required", backend="routing")
+        want = self.channel_for(target)
+        if want and want not in self.senders:
+            return SendResult(ok=False, backend="routing",
+                              error=f"channel {want} not configured (configured: {','.join(self.order)})")
+        chan = want or self.fallback
+        sender = self.senders.get(chan)
+        if sender is None:
+            return SendResult(ok=False, backend="routing", error="no sender available")
+        res = sender.send(target, message, idempotency_key)
+        self.sent.append({"target": target, "channel": chan,
+                          "ok": bool(getattr(res, "ok", False)),
+                          "idempotency_key": idempotency_key})
+        return res
+
+
+SENDER_BUILDERS = {"feishu": FeishuSender, "weixin": WeixinSender, "wecom": WecomSender}
+
+
 def build_sender_from_env() -> Sender:
     """统一 Sender 工厂：按 DC_NOTIFY_SENDER_MODE 选择发送器。
 
     - 未配置/feishu（默认）→ FeishuSender（真实发送，开关默认开启）
     - weixin → WeixinSender，通过 openclaw message send CLI 发到微信会话
-    - disabled → DisabledSender，仅 dry_run，不标记 sent
+    - wecom → WecomSender，发到企业微信会话
+    - 逗号列表（如 `weixin,wecom`）→ RoutingSender，**按目标形态选通道**（两通道并存）
+    - 无法识别 → DisabledSender，仅 dry_run，不标记 sent
 
     mock 不允许通过环境变量进入，只允许测试代码显式注入 NotifyEngine(sender=MockSender())。
     生产 CLI、dc_daily_cycle、默认 NotifyEngine 都必须走此工厂，禁止自行判断 Sender。
     """
-    mode = os.getenv("DC_NOTIFY_SENDER_MODE", "feishu").strip().lower()
-    if mode == "feishu":
-        return FeishuSender()
-    if mode == "weixin":
-        return WeixinSender()
-    return DisabledSender()
+    raw = os.getenv("DC_NOTIFY_SENDER_MODE", "feishu").strip().lower()
+    modes = [m.strip() for m in raw.split(",") if m.strip()]
+    known = [m for m in modes if m in SENDER_BUILDERS]
+    if not known:
+        return DisabledSender()
+    if len(known) == 1 and len(modes) == 1:
+        return SENDER_BUILDERS[known[0]]()
+    return RoutingSender({m: SENDER_BUILDERS[m]() for m in known}, known)
 
 
 # ── Markdown 持久化存储 ────────────────────────────────────

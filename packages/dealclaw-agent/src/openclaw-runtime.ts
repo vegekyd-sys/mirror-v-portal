@@ -91,7 +91,12 @@ export class OpenClawRuntimeClient implements RuntimeClient {
   constructor(options: { baseUrl?: string; agentId?: string; timeoutMs?: number } = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.OPENCLAW_RUNTIME_URL ?? 'http://127.0.0.1:18790').replace(/\/$/, '');
     this.agentId = options.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'dealclaw';
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.OPENCLAW_RUNTIME_TIMEOUT_MS ?? 120_000);
+    // Non-streaming /execute (admin web-chat "sync" path) must not abort a
+    // long reasoning run prematurely. The upstream gateway gives external chat
+    // 300s (DEALCLAW_EXTERNAL_CHAT_TIMEOUT_MS); keep the agent a hair under it
+    // so the agent surfaces a clear 502 before the gateway 504s. 120s was too
+    // short for deep reasoning runs (see snowtron/雪特朗 2026-09-14 incident).
+    this.timeoutMs = options.timeoutMs ?? Number(process.env.OPENCLAW_RUNTIME_TIMEOUT_MS ?? 280_000);
   }
 
   async health(): Promise<{ ok: boolean; detail?: string }> {

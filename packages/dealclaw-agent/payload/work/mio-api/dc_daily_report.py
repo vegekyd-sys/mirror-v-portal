@@ -109,6 +109,78 @@ def _self_evolution_brief(company_id: str, days: int = 7) -> str:
         return ""
 
 
+# ── 出数前自愈：入站事实层有界补齐（best-effort）──────────────────────
+# 背景：Resend 入站原先不写事实层（已修：handle_inbound_event 落库），但补丁上线前漏掉的
+# 回复、以及 webhook 丢投 / 轮询游标越过的历史缺口，不会自动回来。
+# 这里在早晚报「出数前」有界补一次：只拉入站、限条数、短超时、失败不影响出数。
+SELFHEAL_ENV = "DC_DAILY_INBOUND_SELFHEAL"                     # 0/false 可关闭；默认开
+SELFHEAL_LIMIT_ENV = "DC_DAILY_INBOUND_SELFHEAL_LIMIT"         # 默认 50
+SELFHEAL_TIMEOUT_ENV = "DC_DAILY_INBOUND_SELFHEAL_TIMEOUT"     # 默认 25 秒
+
+
+def _ensure_recent_inbound(company_id: str, limit: int | None = None) -> dict:
+    """出数前的有界自愈：拉最近 N 条入站写进事实层（幂等、best-effort）。
+
+    - 只拉入站（direction=received）、只要邮件本体，**不拉附件、不组装案卷**；
+    - 短超时（默认 25s）+ 整体 try/except：失败/超时只返回错误，绝不抛给调用方；
+    - 幂等：EmailStore 按 message_id 取键，同一天早晚两报重复跑不会重复计数。
+
+    返回 {ok, written, fetched, skipped_reason?, error?}，供日志/诊断使用。
+    """
+    flag = (os.environ.get(SELFHEAL_ENV, "1") or "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return {"ok": True, "skipped_reason": "disabled"}
+    if not company_id:
+        return {"ok": True, "skipped_reason": "no_company"}
+    try:
+        lim = int(limit or os.environ.get(SELFHEAL_LIMIT_ENV, "50") or 50)
+    except Exception:
+        lim = 50
+    try:
+        tmo = int(os.environ.get(SELFHEAL_TIMEOUT_ENV, "25") or 25)
+    except Exception:
+        tmo = 25
+    if lim <= 0:
+        return {"ok": True, "skipped_reason": "limit_disabled"}
+
+    # 租户闸门（fail-closed，2026-09-17）：Resend 是全平台共用账号，拉回来的是所有
+    # 租户的收信。查不到本租户绑定邮箱就别拉了——历史上这里会退化成「不过滤」，
+    # 把别家租户的回信写成本租户事实，早报照着念出来（串租户事故）。
+    try:
+        from dc_tenant_mailboxes import TenantScopeUnknown, require_tenant_mailboxes
+        require_tenant_mailboxes(company_id)
+    except Exception as e:  # noqa: BLE001 - 含 TenantScopeUnknown 与 import 失败
+        return {"ok": False, "skipped_reason": "tenant_scope_unknown", "error": str(e)[:200]}
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+
+    try:
+        import dc_resend_history as hist
+    except Exception as e:  # 模块缺失也不影响出数
+        return {"ok": False, "error": str(e)[:200]}
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = ex.submit(hist.pull, direction="received", limit=lim, company_id=company_id)
+        r = fut.result(timeout=tmo)
+    except _FutTimeout:
+        return {"ok": False, "error": f"timeout>{tmo}s"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        # 超时也不等线程：不能因为自愈把日报拖住（worker 自带 25s 网络超时）
+        ex.shutdown(wait=False)
+
+    r = r or {}
+    sides = r.get("sides") or {}
+    return {
+        "ok": bool(r.get("ok")),
+        "written": int(r.get("written") or 0),
+        "fetched": int(((sides.get("received") or {}).get("fetched")) or 0),
+        "errors": r.get("errors") or [],
+    }
+
+
 def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
                     date_range=None, tz: str = None, store=None) -> dict:
     """聚合发送/送达/回复/退信等指标（**统一读入口**：email_metrics.service）。
@@ -118,6 +190,8 @@ def collect_metrics(company_id: str, campaign_id: str = None, date: str = None,
     不传则为全部时间（保留旧可见语义）。
     数字不可用时 `status="unavailable"` 且值为 None（**不报假 0**）。
     """
+    # 出数前自愈：有界补齐最近入站（只补缺失，不改口径）；失败/超时不影响出数。
+    selfheal = _ensure_recent_inbound(company_id)
     from dc_email_controller.dc_email_signals import list_signals
     from email_metrics.service import read_email_metrics
     # 回复：按唯一回复 message_id（信号）计数，与看板漏斗一致（Resend 路径生成信号，不写 inbound bound 记录）
@@ -165,11 +239,141 @@ def collect_due_followups(company_id: str) -> list[dict]:
     return list_followup_candidates(company_id)
 
 
+def collect_touch_round_queue(company_id: str, at: str = None) -> dict:
+    """多轮触达「待触达队列」（轮次/分层/应触达日期/内容角度）。失败返回 {}。"""
+    try:
+        from dc_touch_rounds import build_touch_queue
+        return build_touch_queue(company_id, at=at)
+    except Exception:
+        return {}
+
+
+def _touch_rounds_section(company_id: str, slot: str, queue: dict | None = None) -> str:
+    """早晚报「多轮触达」todo 区块（早报 + 晚报都要有；无数据也输出计数行）。"""
+    try:
+        from dc_touch_rounds import render_touch_rounds_section
+        q = queue if queue is not None else collect_touch_round_queue(company_id)
+        if not q:
+            return ""
+        return render_touch_rounds_section(q, slot=slot)
+    except Exception:
+        return ""
+
+
 def collect_opportunities(company_id: str) -> list[dict]:
     """新增机会（quote/sample/meeting 信号）。"""
     from dc_email_controller.dc_email_signals import list_signals
     opp = {"quote_request", "sample_request", "meeting_interest"}
     return [s for s in list_signals(company_id) if s.get("signal_type") in opp]
+
+
+def _parse_iso_utc(ts):
+    """宽容解析带时区 ISO（兼容事实层的 “2026-09-15 05:57:49.881000+00” 写法）。"""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _sender_parts(raw: str) -> tuple[str, str]:
+    """``“Name <a@b>”`` → (显示名, 地址)；只有地址时名字为空。"""
+    text = str(raw or "").strip()
+    if "<" in text and ">" in text:
+        name = text.split("<")[0].strip().strip('"').strip()
+        addr = text[text.index("<") + 1:text.rindex(">")].strip().lower()
+        return name, addr
+    return "", text.lower()
+
+
+def collect_reply_intent_rows(company_id: str, *, hours: int = 24,
+                             store=None, mailboxes=None, stats: dict = None) -> list[dict]:
+    """窗口内的回信（入站事实）+ 其信号，供「采购意图」推理段使用（只读，不发送）。
+
+    数据源：``email-facts/inbound``（事实层，Resend/IMAP 两条路都会落）+
+    ``email-signals``（active 信号）。按回信 message_id 关联；关联不到就是零信号回信，
+    照样进「未识别出采购意图」清单（客户口径：两类都不能少）。
+    """
+    from dc_email_controller.dc_email_signals import list_signals
+    if store is None:
+        from email_gateway.store import EmailStore
+        store = EmailStore()
+    # 租户收口：传了本租户邮箱就按**收发地址**再核一遍，挡住历史已写进本租户目录的
+    # 污染记录（早报是客户直接看的，绝不能出现别家租户的往来）。
+    try:
+        inbounds = store.list_inbound_records(company_id=company_id) or []
+    except Exception:
+        return []
+    if mailboxes is not None:
+        try:
+            from dc_tenant_mailboxes import filter_tenant_records
+            inbounds, foreign = filter_tenant_records(inbounds, mailboxes)
+        except Exception:  # noqa: BLE001 - 口径不可用 → 一封都不展示
+            inbounds, foreign = [], inbounds
+        if stats is not None:
+            stats["withheld_foreign"] = len(foreign)
+    by_mid: dict[str, list[dict]] = {}
+    try:
+        for s in (list_signals(company_id) or []):
+            mid = str(s.get("source_message_id") or "")
+            if mid:
+                by_mid.setdefault(mid, []).append(s)
+    except Exception:
+        pass
+    since = datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))
+    rows: list[dict] = []
+    for ib in inbounds:
+        when = _parse_iso_utc(ib.get("received_at") or ib.get("created_at"))
+        if when is None or when < since:
+            continue
+        mid = str(ib.get("message_id") or "")
+        sender_name, sender_addr = _sender_parts(ib.get("sender") or "")
+        rows.append({
+            "message_id": mid,
+            "sender": sender_addr,
+            "sender_name": sender_name,
+            "company_name": str(ib.get("buyer_company") or ib.get("company_name") or ""),
+            "subject": str(ib.get("subject") or ""),
+            "excerpt": str(ib.get("text_preview") or ib.get("text") or ""),
+            "received_at": str(ib.get("received_at") or ib.get("created_at") or ""),
+            "signals": by_mid.get(mid, []),
+        })
+    rows.sort(key=lambda r: r.get("received_at") or "", reverse=True)
+    return rows
+
+
+def _reply_intent_section(company_id: str, slot: str, store=None) -> str:
+    """早晚报「回信采购意图」段（两类清单都不省；无回信时也输出 0 计数，证明段落没被省）。"""
+    try:
+        from dc_daily_brief import (REPLY_SECTION_TITLE, classify_reply_purchase_intent,
+                                    render_reply_intent_section)
+        if slot == "morning":
+            hours = 24
+        else:
+            now_local = datetime.now(timezone.utc).astimezone(ZoneInfo(BUSINESS_TZ))
+            elapsed = (now_local - now_local.replace(hour=0, minute=0, second=0, microsecond=0))
+            hours = max(1, int(elapsed.total_seconds() // 3600) + 1)
+        # 口径未知就明说，不拿未经核验的邮件凑数（宁可少一段，也不串租户）
+        try:
+            from dc_tenant_mailboxes import require_tenant_mailboxes
+            boxes = require_tenant_mailboxes(company_id)
+        except Exception:  # noqa: BLE001
+            return (f"{REPLY_SECTION_TITLE}\n"
+                    "■ 本段暂不可用：查不到本企业的绑定邮箱\n"
+                    "  · 为避免把别的企业的回信算成你的，这里不展示未经核验的邮件\n"
+                    "  · 处理：绑定/补齐本企业发信邮箱后自动恢复")
+        stats: dict = {}
+        rows = collect_reply_intent_rows(company_id, hours=hours, store=store,
+                                         mailboxes=boxes, stats=stats)
+        text = render_reply_intent_section(classify_reply_purchase_intent(rows))
+        withheld = int(stats.get("withheld_foreign") or 0)
+        if withheld:
+            text += f"\n  · （另有 {withheld} 封往来不属于本企业邮箱，已按租户隔离过滤，不计入上述两类）"
+        return text
+    except Exception:
+        return ""
 
 
 def _campaign_brief(company_id: str) -> str:
@@ -440,11 +644,13 @@ def _pipeline_brief(company_id: str, slot: str) -> str:
             r = pipeline.run_morning_brief(ctx, base)
             plan = r.get("plan") or {}
             parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
+                     _reply_intent_section(company_id, "morning"),
                      _fmt_pipeline_morning(plan)]
         else:
             r = pipeline.run_evening_brief(ctx, base)
             plan = r.get("plan") or {}
             parts = [_exhibition_battle(company_id), _today_metrics(company_id, plan),
+                     _reply_intent_section(company_id, "evening"),
                      _fmt_pipeline_evening(r.get("review"), plan)]
         return "\n\n".join(p for p in parts if p)
     except Exception:
@@ -479,13 +685,24 @@ def _fmt_pipeline_evening(review, plan: dict) -> str:
     return "\n".join(lines)
 
 
+def _brief_card(text: str, *, title: str, link: str = "") -> dict | None:
+    """文本 → 飞书卡片（含按钮）。失败返回 None —— 不影响文本发送。"""
+    try:
+        from dc_brief_render import default_brief_actions, to_feishu_card  # noqa: PLC0415
+
+        return to_feishu_card(text, title=title, actions=default_brief_actions(link))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_morning_report(company_id: str) -> dict:
     """早报：只展示关键变化（漏斗 + 今日到期跟进 + 待确认草稿 + KB）。"""
     m = collect_metrics(company_id)
     drafts = collect_pending_drafts(company_id)
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
-    text = _format_morning(company_id, m, drafts, followups, funnel)
+    touch_queue = collect_touch_round_queue(company_id)
+    text = _format_morning(company_id, m, drafts, followups, funnel, touch_queue=touch_queue)
     brief = _pipeline_brief(company_id, "morning")
     if brief:
         text = (brief + "\n\n" + text) if text else brief
@@ -498,18 +715,25 @@ def build_morning_report(company_id: str) -> dict:
     evolution = _self_evolution_brief(company_id)
     if evolution:
         text += "\n\n" + evolution
-    return {
+    report = {
         "company_id": company_id,
         "slot": "morning",
         "metrics": m,
         "funnel": funnel,
         "pending_draft_count": len(drafts),
         "due_followup_count": len(followups),
+        "touch_round_due_count": len(touch_queue.get("due_rows") or []),
+        "touch_round_waiting_line": touch_queue.get("waiting_line", ""),
+        "touch_round_queue": touch_queue,
         "campaign": _campaign_brief(company_id),
         "kb": _kb_brief(company_id),
         "text": text,
         "generated_at": _now(),
     }
+    card = _brief_card(text, title="DealClaw 早报", link=_followup_table_url(company_id))
+    if card:
+        report["card"] = card
+    return report
 
 
 def build_evening_report(company_id: str) -> dict:
@@ -520,14 +744,16 @@ def build_evening_report(company_id: str) -> dict:
     followups = collect_due_followups(company_id)
     funnel = _funnel(company_id)
     strategy = _strategy(company_id)
-    text = _format_evening(company_id, m, drafts, followups, funnel, strategy)
+    touch_queue = collect_touch_round_queue(company_id)
+    text = _format_evening(company_id, m, drafts, followups, funnel, strategy,
+                           touch_queue=touch_queue)
     brief = _pipeline_brief(company_id, "evening")
     if brief:
         text = (brief + "\n\n" + text) if text else brief
     evolution = _self_evolution_brief(company_id)
     if evolution:
         text += "\n\n" + evolution
-    return {
+    report = {
         "company_id": company_id,
         "slot": "evening",
         "metrics": m,
@@ -535,12 +761,19 @@ def build_evening_report(company_id: str) -> dict:
         "strategy": strategy,
         "pending_draft_count": len(drafts),
         "due_followup_count": len(followups),
+        "touch_round_due_count": len(touch_queue.get("due_rows") or []),
+        "touch_round_waiting_line": touch_queue.get("waiting_line", ""),
+        "touch_round_queue": touch_queue,
         "text": text,
         "generated_at": _now(),
     }
+    card = _brief_card(text, title="DealClaw 晚报", link=_followup_table_url(company_id))
+    if card:
+        report["card"] = card
+    return report
 
 
-def _format_morning(company_id, m, drafts, followups, funnel) -> str:
+def _format_morning(company_id, m, drafts, followups, funnel, touch_queue=None) -> str:
     """早报：只做跟进情况总结（不再逐条列邮箱），明细跳转飞书跟进表。"""
     lines = []
     stage_line = _exhibition_stage_line(company_id)
@@ -550,14 +783,17 @@ def _format_morning(company_id, m, drafts, followups, funnel) -> str:
         _metrics_line(m),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
+    touch_block = _touch_rounds_section(company_id, "morning", queue=touch_queue)
+    if touch_block:
+        lines.append(touch_block)
     url = _followup_table_url(company_id)
     if url:
         lines.append(f"跟进明细 → {url}")
     return "\n".join(lines)
 
 
-def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
-    """晚报：今日发送/待跟进总结，明细跳转飞书跟进表。"""
+def _format_evening(company_id, m, drafts, followups, funnel, strategy, touch_queue=None) -> str:
+    """晚报：今日发送/待跟进总结 + 多轮触达核销/明日预告，明细跳转飞书跟进表。"""
     lines = []
     stage_line = _exhibition_stage_line(company_id)
     if stage_line:
@@ -566,6 +802,9 @@ def _format_evening(company_id, m, drafts, followups, funnel, strategy) -> str:
         _metrics_line(m, prefix="今日"),
         f"待跟进 {len(followups)} 家 · 待确认草稿 {len(drafts)} 份",
     ]
+    touch_block = _touch_rounds_section(company_id, "evening", queue=touch_queue)
+    if touch_block:
+        lines.append(touch_block)
     url = _followup_table_url(company_id)
     if url:
         lines.append(f"跟进明细 → {url}")

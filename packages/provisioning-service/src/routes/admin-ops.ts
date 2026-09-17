@@ -23,6 +23,16 @@ import { createChatApiKey, listChatApiKeys, revokeChatApiKey } from '../services
 import { backfillChatlogEnv } from '../services/chatlog-backfill.js';
 import { backfillSenderNames } from '../services/sender-name-backfill.js';
 import { patchDeploymentEnvVar, restartDeployment } from '../services/k8s-client.js';
+import {
+  MioApiError,
+  quickRegisterMioSupplier,
+  searchMioSuppliers,
+} from '../services/mio-supplier-client.js';
+import {
+  MioSupplierError,
+  backfillTenantMioSuppliers,
+  updateTenantMioSupplier,
+} from '../services/mio-supplier.js';
 
 const RELEASE_SERVICES = ['dealclaw-agent', 'nexus-gateway'] as const;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -41,6 +51,46 @@ export function createAdminOpsRoutes(
     const u = (req as any).adminUser;
     if (u && (u.username || u.sub)) return String(u.username || u.sub);
     return 'service-token';
+  };
+
+  /**
+   * 米奥接口错误 → HTTP 响应的统一映射。
+   *
+   * 关键点：**业务错误（kind='business'）把米奥原始 msg 原样透出**，不重写
+   * 文案、不重试、不去重；调用方（admin SPA）直接展示给操作者。
+   * status 由路由决定：写类接口（新建供应商）用 409，读类接口（搜索）用 502，
+   * 因为读接口的业务失败本质是上游网关/凭据问题，不是「冲突」。
+   * 任何情况下都不回显凭据（token 只存在于 env 与请求头）。
+   */
+  const sendMioError = (
+    res: Response,
+    err: unknown,
+    opts: { businessStatus: number; fallback: string },
+  ): void => {
+    if (err instanceof MioApiError) {
+      const status =
+        err.kind === 'business'
+          ? opts.businessStatus
+          : err.kind === 'input'
+            ? 400
+            : err.kind === 'config'
+              ? 503
+              : err.status;
+      res.status(status).json({
+        ok: false,
+        code: err.code,
+        message: err.message,
+        ...(err.kind === 'business' ? { upstreamCode: err.upstream?.code ?? null } : {}),
+      });
+      return;
+    }
+    if (err instanceof MioSupplierError) {
+      res.status(err.status).json({ ok: false, code: err.code, message: err.message });
+      return;
+    }
+    console.error('Mio operation failed:', err);
+    const e = err as any;
+    res.status(500).json({ ok: false, code: 'INTERNAL', message: e?.message || opts.fallback });
   };
 
   // POST /v1/admin/image-releases/sync — pull the current tag list from the
@@ -696,6 +746,154 @@ export function createAdminOpsRoutes(
       const e = err as any;
       console.error('Toggle shared session failed:', e);
       res.status(500).json({ code: 'INTERNAL', message: e.message || 'Toggle failed' });
+    }
+  });
+
+  // ── 米奥（Mio）供应商：搜索 / 新建 / 存量补录 / 租户绑定 ──
+  // 鉴权沿用本文件既有方案（createServiceOrAdminAuthMiddleware：服务 token
+  // 或 admin JWT）。凭据 MIO_BLADE_AUTH 只从 env 读，不经过前端。
+
+  // GET /v1/admin/mio-suppliers?search=<kw>&page=<n> — 只读代理，专供前端
+  // 下拉：只回 {ok, items:[{id, code, name}], total}。
+  // 注意：米奥侧是模糊匹配，可能 0 条也可能多条（多条由调用方人工选择）。
+  router.get('/v1/admin/mio-suppliers', async (req: Request, res: Response) => {
+    try {
+      const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+      if (!search) {
+        res.status(400).json({
+          code: 'BAD_REQUEST',
+          message: 'search 不能为空：供应商搜索为模糊匹配，需提供公司名关键词',
+        });
+        return;
+      }
+      const page = Math.max(0, Math.floor(Number(req.query.page ?? 0) || 0));
+      const result = await searchMioSuppliers(config, { search, page });
+      res.json({ ok: true, items: result.items, total: result.total });
+    } catch (err: unknown) {
+      sendMioError(res, err, { businessStatus: 502, fallback: '搜索米奥供应商失败' });
+    }
+  });
+
+  // POST /v1/admin/mio-suppliers — 代理 quickRegister 快速创建供应商。
+  // 成功回 {ok, supplierId, name}；同名重复等业务失败按米奥原始 msg 回 409。
+  // 返回的 password 字段一律忽略（不入库、不回显）。
+  router.post('/v1/admin/mio-suppliers', async (req: Request, res: Response) => {
+    try {
+      const companyName = typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : '';
+      const mobile = typeof req.body?.mobile === 'string' ? req.body.mobile.trim() : '';
+      const intDialingCode = typeof req.body?.intDialingCode === 'string' && req.body.intDialingCode.trim()
+        ? req.body.intDialingCode.trim()
+        : '+86';
+
+      if (!companyName) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: '公司名称（companyName）不能为空' });
+        return;
+      }
+      if (companyName.length > 200) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: '公司名称过长（上限 200 字符）' });
+        return;
+      }
+      if (!mobile) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: '联系人手机号（mobile）不能为空' });
+        return;
+      }
+
+      const created = await quickRegisterMioSupplier(config, { companyName, mobile, intDialingCode });
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'mio-supplier.create',
+        method: 'POST',
+        path: '/v1/admin/mio-suppliers',
+        resourceType: 'mio_supplier',
+        resourceId: created.supplierId,
+        newValue: { supplierId: created.supplierId, name: created.name, intDialingCode },
+        statusCode: 200,
+      });
+
+      res.json({ ok: true, supplierId: created.supplierId, name: created.name });
+    } catch (err: unknown) {
+      sendMioError(res, err, { businessStatus: 409, fallback: '创建米奥供应商失败' });
+    }
+  });
+
+  // POST /v1/admin/mio-suppliers/backfill — 存量补录。
+  // 入参 {tenantIds?: string[], dryRun?: boolean}（dryRun 默认 true，只报告不写库）。
+  // 规则：company_name 非空 && mio_cdp_supplier_id 为空的租户按公司名搜索,
+  // **只有唯一精确命中（忽略大小写/首尾空格的完整名称相等）才写入**；
+  // 0 条或多条一律进 skipped，绝不自动取第一条。
+  router.post('/v1/admin/mio-suppliers/backfill', async (req: Request, res: Response) => {
+    try {
+      const rawIds = req.body?.tenantIds;
+      if (rawIds !== undefined && rawIds !== null && !Array.isArray(rawIds)) {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'tenantIds 必须是字符串数组' });
+        return;
+      }
+      const tenantIds = Array.isArray(rawIds)
+        ? rawIds.filter((v: unknown) => typeof v === 'string' && (v as string).trim()).map((v: string) => v.trim())
+        : undefined;
+      const dryRun = req.body?.dryRun !== false;
+
+      const result = await backfillTenantMioSuppliers(pool, config, { tenantIds, dryRun });
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'mio-supplier.backfill',
+        method: 'POST',
+        path: '/v1/admin/mio-suppliers/backfill',
+        resourceType: 'mio_supplier',
+        newValue: {
+          dryRun: result.dryRun,
+          scanned: result.scanned,
+          matched: result.matched,
+          updated: result.updated,
+          skipped: result.skipped.length,
+          tenantIds: tenantIds ?? null,
+        },
+        statusCode: 200,
+      });
+
+      res.json({ ok: true, operator: adminIdentity(req), ...result });
+    } catch (err: unknown) {
+      sendMioError(res, err, { businessStatus: 409, fallback: '米奥供应商补录失败' });
+    }
+  });
+
+  // POST /v1/admin/tenants/:tenantId/mio-supplier — 给已存在租户绑定/换绑
+  // 米奥供应商 ID（body: {supplierId}；null/空串 = 清除）。
+  // 复用 services/mio-supplier.ts 的服务函数（含唯一约束预检 + agent-config
+  // Secret 注入 + agent 滚动重启）；唯一冲突已翻成可读中文。
+  // 与 PATCH /v1/tenants/:id/mio-supplier-id 行为一致，只是路径挂在 /v1/admin 下。
+  router.post('/v1/admin/tenants/:tenantId/mio-supplier', async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.body ?? {};
+      if (supplierId !== undefined && supplierId !== null && typeof supplierId !== 'string') {
+        res.status(400).json({ code: 'BAD_REQUEST', message: 'supplierId 必须是字符串或 null' });
+        return;
+      }
+      const tenantId = String(req.params.tenantId);
+      const result = await updateTenantMioSupplier(pool, config, tenantId, supplierId ?? null);
+
+      await writeAuditLog(pool, {
+        ...actorFromRequest(req),
+        action: 'tenant.mio-supplier',
+        method: 'POST',
+        path: `/v1/admin/tenants/${tenantId}/mio-supplier`,
+        resourceType: 'tenant',
+        resourceId: tenantId,
+        tenantId,
+        newValue: { supplierId: result.supplierId, restarted: result.restarted },
+        statusCode: 200,
+      });
+
+      res.json({
+        ...result,
+        message: result.restarted
+          ? `供应商 ID 已${result.supplierId ? `设为 ${result.supplierId}` : '清除'}，agent 已滚动重启（约 10–30 秒生效）`
+          : `供应商 ID 已${result.supplierId ? `设为 ${result.supplierId}` : '清除'}`,
+      });
+    } catch (err: unknown) {
+      sendMioError(res, err, { businessStatus: 409, fallback: '更新米奥供应商 ID 失败' });
     }
   });
 

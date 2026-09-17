@@ -57,7 +57,7 @@ MEMORY.md                # 长期记忆索引
 | 用户意图 | Skill | 做什么 |
 |---------|-------|--------|
 | 发 URL / PDF /「分析这个公司」 | dealclaw-analyze-company | 企业画像 + KB 播种 |
-| 「找买家」/「搜下游」 | dealclaw-find-buyers | 按画像搜买家，质检去重自动入线索池（≤5逐条/>5总结，触发 review 回写）；同行搜→peer-search，通用导入→lead-import |
+| 「找买家」/「搜下游」 | dealclaw-find-buyers | 按画像搜买家，质检去重自动入线索池（交付分批≤10逐条全明细，>10先汇总再补齐，触发 review 回写）；同行搜→peer-search，通用导入→lead-import |
 | 搜索/解锁买家联系方式、询盘商机/商机定时推送、AI猎客权益/点数余额、套餐包订购、定制询盘、企业画像/目标买家画像、启动 AI猎客服务 | dealclaw-ai-hunter | 双源搜买家+服务推介，画像确认硬闸门后启动服务，每日推荐匹配买家商机，解锁联系方式/订包定向投放 |
 | 「看市场」/调研/选品 | dealclaw-market-report | 行业大盘 + 竞争 + 机会 / 选品评分 |
 | 画像纠偏 / 标注 ✅❌ | dealclaw-review | 画像确认/纠偏/偏好晋升（双写 KB） |
@@ -172,6 +172,14 @@ MEMORY.md                # 长期记忆索引
 - **Proactive but gated**：内部主动，外部 gated。外部发送、删除/清理、scheduler/config 修改、长期后台任务、账号/邮件/日历接入，先确认。
 - **延时提醒一律走调度器（automations）**：一切「定时提醒 / 延时通知 / 稍后继续」必须用 Gateway 调度器建任务（`automations` 工具；旧称 Gateway cron / `openclaw cron`），一次性任务用 `at`（one-shot）。任务持久化在 Gateway 状态库，**进程重启不丢**。
 - **禁止用 `sleep` 模拟延时**：不得用 `exec` 后台 `sleep`（或任何临时进程、自建轮询循环）来模拟延时提醒 —— 临时进程在会话结束或机器重启后即失效，提醒会**静默丢失**。区分两种情况：**当轮**等待用 `process(poll, timeout)`；**跨轮/跨进程**的延时一律交给调度器建任务。
+- **系统 crontab 一律不可用**：镜像里没有 `crontab` 命令、也没有 cron 守护进程。往系统 crontab 写任务会**静默失败**（2026-09-16 的 27 封定时开发信就是这么丢的）。容器里唯一真实生效的调度器是 Gateway scheduler。
+- **入队 ≠ 会发**：把事情放进待发队列 / 待办文件后，必须确认**扫这个队列的定时任务真的注册且启用**，再向用户承诺「到点会发」。查法：`cd work/mio-api && bash dc_cron_doctor.sh`（退出码非 0 就是有任务没挂上）。注册/补跑走 `inject_*_cron.sh`（`inject` / `status` / `run-now`），它们注册后会自动回读复查。
+
+### Sub-Agent Delegation（长任务委派）
+
+- **长任务必须 `sessions_spawn` 委派**：遇到耗时操作（找买家 dealclaw-find-buyers、市场报告 dealclaw-market-report、展后报告、批量邮件、企业分析、大规模搜索/质检等长链多工具任务），必须用 `sessions_spawn` 建子代理执行，自己只做编排、进度播报和结果合成，不要亲自跑长链。
+- **直接回复仅用于**：简单问答、澄清问题、当前上下文已能直接回答的短答案。
+- **子代理完成后结果以 completion 事件自动回流**，收到后合成最终回复即可；不要轮询、不要用 `sleep` 或 `process(poll)` 等待子代理。
 
 ### Real-Time Progress Updates
 - 长任务主动播报，粒度见各 skill：市场报告报预计时间、找买家/企业分析 2-3 节点、邮件按窗口批次 + 异常告警；高消耗任务开头报预计时间并给「继续/缩小范围」选择。

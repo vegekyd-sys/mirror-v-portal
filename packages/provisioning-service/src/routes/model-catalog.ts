@@ -1,17 +1,40 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type pg from 'pg';
 import type { ProvisioningConfig } from '../config.js';
-import { actorFromRequest } from '../services/audit.js';
-import { decryptValue } from '../services/crypto.js';
+import { actorFromRequest, writeAuditLog, writeAuditLogStrict } from '../services/audit.js';
+import { decryptValue, maskValue } from '../services/crypto.js';
 import { importLegacyCatalog } from '../services/model-catalog-import.js';
 import {
   ModelParamDiscoveryError,
   ModelParamDiscoveryService,
 } from '../services/model-param-discovery.js';
-import { CatalogRepository, CatalogService, snapshotFingerprint } from '../services/model-catalog.js';
-import { enqueueLlmPush } from '../services/llm-push-task.js';
+import {
+  CatalogRepository, CatalogService, snapshotFingerprint,
+  modelRowIdToLegacyRef, legacyRefToModelRowId,
+  type ProviderInstanceRecord,
+} from '../services/model-catalog.js';
+import {
+  CatalogReleaseIdempotencyConflictError,
+  CatalogReleaseService,
+  type ReleaseRolloutPolicy,
+} from '../services/catalog-release-service.js';
+import {
+  GlobalPolicyBackfillError,
+  GlobalPolicyBackfillService,
+} from '../services/global-policy-backfill.js';
 import { getGlobalLlmProviders, LLM_PROVIDERS_KEY, validateLlmProviders } from '../services/llm-providers.js';
-import { upsertRuntimeConfig, validateConfigValue } from '../services/runtime-config.js';
+import { TenantSelectionV2Service } from '../services/tenant-selection-v2.js';
+import { validateConfigValue } from '../services/runtime-config.js';
+import { checkCatalogDrift } from '../services/catalog-drift-detector.js';
+import type { CatalogReleaseRecord, CatalogReleaseView } from '../domain/catalog-release.js';
+import {
+  GlobalModelPolicyInputSchema,
+  ModelMutationSchema,
+  ProviderInstanceInputSchema,
+  ProviderMutationSchema,
+  MODEL_TYPES,
+  type ModelType,
+} from '../domain/model-catalog.js';
 
 function disabled(res: Response): void {
   res.status(503).json({ code: 'DISABLED', message: 'Model catalog feature is disabled' });
@@ -25,6 +48,13 @@ function paramWriteDisabled(res: Response): void {
   res.status(403).json({
     code: 'MODEL_CATALOG_PARAM_WRITE_DISABLED',
     message: 'Model catalog parameter writes are disabled',
+  });
+}
+
+function globalPolicyBackfillWriteDisabled(res: Response): void {
+  res.status(403).json({
+    code: 'MODEL_CATALOG_GLOBAL_POLICY_BACKFILL_WRITE_DISABLED',
+    message: 'Global model policy backfill writes are disabled',
   });
 }
 
@@ -48,17 +78,99 @@ function redactSnapshot(snapshot: Awaited<ReturnType<CatalogService['buildCompat
   };
 }
 
+/** Convert a CatalogReleaseRecord (with encrypted fields) to a public view. */
+function recordToView(record: CatalogReleaseRecord): CatalogReleaseView {
+  return {
+    id: record.id,
+    version: record.version,
+    parentId: record.parentId,
+    fingerprint: record.fingerprint,
+    parentFingerprint: record.parentFingerprint,
+    diffSummary: record.diffSummary,
+    warnings: record.warnings,
+    actor: record.actor,
+    actorType: record.actorType,
+    status: record.status,
+    createdAt: record.createdAt.toISOString(),
+  };
+}
+
+/** Strip encrypted API key from a provider record, adding hasApiKey + apiKeyMask. */
+function redactProvider(provider: ProviderInstanceRecord) {
+  const { encryptedApiKey, ...rest } = provider
+  let apiKeyMask = '••••••••'
+  if (encryptedApiKey) {
+    try { apiKeyMask = maskValue(decryptValue(encryptedApiKey)) } catch { /* keep default mask */ }
+  }
+  return { ...rest, hasApiKey: Boolean(encryptedApiKey), apiKeyMask }
+}
+
+/** Parse expectedRevision from query param or body field. Returns NaN if absent. */
+function parseExpectedRevision(req: Request): number {
+  const raw = req.query.expectedRevision ?? req.body?.expectedRevision
+  const num = Number(raw)
+  return Number.isSafeInteger(num) && num >= 0 ? num : NaN
+}
+
+/** Send a CAS conflict response. */
+function staleRevision(res: Response): void {
+  res.status(409).json({ code: 'STALE_REVISION', message: 'Revision mismatch — refresh and retry' })
+}
+
+/** Send a validation error response. */
+function validationError(res: Response, message: string): void {
+  res.status(400).json({ code: 'MODEL_CATALOG_VALIDATION', message })
+}
+
+/** Send a conflict error response. */
+function conflictError(res: Response, code: string, message: string): void {
+  res.status(409).json({ code, message })
+}
+
+/** Parse and strictly validate an explicit Release rollout policy. */
+function parseReleaseRollout(value: unknown): ReleaseRolloutPolicy | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.mode === 'no-rollout') {
+    return Object.keys(body).length === 1 ? { mode: 'no-rollout' } : null;
+  }
+  const allowed = new Set(['mode', 'scopeType', 'tenantIds']);
+  if (body.mode !== 'rollout' || Object.keys(body).some((key) => !allowed.has(key))) return null;
+  const scopes = ['full', 'allowlist', 'single', 'affected', 'canary'] as const;
+  if (!scopes.includes(body.scopeType as typeof scopes[number])) return null;
+  const scopeType = body.scopeType as typeof scopes[number];
+  const tenantIds = body.tenantIds;
+  if (tenantIds !== undefined &&
+      (!Array.isArray(tenantIds) || tenantIds.some((id) => typeof id !== 'string' || id.trim() === ''))) {
+    return null;
+  }
+  const ids = tenantIds as string[] | undefined;
+  if (scopeType === 'single' && ids?.length !== 1) return null;
+  if ((scopeType === 'allowlist' || scopeType === 'canary') && !ids?.length) return null;
+  if ((scopeType === 'full' || scopeType === 'affected') && ids !== undefined) return null;
+  return ids ? { mode: 'rollout', scopeType, tenantIds: ids } : { mode: 'rollout', scopeType };
+}
+
 /** Admin routes for the P0 shadow catalog and explicit compatibility publishing. */
 export function createModelCatalogRoutes(
   pool: pg.Pool,
   config: ProvisioningConfig,
   authMiddleware?: (req: Request, res: Response, next: NextFunction) => void,
+  releaseService?: CatalogReleaseService,
 ) {
   const router = Router();
   if (authMiddleware) router.use(authMiddleware);
   const repository = new CatalogRepository(pool);
   const service = new CatalogService(repository);
   const paramDiscovery = new ModelParamDiscoveryService(pool);
+  const policyBackfill = new GlobalPolicyBackfillService(pool, repository);
+  const releases = releaseService ?? new CatalogReleaseService(pool);
+  // Inject feature flags into the release service for P1-2 catalog projection.
+  if ('setConfig' in releases && typeof (releases as any).setConfig === 'function') {
+    (releases as CatalogReleaseService).setConfig({
+      catalogProjectionFromAuthority: config.catalogProjectionFromAuthority,
+    });
+  }
 
   router.post('/v1/admin/model-catalog/import', async (req, res) => {
     if (config.modelCatalogShadowImport !== true) return disabled(res);
@@ -158,16 +270,25 @@ export function createModelCatalogRoutes(
     }
   });
 
-  router.get('/v1/admin/model-catalog/snapshot-preview', async (_req, res) => {
+  router.get('/v1/admin/model-catalog/snapshot-preview', async (req, res) => {
     if (config.modelCatalogRead !== true) return disabled(res);
     try {
+      if (req.query.mode === 'authority') {
+        const preview = await releases.buildAuthorityPreview();
+        res.json({ ...preview, snapshot: redactSnapshot(preview.snapshot), mode: 'authority' });
+        return;
+      }
+      if (req.query.mode !== undefined && req.query.mode !== 'compatibility') {
+        validationError(res, 'mode must be compatibility or authority');
+        return;
+      }
       const legacy = await getGlobalLlmProviders(pool);
       const previous = legacy ?? {
         providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [],
       };
       const snapshot = await service.buildCompatibilitySnapshot(legacy);
       const diff = service.diffCompatibilitySnapshot(previous, snapshot);
-      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: diff.fingerprint, diff });
+      res.json({ snapshot: redactSnapshot(snapshot), fingerprint: diff.fingerprint, diff, mode: 'compatibility' });
     } catch (error) {
       console.error('model catalog snapshot preview failed:', error);
       internalError(res, 'SNAPSHOT_INVALID', 422);
@@ -176,42 +297,58 @@ export function createModelCatalogRoutes(
 
   router.post('/v1/admin/model-catalog/snapshot-restore', async (req, res) => {
     if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
-    const backupId = typeof req.body?.backupId === 'string' ? req.body.backupId : '';
-    if (!backupId) {
-      res.status(400).json({ code: 'VALIDATION', message: 'backupId is required' });
+    // Restore mutates the same runtime projection as publish. During emergency
+    // legacy writes, freeze it before reading either the request body or DB so
+    // the two authorities cannot race.
+    if (config.catalogBreakGlass === true) {
+      res.status(503).json({
+        code: 'CATALOG_RESTORE_FROZEN',
+        message: 'Break-glass 模式已激活，Catalog Restore 已冻结。请先解除 break-glass 再恢复。',
+      });
+      return;
+    }
+    const restoreBody = req.body as Record<string, unknown> | undefined;
+    const restoreAllowed = new Set(['backupId', 'idempotencyKey', 'rollout']);
+    const backupId = typeof restoreBody?.backupId === 'string' ? restoreBody.backupId : '';
+    const restoreIdempotencyKey = typeof restoreBody?.idempotencyKey === 'string'
+      ? restoreBody.idempotencyKey.trim() : '';
+    const restoreRollout = parseReleaseRollout(restoreBody?.rollout);
+    if (!restoreBody || Object.keys(restoreBody).some((key) => !restoreAllowed.has(key)) ||
+        !backupId || !restoreIdempotencyKey || !restoreRollout) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'backupId, idempotencyKey, and valid explicit rollout are required',
+      });
       return;
     }
     try {
-      const backup = await pool.query('SELECT encrypted_value FROM llm_catalog_snapshot_backups WHERE id=$1', [backupId]);
-      if (!backup.rows[0]) {
+      const { actor, actorType } = actorFromRequest(req);
+      const result = await releases.atomicRestore({
+        backupId,
+        actor,
+        actorType: actorType === 'external' ? 'service' : actorType,
+        idempotencyKey: restoreIdempotencyKey,
+        rollout: restoreRollout,
+      });
+      if (!result) {
         res.status(404).json({ code: 'NOT_FOUND', message: 'Snapshot backup not found' });
         return;
       }
-      const previous = await getGlobalLlmProviders(pool);
-      const restored = validateLlmProviders(JSON.parse(decryptValue(backup.rows[0].encrypted_value)));
-      const blob = JSON.stringify(restored);
-      validateConfigValue(blob);
-      const { actor, actorType } = actorFromRequest(req);
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const current = await client.query(
-          `SELECT id,encrypted_value FROM runtime_configs WHERE tenant_id IS NULL AND config_key=$1 FOR UPDATE`,
-          [LLM_PROVIDERS_KEY],
-        );
-        if (current.rows[0]) await client.query(
-          `INSERT INTO llm_catalog_snapshot_backups
-             (id,runtime_config_id,encrypted_value,source_fingerprint,actor)
-           VALUES (gen_random_uuid(),$1,$2,$3,$4)`,
-          [current.rows[0].id,current.rows[0].encrypted_value,snapshotFingerprint(previous ?? { providers:[],defaultModel:null,imageModel:null,compactionModel:null,fallbackModels:[] }),actor],
-        );
-        await upsertRuntimeConfig(client,{tenantId:null,key:LLM_PROVIDERS_KEY,value:blob,isSecret:true,description:'模型目录快照恢复'});
-        await client.query('COMMIT');
-      } catch (error) { await client.query('ROLLBACK'); throw error; }
-      finally { client.release(); }
-      const task=await enqueueLlmPush(pool,{kind:'global_push',scope:null,trigger:'retry',prevLibrary:previous,nextLibrary:restored,actor,actorType:actorType==='external'?'service':actorType});
-      res.json({ok:true,...task,streamUrl:`/v1/admin/llm-push-tasks/${task.taskId}/stream`});
+      res.json({
+        ok: true,
+        release: result.release,
+        taskId: result.taskId,
+        streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
+      });
     } catch (error) {
+      if (error instanceof CatalogReleaseIdempotencyConflictError) {
+        conflictError(res, error.code, error.message);
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('INVALID_ROLLOUT_TARGETS:')) {
+        validationError(res, error.message);
+        return;
+      }
       console.error('model catalog snapshot restore failed:', error);
       internalError(res);
     }
@@ -219,14 +356,40 @@ export function createModelCatalogRoutes(
 
   router.post('/v1/admin/model-catalog/snapshot-publish', async (req, res) => {
     if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
-    const expectedFingerprint = typeof req.body?.fingerprint === 'string' ? req.body.fingerprint : '';
-    if (!expectedFingerprint) {
-      res.status(400).json({ code: 'VALIDATION', message: 'fingerprint is required' });
+    // P0-5: Break-glass 模式激活时冻结 Catalog Publish，防止双写。
+    if (config.catalogBreakGlass === true) {
+      res.status(503).json({
+        code: 'CATALOG_PUBLISH_FROZEN',
+        message: 'Break-glass 模式已激活，Catalog Publish 已冻结。请先解除 break-glass 再发布。',
+      });
+      return;
+    }
+    const publishBody = req.body as Record<string, unknown> | undefined;
+    const publishAllowed = new Set([
+      'fingerprint', 'expectedParentFingerprint', 'idempotencyKey', 'rollout',
+    ]);
+    const expectedFingerprint = typeof publishBody?.fingerprint === 'string' ? publishBody.fingerprint : '';
+    const expectedParentFingerprint = publishBody?.expectedParentFingerprint === null ||
+      typeof publishBody?.expectedParentFingerprint === 'string'
+      ? publishBody.expectedParentFingerprint as string | null : undefined;
+    const idempotencyKey = typeof publishBody?.idempotencyKey === 'string'
+      ? publishBody.idempotencyKey.trim() : '';
+    const rollout = parseReleaseRollout(publishBody?.rollout);
+    if (!publishBody || Object.keys(publishBody).some((key) => !publishAllowed.has(key)) ||
+        !expectedFingerprint || expectedParentFingerprint === undefined || !idempotencyKey || !rollout) {
+      res.status(400).json({
+        code: 'VALIDATION',
+        message: 'fingerprint, expectedParentFingerprint, idempotencyKey, and valid explicit rollout are required',
+      });
       return;
     }
     try {
+      // Rebuild through the same canonical Authority builder used inside
+      // atomicPublish when Authority projection is enabled.
       const previous = await getGlobalLlmProviders(pool);
-      const next = validateLlmProviders(await service.buildCompatibilitySnapshot(previous));
+      const next = config.catalogProjectionFromAuthority === true
+        ? (await releases.buildAuthorityPreview()).snapshot
+        : validateLlmProviders(await service.buildCompatibilitySnapshot(previous));
       const actualFingerprint = snapshotFingerprint(next);
       if (actualFingerprint !== expectedFingerprint) {
         res.status(409).json({ code: 'FINGERPRINT_MISMATCH', message: 'Catalog changed after preview', details: { actualFingerprint } });
@@ -234,44 +397,666 @@ export function createModelCatalogRoutes(
       }
       const blob = JSON.stringify(next);
       validateConfigValue(blob);
+      const diff = service.diffCompatibilitySnapshot(
+        previous ?? { providers: [], defaultModel: null, imageModel: null, compactionModel: null, fallbackModels: [] },
+        next,
+      );
       const { actor, actorType } = actorFromRequest(req);
+
+      // Atomic publish: Release + runtime_config + optional push task in one tx.
+      // expectedParentFingerprint is supplied by preview; never refresh it here.
+      const result = await releases.atomicPublish({
+        expectedParentFingerprint,
+        snapshot: next,
+        fingerprint: actualFingerprint,
+        diffSummary: diff as unknown as Record<string, unknown>,
+        warnings: diff.fallbackWarnings ?? [],
+        actor,
+        actorType: actorType === 'external' ? 'service' : actorType,
+        idempotencyKey,
+        rollout,
+      });
+
+      if (!result) {
+        // CAS failure — someone else published between preview and publish.
+        res.status(409).json({ code: 'STALE_FINGERPRINT', message: 'A newer release was published since preview' });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        release: result.release,
+        taskId: result.taskId,
+        streamUrl: result.taskId ? `/v1/admin/llm-push-tasks/${result.taskId}/stream` : null,
+      });
+    } catch (error) {
+      if (error instanceof CatalogReleaseIdempotencyConflictError) {
+        conflictError(res, error.code, error.message);
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('INVALID_ROLLOUT_TARGETS:')) {
+        validationError(res, error.message);
+        return;
+      }
+      const tooLarge = error instanceof Error && error.message.includes('too long');
+      console.error('model catalog snapshot publish failed:', error);
+      internalError(res, tooLarge ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', tooLarge ? 422 : 500);
+    }
+  });
+
+  // ── Release query endpoints (read-only, controlled by modelCatalogRead) ──
+
+  router.get('/v1/admin/model-catalog/releases', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const list = await releases.listReleases(20);
+      res.json({ releases: list });
+    } catch (error) {
+      console.error('model catalog releases list failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/releases/current', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const releaseId = await releases.getCurrentReleaseId();
+      if (!releaseId) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No current release' });
+        return;
+      }
+      const release = await releases.getRelease(releaseId);
+      if (!release) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Current release not found' });
+        return;
+      }
+      res.json({ release: recordToView(release) });
+    } catch (error) {
+      console.error('model catalog current release failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/releases/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const release = await releases.getRelease(req.params.id);
+      if (!release) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Release not found' });
+        return;
+      }
+      res.json({ release: recordToView(release) });
+    } catch (error) {
+      console.error('model catalog release detail failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/tenants/:id/release-status', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const status = await releases.getTenantReleaseStatus(req.params.id);
+      if (!status) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Tenant release status not found' });
+        return;
+      }
+      res.json({ status });
+    } catch (error) {
+      console.error('model catalog tenant release status failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Provider CRUD (modelCatalogParamWrite) ──────────────────────────────
+
+  router.get('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const provider = await repository.findProvider(req.params.id);
+      if (!provider) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      res.json({ provider: redactProvider(provider) });
+    } catch (error) {
+      console.error('model catalog provider detail failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.post('/v1/admin/model-catalog/providers', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const parsed = ProviderInstanceInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const provider = await repository.createProvider(parsed.data);
+      const redacted = redactProvider(provider);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.create',
+        method: 'POST', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: provider.id, newValue: redacted,
+      });
+      res.status(201).json({ provider: redacted });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('already exists')) {
+        conflictError(res, 'DUPLICATE_PROVIDER', msg);
+        return;
+      }
+      console.error('model catalog provider create failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.patch('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const parsed = ProviderMutationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.findProvider(req.params.id);
+      if (!before) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      const provider = await repository.updateProvider(req.params.id, parsed.data, expectedRevision);
+      const redacted = redactProvider(provider);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.update',
+        method: 'PATCH', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: provider.id,
+        oldValue: redactProvider(before), newValue: redacted,
+      });
+      res.json({ provider: redacted });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog provider update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.delete('/v1/admin/model-catalog/providers/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.findProvider(req.params.id);
+      if (!before) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'Provider not found' });
+        return;
+      }
+      await repository.deleteProvider(req.params.id);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.provider.delete',
+        method: 'DELETE', path: req.path, resourceType: 'llm_provider_instance',
+        resourceId: req.params.id,
+        oldValue: redactProvider(before),
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('PROVIDER_HAS_RUNTIME_MODELS')) {
+        conflictError(res, 'PROVIDER_HAS_RUNTIME_MODELS', msg);
+        return;
+      }
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog provider delete failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Model CRUD (modelCatalogParamWrite) ─────────────────────────────────
+
+  router.post('/v1/admin/model-catalog/providers/:id/models', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId.trim() : '';
+    if (!modelId || modelId.length > 100) {
+      validationError(res, 'modelId must be 1-100 chars');
+      return;
+    }
+    if (!MODEL_TYPES.includes(req.body?.modelType as ModelType)) {
+      validationError(res, 'invalid modelType');
+      return;
+    }
+    if (typeof req.body?.runtimeEnabled !== 'boolean') {
+      validationError(res, 'runtimeEnabled must be boolean');
+      return;
+    }
+    const displayName = typeof req.body.displayName === 'string' && req.body.displayName.trim()
+      ? req.body.displayName.trim().slice(0, 128) : undefined;
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const model = await repository.createModel(req.params.id, {
+        modelId, ...(displayName ? { displayName } : {}),
+        modelType: req.body.modelType as ModelType,
+        runtimeEnabled: req.body.runtimeEnabled as boolean,
+      });
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.create',
+        method: 'POST', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: model.id, newValue: { ...model, effectiveParams: undefined },
+      });
+      res.status(201).json({ model });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('already exists')) {
+        conflictError(res, 'DUPLICATE_MODEL', msg);
+        return;
+      }
+      console.error('model catalog model create failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.patch('/v1/admin/model-catalog/models/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const mutation: { displayName?: string; modelType?: ModelType; runtimeEnabled?: boolean } = {};
+    if (req.body?.displayName !== undefined) {
+      if (typeof req.body.displayName !== 'string' || req.body.displayName.length > 128) {
+        validationError(res, 'displayName must be string <= 128 chars');
+        return;
+      }
+      mutation.displayName = req.body.displayName.trim() || undefined;
+    }
+    if (req.body?.modelType !== undefined) {
+      if (!MODEL_TYPES.includes(req.body.modelType as ModelType)) {
+        validationError(res, 'invalid modelType');
+        return;
+      }
+      mutation.modelType = req.body.modelType as ModelType;
+    }
+    if (req.body?.runtimeEnabled !== undefined) {
+      if (typeof req.body.runtimeEnabled !== 'boolean') {
+        validationError(res, 'runtimeEnabled must be boolean');
+        return;
+      }
+      mutation.runtimeEnabled = req.body.runtimeEnabled;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const model = await repository.updateModel(req.params.id, mutation, expectedRevision);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.update',
+        method: 'PATCH', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: model.id, newValue: { ...model, effectiveParams: undefined },
+      });
+      res.json({ model });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog model update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.delete('/v1/admin/model-catalog/models/:id', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      // Check if model is referenced in Global Model Policy before deleting.
+      const policy = await repository.getGlobalModelPolicy();
+      if (policy) {
+        const refs = [
+          policy.defaultModel, policy.imageModel, policy.compactionModel,
+          ...policy.fallbackModels,
+        ].filter((r): r is string => r !== null)
+        if (refs.includes(req.params.id)) {
+          conflictError(res, 'MODEL_REFERENCED_BY_POLICY',
+            'Model is referenced by the global model policy — remove the reference first');
+          return;
+        }
+      }
+      await repository.deleteModel(req.params.id);
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.model.delete',
+        method: 'DELETE', path: req.path, resourceType: 'llm_provider_model',
+        resourceId: req.params.id,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('not found')) {
+        res.status(404).json({ code: 'NOT_FOUND', message: msg });
+        return;
+      }
+      console.error('model catalog model delete failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Global Model Policy (read = modelCatalogRead, write = modelCatalogSnapshotWrite) ──
+
+  router.post('/v1/admin/model-catalog/global-policy/backfill', async (req, res) => {
+    if (req.body !== undefined && (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body))) {
+      return validationError(res, 'request body must be an object');
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const allowedFields = new Set(['dryRun', 'planFingerprint', 'expectedRevision']);
+    if (Object.keys(body).some((key) => !allowedFields.has(key)) ||
+        (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') ||
+        (body.planFingerprint !== undefined && typeof body.planFingerprint !== 'string') ||
+        (body.expectedRevision !== undefined &&
+          (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0))) {
+      return validationError(res, 'invalid backfill request fields');
+    }
+    const dryRun = body.dryRun === undefined ? true : body.dryRun as boolean;
+    if (dryRun && config.modelCatalogRead !== true) return disabled(res);
+    if (!dryRun && config.modelCatalogGlobalPolicyBackfillWrite !== true) {
+      return globalPolicyBackfillWriteDisabled(res);
+    }
+    if (!dryRun && (typeof body.planFingerprint !== 'string' || !Number.isSafeInteger(body.expectedRevision))) {
+      return validationError(res, 'planFingerprint and expectedRevision are required for apply');
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      if (dryRun) {
+        res.json(await policyBackfill.apply({ dryRun: true, actor }));
+        return;
+      }
       const client = await pool.connect();
       try {
-        await client.query('BEGIN');
-        const current = await client.query(
-          `SELECT id, encrypted_value FROM runtime_configs
-            WHERE tenant_id IS NULL AND config_key=$1 FOR UPDATE`,
-          [LLM_PROVIDERS_KEY],
+        // READ COMMITTED intentionally takes a fresh snapshot for every statement.
+        // Therefore, if a table lock waits for an existing writer, all plan reads
+        // below observe that writer's committed state instead of a pre-lock snapshot.
+        await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext('global-policy-backfill'))`);
+        await client.query('LOCK TABLE runtime_configs IN SHARE MODE');
+        await client.query('LOCK TABLE llm_provider_instances IN SHARE MODE');
+        await client.query('LOCK TABLE llm_provider_models IN SHARE MODE');
+        await client.query('LOCK TABLE llm_global_model_policy IN SHARE ROW EXCLUSIVE MODE');
+        const transactionRepository = new CatalogRepository(client as unknown as pg.Pool);
+        const transactionService = new GlobalPolicyBackfillService(
+          client as unknown as pg.Pool,
+          transactionRepository,
         );
-        if (current.rows[0]) {
-          await client.query(
-            `INSERT INTO llm_catalog_snapshot_backups
-               (id,runtime_config_id,encrypted_value,source_fingerprint,actor)
-             VALUES (gen_random_uuid(),$1,$2,$3,$4)`,
-            [current.rows[0].id, current.rows[0].encrypted_value, actualFingerprint, actor],
-          );
-        }
-        await upsertRuntimeConfig(client, {
-          tenantId: null, key: LLM_PROVIDERS_KEY, value: blob, isSecret: true,
-          description: '模型目录显式发布的兼容快照',
+        const result = await transactionService.apply({
+          dryRun: false,
+          actor,
+          planFingerprint: body.planFingerprint as string,
+          expectedRevision: body.expectedRevision as number,
         });
+        if (result.action === 'applied') {
+          await writeAuditLogStrict(client as unknown as pg.Pool, {
+            actor,
+            actorType,
+            action: 'model-catalog.global-policy.backfill',
+            method: 'POST',
+            path: req.path,
+            resourceType: 'llm_global_model_policy',
+            resourceId: 'current',
+            oldValue: result.currentPolicy,
+            newValue: result.policy,
+          });
+        }
         await client.query('COMMIT');
+        res.json(result);
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;
       } finally {
         client.release();
       }
-      const task = await enqueueLlmPush(pool, {
-        kind: 'global_push', scope: null, trigger: 'save',
-        prevLibrary: previous, nextLibrary: next, actor,
-        actorType: actorType === 'external' ? 'service' : actorType,
-      });
-      res.json({ ok: true, ...task, streamUrl: `/v1/admin/llm-push-tasks/${task.taskId}/stream` });
     } catch (error) {
-      const tooLarge = error instanceof Error && error.message.includes('too long');
-      console.error('model catalog snapshot publish failed:', error);
-      internalError(res, tooLarge ? 'SNAPSHOT_TOO_LARGE' : 'INTERNAL', tooLarge ? 422 : 500);
+      if (error instanceof GlobalPolicyBackfillError) {
+        const status = error.code === 'POLICY_ALREADY_CONFIGURED' ? 409 : 422;
+        res.status(status).json({ code: error.code, message: error.message });
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('STALE_REVISION')) return staleRevision(res);
+      if (message.includes('DANGLING_MODEL_REFERENCE')) {
+        res.status(422).json({
+          code: 'BACKFILL_NOT_READY',
+          message: 'Catalog references changed before the policy could be applied',
+        });
+        return;
+      }
+      console.error('model catalog global policy backfill failed:', error);
+      internalError(res, 'GLOBAL_POLICY_BACKFILL_FAILED');
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/global-policy', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const policy = await repository.getGlobalModelPolicy();
+      res.json({ policy });
+    } catch (error) {
+      console.error('model catalog global policy get failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.put('/v1/admin/model-catalog/global-policy', async (req, res) => {
+    if (config.modelCatalogSnapshotWrite !== true) return disabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const parsed = GlobalModelPolicyInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: 'MODEL_CATALOG_VALIDATION',
+        message: parsed.error.message,
+      });
+      return;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const before = await repository.getGlobalModelPolicy();
+      const policy = await repository.updateGlobalModelPolicy(
+        parsed.data, expectedRevision,
+        actorType === 'external' ? 'service-token' : actor,
+      );
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.global-policy.update',
+        method: 'PUT', path: req.path, resourceType: 'llm_global_model_policy',
+        resourceId: 'current', oldValue: before, newValue: policy,
+      });
+      res.json({ policy });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      if (msg.includes('DANGLING_MODEL_REFERENCE')) {
+        res.status(400).json({ code: 'DANGLING_MODEL_REFERENCE', message: msg });
+        return;
+      }
+      console.error('model catalog global policy update failed:', error);
+      internalError(res);
+    }
+  });
+
+  // ── Pure Catalog Snapshot Preview (modelCatalogRead) ───────────────────
+
+  router.get('/v1/admin/model-catalog/catalog-preview', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const snapshot = await service.buildCatalogSnapshot();
+      const fingerprint = snapshotFingerprint(snapshot);
+      res.json({
+        snapshot: redactSnapshot(snapshot),
+        fingerprint,
+      });
+    } catch (error) {
+      console.error('model catalog catalog preview failed:', error);
+      internalError(res, 'SNAPSHOT_INVALID', 422);
+    }
+  });
+
+  // ── Drift Detection (modelCatalogRead) ────────────────────────────────
+  // Compares the runtime LLM_PROVIDERS fingerprint against the pure Catalog
+  // snapshot fingerprint and the last published Release fingerprint. If any
+  // differ, drift has occurred (likely from a break-glass write that bypassed
+  // the Catalog). Used by the admin UI to flag "reconcile needed".
+
+  router.get('/v1/admin/model-catalog/drift-check', async (_req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const result = await checkCatalogDrift(pool);
+      res.json(result);
+    } catch (err) {
+      console.error('drift-check failed:', err);
+      res.status(500).json({ code: 'INTERNAL' });
+    }
+  });
+
+  // ── Selection V2 endpoints ────────────────────────────────────────────
+  // Stable model row ID selection. GET is controlled by modelCatalogRead;
+  // PUT/POST by modelCatalogParamWrite. These coexist with the legacy
+  // /v1/admin/llm-providers/selection endpoint during the dual-write transition.
+
+  router.get('/v1/admin/model-catalog/tenants/:id/selection', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const v2Service = new TenantSelectionV2Service(pool);
+      const selection = await v2Service.getSelection(req.params.id);
+      if (!selection) {
+        res.status(404).json({ code: 'NOT_FOUND', message: 'No V2 selection for this tenant' });
+        return;
+      }
+      res.json({ selection });
+    } catch (error) {
+      console.error('selection v2 get failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.put('/v1/admin/model-catalog/tenants/:id/selection', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const expectedRevision = parseExpectedRevision(req);
+    if (Number.isNaN(expectedRevision)) {
+      validationError(res, 'expectedRevision is required (query param or body field)');
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const input: {
+      defaultModelId?: string | null;
+      imageModelId?: string | null;
+      compactionModelId?: string | null;
+      fallbackModelIds?: string[];
+      directMode?: boolean;
+    } = {};
+    if ('defaultModelId' in body) {
+      input.defaultModelId = typeof body.defaultModelId === 'string' && body.defaultModelId.trim()
+        ? body.defaultModelId.trim() : null;
+    }
+    if ('imageModelId' in body) {
+      input.imageModelId = typeof body.imageModelId === 'string' && body.imageModelId.trim()
+        ? body.imageModelId.trim() : null;
+    }
+    if ('compactionModelId' in body) {
+      input.compactionModelId = typeof body.compactionModelId === 'string' && body.compactionModelId.trim()
+        ? body.compactionModelId.trim() : null;
+    }
+    if ('fallbackModelIds' in body) {
+      if (!Array.isArray(body.fallbackModelIds)) {
+        validationError(res, 'fallbackModelIds must be an array');
+        return;
+      }
+      input.fallbackModelIds = body.fallbackModelIds
+        .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+        .map((id) => id.trim());
+    }
+    if ('directMode' in body) {
+      input.directMode = body.directMode === true;
+    }
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const v2Service = new TenantSelectionV2Service(pool);
+      const selection = await v2Service.updateSelection(
+        req.params.id,
+        input,
+        expectedRevision,
+        actorType === 'external' ? 'service-token' : actor,
+      );
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.selection-v2.update',
+        method: 'PUT', path: req.path, resourceType: 'llm_tenant_selection_v2',
+        resourceId: req.params.id, tenantId: req.params.id, newValue: selection,
+      });
+      res.json({ selection });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('STALE_REVISION')) return staleRevision(res);
+      console.error('selection v2 update failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.post('/v1/admin/model-catalog/selection/backfill', async (req, res) => {
+    if (config.modelCatalogParamWrite !== true) return paramWriteDisabled(res);
+    const dryRun = req.body?.dryRun === true;
+    try {
+      const { actor, actorType } = actorFromRequest(req);
+      const v2Service = new TenantSelectionV2Service(pool);
+      const report = await v2Service.backfillFromLegacy({
+        dryRun,
+        actor: actorType === 'external' ? 'service-token' : actor,
+      });
+      void writeAuditLog(pool, {
+        actor, actorType, action: 'model-catalog.selection-v2.backfill',
+        method: 'POST', path: req.path, resourceType: 'llm_tenant_selection_v2',
+        resourceId: 'batch',
+        newValue: {
+          dryRun,
+          totalTenants: report.totalTenants,
+          migrated: report.migrated,
+          skipped: report.skipped,
+          missing: report.missing,
+          errors: report.errors.length,
+        },
+      });
+      res.json({ report });
+    } catch (error) {
+      console.error('selection v2 backfill failed:', error);
+      internalError(res);
+    }
+  });
+
+  router.get('/v1/admin/model-catalog/selection/compare/:id', async (req, res) => {
+    if (config.modelCatalogRead !== true) return disabled(res);
+    try {
+      const v2Service = new TenantSelectionV2Service(pool);
+      const comparison = await v2Service.compareSelections(req.params.id);
+      res.json(comparison);
+    } catch (error) {
+      console.error('selection v2 compare failed:', error);
+      internalError(res);
     }
   });
 

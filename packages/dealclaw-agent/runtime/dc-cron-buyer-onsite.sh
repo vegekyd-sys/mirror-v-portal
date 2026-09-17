@@ -37,17 +37,30 @@ python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
 SUPPLIER_ID="${MIO_CDP_SUPPLIER_ID:-}"
 OPEN_ID="${MIO_V_OPEN_ID:-}"
 
+# ── schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）──
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+DEFAULT_CRON="*/5 * * * *"
+sched_env="$(python3 "$CONVERGE" resolve --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ")" || {
+  echo "[dc-cron-buyer-onsite] schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+  exit 1
+}
+eval "$sched_env"
+
 openclaw cron add \
-  --cron "*/5 * * * *" \
-  --tz "$TZ" \
+  --cron "$DC_CRON_EXPR" \
+  --tz "$DC_CRON_TZ" \
   --command "python3 monitor_buyer_onsite.py" \
   --command-cwd "$MIO_DIR" \
   --command-env "MIO_CDP_SUPPLIER_ID=$SUPPLIER_ID" \
   --command-env "MIO_V_OPEN_ID=$OPEN_ID" \
   --command-env "OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR:-/data/workspace}" \
   --no-deliver \
+  --timeout-seconds 240 \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-buyer-onsite-monitor" \
-  --description "DealClaw 买家到场监控（*/5 @ $TZ）"
+  --description "DealClaw 买家到场监控（${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
 
-echo "[dc-cron-buyer-onsite] 已同步（*/5 @ $TZ）"
+python3 "$CONVERGE" record --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ" \
+  || echo "[dc-cron-buyer-onsite] 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
+
+echo "[dc-cron-buyer-onsite] 已同步（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"

@@ -42,7 +42,11 @@ export const SKILL_ENV_DEFAULT_MODE = 0o440;
  * tenant-config Secret (envFrom). LLM_PROVIDERS is the admin-managed provider
  * blob (JSON: providers + defaultModel) parsed by write-config.mjs.
  */
-export const ENV_FROM_ONLY_KEYS = new Set(['LLM_PROVIDERS']);
+export const ENV_FROM_ONLY_KEYS = new Set([
+  'LLM_PROVIDERS',
+  'LLM_RUNTIME_CONFIG_V2',
+  'LLM_RUNTIME_CONTRACT_MODE',
+]);
 
 /**
  * Keys that are no longer supported. Keeping them in runtime_configs or the

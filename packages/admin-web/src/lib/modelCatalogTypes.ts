@@ -30,6 +30,10 @@ export interface CatalogProvider {
   source: string;
   enabled: boolean;
   hasApiKey: boolean;
+  /** CAS revision number (P2 write API); absent on P1 read-only responses. */
+  revision?: number;
+  /** API key mask returned by detail endpoint (e.g. abcd••••wxyz). */
+  apiKeyMask?: string;
 }
 
 export interface CatalogModel {
@@ -42,6 +46,8 @@ export interface CatalogModel {
   effectiveParams: ModelRuntimeParams;
   paramsStatus: ParamsStatus;
   schemaVersion: number;
+  /** CAS revision number (P2 write API); absent on P1 read-only responses. */
+  revision?: number;
 }
 
 export interface CatalogImportRun {
@@ -91,6 +97,8 @@ export interface SnapshotDiff {
   addedModels: string[];
   removedModels: string[];
   changedModels: string[];
+  affectedProviders: string[];
+  fallbackWarnings: Array<{ providerName: string; modelId: string; fallbackFields: string[] }>;
   changedReferences: Array<{
     reference: 'defaultModel' | 'imageModel' | 'compactionModel' | 'fallbackModels';
     before: string | string[] | null;
@@ -135,4 +143,98 @@ export interface SnapshotMutationResponse {
   ok: boolean;
   taskId: string;
   streamUrl: string;
+}
+
+// ── P2 structured catalog management API contracts ──
+
+/** Global model selection policy (default / image / compaction / fallback). */
+export interface GlobalModelPolicy {
+  defaultModel: string | null;
+  imageModel: string | null;
+  compactionModel: string | null;
+  fallbackModels: string[];
+  revision: number;
+}
+
+/** Immutable catalog release record. */
+export interface CatalogRelease {
+  id: string;
+  version: number;
+  parentId: string | null;
+  fingerprint: string;
+  parentFingerprint: string | null;
+  diffSummary: Record<string, unknown>;
+  warnings: unknown[];
+  actor: string | null;
+  actorType: string;
+  status: string;
+  createdAt: string;
+}
+
+/** Impact manifest returned by GET /rollout/impact-preview. */
+export interface ImpactManifest {
+  releaseId: string | null;
+  fingerprint: string;
+  totalTenants: number;
+  affectedTenants: number;
+  unaffectedTenants: number;
+  pinnedTenants: number;
+  entries: TenantImpactEntry[];
+}
+
+/** Per-tenant impact entry inside an ImpactManifest. */
+export interface TenantImpactEntry {
+  tenantId: string;
+  tenantName: string | null;
+  internal: boolean;
+  affected: boolean;
+  affectedReasons: string[];
+  agentRestart: boolean;
+  gatewayRestart: boolean;
+  currentAppliedReleaseId: string | null;
+  desiredReleaseId: string | null;
+  deliveryStatus: string | null;
+}
+
+/** Per-tenant release delivery status from GET /rollout/status. */
+export interface TenantReleaseStatus {
+  tenantId: string;
+  desiredReleaseId: string | null;
+  appliedReleaseId: string | null;
+  appliedFingerprint: string | null;
+  deliveryStatus: string | null;
+  attempts: number;
+  updatedAt: string;
+}
+
+/** Rollout scope type for POST /rollout. */
+export type RolloutScopeType = 'full' | 'allowlist' | 'single' | 'affected' | 'canary';
+
+/** Response from POST /rollout (scoped rollout creation). */
+export interface RolloutCreateResponse {
+  ok: boolean;
+  rolloutId: string;
+  message?: string;
+}
+
+/** Pure catalog snapshot returned by GET /catalog-preview. */
+export interface CatalogPreview {
+  fingerprint: string;
+  providers: Array<{
+    id: string;
+    legacyProviderName: string;
+    displayName?: string;
+    templateKey: string;
+    protocol: string;
+    baseUrl: string;
+    enabled: boolean;
+    models: Array<{
+      modelId: string;
+      displayName?: string;
+      modelType: string;
+      runtimeEnabled: boolean;
+      paramsStatus: string;
+    }>;
+  }>;
+  policy: GlobalModelPolicy;
 }

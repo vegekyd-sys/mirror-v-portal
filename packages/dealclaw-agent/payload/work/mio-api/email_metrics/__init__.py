@@ -7,6 +7,7 @@
   adapter.py  旧数据 → 事实层事件（只读，不改原存储）
   facts.py    事件回放 → 消息投递投影（delivered_final / delivered_ever）
   views.py    activity_view / campaign_view / metrics_view（唯一读入口）
+  quality_metrics.py  metrics_view/send_quality_view（发信质量与用量：6 指标分渠道 + 退信/投诉率 + 两套账，纯读取）
   config.py   口径开关 legacy|shadow|v1（按租户）+ 业务时区
   legacy.py   旧口径 Adapter（字段名兼容 + 业务时区「今日」）
   service.py  read_email_metrics：按口径返回，shadow 只记差异，缺失报 partial/unavailable
@@ -31,7 +32,10 @@ from .pseudonym import pseudonym  # noqa: F401
 from .config import resolve_mode, resolve_report_timezone  # noqa: F401
 from .service import (build_data_quality_alert, format_metrics_line,  # noqa: F401
                       metrics_hidden_hint, read_email_metrics)
+from .quality_metrics import (format_quality_line,  # noqa: F401
+                              send_quality_view)
 
 __all__ = ["schema", "pseudonym", "read_email_metrics", "resolve_mode",
            "resolve_report_timezone", "build_data_quality_alert",
-           "format_metrics_line", "metrics_hidden_hint"]
+           "format_metrics_line", "metrics_hidden_hint",
+           "send_quality_view", "format_quality_line"]

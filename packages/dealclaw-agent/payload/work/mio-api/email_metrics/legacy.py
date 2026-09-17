@@ -240,7 +240,8 @@ def legacy_metrics(outbound_records, inbound_records, *, company_id: str | None 
                    date_range=None, tz: str | None = None) -> dict:
     """旧口径数字（字段名已兼容、日期已按业务时区过滤）。
 
-    口径仍是旧的：`sent` = outbound 记录条数；`replied` = 命中的入站消息数。
+    口径：`sent`/`delivered`/`bounced`/`failed`/`pending` = **按收件人数**计（1 封发给 N 个邮箱 = N），
+    不数记录数；`replied` = 命中的入站消息数。
     它**不等于** v1 的 Provider accepted / 唯一回复买家，差异由 shadow 对账记录。
     """
     tz = tz or DEFAULT_REPORT_TZ
@@ -286,14 +287,18 @@ def legacy_metrics(outbound_records, inbound_records, *, company_id: str | None 
         if key:
             repliers.add(key)
 
+    def _rcount(records) -> int:
+        """按收件人数计（1 封发给 N 个邮箱 = N），不数记录数；收件人解析不到时按 1 计。"""
+        return sum(max(1, len(recipients_of(o))) for o in records)
+
     return {
-        "sent": len(outbounds),
-        "delivered": sum(1 for o in outbounds if provider_status(o) == S.EV_DELIVERED),
-        "bounced": sum(1 for o in outbounds if provider_status(o) == S.EV_BOUNCED),
-        "failed": sum(1 for o in outbounds if provider_status(o) == S.EV_FAILED),
-        "pending": sum(1 for o in outbounds
-                       if provider_status(o) not in (S.EV_DELIVERED, S.EV_BOUNCED,
-                                                    S.EV_FAILED)),
+        "sent": _rcount(outbounds),
+        "delivered": _rcount(o for o in outbounds if provider_status(o) == S.EV_DELIVERED),
+        "bounced": _rcount(o for o in outbounds if provider_status(o) == S.EV_BOUNCED),
+        "failed": _rcount(o for o in outbounds if provider_status(o) == S.EV_FAILED),
+        "pending": _rcount(o for o in outbounds
+                           if provider_status(o) not in (S.EV_DELIVERED, S.EV_BOUNCED,
+                                                        S.EV_FAILED)),
         "inbound_messages": len(inbounds),
         "reply_messages": reply_messages,
         "unique_repliers": len(repliers),

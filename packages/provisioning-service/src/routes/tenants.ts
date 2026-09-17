@@ -215,6 +215,9 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         res.status(201).json({
           ok: true,
           provisioned: false,
+          // null = 本次创建未绑定米奥供应商（不阻塞、不自动绑定），
+          // 前端据此提示操作者后续绑定（POST /v1/admin/tenants/:id/mio-supplier）。
+          mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
           tenant: {
             tenantId,
             companyName: safeName,
@@ -299,6 +302,8 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
       res.status(201).json({
         ok: true,
         provisioned: true,
+        // 同 provisioned:false 分支：null 表示本次未绑定米奥供应商。
+        mioSupplier: safeSupplierId ? { supplierId: safeSupplierId } : null,
         tenant: {
           tenantId,
           companyName: safeName,
@@ -866,28 +871,33 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         return;
       }
 
-      const { k8s_namespace: namespace } = rows[0];
       const deploymentName = `${service}-${tenantId}`;
       const fullImage = normalizeImage(service, image);
 
-      // Recreate (scale 0 → patch image → scale 1), NOT rolling update: a
-      // single-replica agent shares its SQLite PVC with the replacement pod,
-      // so a rolling update would briefly run two pods that deadlock on the
-      // same DB file and neither passes startupProbe.
-      const { updateDeploymentImageRecreate } = await import('../services/k8s-client.js');
-      const updated = await updateDeploymentImageRecreate(namespace, deploymentName, fullImage);
-      if (!updated) {
-        res.status(404).json({ code: 'NOT_FOUND', message: 'Deployment not found' });
-        return;
-      }
-
-      // Persist (or clear) the pin so the rollout cron respects this override.
-      const { actor } = actorFromRequest(req);
+      // Persist (or clear) the pin synchronously so the rollout cron respects
+      // this override immediately, before the async recreate lands.
+      const { actor, actorType } = actorFromRequest(req);
+      const batchActorType: 'admin' | 'service' = actorType === 'admin' ? 'admin' : 'service';
       if (shouldPin) {
         await setOverride(pool, { tenantId, service, image: fullImage, updatedBy: actor });
       } else {
         await clearOverride(pool, tenantId, service);
       }
+
+      // Enqueue an async single-tenant rollout task (scope = tenantId) that
+      // recreates just this tenant's Deployment via the Recreate strategy. The
+      // process-local worker executes it in the background and publishes
+      // progress to SSE, so the operator gets a taskId immediately instead of
+      // blocking on the old synchronous scale-0→poll→scale-1 loop.
+      const tag = image.includes(':') ? (image.split(':').pop() as string) : image;
+      const { taskId, reused } = await enqueueRolloutBatch(pool, {
+        service,
+        image: fullImage,
+        tag,
+        actor,
+        actorType: batchActorType,
+        tenantId,
+      });
 
       await auditFor(req, {
         action: shouldPin ? 'image-release.pin' : 'image-release.unpin',
@@ -896,13 +906,13 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         resourceType: 'tenant_image_override',
         resourceId: `${tenantId}/${service}`,
         tenantId,
-        newValue: { service, image: fullImage, pinned: shouldPin },
+        newValue: { service, image: fullImage, pinned: shouldPin, taskId },
         statusCode: 200,
       });
 
       await pool.query(
         `INSERT INTO tenant_status_log (tenant_id, from_status, to_status, reason) VALUES ($1, $2, $2, $3)`,
-        [tenantId, rows[0].status, `Deployment ${service} updated to ${image}${shouldPin ? ' (pinned)' : ''}`],
+        [tenantId, rows[0].status, `Deployment ${service} update enqueued → ${image}${shouldPin ? ' (pinned)' : ''}`],
       );
 
       res.json({
@@ -913,6 +923,10 @@ export function createTenantRoutes(pool: pg.Pool, config: ProvisioningConfig, au
         image: fullImage,
         pinned: shouldPin,
         action: 'recreate',
+        taskId,
+        status: 'pending',
+        reused,
+        progressUrl: `/v1/tenants/batch/deployment/${taskId}/stream`,
       });
     } catch (err: unknown) {
       const e = err as any;

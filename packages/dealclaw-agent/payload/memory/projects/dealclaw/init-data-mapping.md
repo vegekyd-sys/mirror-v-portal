@@ -122,3 +122,31 @@
 - 联系人字段永远不进线索池（解锁时才单独推群），这是已有铁律，本次不破。
 - `countdownDays` 是占位值，倒计时用 campaign 的 `days_remaining`（开展日锚点）。
 - 权益（privilegeList/gradeTypeName）不进知识库也不进线索池，仅内部用于判断可解锁额度。
+
+---
+
+## 四、2026-09-15 新增：展中推荐独立池与两个新标签
+
+现场推荐（`dc_onsite_recommend.py`）从「只推不落池」改为**落池**，口径：
+
+### 新增选项（`work/mio-api/dc_company_registry.py` → `LEAD_POOL_FIELDS_JSON`）
+
+- 「来源」options 新增 **`展中推荐`**（与展后推荐的 `展会线索` 区分）
+- 「阶段」options 新增 **`现场对接中`**
+
+> select 字段的选项之外的值写不进飞书：新建池自带这两个选项；
+> 老池/按标题找回的池会在写记录前用 `+field-get` → `+field-update` 自动补选项（缺才写）。
+
+### 展中推荐池布局（每届展会一个独立池）
+
+| 项 | 值 |
+|---|---|
+| 注册表键 | `<company_id>::exhibition::<exhibition_id>`（绕过 `canonical_company_id` 折叠，否则会与企业主池撞键） |
+| Base 标题 | `<展会名>｜展中推荐线索池`（`ensure_exhibition_lead_pool`） |
+| 表结构 | 与企业线索池同一套 v4 字段（`_create_bitable` 同一入口） |
+| 与企业主池关系 | **分开**：企业主池仍只收 引擎搜索/邀约/展会线索 等；展中推荐只进本展会池 |
+| 幂等 | 池：注册表命中复用 → 按标题回查恢复；记录：公司CDPID > 官网域名 去重，同批重复只落第一条 |
+| 排除不落 | `denied` / `blacklisted` / `manual_excluded` / `identity_mismatch` / `cancelled` / 邀约状态 `inviationState=3`（已拒绝）→ 不推也不落 |
+
+> 注：本文第二节「现有来源值（7 个）」是 2026-09-08 的快照，早与代码不一致；以代码 `LEAD_POOL_FIELDS_JSON` 为准。
+> `skills/dealclaw-find-buyers/scripts/dc_company_registry.py` 是另一份旧副本（仍带已退役的冷热字段），本次未动，待后续收敛。

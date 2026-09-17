@@ -32,14 +32,27 @@ python3 -c "from zoneinfo import ZoneInfo; ZoneInfo('$TZ')" 2>/dev/null \
   || { echo "[dc-cron-resend-poll] 非法时区: $TZ" >&2; exit 1; }
 
 # 命令跑在 MIO_DIR，dc_resend_source.py 会自行从 <MIO_DIR>/.env 读 RESEND_API_KEY
+# ── schedule 三方合并：镜像默认值 vs 用户手改（见 dc-cron-converge.py）──
+CONVERGE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dc-cron-converge.py"
+DEFAULT_CRON="*/5 * * * *"
+sched_env="$(python3 "$CONVERGE" resolve --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ")" || {
+  echo "[dc-cron-resend-poll] schedule 解析失败，跳过本次注册（下次启动重试）" >&2
+  exit 1
+}
+eval "$sched_env"
+
 openclaw cron add \
-  --cron "*/5 * * * *" \
-  --tz "$TZ" \
+  --cron "$DC_CRON_EXPR" \
+  --tz "$DC_CRON_TZ" \
   --command "python3 -m dc_email_controller.dc_resend_source" \
   --command-cwd "$MIO_DIR" \
   --no-deliver \
+  --timeout-seconds 240 \
   --declaration-key "$DECL_KEY" \
   --name "dealclaw-resend-poll" \
-  --description "DealClaw Resend poller（*/5 @ $TZ）"
+  --description "DealClaw Resend poller（${DC_CRON_EXPR} @ ${DC_CRON_TZ}）"
 
-echo "[dc-cron-resend-poll] 已同步（*/5 @ $TZ）"
+python3 "$CONVERGE" record --decl-key "$DECL_KEY" --cron "$DEFAULT_CRON" --tz "$TZ" \
+  || echo "[dc-cron-resend-poll] 基线记录失败（不影响本次注册，但下次升级可能误判）" >&2
+
+echo "[dc-cron-resend-poll] 已同步（${DC_CRON_EXPR} @ ${DC_CRON_TZ}，schedule 来源: ${DC_CRON_SOURCE}）"

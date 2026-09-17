@@ -59,6 +59,14 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     && npm install --omit=dev --no-save --legacy-peer-deps \
       --prefix /opt/dealclaw/plugins/weixin \
       @tencent-weixin/openclaw-weixin@2.4.8 \
+    # WeCom and DingTalk enterprise channel plugins. Both versions are pinned;
+    # their peer ranges include the OpenClaw 2026.7.1 host used by this image.
+    && npm install --omit=dev --no-save --legacy-peer-deps \
+      --prefix /opt/dealclaw/plugins/wecom \
+      @wecom/wecom-openclaw-plugin@2026.7.2 \
+    && npm install --omit=dev --no-save --legacy-peer-deps \
+      --prefix /opt/dealclaw/plugins/dingtalk \
+      @dingtalk-real-ai/dingtalk-connector@0.8.25 \
     && chown -R node:node /opt/dealclaw/plugins \
     # Jenkins builders run in mainland China; use the Aliyun Debian mirror to avoid
     # multi-minute stalls against deb.debian.org while retaining apt retries.

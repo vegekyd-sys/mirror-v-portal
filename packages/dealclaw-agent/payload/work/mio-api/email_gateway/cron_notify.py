@@ -110,6 +110,73 @@ def _resolve_mention(owner_open_id: str, chat_id: str = "") -> str:
     return _fetch_group_digital_agent(chat_id)
 
 
+def _human_size(n: object) -> str:
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    for unit in ("B", "KB", "MB"):
+        if n < 1024 or unit == "MB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return ""
+
+
+def _attachment_line(rows: object) -> str:
+    """把附件索引行渲染成卡片里的一行清单。
+
+    只列「有什么」，**不下发文件**（口径：提醒卡片只报有附件；要文件时由 agent 用
+    `dc_resend_attachments --find` / `--pull` 取，再按需发给用户）。没落盘成功的也照列
+    并标原因，「静默丢附件」正是这次要修的病。
+    """
+    if not isinstance(rows, list) or not rows:
+        return ""
+    parts = []
+    for row in rows[:10]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("filename") or "attachment")
+        size = _human_size(row.get("size"))
+        item = f"{name}（{size}）" if size else name
+        if not row.get("stored"):
+            reason = row.get("skipped") or row.get("error") or "未保存"
+            item += f" ⚠️{str(reason)[:30]}"
+        parts.append(item)
+    if not parts:
+        return ""
+    more = f" 等 {len(rows)} 个" if len(rows) > 10 else ""
+    return "📎 **附件**\n" + "、".join(parts) + more
+
+
+def _build_notify_text(events: list[dict], chat_id: str = "") -> str:
+    """构造应用机器人投递用的纯文本。
+
+    与卡片等价的信息量；私聊（ou_）不 @（私聊里提及无意义），群内（oc_）保留
+    「请及时跟进」的 @ 提示，避免丢掉原来群里的提醒效果。
+    """
+    lines = [f"[出海精灵小元] 新邮件提醒 · {len(events)} 封", ""]
+    mention_ids: set[str] = set()
+    for index, event in enumerate(events, start=1):
+        preview = _excerpt(event.get("preview")) or "（无可显示的纯文本正文）"
+        lines.append(f"{index}. 发件人：{event.get('from') or '未知'}")
+        lines.append(f"   收件邮箱：{event.get('email_address') or '未知'}")
+        lines.append(f"   主题：{event.get('subject') or '（无主题）'}")
+        lines.append(f"   内容：{preview}")
+        att_line = _attachment_line(event.get("attachments"))
+        if att_line:
+            lines.append(f"   {att_line}")
+        mention_id = _resolve_mention(event.get("owner_open_id", ""), chat_id)
+        if mention_id:
+            mention_ids.add(mention_id)
+        lines.append("")
+    if mention_ids and str(chat_id or "").startswith("oc_"):
+        at_tags = " ".join(f"<at id={mid}></at>" for mid in sorted(mention_ids))
+        lines.append(f"请及时跟进：{at_tags}")
+    return "\n".join(lines).strip()
+
+
 def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
     elements: list[dict] = []
     mention_ids: set[str] = set()
@@ -130,6 +197,9 @@ def _build_webhook_card(events: list[dict], chat_id: str = "") -> dict:
         elements.append(
             {"tag": "div", "text": {"content": f"邮件内容\n{preview}", "tag": "lark_md"}}
         )
+        att_line = _attachment_line(event.get("attachments"))
+        if att_line:
+            elements.append({"tag": "div", "text": {"content": att_line, "tag": "lark_md"}})
         mention_id = _resolve_mention(event.get("owner_open_id", ""), chat_id)
         if mention_id:
             mention_ids.add(mention_id)
@@ -204,26 +274,37 @@ def main(argv: list[str] | None = None) -> int:
         events = result.get("events", [])
         if not events:
             continue
-        # 按 account 的 binding 路由：有启用绑定则发到各绑定的 webhook，否则 fallback 全局 --webhook
+        # 按 account 的 binding 路由：优先应用机器人（可私聊/群），失败回退到群 webhook。
+        # 旧行为可用 DC_NOTIFY_DELIVERY=webhook_only 一键恢复。
+        from email_gateway.notify_delivery import deliver as _deliver  # noqa: PLC0415
+
         bindings = [
             b for b in store.list_bindings()
             if b.get("account_id") == account_id and b.get("notify_enabled")
         ]
         chat_id = bindings[0].get("chat_id", "") if bindings else ""
         card = _build_webhook_card(events, chat_id)
-        targets: list[tuple[str, str]] = []
+        targets: list[tuple[dict, str]] = []
         if bindings:
             for b in bindings:
                 url = b.get("webhook_url") or args.webhook
-                if url:
-                    targets.append((url, b.get("webhook_secret") or args.webhook_secret))
+                if url or str(b.get("chat_id") or "").startswith(("oc_", "ou_")):
+                    targets.append((b, url))
         elif args.webhook:
-            targets.append((args.webhook, args.webhook_secret))
-        for url, secret in targets:
-            try:
-                _send_webhook(url, secret, card)
-            except Exception as exc:
-                errors.append(f"{account_id}:webhook:{type(exc).__name__}")
+            targets.append(({"chat_id": "", "webhook_url": args.webhook,
+                             "webhook_secret": args.webhook_secret}, args.webhook))
+        for binding, url in targets:
+            text = _build_notify_text(events, binding.get("chat_id", ""))
+            result = _deliver(
+                {**binding, "webhook_url": url or binding.get("webhook_url", "")},
+                text=text,
+                card=card,
+                fallback_webhook=args.webhook,
+                webhook_secret=args.webhook_secret,
+            )
+            if not result.get("ok"):
+                errors.append(f"{account_id}:{'/'.join(a['channel'] for a in result.get('attempts') or []) or 'notify'}"
+                              f":{result.get('error', 'delivery failed')}")
                 webhook_failed = True
     if (not synced_any) or webhook_failed:
         raise RuntimeError("; ".join(errors))

@@ -329,6 +329,7 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         service               TEXT NOT NULL CHECK (service IN ('dealclaw-agent','nexus-gateway')),
         image                 TEXT NOT NULL,                  -- 规范化后的完整镜像
         tag                   TEXT NOT NULL,                  -- 期望 tag（展示用）
+        scope                 TEXT,                            -- NULL=全量 rollout；非空=单租户（tenant_id）
         status                TEXT NOT NULL DEFAULT 'pending'
                               CHECK (status IN ('pending','running','succeeded','partial','failed','cancelled')),
         total_count           INTEGER NOT NULL DEFAULT 0,
@@ -347,12 +348,28 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         started_at            TIMESTAMPTZ,
         finished_at           TIMESTAMPTZ
       );
+      -- 存量库回填：rollout_batch_tasks 若先于 scope 列建表（旧版本），须先补列——
+      -- 必须放在下方唯一索引引用 scope 之前执行，否则存量库会报 column "scope" does not exist。
+      ALTER TABLE rollout_batch_tasks ADD COLUMN IF NOT EXISTS scope TEXT;
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_status ON rollout_batch_tasks(status, created_at);
       CREATE INDEX IF NOT EXISTS idx_rollout_batch_tasks_created ON rollout_batch_tasks(created_at DESC);
-      -- 幂等入队去重：一个 service+image 同一时刻只允许一个进行中的任务
+      -- 幂等入队去重：一个 service+image（全量，scope IS NULL）同一时刻只允许
+      -- 一个进行中的任务，避免 rollout cron 重复触发导致任务堆积。单租户 pin
+      -- （scope 非空）不去重——pin 是明确的单租户操作，每次入队新建任务。
       CREATE UNIQUE INDEX IF NOT EXISTS rollout_batch_tasks_active_uq
         ON rollout_batch_tasks(service, image)
-        WHERE status IN ('pending','running');
+        WHERE status IN ('pending','running') AND scope IS NULL;
+      DO $$ 
+      DECLARE v_def TEXT;
+      BEGIN
+        SELECT indexdef INTO v_def FROM pg_indexes WHERE indexname = 'rollout_batch_tasks_active_uq';
+        IF v_def IS NOT NULL AND v_def NOT LIKE '%scope IS NULL%' THEN
+          DROP INDEX rollout_batch_tasks_active_uq;
+          CREATE UNIQUE INDEX rollout_batch_tasks_active_uq
+            ON rollout_batch_tasks(service, image)
+            WHERE status IN ('pending','running') AND scope IS NULL;
+        END IF;
+      END $$;
 
       CREATE TABLE IF NOT EXISTS rollout_batch_task_items (
         id          BIGSERIAL PRIMARY KEY,
@@ -438,6 +455,62 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
         ON wechat_bindings(tenant_id, status);
     `);
 
+    // ── WeCom (企业微信) bot bindings — credential-based direct connection ─
+    // One tenant ↔ one WeCom bot. `bot_id` is a non-sensitive identifier kept
+    // for display only; the bot `secret` is materialized as the
+    // `dealclaw-wecom-<tenantId>` Secret and is NEVER written to the DB.
+    // UNIQUE(tenant_id) enforces single-binding. The channel only exists on
+    // the OpenClaw message plane (fail-closed in write-config.mjs).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wecom_bindings (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        tenant_id       TEXT NOT NULL UNIQUE REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        bot_id          TEXT,
+        status          TEXT NOT NULL DEFAULT 'unbound'
+                        CHECK (status IN ('unbound','bound','disabling','disabled')),
+        bound_at        TIMESTAMPTZ,
+        unbound_at      TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_wecom_bindings_tenant
+        ON wecom_bindings(tenant_id, status);
+      -- Partial unique index: the same WeCom bot can only be bound to one
+      -- tenant at a time. PG table-level UNIQUE has no WHERE clause, so this
+      -- must be a CREATE UNIQUE INDEX (NULL bot_id / non-bound rows excluded).
+      CREATE UNIQUE INDEX IF NOT EXISTS wecom_bindings_bot_id_uq
+        ON wecom_bindings(bot_id)
+        WHERE bot_id IS NOT NULL AND status = 'bound';
+    `);
+
+    // ── DingTalk (钉钉) bot bindings — credential-based direct connection ─
+    // One tenant ↔ one DingTalk bot. `client_id` is a non-sensitive identifier
+    // kept for display only; the `client_secret` is materialized as the
+    // `dealclaw-dingtalk-<tenantId>` Secret and is NEVER written to the DB.
+    // UNIQUE(tenant_id) enforces single-binding. The channel only exists on
+    // the OpenClaw message plane (fail-closed in write-config.mjs).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dingtalk_bindings (
+        id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        tenant_id       TEXT NOT NULL UNIQUE REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+        client_id       TEXT,
+        status          TEXT NOT NULL DEFAULT 'unbound'
+                        CHECK (status IN ('unbound','bound','disabling','disabled')),
+        bound_at        TIMESTAMPTZ,
+        unbound_at      TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_dingtalk_bindings_tenant
+        ON dingtalk_bindings(tenant_id, status);
+      -- Partial unique index: the same DingTalk bot can only be bound to one
+      -- tenant at a time. PG table-level UNIQUE has no WHERE clause, so this
+      -- must be a CREATE UNIQUE INDEX (NULL client_id / non-bound rows excluded).
+      CREATE UNIQUE INDEX IF NOT EXISTS dingtalk_bindings_client_id_uq
+        ON dingtalk_bindings(client_id)
+        WHERE client_id IS NOT NULL AND status = 'bound';
+    `);
+
     // ── Shared DM session (v0.9) — per-tenant toggle that merges Feishu and
     // WeChat DM conversations into a single session (agent:dealclaw:main),
     // enabling cross-channel conversation continuity. Suitable for single-user
@@ -447,7 +520,20 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
     // DEALCLAW_SHARED_DM_SESSION env var on the agent Deployment; write-config
     // .mjs checks it with priority over DEALCLAW_SESSION_DM_SCOPE.
     await client.query(`
-      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS shared_dm_session BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    // v0.10 — shared DM session is now DEFAULT ON. For environments where the
+    // column already exists (v0.9 created it with DEFAULT FALSE), align the
+    // column default and backfill existing rows so the admin console reflects
+    // "enabled" consistently with the runtime. NOTE: write-config.mjs treats
+    // an unset DEALCLAW_SHARED_DM_SESSION as enabled, but a tenant whose
+    // Deployment env was explicitly set to '0' (manually disabled) keeps
+    // DEALCLAW_SHARED_DM_SESSION=0 — the runtime stays "disabled" for those;
+    // only the DB flag is realigned here.
+    await client.query(`
+      ALTER TABLE tenants ALTER COLUMN shared_dm_session SET DEFAULT TRUE;
+      UPDATE tenants SET shared_dm_session = TRUE WHERE shared_dm_session = FALSE;
     `);
 
     // P0 structured model catalog is expand-only and remains shadow data until
@@ -547,6 +633,137 @@ export async function migrate(pool?: pg.Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_llm_model_param_evidence_model
         ON llm_model_param_evidence(model_row_id, created_at DESC);
+    `);
+
+    // ── Immutable Release registry + per-tenant rollout status (P0-2) ──────
+    // Every catalog publish creates an append-only Release row with an
+    // encrypted canonical snapshot + compat payload + fingerprint. The
+    // `llm_catalog_release_pointer` singleton tracks the current "desired"
+    // release. `llm_tenant_release_status` tracks per-tenant desired/applied
+    // state so the rollout worker can reconcile drift and report delivery.
+    //   - `llm_provider_instances.revision` enables optimistic CAS for
+    //     scoped rollout (compare-and-swap on the provider row).
+    //   - `llm_push_tasks` gains release_id / scope_type / idempotency_key
+    //     so a push task can be linked to its Release and de-duplicated.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_catalog_releases (
+        id                 UUID PRIMARY KEY,
+        version            BIGINT NOT NULL,
+        parent_id          UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        canonical_snapshot TEXT NOT NULL,
+        compat_payload     TEXT NOT NULL,
+        fingerprint        TEXT NOT NULL,
+        parent_fingerprint TEXT,
+        diff_summary       JSONB NOT NULL DEFAULT '{}'::jsonb,
+        warnings           JSONB NOT NULL DEFAULT '[]'::jsonb,
+        actor              TEXT,
+        actor_type         TEXT NOT NULL DEFAULT 'admin' CHECK (actor_type IN ('admin','service')),
+        status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','rolled-back')),
+        idempotency_key    TEXT UNIQUE,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_catalog_releases_version
+        ON llm_catalog_releases(version DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_catalog_releases_parent
+        ON llm_catalog_releases(parent_id);
+
+      CREATE TABLE IF NOT EXISTS llm_catalog_release_pointer (
+        id          TEXT PRIMARY KEY DEFAULT 'current',
+        release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      INSERT INTO llm_catalog_release_pointer (id) VALUES ('current') ON CONFLICT DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS llm_tenant_release_status (
+        tenant_id           TEXT NOT NULL,
+        desired_release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        applied_release_id  UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL,
+        applied_fingerprint TEXT,
+        applied_at          TIMESTAMPTZ,
+        restart_reason      TEXT,
+        delivery_status     TEXT CHECK (delivery_status IN ('pending','delivered','failed','skipped','unsupported')),
+        error               TEXT,
+        attempts            INTEGER NOT NULL DEFAULT 0,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id)
+      );
+
+      ALTER TABLE llm_provider_instances
+        ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS release_id UUID REFERENCES llm_catalog_releases(id) ON DELETE SET NULL;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'full';
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+    `);
+
+    // ── Global Model Policy (P0-1 Catalog Authority) ──────────────────────
+    // Singleton row (id='current') holding the catalog-only model reference
+    // policy: defaultModel / imageModel / compactionModel / fallbackModels.
+    // These are stable model row IDs (lpm_...) that resolve into the catalog
+    // at snapshot-build time — no legacy JSON skeleton required.
+    // revision enables optimistic CAS so concurrent admin edits don't clobber.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_global_model_policy (
+        id               TEXT PRIMARY KEY DEFAULT 'current',
+        default_model    TEXT,
+        image_model      TEXT,
+        compaction_model TEXT,
+        fallback_models  TEXT[] NOT NULL DEFAULT '{}',
+        revision         BIGINT NOT NULL DEFAULT 0,
+        updated_by       TEXT,
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      INSERT INTO llm_global_model_policy (id) VALUES ('current') ON CONFLICT DO NOTHING;
+    `);
+
+    // ── Selection V2: stable model row IDs instead of legacy refs ────────
+    // Tenant selection stored as stable lpm_ IDs, so provider renames don't
+    // break references. Coexists with the legacy runtime_configs selection
+    // during the dual-write / dual-read transition period.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS llm_tenant_selection_v2 (
+        tenant_id           TEXT NOT NULL,
+        default_model_id    TEXT,
+        image_model_id      TEXT,
+        compaction_model_id TEXT,
+        fallback_model_ids  TEXT[] NOT NULL DEFAULT '{}',
+        direct_mode         BOOLEAN NOT NULL DEFAULT FALSE,
+        revision            BIGINT NOT NULL DEFAULT 0,
+        updated_by          TEXT,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id)
+      );
+    `);
+
+    // ── Batch control for scoped rollout (P0-3 remaining) ────────────────
+    // Adds per-batch metadata to push task items so the worker can process
+    // tenants in controlled waves with an observation window between batches.
+    //   - batch_index: 0-based position within the task's batch sequence
+    //   - batch_total: total number of batches for this task (0 = unbatched)
+    //   - batch_status: 'pending' (claimable) | 'paused' (held back) | 'completed'
+    // Non-batched tasks leave these NULL/0/default and the worker's existing
+    // enumerateTargets path is unaffected.
+    await client.query(`
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_index INTEGER;
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_total INTEGER;
+      ALTER TABLE llm_push_task_items
+        ADD COLUMN IF NOT EXISTS batch_status TEXT NOT NULL DEFAULT 'pending';
+      CREATE INDEX IF NOT EXISTS idx_llm_push_items_batch
+        ON llm_push_task_items(task_id, batch_index, batch_status);
+
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS batch_interval_ms INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_push_tasks
+        ADD COLUMN IF NOT EXISTS auto_pause_thresholds JSONB;
     `);
 
     console.log(JSON.stringify({

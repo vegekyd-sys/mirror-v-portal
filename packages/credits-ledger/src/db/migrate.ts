@@ -306,6 +306,33 @@ export async function migrate() {
   // ── v2.5: Seed initial admin user ──
   await seedInitialAdmin();
 
+  // ── P1-3: Pricing Authority — extend llm_model_price_plans ──
+  // Add status constraint to include 'revoked', plus lifecycle + CAS columns.
+  await query(`ALTER TABLE llm_model_price_plans ADD COLUMN IF NOT EXISTS skus JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE llm_model_price_plans ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`);
+  await query(`ALTER TABLE llm_model_price_plans ADD COLUMN IF NOT EXISTS updated_by TEXT`);
+  await query(`ALTER TABLE llm_model_price_plans ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE llm_model_price_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  // Update the status CHECK constraint to include 'revoked'
+  await query(`ALTER TABLE llm_model_price_plans DROP CONSTRAINT IF EXISTS llm_model_price_plans_status_check`);
+  await query(`ALTER TABLE llm_model_price_plans ADD CONSTRAINT llm_model_price_plans_status_check CHECK (status IN ('draft','published','superseded','disabled','revoked'))`);
+
+  // ── P1-3: Pricing drift delta-threshold alerts ──
+  await query(`
+    CREATE TABLE IF NOT EXISTS llm_pricing_drift_alerts (
+      id              BIGSERIAL PRIMARY KEY,
+      usage_event_id  UUID,
+      legacy_amount   NUMERIC,
+      new_amount      NUMERIC,
+      delta_amount    NUMERIC,
+      delta_threshold NUMERIC,
+      provider        TEXT,
+      model           TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_pricing_drift_alerts_created ON llm_pricing_drift_alerts(created_at DESC)`);
+
   console.log('Migrations complete');
 }
 

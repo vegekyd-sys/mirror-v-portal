@@ -16,13 +16,14 @@
  *
  * Channel framing (k8s remotecommand v4): every message is
  *   [1-byte stream type][payload]
- *   0=stdin  1=stdout  2=stderr  3=error  255=resize(JSON {Width,Height})
+ *   0=stdin  1=stdout  2=stderr  3=error  4=resize(JSON {Width,Height})
  */
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   getTenantPod,
+  getSystemAgentPod,
   isSafeK8sName,
   isSafeTenantId,
   openPodExecWs,
@@ -43,7 +44,7 @@ const STREAM_STDIN = 0;
 const STREAM_STDOUT = 1;
 const STREAM_STDERR = 2;
 const STREAM_ERROR = 3;
-const STREAM_RESIZE = 255;
+const STREAM_RESIZE = 4;
 
 /** Tokenize a shell command safely: split on whitespace, allow quoting. */
 function parseCommand(raw: string): string[] | null {
@@ -62,7 +63,8 @@ function parseCommand(raw: string): string[] | null {
 }
 
 interface ExecTarget {
-  tenantId: string;
+  kind: 'tenant' | 'system-agent';
+  tenantId?: string;
   namespace: string;
   pod: string;
   container?: string;
@@ -74,9 +76,11 @@ function parseExecTarget(rawUrl: string | undefined): ExecTarget | { error: stri
   if (!rawUrl) return null;
   const url = new URL(rawUrl, 'http://local');
   const m = url.pathname.match(/^\/v1\/tenants\/([0-9a-f]{32})\/exec$/);
-  if (!m) return null; // not our path — leave for other handlers / 404
-  const tenantId = m[1];
-  if (!isSafeTenantId(tenantId)) return { error: 'tenantId 必须是 32 位十六进制 UUID' };
+  const systemAgent = url.pathname === '/v1/admin/system-agent/exec';
+  if (!m && !systemAgent) return null; // not our path — leave for other handlers / 404
+  const tenantId = m?.[1];
+  if (tenantId && !isSafeTenantId(tenantId)) return { error: 'tenantId 必须是 32 位十六进制 UUID' };
+  if (systemAgent && process.env.NEXUS_MANAGER_ENABLED !== 'true') return { error: 'Nexus Manager 尚未启用' };
 
   const pod = url.searchParams.get('pod') ?? '';
   const container = url.searchParams.get('container') ?? undefined;
@@ -88,8 +92,9 @@ function parseExecTarget(rawUrl: string | undefined): ExecTarget | { error: stri
   if (!command) return { error: 'cmd 参数不合法（最多 8 段，仅字母数字 ._- 和 /）' };
 
   return {
-    tenantId,
-    namespace: tenantNamespace(tenantId),
+    kind: systemAgent ? 'system-agent' : 'tenant',
+    ...(tenantId ? { tenantId } : {}),
+    namespace: systemAgent ? (process.env.NEXUS_MANAGER_NAMESPACE || 'dealclaw-system') : tenantNamespace(tenantId!),
     pod,
     container,
     command,
@@ -111,17 +116,6 @@ export function attachPodExecWebSocket(server: Server, authEnvVar = 'PROVISIONIN
   const enabled = ['1', 'true', 'yes', 'on'].includes(
     (process.env.POD_EXEC_ENABLED ?? 'false').toLowerCase(),
   );
-  if (!enabled) {
-    server.on('upgrade', (req, socket) => {
-      const target = parseExecTarget(req.url);
-      if (target !== null) {
-        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\npod exec disabled');
-        socket.destroy();
-      }
-    });
-    return wss;
-  }
-
   server.on('upgrade', (req, socket: Duplex, head) => {
     // Only claim our own path; everything else is destroyed (no other
     // WS consumers exist on this service today).
@@ -133,6 +127,11 @@ export function attachPodExecWebSocket(server: Server, authEnvVar = 'PROVISIONIN
     }
     if ('error' in target) {
       socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n${target.error}`);
+      socket.destroy();
+      return;
+    }
+    if (target.kind === 'tenant' && !enabled) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\npod exec disabled');
       socket.destroy();
       return;
     }
@@ -170,10 +169,13 @@ async function handleExecSession(browser: WebSocket, target: ExecTarget, authEnv
 
   const openK8sExec = async () => {
     try {
-      // Defense in depth: pod must exist and carry the tenant label.
-      const podObj = await getTenantPod(target.namespace, target.tenantId, target.pod);
+      // Defense in depth: the target must be an owned tenant Pod or the fixed
+      // Nexus Manager workload before opening the Kubernetes exec stream.
+      const podObj = target.kind === 'system-agent'
+        ? await getSystemAgentPod(target.namespace, target.pod)
+        : await getTenantPod(target.namespace, target.tenantId!, target.pod);
       if (!podObj) {
-        sendJson(browser, { type: 'error', message: 'Pod 不存在或不属于该租户' });
+        sendJson(browser, { type: 'error', message: target.kind === 'system-agent' ? 'Pod 不属于 Nexus Manager' : 'Pod 不存在或不属于该租户' });
         browser.close(1008, 'pod not found');
         return;
       }

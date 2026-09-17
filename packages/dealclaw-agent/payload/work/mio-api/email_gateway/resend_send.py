@@ -26,9 +26,14 @@ def send(
     cc: list[str] | None = None,
     reply_to: str | None = None,
     html: str | None = None,
+    attachments: list[dict] | None = None,
     secret_resolver: Callable[[str], str] = resolve_secret,
 ) -> str:
-    """Send via Resend API. Returns the Resend message ID."""
+    """Send via Resend API. Returns the Resend message ID.
+
+    ``attachments`` 是 ``email_gateway.attachments.load_attachments`` 的返回值
+    （带原始 ``data`` bytes），本函数负责转成 Resend 要的 base64 形态。
+    """
     payload: dict = {
         "from": from_address,
         "to": to,
@@ -41,6 +46,10 @@ def send(
         payload["cc"] = cc
     if reply_to:
         payload["reply_to"] = reply_to
+    if attachments:
+        from .attachments import to_resend_payload
+
+        payload["attachments"] = to_resend_payload(attachments)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     api_key = _resolve_api_key(secret_resolver)
     http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=10, read=20))

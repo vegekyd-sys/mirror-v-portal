@@ -20,15 +20,26 @@ author: ""
 
 默认输出：`[品类]_[国家]_市场决策与开拓报告.html`。使用简体中文，保留必要的当地语言名称、搜索词和法规原名；金额同时显示当地货币与 USD，并标注汇率日期。
 
+**同时产出可下载 HTML 与公网直链**（对话式外部集成方按直链取件，见「HTML 交付物」一节）：把既有报告 HTML 上传米奥文件服务得到永久直链 `html_url`——**无需任何渲染器**。
+
 若用户输入多个国家，为每个国家执行一次完整研究并生成独立 HTML 文件。不要把多个国家拼进同一份报告。
 
 ### 🚨 交付强制规则
 
-**最终交付物 = HTML 文件 + 核心摘要卡片，两个缺一不可。**
+**交付物按链路分级——不要因为外部集成需求而降级小元用户自己的体验。**
+
+| 链路 | 交付物 |
+|---|---|
+| **飞书对话**（小元用户直接使用） | HTML 文件 + 核心摘要卡片。HTML 直链**有则附上**，上传失败**不阻塞主交付** |
+| **对话式外部集成链路**（`POST /api/external/chat/stream`） | 上述两项 + **必须在回复末尾单行输出 `HTML_ARTIFACT={...}`**；无此标记行即本次调用不可用，须如实报缺口 |
+
+判定方式：本次请求由外部集成方发起（对话式 SSE/API 调用）时按对外集成链路执行，否则按飞书对话链路执行。
 
 1. `write` → 存 `.html` 到 workspace
-2. `message.send` + `filePath` → 发 HTML 文件
-3. `message.send` → 发核心摘要（用飞书卡片或文字），必须在同一条消息里或紧跟在文件后面
+2. 上传 HTML 取回直链（见「HTML 交付物」一节）——**拿不到就如实标注缺口，禁止伪造链接，也禁止跳过上报**
+3. `message.send` + `filePath` → 发 HTML 文件
+4. `message.send` → 发核心摘要（用飞书卡片或文字），必须在同一条消息里或紧跟在文件后面
+5. 对外集成链路：**回复最末尾单独一行**输出 `HTML_ARTIFACT={...}`（不要与其他文字同行、不要放进代码块）
 
 **核心摘要格式（必须包含）：**
 
@@ -81,9 +92,143 @@ author: ""
 7. **建立选品池并评分**：生成 10–20 个子类/产品形态，使用 `references/scoring-model.md`；硬门槛优先于分数。
 8. **形成进入方案**：给出首发组合、渠道伙伴、定位、落地成本、三种经济情景、90天路线图和 Kill Criteria。
 9. **生成 HTML**：复制 `assets/report-shell.html` 的视觉体系，按 `references/report-template.md` 组织内容，写入完整可读正文和真实来源链接。
-10. **检查交付物**：确认文件可离线打开、无占位符、无 Exa 依赖、国家未串线、核心数字可追溯、打印不超过20页。
+10. **产出 HTML 直链**：按「HTML 交付物」一节上传既有 HTML，取回 `html_url`。上传失败时：飞书对话链路照常交付并在摘要中附注缺口；对外集成链路必须如实报缺口，不省略、不编造。
+11. **检查交付物**：确认文件可离线打开、无占位符、无 Exa 依赖、国家未串线、核心数字可追溯、打印不超过20页。
 
-## 实时进度卡（硬交付物）
+## HTML 交付物（对话式外部集成链路）
+
+外部集成方（米奥 TradeChina「AI猎客」试用页后端）通过 `POST /api/external/chat/stream`（SSE）发自然语言指令指使小元调用本 skill，聚合回复文本后**从回复末尾单行解析产物标记**。
+
+**不需要任何渲染器**：报告 HTML 本来就在，直接上传米奥文件服务即可。
+
+```bash
+python3 skills/dealclaw-market-report/scripts/upload_artifact.py \
+  --html work/xxx-report.html \
+  --product <产品> --market <市场>
+```
+
+脚本行为：上传米奥文件服务 → 跟随 302 校验真实对象（200 + 字节数一致）→ 输出机器可读契约。
+
+**输出契约（回复末尾单独一行，不要与其他文字同行、不要放进代码块）：**
+
+```text
+HTML_ARTIFACT={"html_url":"https://img.tradechina.com/image/getDocumentUrl/<file_id>","file_id":"<32位id>","bytes":12345}
+```
+
+- 键名固定为 `html_url` / `file_id` / `bytes`，不得改名或省略。
+- 标记行必须是**回复的最后一行**：外部集成方按末尾单行解析。
+- 对外集成链路**无此标记行即视为交付失败**；飞书对话链路无此要求。
+
+要点与坑：
+
+- 直链为**永久链接**，不返回 `expires_at`。
+- `getDocumentUrl` 返回 **302 且响应体为空**，必须跟随重定向后再校验 200 与字节数；不跟跳转会拿到 0 字节并误判成功。
+- 上传响应的 `code` 是**字符串 `"0"`**，不是数字；只取 `data` 字段作为 fileId。
+- 上传时的中文文件名（`市场分析报告-{product}-{market}.html`）仅用于本方对账/日志；浏览器最终落地文件名由米奥侧决定。
+- 上传失败（网络/校验不通过）时脚本退出码 4 并明确报错；此时按缺口如实汇报，**禁止伪造链接**。
+- 文件服务 host 可用环境变量 `MIAO_FILE_HOST` 覆盖，默认 `https://img.tradechina.com/image/`。
+
+## 会话内异步（对话式集成专用）
+
+对话式外部集成方（米奥「AI猎客」试用页后端）采用**跨轮推进**模型：报告不在一条消息里跑完，而由该会话的后续询问消息逐轮推进。原因是客户运行时**禁用了 `sessions_spawn` / `sessions_send` / `cron`**（已核实 `/data/state/openclaw.json`），agent 无法自行开并发会话或定时任务——**不要在 skill 里尝试任何形式的子会话、后台进程或自调用**。
+
+> ⚠️ **本链路下进度模型只有一套：`report_task.py` 的 8 个分片（下节）。**
+> 后面的「实时进度卡」章节（四节点 `scoping / researching / scoring / rendering`，编号 1/4…4/4）**仅适用于飞书对话链路，本链路不适用、不得引用**。
+> 实测事故：agent 引用了进度卡的四节点与「x/4 步」编号，却从未执行 `report_task.py`，导致状态未落盘、又把抓取到的登录页当报告上传。**两套进度模型不得混用。**
+
+### 一轮的职责划分
+
+| 轮次 | 触发条件 | 必须做的事 | 禁止做的事 |
+|---|---|---|---|
+| **触发轮** | 用户要求生成报告 | ① 落任务状态；② 回一句回执；③ 结束 | **任何研究、检索、写作、取数** |
+| **询问轮** | 本会话追问进度 | ① 读任务状态；② 推进**一个**分片；③ 落状态；④ 回一句进度 | 一次推进多个分片；未完成时输出标记行 |
+| **收尾轮** | 分片已全部完成 | 上传 HTML 并落产物；末尾单独一行输出 `HTML_ARTIFACT` | 重新生成报告 |
+
+### 路径约定（必读）
+
+本 skill 的脚本不在 workspace 根的 `scripts/`，而在**技能自己的 `scripts/` 下**。相对路径会撞到 workspace 根的 `scripts/` 目录（那是另一批脚本），因此调用必须带上技能目录前缀：
+
+```text
+技能根：skills/dealclaw-market-report/          （相对 workspace 根）
+脚本：  skills/dealclaw-market-report/scripts/report_task.py
+        skills/dealclaw-market-report/scripts/upload_artifact.py
+```
+
+若当前工作目录不是 workspace 根，用绝对形式：
+
+```text
+${OPENCLAW_WORKSPACE_DIR:-/data/workspace}/skills/dealclaw-market-report/scripts/<脚本名>
+```
+
+**不得**写成裸 `scripts/report_task.py` —— 那会解析到 workspace 根目录下的 `scripts/`，触发「文件不存在」。
+
+### 任务状态
+
+状态落在磁盘，不依赖任何会话外能力：
+
+```bash
+python3 skills/dealclaw-market-report/scripts/report_task.py create --key "<会话键>" --product "<产品>" --market "<市场>"
+python3 skills/dealclaw-market-report/scripts/report_task.py get    --key "<会话键>"
+python3 skills/dealclaw-market-report/scripts/report_task.py advance --key "<会话键>" --next-stage --note "<进度文案>"
+python3 skills/dealclaw-market-report/scripts/report_task.py complete --key "<会话键>" --html-url "<直链>" --file-id "<id>" --bytes <N>
+python3 skills/dealclaw-market-report/scripts/report_task.py fail   --key "<会话键>" --error "<原因>"
+```
+
+- **会话键**取该会话的稳定标识（外部集成方传入的 `externalUserId`）；**同一会话的所有轮次必须用同一个键**，否则读不到状态。
+- 存储：`work/mio-api/report-tasks/<key>.json`（原子写），目录可用 `MIAO_REPORT_TASK_DIR` 覆盖。
+
+### 分片纪律（不得违反）
+
+- 默认 8 个分片：`scoping → market → competition → compliance → scoring → entry → render → deliver`。
+- **单轮只推进一步，单步耗时控制在 5 分钟内**——这是不撞集成方超时的硬前提。
+- 单步即将超时时，先把已完成的部分落进 `advance --note`，本轮如实回进度，**不要为了凑完整而拖长本轮**。
+
+**每个分片必须产出真实内容（最容易做错的一条）：**
+
+- `report_task.py advance` 只是**记账**，不是分片工作本身。不得只调 advance 而不做该分片的实质工作。
+- 每个分片必须把**该阶段的实际成果写入报告文件**（追加/更新），使报告逐轮变厚。
+- 报告文件路径必须**锚定 workspace**（用绝对路径，如 `${OPENCLAW_WORKSPACE_DIR:-/data/workspace}/work/<...>.html`）；**不得用相对路径**——agent 工具 CWD 可能是 `/tmp`，会写丢。
+- **禁止叙事式假装完成**：没真做研究就不能回「已完成某某阶段」，也不能凭空报进度。
+
+### 落地证据要求（防止「幻觉式具体」）
+
+实测事故：回执与进度都形式合规、内容还很具体（HS 编码、子类名、评分齐全），但**任务状态从未落盘、报告从未生成**，最终把抓到的 SSO 登录页当报告交付。反常的是分片编号被说成「x/4 步」——而脚本写的是 **8**。
+
+**编号对不上，就是没有真读脚本输出的铁证。** 因此：
+
+- **触发轮**：回执**必须携带 `create` 返回的真实 `taskId`**（形如 `mr-<epoch>-<slug>`）。没有 taskId 的回执 = 未受理，**禁止声称「已受理/已入队列」**。
+- **询问轮**：进度必须**引用 `advance` 返回 JSON 里的 `stage` / `totalStages` / `stageName`**，不得自编步数与阶段名。脚本总数固定为 8，回「x/4」即为编造。
+- **禁止在没有落盘产出的情况下给出具体数据**（HS 编码、税率、评分、子类名称等）。**叙述不算产出，文件才算。**
+- 自检：如果你的回执/进度里出现了脚本从未输出过的数字或名称，停下来，先真执行。
+
+### 交付物红线（实测事故防范）
+
+- 报告必须是**本地生成的 HTML**。
+- **绝不允许把 web_fetch / 抓取到的页面当作报告内容**：需要登录的数据源抓到的是登录页/跳转页，那是环境问题，应如实报缺口，而不能当报告交付。
+- 上传前必须跑 `upload_artifact.py` 的交付物体检（<8KB、命中登录/SSO 特征、正文无产品/市场名均会被拒绝，退出码 5）。
+- 体检未通过时**不得输出标记行**，按缺口如实汇报。
+
+### 询问轮回复规则
+
+- **未完成**：一句话进度（如「已完成市场规模与证据账本，正在做竞争与渠道」），**不输出标记行**。
+- **已完成**：回复末尾**单独一行**原样输出（不要与其他文字同行、不要放进代码块）：
+
+```text
+HTML_ARTIFACT={"html_url":"<直链>","file_id":"<fileId>","bytes":<字节数>}
+```
+
+- **失败**：先 `report_task.py fail` 落状态，再回一句可读原因（如额度不足 / 取数失败），不输出标记行。
+
+### 边界
+
+- 触发轮**不得**为了「显得快」而预先做部分研究——回执必须快且无副作用。
+- 询问轮**不得**重新开始整份报告；`status=completed` 时只回产物，不重跑。
+- 集成方会秒级高频轮询，每轮仍**只推进一个分片**，不得因轮询密集而合并推进（否则会撞单轮超时）。
+- 飞书对话链路不要求异步：用户直接在飞书里问时，按正常单轮交付执行。
+
+## 实时进度卡（仅飞书对话链路）
+
+> **适用范围：仅飞书对话链路。** 对话式外部集成链路（会话内异步）**不使用**实时进度卡——那里的进度只有 `report_task.py` 的 8 个分片，不得引用本节的四节点与 1/4…4/4 编号。
 
 市场报告是长任务，实时进度卡是交付物的一部分、不是可选项，不得只用一句「预计耗时」替代。用共享运行时 `work/mio-api/cards/market_report_card.py` 的 `MarketReportCard` 起卡并原地更新，不在中途另发文字重复结果。
 

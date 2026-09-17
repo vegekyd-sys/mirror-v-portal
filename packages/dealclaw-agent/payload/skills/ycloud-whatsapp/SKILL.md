@@ -4,7 +4,8 @@ description: >-
   通过公司 WhatsApp 桥接服务收发消息、查询企业号/模板/会话，以及用 Partner Direct Link
   完成嵌入式注册；当用户说“初始化 WhatsApp 配置”“给我 WhatsApp 飞书 webhook”时，先注册
   飞书应用并返回 webhookUrl；仅当用户明确说“绑定已有 WABA”时，直接向桥接提交供应商与
-  WABA ID 调用已有 WABA 导入入口。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
+  WABA ID 调用已有 WABA 导入入口；仅当用户明确说“解绑 WABA”“解除 WABA 绑定”时调用解绑
+  入口（只解当前租户与该 WABA 的绑定，不动号码）。日常操作只使用当前 supplier id 与可选企业号 from，不处理 WABA 标识。
   适用于 WhatsApp、飞书客服话题、24h 窗口、模板、Direct Link 和 CDP 供应商；不用于 SMS。
 ---
 
@@ -16,7 +17,7 @@ description: >-
 `partnerCustomerId` 和可选业务号 `from`。WABA 路由由桥接在服务端动态解析；
 智能体不读取、复制、缓存、展示或发送任何 WABA 标识，也不从响应中的内部字段推断路由。
 
-唯一例外见“绑定已有 WABA”；该 ID 不得进入日常接口或后续消息。
+唯一例外见“绑定已有 WABA”与“解绑已有 WABA”；该 ID 不得进入日常接口或后续消息。
 
 禁止请求 `api.ycloud.com` / Meta Cloud API，禁止读取或打印 `YCLOUD_API_KEY`。
 
@@ -201,6 +202,36 @@ YCloud 账号校验 + WABA 归属/手机号冲突检查兜底。
 
 成功输出只读取 `ok`、`partnerCustomerId`、`status`、`phones`；不要向用户回显 WABA ID。
 YCloud 校验失败、跨租户归属或手机号冲突时停止，不改绑、不绕过 Bridge。
+
+## 解绑已有 WABA
+
+仅当用户明确要求“解绑 WABA”“解除 WABA 绑定”“把这条 WABA 与当前供应商解绑”时进入。
+它只解除**当前租户与该 WABA 的绑定**，与终端客户无关，也不会释放号码。
+
+1. 从该次请求取得 WABA ID；缺失时只询问该 ID，不从历史、日志、响应或其它租户复制。
+2. `$SUPPLIER` 只能来自当前进程的 `MIO_CDP_SUPPLIER_ID`；不接受用户、模型或请求参数改写。
+3. 使用本 Skill 的 helper。把 WABA ID 通过 stdin 传入，不作为 CLI 参数，不打印输入、请求体
+   或环境变量：
+
+```bash
+printf '%s' "$WABA_ID" | python3 skills/ycloud-whatsapp/scripts/unbind_waba.py
+```
+
+helper 调用 `POST $BRIDGE/api/admin/whatsapp/unbind-waba`，只携带当前 `partnerCustomerId` 与本次
+WABA ID，不携带任何鉴权；服务端只解本租户自己的绑定。
+
+成功输出只读取 `ok`、`unbound`、`code`、`partnerCustomerId`、`phonesTouched`；不要向用户回显
+WABA ID。`WABA_ALREADY_UNBOUND`（已是解绑状态）与 `WABA_NOT_BOUND`（从未绑定）都是**如实
+回报**，不要改口说成“刚刚解绑成功”。
+
+解绑后该租户与这条 WABA 的**收发通道双向断开**：新的买家消息不再归属到当前租户，飞书话题
+里也回发不出去（会提示缺少有效绑定）。要恢复就让用户重新走“绑定已有 WABA”。
+
+### 解绑前要跟用户讲清的三件事
+
+- 若该 WABA 上**仍有终端客户在联系**，解绑后他们的消息不再进入本租户（历史记录仍在，但不再接续）；
+- 解绑**不会释放号码**，也不会把号码转给他人；
+- 恢复方式就是重新绑定同一个 WABA（不需要重新走 Direct Link 注册）。
 
 ## 嵌入式注册 / 状态
 

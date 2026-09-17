@@ -9,7 +9,12 @@ dc_followup 能据此生成跟进草稿。
 
 用法：
   python3 dc_record_outbound.py --company-id <sid> --from <addr> --to <a,b,c> \
-      --subject <s> --text <t> --resend-id <id> [--account-id resend_gs]
+      --subject <s> --text <t> --resend-id <id> [--account-id <真实账号>]
+
+2026-09-16 修复：`--account-id` 原先默认写死 `resend_gs`（一个不存在的账号），
+调用方不传时事实里就落这个假账号 → **回信按账号匹配时永远配不上**（回信通知失灵的根因）。
+现在默认改为「按 `--from` 发件地址反查本租户真实邮箱账号」；显式传 `--account-id` 仍以传入值为准；
+反查不到时如实落空（不再造假），由链路自检 `dc_email_selfcheck.py` 标为无归属并自愈。
 """
 from __future__ import annotations
 
@@ -28,10 +33,34 @@ from email_gateway.store import EmailStore, utc_now  # noqa: E402
 from enterprise_ids import canonical_company_id  # noqa: E402
 
 
+def _bare_address(raw: str) -> str:
+    """``Name <a@b>`` / ``a@b`` → 小写裸地址。"""
+    text = str(raw or "").strip()
+    if "<" in text and ">" in text:
+        text = text[text.find("<") + 1:text.rfind(">")]
+    return text.strip().lower()
+
+
+def resolve_account_id(store: EmailStore, from_addr: str) -> str:
+    """按发件地址反查本租户真实邮箱账号；查不到返回空串（**不猜、不造假**）。"""
+    addr = _bare_address(from_addr)
+    if not addr:
+        return ""
+    try:
+        accounts = store.list_accounts() or []
+    except Exception:  # noqa: BLE001
+        return ""
+    for acc in accounts:
+        if str(acc.get("email_address") or "").strip().lower() == addr:
+            return str(acc.get("account_id") or "")
+    return ""
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="记录一条 GS/Resend 直发 outbound 事实")
     p.add_argument("--company-id", default="")
-    p.add_argument("--account-id", default="resend_gs")
+    p.add_argument("--account-id", default="",
+                   help="真实邮箱账号 id；不传则按 --from 发件地址反查（查不到落空，不造假）")
     p.add_argument("--from", dest="from_addr", default="")
     p.add_argument("--to", default="")
     p.add_argument("--subject", default="")
@@ -61,10 +90,24 @@ def main() -> int:
         print(json.dumps({"ok": True, "duplicate": True, "resend_id": args.resend_id}))
         return 0
 
+    # 账号：显式传入优先；否则按发件地址反查真实账号（不再写死 resend_gs）
+    account_id = str(args.account_id or "").strip()
+    resolved = bool(account_id)
+    if not account_id:
+        account_id = resolve_account_id(store, args.from_addr)
+        resolved = bool(account_id)
+    if not account_id:
+        print(json.dumps({"warning": "account_id unresolved from sender address",
+                          "from": _bare_address(args.from_addr)}, ensure_ascii=False),
+              file=sys.stderr)
+
     now = utc_now()
     record = {
         "direction": "outbound",
-        "account_id": args.account_id,
+        "account_id": account_id,
+        # 显式渠道标记：GS 直发（Resend API）。quality_metrics 优先读它，
+        # 不再靠 account_id == resend_gs 推断（2026-09-16 已取消写死假账号）。
+        "send_channel": "growth_send",
         "sender": args.from_addr,
         "recipients": to_list,
         "subject": args.subject,
@@ -84,7 +127,8 @@ def main() -> int:
     try:
         inserted = store.insert_message(record)
         print(json.dumps({"ok": True, "inserted": inserted, "resend_id": args.resend_id,
-                          "company_id": company_id}))
+                          "company_id": company_id, "account_id": account_id,
+                          "account_resolved": resolved}))
         return 0
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": str(e)[:200]}), file=sys.stderr)

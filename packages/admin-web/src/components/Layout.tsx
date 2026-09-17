@@ -15,7 +15,7 @@ const WORKBENCH: NavItem[] = [
   { to: '/', icon: '概', label: '概览', end: true },
   { to: '/customers', icon: '客', label: '客户与 Credits' },
   { to: '/agents', icon: 'A', label: 'Agents 管理' },
-  { to: '/llm-providers', icon: '模', label: '模型供应商' },
+  { to: '/catalog', icon: '录', label: '模型目录' },
   { to: '/llm-token-pricing', icon: '价', label: 'LLM Token 定价' },
   { to: '/chat', icon: '聊', label: '对话' },
   { to: '/pricing', icon: '价', label: 'Skill 定价' },
@@ -24,7 +24,9 @@ const WORKBENCH: NavItem[] = [
 ];
 
 const SYSTEM: NavItem[] = [
+  { to: '/nexus-manager', icon: 'N', label: 'Nexus Manager' },
   { to: '/image-releases', icon: '镜', label: '镜像版本' },
+  { to: '/rollout-tasks', icon: '发', label: '发布进度' },
   { to: '/runtime-configs', icon: '配', label: '运行时配置' },
   { to: '/audit-logs', icon: '审', label: '审计日志' },
   { to: '/users', icon: '户', label: '用户管理' },

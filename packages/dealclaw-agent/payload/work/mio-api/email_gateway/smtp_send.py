@@ -11,6 +11,13 @@ from email.utils import formataddr, make_msgid
 from pathlib import Path
 from typing import Any, Callable
 
+from .attachments import (
+    attach_to_message,
+    digest as attachments_digest,
+    load_attachments,
+    store_outbound as store_outbound_attachments,
+    summarize as summarize_attachments,
+)
 from .providers import get_provider
 from .resend_send import send as resend_send
 from .secrets import resolve_secret
@@ -44,8 +51,13 @@ def build_idempotency_key(
     content_version: str = "",
     subject: str = "",
     text: str = "",
+    attachments_digest: str = "",
 ) -> str:
     raw = f"{company_id}|{campaign_id}|{lead_id}|{recipient}|{touch_number}|{content_version}|{subject}|{text}"
+    if attachments_digest:
+        # 只在**有附件时**追加：不带附件的键必须与历史逐字节一致，
+        # 否则存量已发邮件会因为算出新键而被判成「没发过」，重复发给买家。
+        raw = f"{raw}|{attachments_digest}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
@@ -73,6 +85,7 @@ class SmtpSender:
         cc: list[str] | None,
         reply_to: str | None,
         html: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Send via Resend API. Returns the real Resend email id (provider id)."""
         return resend_send(
@@ -83,6 +96,7 @@ class SmtpSender:
             cc=cc,
             reply_to=reply_to,
             html=html,
+            attachments=attachments,
             secret_resolver=self.secret_resolver,
         )
 
@@ -168,9 +182,15 @@ class SmtpSender:
         touch_number: int = 0,
         content_version: str = "",
         thread_id: str = "",
+        source: str = "",
+        attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         if not to or any("@" not in address for address in [*to, *(cc or []), *(bcc or [])]):
             raise ValueError("valid recipients are required")
+
+        # 附件先读盘校验：dry_run 也走这一步，让「文件不存在/超限」在真发之前就暴露。
+        # 任何一条不合法直接抛 AttachmentError——发信侧不允许静默少发附件。
+        attachment_items = load_attachments(attachments)
 
         recipient_key = ",".join(sorted(to))
         try:
@@ -182,6 +202,7 @@ class SmtpSender:
             company_id=company_id, campaign_id=campaign_id, lead_id=lead_id,
             recipient=recipient_key, touch_number=touch_number, content_version=content_version,
             subject=subject, text=(text or "") + (html or ""),
+            attachments_digest=attachments_digest(attachment_items),
         )
 
         # Try registered account first; fall back to Resend for backward compat.
@@ -196,12 +217,14 @@ class SmtpSender:
                     resend_id = self._send_via_resend(
                         from_address=from_addr, to=to, subject=subject,
                         text=text, cc=cc, reply_to=reply_to, html=html,
+                        attachments=attachment_items,
                     )
                 return self._build_send_result(
                     from_addr=from_addr, to=to, cc=cc, bcc=bcc,
                     subject=subject, message_id=make_msgid(domain=account_id.split("@", 1)[1]),
                     dry_run=dry_run, account_id=account_id,
                     resend_id=resend_id, idempotency_key=idempotency_key,
+                    attachments=summarize_attachments(attachment_items),
                 )
             raise ValueError(f"email account not found: {account_id}")
 
@@ -222,6 +245,7 @@ class SmtpSender:
                     subject=subject, message_id=make_msgid(domain=account["email_address"].split("@", 1)[1]),
                     dry_run=dry_run, account_id=account_id,
                     resend_id="", idempotency_key=idempotency_key,
+                    attachments=summarize_attachments(attachment_items),
                 ),
                 "ok": False,
                 "duplicate": True,
@@ -241,6 +265,9 @@ class SmtpSender:
         msg.set_content(text)
         if html:
             msg.add_alternative(html, subtype="html")
+        # 附件必须在正文（含 html 备选）之后挂：add_attachment 会把消息升级成
+        # multipart/mixed，先挂附件再 add_alternative 会把正文结构搅乱。
+        attach_to_message(msg, attachment_items)
 
         envelope = [*to, *(cc or []), *(bcc or [])]
         resend_id = ""
@@ -251,6 +278,7 @@ class SmtpSender:
                 resend_id = self._send_via_resend(
                     from_address=formataddr((account["display_name"], account["email_address"])),
                     to=to, subject=subject, text=text, cc=cc, reply_to=reply_to, html=html,
+                    attachments=attachment_items,
                 ) or ""
                 # Only mark provider-accepted when a real Resend id was returned.
                 provider_accepted = bool(resend_id)
@@ -275,6 +303,10 @@ class SmtpSender:
                         pass
                 if refused:
                     raise RuntimeError("SMTP server refused one or more recipients")
+                # SMTP 没有投递回执：走到这里（含 refused 检查）就是服务器已接收。
+                # 2026-09-15 修复：此前只有 resend 分支置位，SMTP 恒 False → provider_status 恒 ''，
+                # 下游 dc_followup / dc_email_signals / growth_dashboard / email_provider 全部跳过。
+                provider_accepted = True
 
             # 回查真实 Message-ID（Resend 走 API，SMTP 退回本地 make_msgid）
             smtp_message_id = self._query_smtp_message_id(account, resend_id, message_id)
@@ -291,6 +323,12 @@ class SmtpSender:
                 except Exception:
                     resolved_name = ""
 
+            # 发出去的附件也进统一附件库：案卷要能看到「我方发了什么」，不能只有入站留原件。
+            # best-effort——信已经发出去了，落盘失败只是案卷少了原件，不能反过来炸发送结果。
+            attachment_rows = store_outbound_attachments(
+                attachment_items, company_id=company_id, message_id=message_id,
+            )
+
             # Persist enriched outbound facts. Mark legacy when campaign_id is absent.
             outbound = {
                 "account_id": account_id,
@@ -303,6 +341,9 @@ class SmtpSender:
                 # 正文原文：邮件回信/案卷要显示原文，不能只有 preview（2026-09-13 修）
                 "text": text or "",
                 "html": html or "",
+                # 附件索引行（[{filename, content_type, size, path, sha256}]）——
+                # _normalize 是白名单，这个键早就在里面，入站一直在用，出站到今天才有。
+                "attachments": attachment_rows,
                 "related": True,
                 "status": "sent",
                 "created_at": utc_now(),
@@ -314,8 +355,13 @@ class SmtpSender:
                 "lead_id": lead_id,
                 "contact_id": contact_id,
                 "contact_name": resolved_name,
+                # 来源：回信时据此判定「能不能免确认自动回」（展会闸门读它）
+                "source": source or "",
                 "idempotency_key": idempotency_key,
-                "provider_status": "accepted" if provider_accepted else "",
+                # 个人邮箱 SMTP 无投递回执：发信成功即乐观默认 delivered，
+                # 后续 IMAP 扫到退信 NDR 时由 mark_bounced_by_contact 改回 bounced。
+                # 方向不能反：失败必须留空，不能写成 delivered。
+                "provider_status": "delivered" if provider_accepted else "",
                 "touch_number": touch_number,
                 "content_version": content_version,
                 "legacy": not bool(campaign_id),
@@ -326,7 +372,9 @@ class SmtpSender:
             except Exception:
                 # Resend already accepted → do NOT re-send. Save recovery evidence for a
                 # status-only retry; then re-raise so callers don't report a false success.
-                if provider_accepted and resend_id:
+                if provider_accepted:
+                    # SMTP 也要写：本地持久化失败时避免重发
+                    # （原来只认 resend_id → SMTP 恒不写，重发风险）
                     self._write_recovery_evidence(outbound)
                 raise
 
@@ -335,6 +383,7 @@ class SmtpSender:
             subject=subject, message_id=message_id,
             dry_run=dry_run, account_id=account_id,
             resend_id=resend_id, idempotency_key=idempotency_key,
+            attachments=summarize_attachments(attachment_items),
         )
 
     @staticmethod
@@ -350,6 +399,7 @@ class SmtpSender:
         account_id: str = "",
         resend_id: str = "",
         idempotency_key: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return {
             "ok": True,
@@ -363,4 +413,6 @@ class SmtpSender:
             "message_id": message_id,
             "resend_id": resend_id,
             "idempotency_key": idempotency_key,
+            # 附件摘要（不含二进制）：调用方/用户据此核对「到底带了哪几个文件」
+            "attachments": attachments or [],
         }
