@@ -28,9 +28,14 @@ export interface RegistrationSession {
   _completionPromise?: Promise<void>;
 }
 
+// What the user sees inside Feishu at the moment they scan. Overridable so the
+// identity can change without a redeploy; the default is V, matching the payload
+// the agent is seeded with — a shipped name that contradicts the payload is worse
+// than either one alone.
 const APP_PRESET = {
-  name: '出海精灵 AI外贸专家',
-  desc: 'AI-powered sales assistant for global trade — 全天候帮你找客户、写邮件、跟线索',
+  name: process.env.FEISHU_APP_NAME || 'V',
+  desc: process.env.FEISHU_APP_DESC
+    || 'A thinking partner, not a tool — 有记忆、有观点，会跟你一起想',
 };
 
 export async function startFeishuRegistration(
