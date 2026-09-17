@@ -13,6 +13,7 @@ import { EdgeRouter } from "./channel-edge.js";
 import { WeixinEdge } from "./weixin.js";
 import { WeixinLogin } from "./weixin-login.js";
 import { DingtalkEdge } from "./dingtalk.js";
+import { WecomEdge } from "./wecom.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
@@ -25,8 +26,9 @@ const feishu = new FeishuEdge(store);
 const weixin = new WeixinEdge(store);
 const weixinLogin = new WeixinLogin(weixin);
 const dingtalk = new DingtalkEdge(store);
+const wecom = new WecomEdge(store);
 // One edge per surface the runtime serves; the manager stays channel-agnostic.
-const edge = new EdgeRouter([feishu, weixin, dingtalk]);
+const edge = new EdgeRouter([feishu, weixin, dingtalk, wecom]);
 const manager = new RuntimeManager(
   store,
   new ProviderRouter({ vercel: new VercelProvider(config), alibaba: new AlibabaProvider(config) }),
@@ -113,6 +115,27 @@ app.post("/v1/channels/dingtalk/bind", async (req, res, next) => {
     }
     await dingtalk.bind(tenantId, clientId, clientSecret);
     res.json({ ok: true, tenantId, clientId });
+  } catch (e) {
+    next(e);
+  }
+});
+// WeCom bots are created by the customer scanning 一键创建智能机器人 in their
+// own org; that scan yields the botId/secret bound here.
+app.post("/v1/channels/wecom/bind", async (req, res, next) => {
+  try {
+    const tenantId = req.body?.tenantId || config.trialTenantId;
+    const botId = String(req.body?.botId || "").trim();
+    const secret = String(req.body?.secret || "").trim();
+    if (!botId || !secret) {
+      res.status(400).json({ error: "CREDENTIALS_REQUIRED" });
+      return;
+    }
+    if (!(await store.tenant(tenantId))) {
+      res.status(404).json({ error: "TENANT_NOT_FOUND" });
+      return;
+    }
+    await wecom.bind(tenantId, botId, secret);
+    res.json({ ok: true, tenantId, botId });
   } catch (e) {
     next(e);
   }

@@ -13,6 +13,7 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",
     "@vercel/sandbox": "3.3.0",
+    "@wecom/aibot-node-sdk": "^1.0.6",
     "cron-parser": "5.4.0",
     "dingtalk-stream": "2.1.4",
     "e2b": "2.31.0",
