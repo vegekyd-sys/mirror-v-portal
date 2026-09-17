@@ -432,8 +432,11 @@ export class CatalogRolloutService {
   ): Promise<void> {
     if (tenantIds.length === 0) return;
     // Build a multi-value VALUES clause for batch upsert.
+    // Column order: tenant_id, desired_release_id, delivery_status, attempts, updated_at
+    // $1 = releaseId (desired_release_id), $2..$n = tenantIds (tenant_id)
+    // delivery_status='pending', attempts=0, updated_at=NOW() are static literals.
     const values = tenantIds
-      .map((_, i) => `($1, $${i + 2})`)
+      .map((_, i) => `($${i + 2}, $1, 'pending', 0, NOW())`)
       .join(', ');
     await this.pool.query(
       `INSERT INTO llm_tenant_release_status
