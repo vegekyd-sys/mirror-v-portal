@@ -237,9 +237,13 @@ export default function DingTalkAppScanModal({ open, onClose, onCredentials }: P
         )}
       </div>
       <div className="hint">
-        客户用钉钉 App 扫码并确认后，钉钉会在客户企业内自动创建机器人，
-        Client ID 与 Client Secret 将自动填入表单——无需再到钉钉开放平台手动复制。
-        如客户已有现成机器人，仍可手动填写 Client ID / Client Secret。
+        客户用钉钉 App 扫码并确认后，钉钉会在客户企业内自动创建<b>企业内部应用</b>
+        （应用创建完成后即具备机器人能力），Client ID 与 Client Secret 将自动填入表单，
+        无需再到钉钉开放平台手动复制。如客户已有现成应用，仍可手动填写。
+      </div>
+      <div className="hint" style={{ marginTop: 8, color: '#d97706' }}>
+        ⚠️ 钉钉创建的是「企业内部应用」，需该企业的管理员在钉钉管理后台审批同意后方可生效，
+        审批通过前凭据暂不可用。
       </div>
       <div className="form-row" style={{ marginTop: 12, justifyContent: 'center' }}>
         {(phase === 'error' || expired) && (
