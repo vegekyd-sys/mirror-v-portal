@@ -131,6 +131,7 @@ export class RuntimeManager {
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);
           },
+          { channel: current.channel },
         );
         await db.query("BEGIN");
         try {

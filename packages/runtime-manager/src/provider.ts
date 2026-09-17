@@ -29,11 +29,32 @@ export interface RuntimeProvider {
     sessionKey: string,
     text: string,
     onEvent: (kind: string, data: any) => Promise<void>,
+    context?: TurnContext,
   ): Promise<string>;
   stop(
     tenant: Tenant,
   ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
 }
+
+/** What the agent needs to know about where this turn came from. */
+export interface TurnContext {
+  channel?: string;
+}
+
+/**
+ * Our channel ids to the ones OpenClaw knows. Without this the runtime sees no
+ * channel at all and treats every turn as webchat — which is why the agent
+ * announced it was on webchat while answering someone in Feishu.
+ */
+const OPENCLAW_CHANNEL: Record<string, string> = {
+  feishu: "feishu",
+  weixin: "weixin",
+  wecom: "wecom",
+  dingtalk: "dingtalk",
+  web: "webchat",
+};
+export const openclawChannel = (channel?: string) =>
+  channel ? (OPENCLAW_CHANNEL[channel] ?? channel) : undefined;
 
 export interface RuntimeSandbox {
   name: string;
@@ -174,6 +195,7 @@ export class VercelProvider implements RuntimeProvider {
     sessionKey: string,
     text: string,
     onEvent: (kind: string, data: any) => Promise<void>,
+    context?: TurnContext,
   ): Promise<string> {
     const executeStart = Date.now();
     const sbx =
@@ -255,7 +277,11 @@ export class VercelProvider implements RuntimeProvider {
       env: {
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
         NEXUS_REQUEST_B64: Buffer.from(
-          JSON.stringify({ sessionKey, text }),
+          JSON.stringify({
+            sessionKey,
+            text,
+            channel: openclawChannel(context?.channel),
+          }),
         ).toString("base64"),
       },
       stdout: sink,

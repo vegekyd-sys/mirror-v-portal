@@ -35,6 +35,9 @@ try {
       authorization: `Bearer ${process.env.NEXUS_GATEWAY_TOKEN}`,
       "x-openclaw-agent-id": "dealclaw",
       "x-openclaw-session-key": request.sessionKey,
+      // Tell the runtime which surface this turn came from. Absent it, every
+      // turn looks like webchat and the agent describes itself accordingly.
+      ...(request.channel ? { "x-openclaw-message-channel": request.channel } : {}),
     },
     body: JSON.stringify({
       model: "openclaw/dealclaw",
