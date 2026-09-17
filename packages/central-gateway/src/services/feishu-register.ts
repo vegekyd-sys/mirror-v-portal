@@ -35,8 +35,12 @@ export interface RegistrationSession {
 // description traces V's own Evolution Direction: Mirror, Match, Exceed.
 const APP_PRESET = {
   name: process.env.FEISHU_APP_NAME || 'V from Versa',
-  desc: process.env.FEISHU_APP_DESC
-    || '自进化智能体',
+  desc: process.env.FEISHU_APP_DESC || '自进化智能体',
+  // 1-6 publicly reachable image URLs; the first is pre-selected. Without this
+  // Feishu offers its own stock avatars and the agent has no face of its own.
+  ...(process.env.FEISHU_APP_AVATAR
+    ? { avatar: process.env.FEISHU_APP_AVATAR.split(',').map((u) => u.trim()).filter(Boolean) }
+    : {}),
 };
 
 export async function startFeishuRegistration(
