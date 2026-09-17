@@ -12,6 +12,8 @@ export interface Config {
   snapshotId?: string;
   optimizeRuntime?: boolean;
   sandboxPrefix: string;
+  /** External payload tar, rooted at the workspace. Overrides the in-repo payload. */
+  payloadArchive?: string;
   model: { id: string; baseUrl: string; apiKey: string };
   vercel: { token: string; teamId: string; projectId: string };
   alibaba?: { apiKey: string; region: string; templateId: string; trialTenantId?: string; enabled?: boolean };

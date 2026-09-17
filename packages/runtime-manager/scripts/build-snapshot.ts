@@ -6,20 +6,29 @@ import { loadConfig } from "../src/config.js";
 
 const config = loadConfig();
 const root = path.resolve("../..");
-const archive = path.join(config.dataDir, "dealclaw-payload.tar");
-// Only version-controlled payload, never local customer data or environment files.
-execFileSync(
-  "git",
-  [
-    "archive",
-    "--format=tar",
-    "--output",
-    archive,
-    "HEAD",
-    "packages/dealclaw-agent/payload",
-  ],
-  { cwd: root },
-);
+// A payload can come from two places, and they nest differently:
+//   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
+//   - an external archive (config.payloadArchive) already rooted at the workspace,
+//     e.g. an agent exported from another host. Kept out of git: these run to
+//     hundreds of MB and carry an agent's accumulated memory.
+const external = config.payloadArchive;
+let archive: string;
+let stripComponents: number;
+if (external) {
+  archive = path.isAbsolute(external) ? external : path.join(config.dataDir, external);
+  if (!fs.existsSync(archive)) throw new Error(`PAYLOAD_ARCHIVE_MISSING: ${archive}`);
+  stripComponents = 1; // entries are ./AGENTS.md, ./memory/...
+  console.log(JSON.stringify({ phase: "payload-external", archive, bytes: fs.statSync(archive).size }));
+} else {
+  archive = path.join(config.dataDir, "dealclaw-payload.tar");
+  stripComponents = 3; // entries are packages/dealclaw-agent/payload/...
+  // Only version-controlled payload, never local customer data or environment files.
+  execFileSync(
+    "git",
+    ["archive", "--format=tar", "--output", archive, "HEAD", "packages/dealclaw-agent/payload"],
+    { cwd: root },
+  );
+}
 const name = `${config.sandboxPrefix}-build-${Date.now()}`;
 fs.writeFileSync(
   path.join(config.dataDir, "builder.json"),
@@ -64,7 +73,7 @@ try {
   await run("payload", "tar", [
     "-xf",
     "/vercel/sandbox/payload.tar",
-    "--strip-components=3",
+    `--strip-components=${stripComponents}`,
     "-C",
     "/vercel/sandbox/nexus/payload",
   ]);
