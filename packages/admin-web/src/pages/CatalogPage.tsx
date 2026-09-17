@@ -650,8 +650,8 @@ export default function CatalogPage() {
 
   const loadPolicy = useCallback(async () => {
     try {
-      const r = await api<GlobalModelPolicy>('/v1/admin/model-catalog/global-policy');
-      setPolicy(r);
+      const r = await api<{ policy: GlobalModelPolicy | null }>('/v1/admin/model-catalog/global-policy');
+      setPolicy(r.policy ?? null);
     } catch (e) {
       // Policy may not exist yet; don't block the page.
       if (e instanceof Error && !e.message.includes('404')) {
@@ -671,8 +671,8 @@ export default function CatalogPage() {
 
   const loadCurrentRelease = useCallback(async () => {
     try {
-      const r = await api<CatalogRelease | null>('/v1/admin/model-catalog/releases/current');
-      setCurrentRelease(r);
+      const r = await api<{ release: CatalogRelease | null }>('/v1/admin/model-catalog/releases/current');
+      setCurrentRelease(r.release ?? null);
     } catch {
       setCurrentRelease(null);
     }
@@ -680,8 +680,8 @@ export default function CatalogPage() {
 
   const loadRolloutStatus = useCallback(async () => {
     try {
-      const r = await api<{ tenants: TenantReleaseStatus[] }>('/v1/admin/model-catalog/rollout/status');
-      setRolloutStatus(r.tenants ?? []);
+      const r = await api<{ statuses: TenantReleaseStatus[] }>('/v1/admin/model-catalog/rollout/status');
+      setRolloutStatus(r.statuses ?? []);
     } catch {
       setRolloutStatus([]);
     }
@@ -882,8 +882,33 @@ export default function CatalogPage() {
     setBusy(true);
     setCatalogPreview(null);
     try {
-      const r = await api<CatalogPreview>('/v1/admin/model-catalog/catalog-preview');
-      setCatalogPreview(r);
+      const r = await api<{ fingerprint: string; snapshot: { providers: Array<{ name: string; models: Array<Record<string, unknown>> }>; defaultModel: string | null; imageModel: string | null; compactionModel: string | null; fallbackModels: string[] } }>('/v1/admin/model-catalog/catalog-preview');
+      // Map the Legacy snapshot format to the CatalogPreview display shape.
+      const s = r.snapshot;
+      setCatalogPreview({
+        fingerprint: r.fingerprint,
+        providers: (s?.providers ?? []).map((p) => ({
+          id: p.name,
+          legacyProviderName: p.name,
+          templateKey: '',
+          protocol: '',
+          baseUrl: '',
+          enabled: true,
+          models: (p.models ?? []).map((m) => ({
+            modelId: String(m.id ?? ''),
+            modelType: String(m.modelType ?? 'chat'),
+            runtimeEnabled: true,
+            paramsStatus: 'fallback',
+          })),
+        })),
+        policy: {
+          defaultModel: s?.defaultModel ?? null,
+          imageModel: s?.imageModel ?? null,
+          compactionModel: s?.compactionModel ?? null,
+          fallbackModels: s?.fallbackModels ?? [],
+          revision: 0,
+        },
+      });
       flash('Catalog preview 已生成');
     } catch (e) {
       flash(errMsg(e), true);
@@ -910,7 +935,20 @@ export default function CatalogPage() {
     if (!window.confirm('危险操作：将发布当前 Catalog 快照并创建新 Release。确认继续？')) return;
     setBusy(true);
     try {
-      await api('/v1/admin/model-catalog/snapshot-publish', { method: 'POST' });
+      // Fetch the authority preview to get the fingerprint and parent fingerprint.
+      const preview = await api<{ fingerprint: string; expectedParentFingerprint: string | null }>(
+        '/v1/admin/model-catalog/snapshot-preview?mode=authority',
+      );
+      const idempotencyKey = `publish-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      await api('/v1/admin/model-catalog/snapshot-publish', {
+        method: 'POST',
+        body: {
+          fingerprint: preview.fingerprint,
+          expectedParentFingerprint: preview.expectedParentFingerprint,
+          idempotencyKey,
+          rollout: { mode: 'rollout', scopeType: 'full' },
+        },
+      });
       flash('Snapshot 已发布，新 Release 已创建');
       await Promise.all([loadReleases(), loadCurrentRelease(), loadRolloutStatus()]);
     } catch (e) {
@@ -927,9 +965,14 @@ export default function CatalogPage() {
     if (!window.confirm('请再次确认：此操作将覆盖当前已发布快照。是否继续？')) return;
     setBusy(true);
     try {
+      const idempotencyKey = `restore-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       await api<SnapshotMutationResponse>('/v1/admin/model-catalog/snapshot-restore', {
         method: 'POST',
-        body: { backupId },
+        body: {
+          backupId,
+          idempotencyKey,
+          rollout: { mode: 'rollout', scopeType: 'full' },
+        },
       });
       flash('历史 Snapshot 已恢复；Release 与 Rollout 状态已刷新');
       await Promise.all([loadCatalogStatus(), loadReleases(), loadCurrentRelease(), loadRolloutStatus()]);
