@@ -2,7 +2,7 @@
 
 > 这些脚本跑在 dealclaw-agent 容器里，由 `entrypoint.sh` 在 gateway `/readyz` 就绪后调用。
 > 它们**不进 payload**（payload 边界见 `../PAYLOAD_BOUNDARY.md`），是镜像自带的运维层。
-> 状态：2026-09-15 补充 cron schedule 三方合并。
+> 状态：2026-09-17 新增 `dc-cron-pending-send.sh`（待发队列调度器，补 2026-09-16 的漏挂事故）。
 
 ## 目录速览
 
@@ -10,7 +10,7 @@
 |---|---|
 | `entrypoint.sh` | 容器入口：写配置 → 起 gateway → 等就绪 → 注册 cron → agent 预加载 |
 | `write-config.mjs` | 生成 `$OPENCLAW_STATE_DIR/openclaw.json`（渠道、模型、工具白名单、gateway auth）|
-| `dc-cron-*.sh` | 6 个脚本，声明式注册 7 条产品 cron（见下）|
+| `dc-cron-*.sh` | 7 个脚本，声明式注册 8 条产品 cron（清单见 `docs/cron-timers.md`）|
 | `dc-cron-converge.py` | cron schedule 三方合并 helper（见下） |
 | `dc-ensure-agent-preload.sh` | 画像 + 线索池预热 |
 | `dc-env-config.sh` | 租户启动后把环境变量写进 `work/mio-api/.env` |

@@ -172,6 +172,8 @@ MEMORY.md                # 长期记忆索引
 - **Proactive but gated**：内部主动，外部 gated。外部发送、删除/清理、scheduler/config 修改、长期后台任务、账号/邮件/日历接入，先确认。
 - **延时提醒一律走调度器（automations）**：一切「定时提醒 / 延时通知 / 稍后继续」必须用 Gateway 调度器建任务（`automations` 工具；旧称 Gateway cron / `openclaw cron`），一次性任务用 `at`（one-shot）。任务持久化在 Gateway 状态库，**进程重启不丢**。
 - **禁止用 `sleep` 模拟延时**：不得用 `exec` 后台 `sleep`（或任何临时进程、自建轮询循环）来模拟延时提醒 —— 临时进程在会话结束或机器重启后即失效，提醒会**静默丢失**。区分两种情况：**当轮**等待用 `process(poll, timeout)`；**跨轮/跨进程**的延时一律交给调度器建任务。
+- **系统 crontab 一律不可用**：镜像里没有 `crontab` 命令、也没有 cron 守护进程。往系统 crontab 写任务会**静默失败**（2026-09-16 的 27 封定时开发信就是这么丢的）。容器里唯一真实生效的调度器是 Gateway scheduler。
+- **入队 ≠ 会发**：把事情放进待发队列 / 待办文件后，必须确认**扫这个队列的定时任务真的注册且启用**，再向用户承诺「到点会发」。查法：`cd work/mio-api && bash dc_cron_doctor.sh`（退出码非 0 就是有任务没挂上）。注册/补跑走 `inject_*_cron.sh`（`inject` / `status` / `run-now`），它们注册后会自动回读复查。
 
 ### Sub-Agent Delegation（长任务委派）
 
