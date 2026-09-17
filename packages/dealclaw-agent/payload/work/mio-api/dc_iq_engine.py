@@ -475,6 +475,17 @@ class IQEngine:
             self._save_state(buyer_domain, buyer_name, user_open_id, -1, intent, "", channel, enterprise)
             return breakpoint("rejected")
         if profile.get("missing") or profile.get("source") == "missing":
+            # 自愈（2026-09-17）：过去这里直接断点，导致"画像越缺越没人写"的死锁——
+            # 播种分支在断点之后，永远走不到。现在每次命中都先尝试从已有素材沉淀一次，
+            # 让画像随使用自动长出来，而不是等着某次显式 analyze-company。
+            try:
+                from dc_profile_learn import harvest  # noqa: PLC0415
+                self._self_heal = harvest(enterprise or "unknown", source="iq_missing_profile")
+                if self._self_heal.get("wrote"):
+                    self._audit_log("kb.profile", user_open_id, enterprise, buyer_domain,
+                                    f"画像自愈: {sorted((self._self_heal.get('changed') or {}).keys())}")
+            except Exception as exc:  # noqa: BLE001
+                self._self_heal = {"ok": False, "error": str(exc)[:200]}
             missing = profile.get("missing") or ["企业画像"]
             return breakpoint("missing_profile", missing, draft)
         if new_stage >= 4:

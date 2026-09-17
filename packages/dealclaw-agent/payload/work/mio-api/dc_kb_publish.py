@@ -184,6 +184,17 @@ def build_homepage(enterprise, layer_links=None):
         recent_learnings.append(f"买家常问: {qs[0]['question'][:50]}")
     
     
+    # ── 显化：真读反思 + 事实（2026-09-17 田耕郡：反思和「更懂你」必须让用户看得见）──
+    # 过去这里是空转的（只有画像更新/交互次数/常问），客户看到的"学习记录"是占位。
+    # 展示层读取失败绝不影响文档生成。
+    try:
+        import dc_memory_view as _mv  # noqa: PLC0415
+        real = _mv.render_learning_block(enterprise)
+        if real:
+            recent_learnings = real
+    except Exception:  # noqa: BLE001
+        pass
+
     if not recent_learnings:
         recent_learnings = ["知识库刚建立，开始使用后会累积学习记录"]
 
@@ -457,6 +468,14 @@ def build_profile(enterprise):
         f"物料就绪度: {sum(1 for m in mats.values() if m.get('status')=='ready')}/7",
     ]))
     lines.append("")
+
+    # ── 显化：我记住的事实 + 我们的长期约定（只读，来自 canonical 记忆）──
+    try:
+        import dc_memory_view as _mv  # noqa: PLC0415
+        lines.extend(_mv.render_facts_block(enterprise))
+        lines.extend(_mv.render_rules_block(enterprise))
+    except Exception:  # noqa: BLE001
+        pass
 
     # 知识缺口
     missing = [t for t, m in mats.items() if m.get("status") != "ready"]

@@ -78,6 +78,13 @@ author: ""
 
 1. 确定 enterprise key（企业域名去点去协议，如 `easterglass.com` → `easterglasscom`）
 2. 调用 `dc_kb_engine.seed_profile(enterprise_key, profile_data)` 写入画像
+
+**画像写入语义（2026-09-17 起）**：
+- `seed_profile` 已改为**非破坏合并**——只填空、只追加，**不覆盖**已有非空值。重跑分析不会冲掉日常沉淀。
+- 企业事实的**原始记录在 `memory/company/<企业>/facts.md`**（人可读、格式固定：`| 字段 | 值 | 来源 | 时间 |`，检索以它为准）；`kb.json profile` 只是**机器投影**（搜索/邮件/展中匹配读它）。
+- **日常新增事实不要重跑整篇分析**：把事实写进 `work/mio-api/data/memory/<企业>/pending_facts.json`，6 小时心跳会自动落 `facts.md` + 投影。也可即时执行：
+  `python3 work/mio-api/dc_session_distill.py route --company-id <id> --facts-json '[...]' --apply`
+- facts.json 的 kind 取值：`company_fact` / `long_term_rule` / `business_reflection` / `user_profile`。
 3. 每条产品线调用 `dc_kb_engine.add_product(enterprise_key, name, data)`
 4. 验证：`dc_kb_engine.show(enterprise_key)` 确认 profile.name 非空
 

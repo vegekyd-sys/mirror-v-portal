@@ -152,7 +152,7 @@ class KBEngine:
         _product = (p.get("product")
                     or p.get("products")
                     or ((", ".join(p["products"]) if isinstance(p.get("products"), list) else "")) or "")
-        kb["profile"] = {
+        incoming = {
             "name": _name,
             "name_en": _name_en,
             "product": _product,
@@ -166,8 +166,18 @@ class KBEngine:
             "customization": p.get("customization", ""),
             "scale": p.get("scale") or p.get("company_type") or p.get("employees", ""),
             "source": p.get("source") or p.get("data_source", ""),
-            "updated": _now(),
         }
+        # 非破坏合并（2026-09-17）：analyze-company 不得覆盖日常沉淀出来的画像。
+        # 过去这里是整块赋值，会把 dc_profile_learn 积累的字段冲掉。
+        try:
+            from dc_profile_learn import merge_profile  # noqa: PLC0415
+            merged, _changed, _skipped = merge_profile(kb.get("profile") or {}, incoming)
+        except Exception:  # noqa: BLE001
+            merged = {**(kb.get("profile") or {}), **incoming}
+        if not merged.get("source"):
+            merged["source"] = incoming.get("source") or ""
+        merged["updated"] = _now()
+        kb["profile"] = merged
         self._save(enterprise, kb)
         self._audit_log("kb.profile", enterprise, enterprise, f"画像更新: {kb['profile'].get('name','')[:30]}")
         # 🔄 回路1: analyze-company → Persona — 自动播种买家画像

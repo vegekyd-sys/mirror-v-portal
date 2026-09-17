@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -268,10 +269,35 @@ def _section(title: str, lines: list[str]) -> str:
     return title + "\n" + "\n".join(lines) if lines else ""
 
 
+def recent_learnings(company_id: str = "", *, limit: int = 3) -> list[str]:
+    """「最近又学会了」的数据源 = **同一份记忆**（反思 / 长期规则 / 企业事实）。
+
+    2026-09-17 田耕郡：早晚报这段不能靠调用方传，要真读——「接到一起才是每天都能感受到」。
+    读不到就返回空（不编），报头该段自动不出现。
+    """
+    cid = str(company_id or os.environ.get("MIO_CDP_SUPPLIER_ID") or "").strip()
+    try:
+        import dc_memory_view as mv  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    for rec in mv.read_reflections(limit=limit, user="")[::-1]:
+        label = mv.REFLECTION_LABEL.get(rec["type"], "学会了")
+        out.append(f"{label}：{rec['what']}")
+    resolved = mv.resolve_company_id(cid)
+    for r in mv.read_rules(resolved)[-limit:][::-1]:
+        if r["state"] == "active":
+            out.append(f"记住你的规矩：{r['text']}")
+    for r in mv.read_facts(resolved)[-limit:][::-1]:
+        out.append(f"记住：{r['field']} = {r['value']}")
+    return out[:limit]
+
+
 def render_morning(*, kind: str = "daily", date_label: str = "", done: list[str] | None = None,
                    judgement: list[str] | None = None, decisions: list[str] | None = None,
                    rounds: dict | None = None, learned: list[str] | None = None,
-                   link: str = "", exhibition: str = "", stage_line: str = "") -> str:
+                   link: str = "", exhibition: str = "", stage_line: str = "",
+                   company_id: str = "") -> str:
     """早报渲染。``kind``: ``daily``（日常营销）｜``exhibition``（展会营销）。"""
     head = f"早上好 · {date_label}" if date_label else "早上好"
     head += " ｜ 日常" if kind == "daily" else (f" ｜ 展会·{exhibition}" if exhibition else " ｜ 展会")
@@ -283,7 +309,9 @@ def render_morning(*, kind: str = "daily", date_label: str = "", done: list[str]
                            _bullets(judgement or [], 3)))
     blocks.append(_section("■ 今天要你决定", _bullets(decisions or [], 3)))
     blocks.append(_render_rounds(rounds))
-    blocks.append(_section("■ 最近又学会了", _bullets(learned or [], 3)))
+    # 不传就真读记忆（反思/规则/事实），保证客户端「最近又学会了」不是空段
+    learned_items = learned if learned is not None else recent_learnings(company_id)
+    blocks.append(_section("■ 最近又学会了", _bullets(learned_items or [], 3)))
     if link:
         blocks.append(LINK_LINE.format(url=link))       # 链接只出现一次
     return "\n\n".join(b for b in blocks if b)

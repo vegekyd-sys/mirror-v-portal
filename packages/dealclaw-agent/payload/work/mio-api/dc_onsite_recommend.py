@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -286,17 +287,49 @@ def _filter_inshow_today(records: list[dict]) -> list[dict]:
 
 # ── 2. 产品词 ───────────────────────────────────────────────────
 
-def load_products(company_id: str) -> list[str]:
+def load_profile(company_id: str) -> dict:
     p = _workspace_root() / "data" / "memory" / company_id / "kb.json"
     if not p.exists():
-        return []
+        return {}
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return []
-    prof = d.get("profile", {}) or {}
+        return {}
+    return d.get("profile", {}) or {}
+
+
+def load_products(company_id: str) -> list[str]:
+    prof = load_profile(company_id)
     prods = prof.get("products") or prof.get("product") or []
     return [str(x).strip() for x in prods if str(x).strip()]
+
+
+# 画像里可能承载"采购标签/类目"的字段（容错多字段，取到就用）
+PROFILE_TAG_FIELDS = (
+    "tags", "tagKeywords", "tag_keywords", "tagKeyword",
+    "categories", "supplierCategories", "supplier_categories",
+    "keywords", "seoKeywords",
+)
+
+
+def search_terms(company_id: str) -> list[str]:
+    """onsite 搜索词：对齐 find-buyers 机器契约——**标签/类目词优先，英文，一次一个概念**。
+
+    过去直接把 profile.products 原词全塞进 --keywords（可能是中文长句/品牌名），
+    接口按"产品关键词"匹配，自然给出泛化结果。这里改成标签优先、短词优先。
+    """
+    prof = load_profile(company_id)
+    terms: list[str] = []
+    for field in PROFILE_TAG_FIELDS:
+        for t in _split_terms(prof.get(field)):
+            if t not in terms:
+                terms.append(t)
+    if not terms:  # 没有标签字段才退回 products
+        for t in _split_terms(prof.get("products") or prof.get("product")):
+            if t not in terms:
+                terms.append(t)
+    # 一次只传一个搜索概念：过长句子不进接口（find-buyers 同口径）
+    return [t for t in terms if len(t) <= 40][:5]
 
 
 # ── 3. 现场买家 ─────────────────────────────────────────────────
@@ -331,6 +364,120 @@ def load_invited_cdp_ids(company_id: str) -> set[str]:
 ATTR_LABEL = {1: "生产商", 2: "分销商", 3: "零售商", 4: "品牌", 5: "商超"}
 
 
+# ── 产品匹配（2026-09-17 修）──────────────────────────────────
+# 过去这里是假的：`if keywords: reasons.append("产品对路")` —— 只要画像里有产品词，
+# **每个**买家都被标"产品对路"，从不与买家自身产品比对；分层也只看"有没有公司属性/规模"，
+# 与产品无关。结果就是现场推荐"人人主推、个个对路"，用户反馈"给的买家不准"。
+# 现在改成真比对：我们的产品词 ∩ 买家产品字段，命中才叫匹配。
+BUYER_PRODUCT_FIELDS = (
+    "purchaseTags", "productList", "products", "tagList",
+    "关注产品", "采购产品", "buyerProducts", "mainProducts",
+)
+
+
+def _split_terms(raw) -> list[str]:
+    """把产品词/标签拆成可比对词元（支持中英、逗号/分号/斜杠/顿号分隔）。
+
+    关键：买家 purchaseTags 是 **字典列表**（如 {"name": "Packaging Bag"}），
+    必须取 name，否则会把整个 dict 的 repr 当成词，导致真实命中被漏掉（2026-09-17 修）。
+    """
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        for key in ("name", "value", "label", "title", "tagName", "text", "keyword"):
+            if raw.get(key):
+                return _split_terms(raw.get(key))
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        out: list[str] = []
+        for x in raw:
+            for t in _split_terms(x):
+                if t not in out:
+                    out.append(t)
+        return out
+    parts = re.split(r"[,，;；/、|]+", str(raw))
+    out = []
+    for part in parts:
+        t = part.strip().lower()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def buyer_product_terms(buyer: dict) -> list[str]:
+    """买家自身产品字段的全部词元（比对用）。"""
+    terms: list[str] = []
+    for field in BUYER_PRODUCT_FIELDS:
+        for t in _split_terms(buyer.get(field)):
+            if t not in terms:
+                terms.append(t)
+    return terms
+
+
+# 买家侧的弱信号字段（产品字段为空时兜底，放宽匹配）
+BUYER_WEAK_FIELDS = (
+    "companyIntro", "companyProfile", "businessScope", "business_scope",
+    "mainProducts", "main_products", "description", "主营产品", "公司简介",
+)
+
+
+def _terms_match(a: str, b: str) -> bool:
+    """宽松词元匹配（find-buyers 的宽进口径，别硬顶全等）。
+
+    命中任一即算：全等 / 互相包含 / 词元交集（≥4 字的词，去复数）。
+    """
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+
+    def _toks(x: str) -> list:
+        x = re.sub(r"[-_/|]+", " ", x)
+        out = []
+        for t in x.split():
+            t = t.strip().lower()
+            if len(t) >= 4 and t.endswith("s") and not t.endswith("ss"):
+                t = t[:-1]
+            if len(t) >= 4:
+                out.append(t)
+        return out
+
+    return bool(set(_toks(a)) & set(_toks(b)))
+
+
+def match_products(buyer: dict, keywords) -> list[str]:
+    """返回命中的产品词（我们 ∩ 买家）。任一方包含另一方即算命中。
+
+    拿不到任一侧词元 → 返回 []（不做无依据的"匹配"）。
+    """
+    mine = _split_terms(keywords)
+    if not mine:
+        return []
+    theirs = buyer_product_terms(buyer)
+    hits: list[str] = []
+    for kw in mine:
+        for tag in theirs:
+            if _terms_match(kw, tag):
+                if kw not in hits:
+                    hits.append(kw)
+                break
+    if hits:
+        return hits
+    # 产品字段没命中 → 用简介/主营等弱信号兜底（现场宽进，少些限制）
+    weak: list[str] = []
+    for field in BUYER_WEAK_FIELDS:
+        for t in _split_terms(buyer.get(field)):
+            if t not in weak:
+                weak.append(t)
+    for kw in mine:
+        for tag in weak:
+            if _terms_match(kw, tag):
+                if kw not in hits:
+                    hits.append(kw)
+                break
+    return hits
+
+
 def _buyer_facts(buyer: dict, keywords: list[str]) -> dict:
     """现场买家 → 展示行与落池共用的事实（公司名/国家/类型/规模/理由/CDP/官网）。
 
@@ -342,122 +489,37 @@ def _buyer_facts(buyer: dict, keywords: list[str]) -> dict:
         attr_label = "/".join(ATTR_LABEL.get(int(a), str(a)) for a in attrs if str(a).isdigit())
     size = buyer.get("newCompanySize") or buyer.get("companySize") or ""
 
+    hits = match_products(buyer, keywords)
     reasons = []
-    if keywords:
-        reasons.append("产品对路")
+    if hits:
+        reasons.append("产品匹配:" + "/".join(hits[:3]))
+    elif keywords:
+        reasons.append("未见产品交集")
     if attr_label:
         reasons.append(attr_label)
     if size:
         reasons.append(f"规模{size}")
 
     return {
-        "name": strip_tags(buyer.get("companyName") or ""),
+        "name": buyer.get("companyName") or "",
         "country": (buyer.get("countryCnName") or buyer.get("country")
                     or buyer.get("countryEnName") or ""),
         "attr_label": attr_label,
         "size": str(size or ""),
         "reason": (",".join(reasons) if reasons else "现场买家"),
+        "matched_products": hits,
         "cdp": str(buyer.get("companyCdpId") or buyer.get("companyCdpid") or "").strip(),
         "website": str(buyer.get("website") or buyer.get("domain") or "").strip(),
-        # 2026-09-17 客户口径：推送不能只给一个名字 —— 要能看到「到场联系人 + 联系方式」，
-        # 方便现场直接打电话；再配一句公司简介，方便一眼判断要不要邀约到展位。
-        "contact": "、".join(buyer.get("_contacts") or []) or _first_of(buyer, CONTACT_KEYS),
-        "phone": " / ".join(buyer.get("_phones") or []) or _first_of(buyer, PHONE_KEYS),
-        "intro": _one_liner(_first_of(buyer, ("companyProfile", "companyProfileCn", "profileCn",
-                                              "companyIntro", "intro", "companyProfileEn"))),
     }
 
 
-def _first_of(buyer: dict, keys: tuple[str, ...]) -> str:
-    """按字段名优先级取第一个非空值（各数据源命名不一，不猜）。"""
-    for key in keys:
-        value = buyer.get(key)
-        if isinstance(value, (list, tuple)):
-            value = next((v for v in value if str(v or "").strip()), "")
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _one_liner(html_or_text: str, limit: int = 60) -> str:
-    """一句话简介：去标签 + 去空白 + 限长（不硬截字，从句读处断）。"""
-    import re as _re
-
-    text = _re.sub(r"<[^>]+>", " ", str(html_or_text or ""))
-    text = _re.sub(r"\s+", " ", text).strip()
-    if len(text) <= limit:
-        return text
-    cut = max(text.rfind("。", 0, limit), text.rfind(". ", 0, limit), text.rfind("，", 0, limit))
-    return (text[:cut + 1] if cut > limit // 2 else text[:limit]).strip() + "…"
-
-
-def strip_tags(value: str) -> str:
-    """去 HTML 标签 + 归并空白（现场接口的公司名会带 <em> 高亮标记，不能直接发出去）。"""
-    import re as _re
-
-    return _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", "", str(value or ""))).strip()
-
-
-CONTACT_KEYS = ("contactName", "contact_name", "buyerName", "custName", "linkman")
-PHONE_KEYS = ("phone", "mobile", "telephone", "contactPhone", "whatsapp")
-
-
-def dedupe_buyers(buyers: list[dict]) -> list[dict]:
-    """同一公司只留一条：公司名（去标签）归一后合并联系人/电话（多条记一个公司）。
-
-    为什么：现场接口同一家公司会有多条记录（截图为证：XTRANSFER 一连推了十几条）；
-    现在合并成一条，联系人/电话多个并列（“A、B” / “tel1 / tel2”），不丢人也不刷屏。
-    内部用列表去重，避免反复拼接导致“A、B、B、B…”这种膨胀。
-    """
-    merged: dict[str, dict] = {}
-    order: list[str] = []
-    for buyer in buyers or []:
-        if not isinstance(buyer, dict):
-            continue
-        name = strip_tags(buyer.get("companyName") or buyer.get("company_name") or "")
-        key = name.lower() or f"__anon_{len(order)}"
-        contact = _first_of(buyer, CONTACT_KEYS)
-        phone = _first_of(buyer, PHONE_KEYS)
-        item = merged.get(key)
-        if item is None:
-            copy = dict(buyer)
-            copy["companyName"] = name
-            copy["_contacts"] = [contact] if contact else []
-            copy["_phones"] = [phone] if phone else []
-            merged[key] = copy
-            order.append(key)
-            continue
-        if contact and contact not in item["_contacts"]:
-            item["_contacts"].append(contact)
-        if phone and phone not in item["_phones"]:
-            item["_phones"].append(phone)
-    return [merged[k] for k in order]
-
-
 def classify(buyer: dict, keywords: list[str]) -> tuple[str, str]:
-    """分层：主推 / 跟进；返回 (层级, 展示行)。
-
-    展示行口径（2026-09-17 客户定稿）：**公司名｜到场联系人（电话）｜一句话简介**。
-    联系人/电话是现场能直接拨号的依据；拿不到就如实标「未提供」，**不编**。
-    """
+    """分层：主推 / 跟进；返回 (层级, 展示行)。"""
     f = _buyer_facts(buyer, keywords)
-    tier = "主推" if (f["attr_label"] or f["size"]) else "跟进"
+    # 主推 = 产品真命中；没有命中一律降为跟进（过去按"有无公司属性"分层，人人主推）
+    tier = "主推" if f["matched_products"] else "跟进"
     name = f["name"] or "(未知)"
-    contact = f["contact"] or ""
-    phone = f["phone"] or ""
-    if contact and phone:
-        contact_bit = f"到场联系人 {contact}（{phone}）"
-    elif contact:
-        contact_bit = f"到场联系人 {contact}"
-    elif phone:
-        contact_bit = f"电话/WA {phone}"
-    else:
-        contact_bit = "到场联系人未提供"
-    bits = [name, contact_bit]
-    if f["intro"]:
-        bits.append(f["intro"])
-    return tier, "｜".join(bits)
+    return tier, f"{name}｜{f['country']}｜{f['reason']}"
 
 
 # ── 6. 展中推荐落池（每届展会一个独立池）───────────────────
@@ -535,7 +597,7 @@ def onsite_pool_record(buyer: dict, keywords: list[str]) -> "dict | None":
     pool_type = _pool_buyer_type(buyer)
     if pool_type:
         record["买家类型"] = pool_type
-    products = _pool_products(buyer)
+    products = facts["matched_products"]
     if products:
         record["匹配产品"] = products
     return record
@@ -605,23 +667,6 @@ def land_onsite_leads(company_id: str, exhibition: dict, buyers: list,
 # 本展会线索池入口跟汇总气泡走（≤阈值时挂末条明细气泡）。
 ONSITE_BATCH_SIZE = 10
 ONSITE_SUMMARY_THRESHOLD = 10
-# 2026-09-17 客户口径：**每个定时最多推 10 家**（此前一次能推 50 条）。
-# 主推优先入选；没进这一轮的**顺延到下一次定时**（不丢，只是不在本轮推）。
-ONSITE_MAX_PER_RUN = 10
-
-
-def cap_per_run(main: list[str], follow: list[str],
-                limit: int = ONSITE_MAX_PER_RUN) -> tuple[list[str], list[str], int]:
-    """每个定时最多推 limit 家（主推在前）；返回 (主推, 跟进, 顺延家数)。
-
-    纯函数、不丢数据：只是把超出部分从本轮拿出，由调用方提示用户“顺延到下一次”。
-    """
-    if limit < 1:
-        raise ValueError("limit must be >= 1")
-    queue = [("主推", x) for x in (main or [])] + [("跟进", x) for x in (follow or [])]
-    picked, deferred = queue[:limit], queue[limit:]
-    return ([x for t, x in picked if t == "主推"],
-            [x for t, x in picked if t == "跟进"], len(deferred))
 
 
 def _onsite_entries(main: list[str], follow: list[str]) -> list[tuple[str, str]]:
@@ -730,7 +775,7 @@ def run(args) -> dict:
 
     # 时点闸门：只有 cron 带 --slot-gate 才启用。skill 手动触发不带，任何时间都能跑。
     # 放在这里而不是更早，是因为要先知道展会国家才知道该用哪个时区判断「现在几点」。
-    if args.slot_gate:
+    if getattr(args, "slot_gate", False):  # 测试夹具/旧调用方可能没有这个属性
         slots = parse_slots(args.slots)
         due = [e for e in exhs if local_now(e.get("tz") or FALLBACK_TZ).hour in slots]
         if not due:
@@ -744,7 +789,7 @@ def run(args) -> dict:
                     "slots": list(slots), "exhibitions": snapshot, "count": 0}
         exhs = due
 
-    keywords = load_products(company_id)
+    keywords = search_terms(company_id)
     invited = load_invited_cdp_ids(company_id)
     chat_id = (args.chat_id or get_default_target() or "").strip()
 
@@ -755,24 +800,16 @@ def run(args) -> dict:
         # 排除不落铁律：黑名单/明确拒绝不推也不落池
         survivors = [b for b in candidates if not is_excluded_from_onsite(b)]
         excluded = len(candidates) - len(survivors)
-        # 同一家公司只留一条（现场接口会重复；之前一连推十几条同样名单）
-        deduped = dedupe_buyers(survivors)
-        duplicates = len(survivors) - len(deduped)
-        survivors = deduped
         main, follow = [], []
         for b in survivors:
             tier, line = classify(b, keywords)
             (main if tier == "主推" else follow).append(line)
-        # 每个定时最多推 ONSITE_MAX_PER_RUN 家；超出部分顺延到下一次（不丢）
-        main, follow, deferred = cap_per_run(main, follow)
         pool = land_onsite_leads(company_id, exh, survivors, keywords,
                                  chat_id=chat_id, dry_run=args.dry_run)
         if pool.get("error"):
             print(f"[dc_onsite_recommend] 落池失败（明细照推）: {pool['error']}", file=sys.stderr)
         if main or follow or excluded:
-            header = f"📥 现场买家邀约（{exh.get('name') or exh['exhibitionId']}）"
-            # deferred 只进内部结果（results），**不写进推送**：用户不必知道顺延，
-            # 他想看更多时直接问「还有没有推荐的买家」即可。
+            header = f"📥 现场未邀约匹配买家（{exh.get('name') or exh['exhibitionId']}）"
             bubbles = build_onsite_bubbles(header, main, follow, pool_url=pool.get("url") or "")
             sent = sum(1 for text in bubbles if send_card(chat_id, text, dry_run=args.dry_run))
             results.append({"exhibitionId": exh["exhibitionId"], "candidates": len(candidates),

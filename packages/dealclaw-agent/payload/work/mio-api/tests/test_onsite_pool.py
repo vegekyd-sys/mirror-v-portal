@@ -285,7 +285,7 @@ class TestOnsitePoolRecord(OnsitePoolTestCase):
         self.assertEqual(record["官网"], "buyer1.co.id")
         self.assertEqual(record["公司CDPID"], "C1")
         self.assertEqual(record["国家"], "印尼")
-        self.assertEqual(record["推荐理由"], "产品对路,生产商")
+        self.assertEqual(record["推荐理由"], "产品匹配:包装袋,生产商")
         self.assertEqual(record["匹配产品"], ["包装袋"])
         self.assertEqual(record["买家类型"], "制造商", "生产商 → 池枚举 制造商")
 
