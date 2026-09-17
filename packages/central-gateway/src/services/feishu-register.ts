@@ -28,14 +28,15 @@ export interface RegistrationSession {
   _completionPromise?: Promise<void>;
 }
 
-// What the user sees inside Feishu at the moment they scan. Overridable so the
-// identity can change without a redeploy; the default is V, matching the payload
-// the agent is seeded with — a shipped name that contradicts the payload is worse
-// than either one alone.
+// What the user sees inside Feishu at the moment they scan, and what Feishu
+// pre-fills on its app-creation screen. Overridable so the identity can change
+// without a redeploy. The default matches the seeded payload — a shipped name
+// that contradicts the payload is worse than either one alone — and the
+// description traces V's own Evolution Direction: Mirror, Match, Exceed.
 const APP_PRESET = {
   name: process.env.FEISHU_APP_NAME || 'V from Versa',
   desc: process.env.FEISHU_APP_DESC
-    || '公司级 OpenClaw 智能助理 — 把上下文变成可落地的成果',
+    || '自进化智能体 — 镜像你的思维，预判你的下一步，补上你看不见的盲区',
 };
 
 export async function startFeishuRegistration(
