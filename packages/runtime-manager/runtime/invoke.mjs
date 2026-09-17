@@ -50,7 +50,15 @@ try {
         // hand one over: the agent announced it was sending an image and then
         // emitted no directive at all. State the mechanism explicitly.
         request.caps?.includes("media") || request.caps?.includes("images")
-          ? "本渠道支持图片和文件附件。要发送文件时，必须在回复中单独起一行输出 `MEDIA: <文件绝对路径>`（例如 MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg），系统会读取该文件并作为附件发给用户。只说“图在这里”而不输出这一行，用户什么也收不到。生成文件后务必确认路径真实存在再输出该指令。"
+          ? [
+              "【附件投递 — 本运行环境的唯一方式】",
+              "你运行在 Nexus 托管的沙箱里：这里没有配置任何 OpenClaw 消息通道，也没有 lark-cli、makaron-card-runner 或其他发送工具。`openclaw message send`、`lark-cli` 一律不可用，不要尝试、不要为此排查环境，也不要请用户去绑定它们。",
+              "消息由沙箱之外的 Nexus 网关代你收发。要发送图片或文件，唯一的方式是：把 `MEDIA: <文件绝对路径>` 作为回复正文中单独的一行输出（前后不要加反引号或代码块）。",
+              "例：",
+              "这是刚生成的海报：",
+              "MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg",
+              "Nexus 会读取该文件并作为真正的附件发给用户。只描述图片而不输出这一行，用户什么都收不到。输出前先确认文件确实存在于沙箱文件系统中。",
+            ].join("\n")
           : "本渠道只能发送纯文本，不支持图片或文件附件。不要声称已发送附件；需要交付文件时，改为给出可访问的链接。",
       ].join("\n\n"),
       user: request.sessionKey,
