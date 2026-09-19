@@ -100,7 +100,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var button = document.getElementById('motionControl');
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   var pausedByUser = false, current = 0, switching = false, transitionTimer = null;
-  var source = '/onboard/assets/nexus-world-v5.mp4';
+  var source = '/onboard/assets/nexus-world-v5.mp4?v=6';
   function canPlay() { return !reduced.matches && !document.hidden && !pausedByUser; }
   function label() {
     button.textContent = pausedByUser ? '▷' : 'Ⅱ';
