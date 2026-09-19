@@ -12,6 +12,7 @@ WORKDIR /app
 COPY --from=build /app/package*.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/public ./public
 USER node
 EXPOSE 8085
 CMD ["node", "dist/index.js"]

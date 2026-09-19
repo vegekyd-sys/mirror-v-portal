@@ -168,6 +168,23 @@ describe('GET /onboard — Feishu registration', () => {
     expect(res.text).not.toContain('联系邮箱');
   });
 
+  it('serves the generated onboarding artwork and logo', async () => {
+    for (const name of ['nexus-world-v2.webp', 'nexus-world-mobile-v2.webp', 'nexus-logo-v2.webp']) {
+      const res = await request(app).get('/onboard/assets/' + name);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('image/webp');
+      expect(res.body.subarray(0, 4).toString()).toBe('RIFF');
+    }
+  });
+
+  it('supports byte ranges for the background video', async () => {
+    const res = await request(app).get('/onboard/assets/nexus-world-v5.mp4').set('Range', 'bytes=0-255');
+    expect(res.status).toBe(206);
+    expect(res.headers['content-type']).toContain('video/mp4');
+    expect(res.headers['content-range']).toMatch(/^bytes 0-255\//);
+    expect(Number(res.headers['content-length'])).toBe(256);
+  });
+
   it('returns HTML page for dingtalk', async () => {
     const res = await request(app).get('/onboard').set('User-Agent', 'DingTalk/6.0');
     expect(res.status).toBe(200);

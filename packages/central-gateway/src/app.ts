@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import QRCode from 'qrcode';
@@ -61,6 +62,7 @@ export function createApp() {
       },
     },
   }));
+  app.use('/onboard/assets', express.static(fileURLToPath(new URL('../public/onboard/', import.meta.url)), { maxAge: '1d', index: false }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
 
