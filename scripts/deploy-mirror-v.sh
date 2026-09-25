@@ -74,7 +74,8 @@ for attempt in {1..15}; do
     systemctl reload nginx
     admin_ready=0
     for admin_attempt in {1..10}; do
-      if curl -fsS http://127.0.0.1/admin/ >/dev/null 2>&1; then
+      if curl -fsS http://127.0.0.1/admin/ >/dev/null 2>&1 \
+        && curl -fsS http://127.0.0.1/admin >/dev/null 2>&1; then
         admin_ready=1
         break
       fi
