@@ -72,7 +72,15 @@ for attempt in {1..15}; do
       break
     fi
     systemctl reload nginx
-    if ! curl -fsS http://127.0.0.1/admin/ >/dev/null 2>&1; then
+    admin_ready=0
+    for admin_attempt in {1..10}; do
+      if curl -fsS http://127.0.0.1/admin/ >/dev/null 2>&1; then
+        admin_ready=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "$admin_ready" != 1 ]]; then
       cp /opt/nexus/data/nginx-portal.previous.conf /etc/nginx/nexus-portal.locations.conf
       systemctl reload nginx
       echo 'Admin page failed health check' >&2
