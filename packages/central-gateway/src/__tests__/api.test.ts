@@ -208,6 +208,41 @@ describe('GET /onboard — Feishu registration', () => {
   });
 });
 
+describe('WeChat portal onboarding', () => {
+  it('pins the chosen template and only exposes status for its own QR session', async () => {
+    const managerCalls: Array<{ url: string; body?: string }> = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/v1/templates')) return Response.json({ templates: [
+        { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+      ] });
+      managerCalls.push({ url, body: init?.body as string | undefined });
+      if (url.endsWith('/v1/channels/weixin/portal-login')) return Response.json({
+        sessionId: 'weixin-flow-test', qrImage: 'https://example.invalid/qr', expiresIn: 600,
+      });
+      if (url.endsWith('/v1/channels/weixin/login/weixin-flow-test') && init?.method === 'DELETE')
+        return Response.json({ ok: true });
+      if (url.endsWith('/v1/channels/weixin/login/weixin-flow-test'))
+        return Response.json({ status: 'pending', expiresIn: 590 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    try {
+      const started = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v' });
+      expect(started.status).toBe(200);
+      expect(started.body.deviceCode).toBe('weixin-flow-test');
+      expect(started.body.qrDataUri).toMatch(/^data:image\/png;base64,/);
+      expect(JSON.parse(managerCalls[0].body || '{}')).toEqual({ templateId: 'mirror-v', templateVersion: 'mirror-v.v1' });
+      expect(managerCalls.some(call => call.url.endsWith('/v1/tenants'))).toBe(false);
+      expect((await request(app).get('/onboard/weixin/status/unknown')).status).toBe(404);
+      const status = await request(app).get('/onboard/weixin/status/weixin-flow-test');
+      expect(status.body.status).toBe('pending');
+      expect((await request(app).post('/onboard/weixin/cancel').send({ deviceCode: 'weixin-flow-test' })).body.ok).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
 describe('GET /onboard/status', () => {
   it('returns a debug session list when deviceCode is missing', async () => {
     const res = await request(app).get('/onboard/status');
