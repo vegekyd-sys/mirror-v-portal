@@ -24,4 +24,9 @@ describe("signup template catalog", () => {
     expect(requireTemplate(dedicated, "dealclaw")).toMatchObject({ version: "dealclaw-starter.v1", snapshotId: "snap_new_dealclaw" });
     expect(dedicated.snapshotId).toBe("snap_dealclaw");
   });
+
+  it("lists newly configured agents with their display metadata", () => {
+    const expanded = { ...config, templates: { ...config.templates, xinqing: { version: "xinqing.v1", snapshotId: "snap_xinqing", name: "新晴", description: "陪伴与交流" } } };
+    expect(availableTemplates(expanded).find((template) => template.id === "xinqing")).toMatchObject({ name: "新晴", description: "陪伴与交流" });
+  });
 });

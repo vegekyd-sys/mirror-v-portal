@@ -3,6 +3,7 @@ import { LOCAL_PREVIEW } from "../lib/local-preview";
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { IconLogout, IconNexus } from './icons';
+import nexusLogo from '../../../central-gateway/public/onboard/nexus-logo-v2.webp';
 
 interface NavItem {
   to: string;
@@ -36,8 +37,8 @@ const SYSTEM: NavItem[] = [
 ];
 
 const ELASTIC_WORKBENCH: NavItem[] = [
-  { to: '/', icon: '概', label: 'Mirror V 概览', end: true },
-  { to: '/agents', icon: 'A', label: 'Agent 实例' },
+  { to: '/', icon: '◈', label: '总览', end: true },
+  { to: '/agents', icon: '✦', label: 'Agent 阵容' },
   { to: '/customers', icon: '客', label: '客户与 Credits' },
   { to: '/plans', icon: '套', label: '套餐模板' },
   { to: '/pricing', icon: '价', label: 'Skill 定价' },
@@ -69,21 +70,21 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
   const { user, logout } = useAuth();
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${elastic ? 'elastic-shell' : ''}`}>
       <aside className="sidebar">
         <div className="side-logo">
-          <div className="logo-mark">
-            <IconNexus size={22} />
-          </div>
+          {elastic ? <img className="elastic-logo" src={nexusLogo} alt="Nexus" /> : <div className="logo-mark"><IconNexus size={22} /></div>}
+          {!elastic &&
           <div>
             <div className="brand">Nexus</div>
             <div className="brand-sub">{elastic ? 'Mirror V 门户' : '控制台'}</div>
-          </div>
+          </div>}
         </div>
+        {elastic && <div className="elastic-side-caption">Mirror V 门户 / 管理工作台</div>}
         <nav className="side-nav">
-          <div className="side-section">工 作 台</div>
+          <div className="side-section">工作台</div>
           <SideNav items={elastic ? ELASTIC_WORKBENCH : WORKBENCH} />
-          <div className="side-section">系 统</div>
+          <div className="side-section">系统</div>
           <SideNav items={elastic ? ELASTIC_SYSTEM : SYSTEM} />
         </nav>
         <div className="side-foot">
@@ -109,6 +110,7 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
         </div>
       </aside>
       <main className="main">
+        {elastic && <div className="elastic-topbar"><span>管理工作台</span><div><a href="/onboard">打开门户 <span aria-hidden="true">↗</span></a><span className="elastic-topbar-user">{user?.displayName || user?.username || 'Admin'}</span></div></div>}
         <div className="container">
           {LOCAL_PREVIEW && <div className="hint" style={{marginBottom:16}}>本地页面结构预览 · 全部为示例数据与示例价格 · 不连接线上服务</div>}
           <Outlet />

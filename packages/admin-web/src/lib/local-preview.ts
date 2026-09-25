@@ -21,5 +21,14 @@ export function previewResponse(url:string, method='GET'): unknown {
   if(p==='/v1/billing/llm-token-pricing') return {pricing:[{provider:'demo-provider',model:'demo-model',inputCacheHitPeak:0.1,inputCacheHitOffpeak:0.1,inputCacheMissPeak:1,inputCacheMissOffpeak:1,outputPeak:2,outputOffpeak:2,currency:'CNY',updatedAt:'2026-09-14T00:00:00Z'}]};
   if(p==='/v1/admin/llm-providers') return {config:null};
   if(p==='/v1/admin/auth/me') return {user:previewUser};
+  if(p==='/onboard/templates') return {templates:[
+    {id:'mirror-v',version:'mirror-v.v1',name:'Mirror V',description:'与你一起思考、整理和行动的通用 Agent'},
+    {id:'dealclaw',version:'dealclaw-starter.v1',name:'DealClaw',description:'面向出海业务的 AI 顾问'},
+  ]};
+  if(p==='/v1/admin/elastic/summary') return {agents:[{templateId:'mirror-v',state:'sleeping',count:2},{templateId:'dealclaw',state:'sleeping',count:1}],runs:[{status:'succeeded',count:31},{status:'failed',count:1}],customers:{count:5,balance:100000}};
+  if(p==='/v1/admin/elastic/agents') return {agents:[
+    {tenantId:'demo-mirror-1',name:'Mirror V · 示例实例',templateId:'mirror-v',templateVersion:'mirror-v.v1',runtimeProvider:'vercel',state:'sleeping',createdAt:'2026-09-20T00:00:00Z',lastActivity:'2026-09-25T12:00:00Z',lastError:null,wakeCount:12,feishuBound:true,channels:['feishu'],accountId:'demo-1',balance:86000},
+    {tenantId:'demo-dealclaw-1',name:'DealClaw · 示例实例',templateId:'dealclaw',templateVersion:'dealclaw-starter.v1',runtimeProvider:'vercel',state:'sleeping',createdAt:'2026-09-22T00:00:00Z',lastActivity:'2026-09-25T09:00:00Z',lastError:null,wakeCount:6,feishuBound:true,channels:[],accountId:'demo-2',balance:75000},
+  ]};
   return {items:[],users:[],keys:[],logs:[],events:[],skills:[],releases:[],presets:[],tasks:[],tenants:[],providers:[],sessions:[],messages:[],total:0,config:null};
 }

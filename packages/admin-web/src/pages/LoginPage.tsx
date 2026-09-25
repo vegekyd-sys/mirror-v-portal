@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { ApiError, errMsg } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { IconArrowRight, IconCheck, IconNexus } from '../components/icons';
+import nexusLogo from '../../../central-gateway/public/onboard/nexus-logo-v2.webp';
 
 export default function LoginPage() {
   const elastic = import.meta.env.VITE_NEXUS_ELASTIC === 'true';
@@ -35,13 +36,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="login-shell">
+    <div className={`login-shell ${elastic ? 'elastic-login' : ''}`}>
       <div className="login-hero">
         <div className="hero-brand">
-          <div className="logo-mark">
-            <IconNexus size={22} />
-          </div>
-          {elastic ? 'Nexus · Mirror V 门户' : 'Nexus · 控制台'}
+          {elastic ? <img className="elastic-logo" src={nexusLogo} alt="Nexus" /> : <><div className="logo-mark"><IconNexus size={22} /></div>Nexus · 控制台</>}
         </div>
         <div className="hero-eyebrow">{elastic ? 'MIRROR V AGENT 门户' : 'AGENT 运行管理平台'}</div>
         <h1 className="hero-title">

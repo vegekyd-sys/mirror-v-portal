@@ -11,7 +11,7 @@ export interface Config {
   trialTenantId: string;
   snapshotId?: string;
   /** Versioned, approved snapshots for additional signup templates. */
-  templates?: Record<string, { version: string; snapshotId: string }>;
+  templates?: Record<string, { version: string; snapshotId: string; name?: string; description?: string }>;
   optimizeRuntime?: boolean;
   sandboxPrefix: string;
   /** External payload tar, rooted at the workspace. Overrides the in-repo payload. */

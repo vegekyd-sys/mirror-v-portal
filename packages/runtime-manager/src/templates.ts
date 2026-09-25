@@ -26,8 +26,11 @@ export function availableTemplates(config: Config): AgentTemplate[] {
     snapshotId: config.snapshotId,
   });
   for (const [id, value] of Object.entries(config.templates ?? {})) {
-    if (!LABELS[id] || id === "dealclaw" || !value?.snapshotId || !value?.version) continue;
-    entries.push({ id, version: value.version, ...LABELS[id], snapshotId: value.snapshotId });
+    if (id === "dealclaw" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || !value?.snapshotId || !value?.version) continue;
+    const label = LABELS[id];
+    const name = value.name?.trim() || label?.name || id;
+    const description = value.description?.trim() || label?.description || "独立 Agent 模板";
+    entries.push({ id, version: value.version, name, description, snapshotId: value.snapshotId });
   }
   return entries;
 }

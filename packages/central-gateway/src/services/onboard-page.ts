@@ -214,6 +214,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 
   async function loadTemplates() {
     try {
+      var requestedTemplate = new URLSearchParams(window.location.search).get('template');
       var response = await fetch('/onboard/templates');
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
@@ -233,8 +234,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           open();
         });
         templateList.appendChild(card);
+        if (requestedTemplate === template.id) card.click();
       });
-      say('请选择 Agent，生成专属二维码');
+      if (!selectedTemplate) say('请选择 Agent，生成专属二维码');
     } catch (error) { closeGate(error.message || '模板加载失败'); }
   }
 
