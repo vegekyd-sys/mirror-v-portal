@@ -47,3 +47,7 @@ DealClaw plans are frozen and skill prices are shadow/unapproved on first
 startup, so no charges are enabled by migration. The original Kubernetes
 provisioning service, image rollout and cluster ops are not run on this 2 GB
 host; Elastic's runtime manager remains the instance authority.
+
+The portal supports Feishu registration and WeChat iLink scans. WeChat QR
+sessions remain in manager memory; the tenant is created only after the phone
+confirms. A manager restart expires an unfinished scan, which can be retried.

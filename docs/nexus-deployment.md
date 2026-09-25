@@ -13,8 +13,9 @@ runtime-manager on 127.0.0.1:8097. PostgreSQL 16 is local. Agent sandboxes
 are created by the existing Elastic provider. The host's original OpenClaw
 Feishu event route remains in place.
 
-`/onboard` selects DealClaw or Mirror V and creates a separate Elastic tenant
-after channel QR authorization. `/admin/` shows the migrated customer,
+`/onboard` selects DealClaw or Mirror V and offers Feishu and WeChat QR
+authorization. The Feishu app or WeChat iLink confirmation creates a separate
+Elastic tenant. `/admin/` shows the migrated customer,
 credit, plan and pricing data alongside Elastic instances and runs. The
 GitLab Kubernetes provisioning service is not used on this Lighthouse host.
 
@@ -30,6 +31,8 @@ and tests on every push to `dev`.
 Private runtime config and the database stay under `/opt/nexus/data` and are
 not committed. The admin bootstrap token is written once to a mode-0600 file
 on the host; it must never be logged or added to a release artifact.
+The origin certificate is a short-lived Let's Encrypt IP certificate. The
+`nexus-cert-renew.timer` runs four times daily and reloads Nginx when renewed.
 
 ## Boundaries
 
