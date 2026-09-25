@@ -63,6 +63,6 @@ journalctl -u nexus-runtime-manager -f      # 或 tail -f /var/log/nexus-runtime
 
 入驻页从控制面 `/v1/templates` 获取已配置的模板目录。扫码会话固定模板 ID 和版本；创建租户时持久化模板 ID、版本与快照 ID。已有租户默认保留 DealClaw，后续更新模板快照不会改变已创建实例的起始快照。
 
-`dealclaw` 使用 `config.json` 的 `snapshotId`。`mirror-v` 使用 `templates.mirror-v = { "version": "mirror-v.v1", "snapshotId": "..." }`。只有快照配置完成，模板才会出现在入驻页。Mirror V 源码位于 `packages/agent-templates/mirror-v/payload`，只包含公开通用的启动文件，不使用私人 V 的记忆归档。
+新扫码租户的 `dealclaw` 和 `mirror-v` 分别使用 `config.json` 中的 `templates.dealclaw`、`templates.mirror-v` 版本与快照 ID。旧租户保留原来的 `snapshotId` 作为兼容入口。两个公开模板位于 `packages/agent-templates/*/payload`，只包含独立的起始文件，不使用私人 V 的记忆归档或旧 DealClaw 的客户资料。
 
-构建 Mirror V 快照：在 VLab 的 `/opt/nexus/app/packages/runtime-manager` 执行 `pnpm snapshot --template mirror-v`，然后重启 `nexus-runtime-manager` 以加载更新后的配置。快照脚本只更新 `templates.mirror-v`，不会覆盖 DealClaw 的 `snapshotId`。扫码后每个飞书应用对应一个独立租户和沙箱；首次发消息时启动 OpenClaw 并使用该模板工作区。
+构建模板快照：在 VLab 的 `/opt/nexus/app/packages/runtime-manager` 分别执行 `pnpm snapshot --template dealclaw` 和 `pnpm snapshot --template mirror-v`，然后重启 `nexus-runtime-manager` 以加载更新后的配置。快照脚本只更新对应 `templates.*`，不会覆盖旧租户使用的 `snapshotId`。扫码后每个飞书应用对应一个独立租户和沙箱；首次发消息时启动 OpenClaw 并使用该模板工作区。

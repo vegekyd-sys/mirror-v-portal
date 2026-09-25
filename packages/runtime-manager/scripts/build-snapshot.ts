@@ -6,14 +6,14 @@ import { loadConfig } from "../src/config.js";
 
 const config = loadConfig();
 const root = path.resolve("../..");
-const templateId = process.argv[2] === "--template" ? process.argv[3] : "dealclaw";
-if (!["dealclaw", "mirror-v"].includes(templateId)) throw new Error("UNKNOWN_TEMPLATE");
+const templateId = process.argv[2] === "--template" ? process.argv[3] : "legacy";
+if (!["legacy", "dealclaw", "mirror-v"].includes(templateId)) throw new Error("UNKNOWN_TEMPLATE");
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
 //     e.g. an agent exported from another host. Kept out of git: these run to
 //     hundreds of MB and carry an agent's accumulated memory.
-const external = templateId === "dealclaw" ? config.payloadArchive : undefined;
+const external = templateId === "legacy" ? config.payloadArchive : undefined;
 let archive: string;
 let stripComponents: number;
 if (external) {
@@ -21,26 +21,18 @@ if (external) {
   if (!fs.existsSync(archive)) throw new Error(`PAYLOAD_ARCHIVE_MISSING: ${archive}`);
   stripComponents = 1; // entries are ./AGENTS.md, ./memory/...
   console.log(JSON.stringify({ phase: "payload-external", archive, bytes: fs.statSync(archive).size }));
+} else if (templateId === "legacy") {
+  archive = path.join(config.dataDir, "dealclaw-payload.tar");
+  stripComponents = 3;
+  execFileSync("git", ["archive", "--format=tar", "--output", archive, "HEAD", "packages/dealclaw-agent/payload"], { cwd: root });
 } else {
-  const payloadPath = templateId === "dealclaw"
-    ? "packages/dealclaw-agent/payload"
-    : "packages/agent-templates/mirror-v/payload";
+  const payloadPath = `packages/agent-templates/${templateId}/payload`;
   archive = path.join(config.dataDir, `${templateId}-payload.tar`);
-  if (templateId === "mirror-v") {
-    // The VLab release is a git archive without .git. Package an explicit
-    // public allowlist so stale files or private memories can never join it.
-    const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "payload-manifest.json"];
-    execFileSync("tar", ["-cf", archive, "-C", path.join(root, payloadPath), ...files]);
-    stripComponents = 0;
-  } else {
-    stripComponents = 3;
-    // DealClaw's original build still requires a version-controlled payload.
-    execFileSync(
-      "git",
-      ["archive", "--format=tar", "--output", archive, "HEAD", payloadPath],
-      { cwd: root },
-    );
-  }
+  // The VLab release is a git archive without .git. Package an explicit
+  // public allowlist so stale files or private memories can never join it.
+  const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "payload-manifest.json"];
+  execFileSync("tar", ["-cf", archive, "-C", path.join(root, payloadPath), ...files]);
+  stripComponents = 0;
 }
 const name = `${config.sandboxPrefix}-build-${Date.now()}`;
 fs.writeFileSync(
@@ -127,9 +119,9 @@ try {
   snapshotted = true;
   const file = path.join(config.dataDir, "config.json");
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (templateId === "dealclaw") saved.snapshotId = snapshot.snapshotId;
+  if (templateId === "legacy") saved.snapshotId = snapshot.snapshotId;
   else {
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, "packages/agent-templates/mirror-v/payload/payload-manifest.json"), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, `packages/agent-templates/${templateId}/payload/payload-manifest.json`), "utf8"));
     saved.templates = { ...saved.templates, [templateId]: { version: manifest.version, snapshotId: snapshot.snapshotId } };
   }
   fs.writeFileSync(file, JSON.stringify(saved, null, 2), { mode: 0o600 });

@@ -16,7 +16,12 @@ const LABELS: Record<string, { name: string; description: string }> = {
 /** Only explicitly configured, versioned snapshots may be offered for signup. */
 export function availableTemplates(config: Config): AgentTemplate[] {
   const entries: AgentTemplate[] = [];
-  if (config.snapshotId) entries.push({
+  const dealclaw = config.templates?.dealclaw;
+  if (dealclaw?.snapshotId && dealclaw.version) entries.push({
+    id: "dealclaw", version: dealclaw.version, ...LABELS.dealclaw,
+    snapshotId: dealclaw.snapshotId,
+  });
+  else if (config.snapshotId) entries.push({
     id: "dealclaw", version: "dealclaw-base.v2", ...LABELS.dealclaw,
     snapshotId: config.snapshotId,
   });

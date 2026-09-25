@@ -18,4 +18,10 @@ describe("signup template catalog", () => {
     expect(() => requireTemplate(config, "unknown")).toThrow("TEMPLATE_NOT_AVAILABLE");
     expect(() => requireTemplate(config, "mirror-v", "mirror-v.v0")).toThrow("TEMPLATE_NOT_AVAILABLE");
   });
+
+  it("uses a dedicated DealClaw snapshot for new tenants without changing the legacy one", () => {
+    const dedicated = { ...config, templates: { ...config.templates, dealclaw: { version: "dealclaw-starter.v1", snapshotId: "snap_new_dealclaw" } } };
+    expect(requireTemplate(dedicated, "dealclaw")).toMatchObject({ version: "dealclaw-starter.v1", snapshotId: "snap_new_dealclaw" });
+    expect(dedicated.snapshotId).toBe("snap_dealclaw");
+  });
 });
