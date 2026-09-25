@@ -1,0 +1,22 @@
+[Unit]
+Description=Nexus Credits Ledger (Mirror V)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nexus/current/packages/credits-ledger
+EnvironmentFile=/opt/nexus/data/ledger.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8081
+Environment=NEXUS_ELASTIC_MODE=1
+ExecStart=/root/.nvm/versions/node/v22.22.1/bin/node dist/index.js
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/nexus-credits-ledger.log
+StandardError=append:/var/log/nexus-credits-ledger.log
+
+[Install]
+WantedBy=multi-user.target

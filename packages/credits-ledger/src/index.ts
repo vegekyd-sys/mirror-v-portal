@@ -1,11 +1,14 @@
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
+import { setupElasticAccounts } from './db/elastic-accounts.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 const PORT = Number(process.env.PORT ?? 8081);
+const HOST = process.env.HOST ?? '0.0.0.0';
 
 async function main() {
   await migrate();
+  if (process.env.NEXUS_ELASTIC_MODE === '1') await setupElasticAccounts();
 
   // Run monthly reset on startup to catch any overdue accounts
   try {
@@ -23,11 +26,12 @@ async function main() {
 
   const app = createApp();
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, HOST, () => {
     console.log(JSON.stringify({
       level: 'info',
       service: 'credits-ledger',
       port: PORT,
+      host: HOST,
       message: 'Credits Ledger started',
     }));
   });

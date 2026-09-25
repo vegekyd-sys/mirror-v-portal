@@ -18,6 +18,7 @@ interface Plan {
   renewalPricePer100k?: number;
   monthlyAllowance?: number;
   features?: string[] | string | null;
+  status?: string;
 }
 
 const emptyForm = {
@@ -143,12 +144,14 @@ export default function PlansPage() {
         </div>
       </div>
       {error && <div className="msg msg-err">加载失败：{error}</div>}
+      {import.meta.env.VITE_NEXUS_ELASTIC === 'true' && <div className="hint">原 DealClaw 套餐仅供迁移参考。Mirror V 商业条款尚未发布，冻结套餐不可用于新签约。</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
 
       <div className="plan-grid">
         {plans.map((p) => (
           <div className="plan-card" key={p.planId}>
             <span className="badge badge-plan-pro">{p.tier || '-'}</span>
+            {p.status === 'frozen' && <span className="badge">已冻结</span>}
             <h3>{p.planName}</h3>
             <div className="plan-price">
               ¥{fmtNum(p.annualFeeYuan)} <span>/ 年</span>

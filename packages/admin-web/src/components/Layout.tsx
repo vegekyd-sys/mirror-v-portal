@@ -35,6 +35,18 @@ const SYSTEM: NavItem[] = [
   { to: '/llm-push-tasks', icon: '任', label: '异步任务' },
 ];
 
+const ELASTIC_WORKBENCH: NavItem[] = [
+  { to: '/', icon: '概', label: 'Mirror V 概览', end: true },
+  { to: '/agents', icon: 'A', label: 'Agent 实例' },
+  { to: '/customers', icon: '客', label: '客户与 Credits' },
+  { to: '/plans', icon: '套', label: '套餐模板' },
+  { to: '/pricing', icon: '价', label: 'Skill 定价' },
+];
+
+const ELASTIC_SYSTEM: NavItem[] = [
+  { to: '/users', icon: '户', label: '管理员' },
+];
+
 function SideNav({ items }: { items: NavItem[] }) {
   return (
     <>
@@ -53,7 +65,7 @@ function SideNav({ items }: { items: NavItem[] }) {
   );
 }
 
-export default function Layout() {
+export default function Layout({ elastic = false }: { elastic?: boolean }) {
   const { user, logout } = useAuth();
 
   return (
@@ -65,14 +77,14 @@ export default function Layout() {
           </div>
           <div>
             <div className="brand">Nexus</div>
-            <div className="brand-sub">控制台</div>
+            <div className="brand-sub">{elastic ? 'Mirror V 门户' : '控制台'}</div>
           </div>
         </div>
         <nav className="side-nav">
           <div className="side-section">工 作 台</div>
-          <SideNav items={WORKBENCH} />
+          <SideNav items={elastic ? ELASTIC_WORKBENCH : WORKBENCH} />
           <div className="side-section">系 统</div>
-          <SideNav items={SYSTEM} />
+          <SideNav items={elastic ? ELASTIC_SYSTEM : SYSTEM} />
         </nav>
         <div className="side-foot">
           <div className="side-status">

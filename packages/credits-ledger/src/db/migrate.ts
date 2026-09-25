@@ -397,7 +397,8 @@ async function seedGatewayPrices() {
 
 /**
  * Seed initial admin user (admin/管理员) if admin_users table is empty.
- * The login token is printed to console — save it before deploying!
+ * On Mirror V, ADMIN_BOOTSTRAP_TOKEN_PATH writes the token to a protected
+ * file so it never appears in the journal.
  */
 async function seedInitialAdmin() {
   const { rows } = await query('SELECT COUNT(*) as cnt FROM admin_users');
@@ -420,14 +421,21 @@ async function seedInitialAdmin() {
     [tokenHash]
   );
 
-  console.log('');
-  console.log('══════════════════════════════════════════════');
-  console.log('  管理员账号已创建');
-  console.log('  用户名: admin');
-  console.log('  显示名: 管理员');
-  console.log('  角色: admin');
-  console.log(`  登录口令: ${loginToken}`);
-  console.log('  ⚠️  请立即保存此口令！不会再次显示！');
-  console.log('══════════════════════════════════════════════');
-  console.log('');
+  const bootstrapPath = process.env.ADMIN_BOOTSTRAP_TOKEN_PATH;
+  if (bootstrapPath) {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(bootstrapPath, `${loginToken}\n`, { mode: 0o600, flag: 'wx' });
+    console.log('Admin user created; bootstrap token saved to protected file');
+  } else {
+    console.log('');
+    console.log('══════════════════════════════════════════════');
+    console.log('  管理员账号已创建');
+    console.log('  用户名: admin');
+    console.log('  显示名: 管理员');
+    console.log('  角色: admin');
+    console.log(`  登录口令: ${loginToken}`);
+    console.log('  ⚠️  请立即保存此口令！不会再次显示！');
+    console.log('══════════════════════════════════════════════');
+    console.log('');
+  }
 }

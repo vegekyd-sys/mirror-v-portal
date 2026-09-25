@@ -24,6 +24,7 @@ import ImageReleasesPage from './pages/ImageReleasesPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import ChatPage from './pages/ChatPage';
 import SystemAgentPage from './pages/SystemAgentPage';
+import ElasticApp from './elastic/ElasticApp';
 
 // Router basename mirrors vite `base` (phase 3: '/' → empty basename).
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -36,6 +37,7 @@ function RequireAuth({ children }: { children: ReactElement }) {
 }
 
 export default function App() {
+  if (import.meta.env.VITE_NEXUS_ELASTIC === 'true') return <ElasticApp />;
   return (
     <BrowserRouter basename={BASE}>
       <AuthProvider>

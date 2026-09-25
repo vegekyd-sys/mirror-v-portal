@@ -9,6 +9,10 @@ on:
 jobs:
   elastic-control-plane:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      BILLING_SERVICE_TOKEN: ci-disposable-service-token
+      ADMIN_JWT_SECRET: ci-disposable-jwt-secret
     services:
       postgres:
         image: postgres:16
@@ -33,6 +37,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @dealclaw/central-gateway build
       - run: pnpm --filter @dealclaw/runtime-manager build
+      - run: pnpm --filter @dealclaw/credits-ledger build
+      - run: VITE_NEXUS_ELASTIC=true pnpm --filter admin-web build
       - name: Write disposable integration config
         run: |
           mkdir -p .elastic
@@ -49,3 +55,4 @@ jobs:
           PY
       - run: pnpm --filter @dealclaw/central-gateway test
       - run: pnpm --filter @dealclaw/runtime-manager test
+      - run: pnpm --filter @dealclaw/credits-ledger test

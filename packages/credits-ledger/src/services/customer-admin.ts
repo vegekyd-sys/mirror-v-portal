@@ -14,6 +14,7 @@ export interface PlanTemplate {
   renewalPricePer100k: number;
   monthlyAllowance: number;
   features: string | null;
+  status: string;
 }
 
 export function rowToPlan(r: any): PlanTemplate {
@@ -29,6 +30,7 @@ export function rowToPlan(r: any): PlanTemplate {
     renewalPricePer100k: Number(r.renewal_price_per_100k),
     monthlyAllowance: Number(r.monthly_allowance),
     features: r.features,
+    status: r.status,
   };
 }
 

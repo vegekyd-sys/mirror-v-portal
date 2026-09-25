@@ -10,7 +10,8 @@ Lighthouse instance.
 - Lighthouse `lhins-dpf9aill`, 43.134.135.143, Ubuntu 24.04.
 - Existing OpenClaw gateway and `/feishu/events` Nginx route remain in place.
 - Nexus runtime-manager listens on 127.0.0.1:8097; central-gateway listens on
-  127.0.0.1:8098. Nginx exposes `/`, `/onboard`, `/healthz` and `/v1/agent/`.
+  127.0.0.1:8098; credits-ledger listens on 127.0.0.1:8081. Nginx exposes
+  `/`, `/onboard`, `/admin`, `/healthz`, `/v1/agent/` and ledger `/v1/`.
 - PostgreSQL 16 is local. Private config and database are outside releases at
   `/opt/nexus/data`; no credential or private payload is committed to GitHub.
 - `/opt/nexus/current` points at a committed release. The deploy script keeps
@@ -24,7 +25,7 @@ Lighthouse instance.
 3. Stop the VLab `nexus-central-gateway` and `nexus-runtime-manager` before the
    final database dump. Only one runtime-manager may hold the Feishu long
    connections for a tenant.
-4. Restore the source `nexus_elastic` database on Mirror V. Install the two
+4. Restore the source `nexus_elastic` database on Mirror V. Install the three
    systemd units and the Nginx location include from this directory without
    replacing the OpenClaw `/feishu/events` location.
 5. Run `scripts/deploy-mirror-v.sh activate`. Check `/healthz`, both template
@@ -34,10 +35,13 @@ Lighthouse instance.
 
 For later releases, `scripts/deploy-mirror-v.sh deploy` stages the exact
 committed `dev` revision, installs production dependencies, switches the
-symlink, restarts both services and restores the previous release if the
-health or template checks fail. The GitHub `dev` workflow builds and tests the
-control plane before promotion.
+symlink, restarts all three services and restores the previous release if the
+health, template or admin checks fail. The GitHub `dev` workflow builds and
+tests the control plane and admin SPA before promotion.
 
-The legacy GitLab admin console, billing ledger and K8s provisioning are not
-part of these two units. Their APIs and data model require adaptation to the
-elastic instance identity before they are exposed as working Nexus features.
+The original GitLab admin SPA and credits-ledger are reused here. A ledger
+trigger provisions a zero-balance account for each Elastic instance. Original
+DealClaw plans are frozen and skill prices are shadow/unapproved on first
+startup, so no charges are enabled by migration. The original Kubernetes
+provisioning service, image rollout and cluster ops are not run on this 2 GB
+host; Elastic's runtime manager remains the instance authority.

@@ -10,6 +10,7 @@ import customerAdminRouter from './routes/customer-admin.js';
 import adminAuthRouter, { requireAdmin, requireServiceOrAdmin } from './routes/admin-auth.js';
 import adminSkillsRouter from './routes/admin-skills.js';
 import llmPricingRouter from './routes/llm-pricing.js';
+import elasticAdminRouter from './routes/elastic-admin.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 export function createApp() {
@@ -85,6 +86,7 @@ export function createApp() {
   });
 
   // ── Admin-only routes (JWT protected) ──
+  app.use('/v1/admin/elastic', requireAdmin, elasticAdminRouter);
   app.use('/v1/admin', requireAdmin, adminSkillsRouter);
 
   app.use((_req, res) => {

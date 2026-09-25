@@ -74,7 +74,9 @@ export function verifyJwt(token: string): JwtPayload | null {
     const toVerify = `${headerB64}.${payloadB64}`;
     const expectedSig = createHmac('sha256', JWT_SECRET).update(toVerify).digest('base64url');
 
-    if (!timingSafeEqual(Buffer.from(sigB64), Buffer.from(expectedSig))) return null;
+    const actual = Uint8Array.from(Buffer.from(sigB64));
+    const expected = Uint8Array.from(Buffer.from(expectedSig));
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
 
     const payload: JwtPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
 
