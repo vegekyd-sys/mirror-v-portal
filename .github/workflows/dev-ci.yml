@@ -1,0 +1,51 @@
+name: Nexus dev
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  elastic-control-plane:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dealclaw/central-gateway build
+      - run: pnpm --filter @dealclaw/runtime-manager build
+      - name: Write disposable integration config
+        run: |
+          mkdir -p .elastic
+          python3 - <<'PY'
+          import json
+          with open('.elastic/config.json', 'w') as f:
+              json.dump({
+                  'databaseUrl': 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+                  'adminToken': 'ci-disposable-admin-token',
+                  'encryptionKey': '0' * 64,
+                  'model': {'id': 'test-model', 'baseUrl': 'http://127.0.0.1:1', 'apiKey': 'ci-placeholder'},
+                  'vercel': {'token': 'ci-placeholder', 'teamId': 'ci', 'projectId': 'ci'},
+              }, f)
+          PY
+      - run: pnpm --filter @dealclaw/central-gateway test
+      - run: pnpm --filter @dealclaw/runtime-manager test

@@ -1,0 +1,22 @@
+[Unit]
+Description=Nexus Central Gateway (Mirror V portal)
+After=network-online.target nexus-runtime-manager.service
+Wants=network-online.target
+Requires=nexus-runtime-manager.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nexus/current/packages/central-gateway
+EnvironmentFile=/opt/nexus/data/central.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8098
+Environment=PROVISIONING_SERVICE_URL=http://127.0.0.1:8097
+ExecStart=/root/.nvm/versions/node/v22.22.1/bin/node dist/index.js
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/nexus-central-gateway.log
+StandardError=append:/var/log/nexus-central-gateway.log
+
+[Install]
+WantedBy=multi-user.target

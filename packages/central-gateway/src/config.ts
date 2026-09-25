@@ -6,6 +6,7 @@ function required(name: string): string {
 
 export interface CentralConfig {
   port: number;
+  host: string;
   baseUrl: string;
   provisioningServiceUrl: string;
   provisioningApiToken?: string;
@@ -16,6 +17,7 @@ export interface CentralConfig {
 export function loadConfig(): CentralConfig {
   return {
     port: Number(process.env.PORT ?? 8085),
+    host: process.env.HOST ?? '0.0.0.0',
     baseUrl: process.env.BASE_URL ?? 'https://dealclaw.cn',
     provisioningServiceUrl: process.env.PROVISIONING_SERVICE_URL ?? 'http://provisioning-service:8082',
     provisioningApiToken: process.env.PROVISIONING_API_TOKEN,

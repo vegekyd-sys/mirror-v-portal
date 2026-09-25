@@ -1,0 +1,19 @@
+[Unit]
+Description=Nexus Runtime Manager (Mirror V)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nexus/current/packages/runtime-manager
+Environment=NODE_ENV=production
+Environment=NEXUS_CONFIG_PATH=/opt/nexus/data/config.json
+ExecStart=/root/.nvm/versions/node/v22.22.1/bin/node dist/index.js
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/nexus-runtime-manager.log
+StandardError=append:/var/log/nexus-runtime-manager.log
+
+[Install]
+WantedBy=multi-user.target

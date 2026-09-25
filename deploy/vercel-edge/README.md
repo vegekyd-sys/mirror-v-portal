@@ -6,8 +6,10 @@ plane host; nothing is served from Vercel itself.
 
 The control plane cannot run on Vercel: runtime-manager holds a Feishu long
 connection and an idle-collector timer, neither of which survives a
-serverless invocation. It runs under systemd on the vlab host instead, with
-runtime-manager bound to 127.0.0.1 and only central-gateway exposed.
+serverless invocation. The dev target is the Mirror V Lighthouse host. Its
+runtime-manager and central-gateway listen on loopback and Nginx exposes only
+the portal routes. Deploy this rewrite only after the Mirror V health and
+onboarding smoke checks pass.
 
 Replace the destination host when the control plane moves, and drop this
 project entirely once a registered domain terminates TLS directly.

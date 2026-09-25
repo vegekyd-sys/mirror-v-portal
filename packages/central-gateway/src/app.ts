@@ -67,6 +67,9 @@ export function createApp() {
   const config = loadConfig();
   const app = express();
   app.disable('x-powered-by');
+  // The public listener is behind local Nginx; preserve the scanner's real IP
+  // for onboarding rate limits without trusting arbitrary forwarded headers.
+  app.set('trust proxy', 'loopback');
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -570,4 +573,3 @@ async function handleFeishuJsonOnboard(
 // 流程：打开页面 → 点击「开始入驻」→ 获取真实二维码 → 飞书扫码
 //       → 页面自动轮询状态 → 入驻完成展示租户信息
 // ═══════════════════════════════════════════════════════════
-
