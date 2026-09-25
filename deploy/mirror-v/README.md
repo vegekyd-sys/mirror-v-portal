@@ -51,3 +51,7 @@ host; Elastic's runtime manager remains the instance authority.
 The portal supports Feishu registration and WeChat iLink scans. WeChat QR
 sessions remain in manager memory; the tenant is created only after the phone
 confirms. A manager restart expires an unfinished scan, which can be retried.
+
+For local acceptance on a trusted Mac, run `scripts/mirror-v-local-tunnel.sh`
+and open `http://127.0.0.1:18080/onboard`. The tunnel points to this same
+deployed server and also exposes `/admin/login` locally without public HTTP.
