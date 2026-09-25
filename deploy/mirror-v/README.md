@@ -14,6 +14,8 @@ Lighthouse instance.
   `/`, `/onboard`, `/admin`, `/healthz`, `/v1/agent/` and ledger `/v1/`.
 - PostgreSQL 16 is local. Private config and database are outside releases at
   `/opt/nexus/data`; no credential or private payload is committed to GitHub.
+- Nginx serves the origin through a Let's Encrypt IP certificate on 443.
+  Certbot checks renewal four times daily and reloads Nginx after renewal.
 - `/opt/nexus/current` points at a committed release. The deploy script keeps
   `/opt/nexus/previous` for a one-step rollback.
 

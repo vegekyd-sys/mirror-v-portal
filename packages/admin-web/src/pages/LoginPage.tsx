@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth';
 import { IconArrowRight, IconCheck, IconNexus } from '../components/icons';
 
 export default function LoginPage() {
+  const elastic = import.meta.env.VITE_NEXUS_ELASTIC === 'true';
   const { user, login } = useAuth();
   const navigate = useNavigate();
   const [passphrase, setPassphrase] = useState('');
@@ -40,23 +41,25 @@ export default function LoginPage() {
           <div className="logo-mark">
             <IconNexus size={22} />
           </div>
-          Nexus · 控制台
+          {elastic ? 'Nexus · Mirror V 门户' : 'Nexus · 控制台'}
         </div>
-        <div className="hero-eyebrow">AGENT 运行管理平台</div>
+        <div className="hero-eyebrow">{elastic ? 'MIRROR V AGENT 门户' : 'AGENT 运行管理平台'}</div>
         <h1 className="hero-title">
-          一个平台，连接并管理
+          {elastic ? '选择模板，创建并管理' : '一个平台，连接并管理'}
           <br />
-          你的每一个 AI Agent。
+          {elastic ? '你的 AI Agent。' : '你的每一个 AI Agent。'}
         </h1>
         <p className="hero-desc">
-          多租户隔离运行、模型供应商、Credits 计费与 Skill 编排，统一在 Nexus 完成 —— 让 Agent 的开通、运行与运维清晰可控。
+          {elastic
+            ? 'Nexus 是 Mirror V 的门户。扫码创建独立实例，选择 DealClaw 或 Mirror V 模板，并查看运行、客户账户和 Credits。'
+            : '多租户隔离运行、模型供应商、Credits 计费与 Skill 编排，统一在 Nexus 完成 —— 让 Agent 的开通、运行与运维清晰可控。'}
         </p>
         <div className="hero-foot">
           <span className="side-status">
             <span className="status-dot" /> 平台运行正常
           </span>
           <span>·</span>
-          <span>多租户隔离 · 数据实时同步</span>
+          <span>{elastic ? '独立 Agent 实例 · 数据实时同步' : '多租户隔离 · 数据实时同步'}</span>
         </div>
       </div>
 
@@ -98,7 +101,7 @@ export default function LoginPage() {
             <span>
               登录凭证（JWT）仅保存在当前浏览器，
               <br />
-              请求会通过加密连接发送，不会被前端记录。
+              {elastic ? '请从 HTTPS 管理入口登录。' : '请求会通过加密连接发送，不会被前端记录。'}
             </span>
           </div>
         </div>

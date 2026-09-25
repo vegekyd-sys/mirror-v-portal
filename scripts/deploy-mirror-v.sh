@@ -54,6 +54,10 @@ test -f /opt/nexus/data/config.json
 test -f /opt/nexus/data/central.env
 test -f /opt/nexus/data/ledger.env
 install -m 644 "$release/deploy/mirror-v/nexus-credits-ledger.service" /etc/systemd/system/nexus-credits-ledger.service
+if [[ -f "$release/deploy/mirror-v/nexus-cert-renew.service" ]]; then
+  install -m 644 "$release/deploy/mirror-v/nexus-cert-renew.service" /etc/systemd/system/nexus-cert-renew.service
+  install -m 644 "$release/deploy/mirror-v/nexus-cert-renew.timer" /etc/systemd/system/nexus-cert-renew.timer
+fi
 systemctl daemon-reload
 old="$(readlink -f /opt/nexus/current || true)"
 if [[ -n "$old" ]]; then ln -sfn "$old" /opt/nexus/previous; fi
@@ -66,12 +70,22 @@ for attempt in {1..15}; do
     && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1; then
     cp /etc/nginx/nexus-portal.locations.conf /opt/nexus/data/nginx-portal.previous.conf
     install -m 644 "$release/deploy/mirror-v/nginx-locations.conf" /etc/nginx/nexus-portal.locations.conf
+    if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
+      install -m 644 "$release/deploy/mirror-v/nginx-tls.conf" /etc/nginx/sites-enabled/nexus-tls.conf
+    fi
     if ! nginx -t >/dev/null 2>&1; then
       cp /opt/nexus/data/nginx-portal.previous.conf /etc/nginx/nexus-portal.locations.conf
       echo 'Nginx config failed validation' >&2
       break
     fi
     systemctl reload nginx
+    if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
+      systemctl enable --now nexus-cert-renew.timer
+      if ! curl --noproxy '*' -fsS --resolve 43.134.135.143:443:127.0.0.1 https://43.134.135.143/healthz >/dev/null 2>&1; then
+        echo 'Origin TLS failed health check' >&2
+        break
+      fi
+    fi
     admin_ready=0
     for admin_attempt in {1..10}; do
       if curl -fsS http://127.0.0.1/admin/ >/dev/null 2>&1 \

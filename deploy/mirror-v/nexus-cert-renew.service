@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Nexus Mirror V origin TLS certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/nexus/certbot-venv/bin/certbot renew --quiet --deploy-hook "/usr/bin/systemctl reload nginx"
