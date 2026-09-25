@@ -41,6 +41,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .template-card { flex:1; max-width:250px; min-height:72px; padding:12px 14px; border:1px solid #ffffff77; border-radius:12px; background:#09121bc9; color:#fff; text-align:left; cursor:pointer; font:inherit; backdrop-filter:blur(14px); }
   .template-card[aria-pressed="true"] { border-color:#fff; background:#e9f2ffe8; color:#142032; }
   .template-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+  .channel-picker { display:flex; justify-content:center; gap:8px; margin-top:12px; }
+  .channel-card { min-width:92px; min-height:36px; border:1px solid #ffffff77; border-radius:20px; background:#09121bc9; color:#fff; font:inherit; font-size:12px; cursor:pointer; }
+  .channel-card[aria-pressed="true"] { background:#e9f2ffe8; color:#142032; border-color:#fff; }
+  .channel-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
   .template-name { display:block; font-size:14px; font-weight:600; }
   .template-description { display:block; margin-top:4px; font-size:11px; line-height:1.35; opacity:.8; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
@@ -67,6 +71,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .status.warn { color:#773b21; }
   .meta { color:#55647b; font-size:10px; font-variant-numeric:tabular-nums; margin-top:4px; }
   .meta:empty { display:none; }
+  .verify-form { display:flex; gap:6px; margin-top:8px; }
+  .verify-form[hidden] { display:none; }
+  .verify-form input { width:115px; min-height:36px; border:1px solid #8695a9; border-radius:6px; padding:6px; background:#fff; color:#1b2738; font-size:14px; }
+  .verify-form button { min-height:36px; border:0; border-radius:6px; padding:6px 10px; background:#26344b; color:#fff; cursor:pointer; }
   .retry { visibility:hidden; position:absolute; top:calc(100% + 12px); border:1px solid #26344b88; background:#f4f8ffcc; color:#26344b; border-radius:4px; font:inherit; font-size:13px; padding:12px 20px; min-height:44px; cursor:pointer; }
   .retry.on { visibility:visible; }
   .retry:hover { background:#dbe4f2; color:#000; }
@@ -86,16 +94,16 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
   <header class="masthead"><img class="brand" src="/onboard/assets/nexus-logo-v2.webp" alt="NEXUS"><span class="signature">your agent, your world</span></header>
-  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div></section>
-  <section class="gateway" aria-label="飞书扫码创建 Agent">
+  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><div class="channel-picker" role="group" aria-label="选择扫码渠道"><button type="button" class="channel-card" id="feishuChannel" aria-pressed="true">飞书扫码</button><button type="button" class="channel-card" id="weixinChannel" aria-pressed="false">微信扫码</button></div></section>
+  <section class="gateway" aria-label="扫码创建 Agent">
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
-      <img id="code" alt="飞书扫码创建 Agent">
+      <img id="code" alt="扫码创建 Agent">
       <div class="sweep" id="sweep"></div>
       <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
     </div></div>
     <div class="beam-track" id="beamTrack"><div class="beam-fill" id="beamFill"></div></div>
-    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div></div>
+    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div><form id="verifyForm" class="verify-form" hidden><input id="verifyCode" inputmode="numeric" autocomplete="one-time-code" aria-label="微信验证码" placeholder="微信验证码"><button type="submit">提交验证码</button></form></div>
     <button class="retry" id="retry" type="button">重新生成二维码</button>
   </section>
   <div class="edge" aria-hidden="true"><span class="edge-line"></span><span>另一种可能</span><span class="edge-line"></span></div>
@@ -174,7 +182,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 })();
 (function () {
   var deviceCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
-  var selectedTemplate = null, generation = 0;
+  var selectedTemplate = null, selectedChannel = 'feishu', generation = 0;
   // Edge providers treat sub-second-scale polling from many clients as an attack;
   // 3s is still responsive for a scan while roughly halving requests per session.
   var POLL_MS = 3000;
@@ -188,6 +196,21 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var beamFill = document.getElementById('beamFill');
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
+  var verifyForm = document.getElementById('verifyForm');
+  var verifyCode = document.getElementById('verifyCode');
+  var channelButtons = { feishu: document.getElementById('feishuChannel'), weixin: document.getElementById('weixinChannel') };
+  function cancelPath() { return selectedChannel === 'weixin' ? '/onboard/weixin/cancel' : '/onboard/cancel'; }
+  Object.keys(channelButtons).forEach(function (channel) {
+    channelButtons[channel].addEventListener('click', function () {
+      if (channel === selectedChannel) return;
+      var oldCancelPath = cancelPath(), oldCode = deviceCode;
+      selectedChannel = channel;
+      Object.keys(channelButtons).forEach(function (key) { channelButtons[key].setAttribute('aria-pressed', String(key === channel)); });
+      if (oldCode) fetch(oldCancelPath, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:oldCode}), keepalive:true }).catch(function () {});
+      deviceCode = null;
+      if (selectedTemplate) open();
+    });
+  });
 
   async function loadTemplates() {
     try {
@@ -229,6 +252,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   function closeGate(message) {
     stopTimers();
     active = false;
+    verifyForm.hidden = true;
     setState('lost');
     say(message, true);
     metaEl.textContent = '';
@@ -248,11 +272,15 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (!selectedTemplate) { loadTemplates(); return; }
     var currentGeneration = ++generation;
     var template = selectedTemplate;
+    var channel = selectedChannel;
+    var currentCancelPath = '/onboard/' + (channel === 'weixin' ? 'weixin/' : '') + 'cancel';
     var previousCode = deviceCode;
     stopTimers();
     active = false;
     deviceCode = null;
     expireAt = null;
+    verifyForm.hidden = true;
+    verifyCode.value = '';
     retry.classList.remove('on');
     setState('');
     core.style.display = 'block';
@@ -262,19 +290,19 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     metaEl.textContent = '';
     beamTrack.classList.remove('on');
     beamFill.style.width = '0%';
-    if (previousCode) fetch('/onboard/cancel', {
+    if (previousCode) fetch(currentCancelPath, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceCode: previousCode }), keepalive: true,
     }).catch(function () {});
 
     try {
-      var res = await fetch('/onboard/feishu/start', {
+      var res = await fetch('/onboard/' + channel + '/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ templateId: template.id }),
       });
       var data = await res.json();
       if (currentGeneration !== generation) {
-        if (data.deviceCode) fetch('/onboard/cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:data.deviceCode}), keepalive:true }).catch(function () {});
+        if (data.deviceCode) fetch(currentCancelPath, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:data.deviceCode}), keepalive:true }).catch(function () {});
         return;
       }
       if (!data.ok) throw new Error(data.message || '通道开启失败');
@@ -283,10 +311,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       deviceCode = data.deviceCode;
       core.style.display = 'none';
       code.src = data.qrDataUri || data.qrUrl;
+      code.alt = (channel === 'weixin' ? '微信' : '飞书') + '扫码创建 ' + template.name;
       code.style.display = 'block';
       sweep.style.display = 'block';
       setState('live');
-      say('飞书扫码，创建 ' + template.name);
+      say((channel === 'weixin' ? '微信' : '飞书') + '扫码，创建 ' + template.name);
 
       expireAt = Date.now() + (data.expireIn || 300) * 1000;
       tick();
@@ -303,13 +332,18 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (!deviceCode || !active) return;
     var checkedCode = deviceCode;
     try {
-      var res = await fetch('/onboard/feishu/status/' + checkedCode);
+      var res = await fetch('/onboard/' + selectedChannel + '/status/' + checkedCode);
       var data = await res.json();
       if (checkedCode !== deviceCode) return;
 
       if (typeof data.progress === 'number') progress(data.progress);
 
-      if (data.status === 'provisioning') {
+      if (data.status === 'scanned') {
+        say('已扫码，请在微信中确认');
+      } else if (data.status === 'need_verify_code') {
+        verifyForm.hidden = false;
+        say('请填写微信显示的验证码');
+      } else if (data.status === 'provisioning') {
         clearInterval(tickTimer);
         tickTimer = null;
         expireAt = null;
@@ -322,12 +356,13 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       } else if (data.status === 'completed') {
         stopTimers();
         active = false;
+        verifyForm.hidden = true;
         core.style.display = 'none';
         code.style.display = 'none';
         progress(100);
         setState('through');
         say(selectedTemplate.name + ' 已就绪');
-        metaEl.textContent = '回到飞书，开始对话';
+        metaEl.textContent = selectedChannel === 'weixin' ? '回到微信，开始对话' : '回到飞书，开始对话';
         setTimeout(function () { beamTrack.classList.remove('on'); }, 900);
       } else if (data.status === 'failed' || data.status === 'expired' || data.status === 'cancelled') {
         closeGate(data.message || '通道已关闭');
@@ -336,6 +371,20 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   }
 
   retry.addEventListener('click', function () { if (selectedTemplate) open(); else loadTemplates(); });
+  verifyForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    if (!deviceCode || selectedChannel !== 'weixin') return;
+    var entered = verifyCode.value.trim();
+    if (!/^\d{4,8}$/.test(entered)) { say('请输入 4–8 位验证码', true); return; }
+    try {
+      var response = await fetch('/onboard/weixin/verify/' + deviceCode, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:entered}),
+      });
+      if (!response.ok) throw new Error('验证码提交失败');
+      verifyForm.hidden = true;
+      say('验证码已提交，请在微信中确认');
+    } catch (error) { say(error.message || '验证码提交失败', true); }
+  });
 
   // While the user is away in Feishu scanning, this tab is hidden and every poll
   // it fires is wasted load. Resume with an immediate check so nothing is missed.
@@ -353,7 +402,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   window.addEventListener('beforeunload', function () {
     if (!deviceCode || !active) return;
     try {
-      navigator.sendBeacon('/onboard/cancel',
+      navigator.sendBeacon(cancelPath(),
         new Blob([JSON.stringify({ deviceCode: deviceCode })], { type: 'application/json' }));
     } catch (e) {}
   });

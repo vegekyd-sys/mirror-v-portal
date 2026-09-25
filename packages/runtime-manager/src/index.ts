@@ -25,7 +25,19 @@ if (alibabaReady(config))
   await store.createTenant(alibabaTrialId, "DealClaw 阿里云试用", undefined, undefined, "alibaba");
 const feishu = new FeishuEdge(store);
 const weixin = new WeixinEdge(store);
-const weixinLogin = new WeixinLogin(weixin);
+// Portal scans hold a template in memory and create the tenant only after the
+// WeChat user confirms. Ordinary channel binding still uses an existing tenant.
+const pendingWeixinTemplates = new Map<string, ReturnType<typeof requireTemplate>>();
+const weixinLogin = new WeixinLogin({
+  bind: async (tenantId, botToken, accountId) => {
+    const template = pendingWeixinTemplates.get(tenantId);
+    if (template) {
+      await store.createTenant(tenantId, `扫码创建的 ${template.name}`, undefined, undefined, 'vercel', template);
+    }
+    await weixin.bind(tenantId, botToken, accountId);
+    pendingWeixinTemplates.delete(tenantId);
+  },
+});
 const dingtalk = new DingtalkEdge(store);
 const wecom = new WecomEdge(store);
 // One edge per surface the runtime serves; the manager stays channel-agnostic.
@@ -159,6 +171,34 @@ app.get("/v1/channels/:channel/status", async (req, res, next) => {
 // ── WeChat (iLink) QR binding ─────────────────────────────────────────────
 // The scan must happen where the poll will live, so it runs here rather than
 // inside the sandbox, which is asleep between messages.
+app.post("/v1/channels/weixin/portal-login", async (req, res, next) => {
+  try {
+    let template;
+    try {
+      template = requireTemplate(config, req.body?.templateId, req.body?.templateVersion);
+    } catch {
+      res.status(400).json({ error: 'TEMPLATE_NOT_AVAILABLE' });
+      return;
+    }
+    const tenantId = randomUUID();
+    pendingWeixinTemplates.set(tenantId, template);
+    setTimeout(() => pendingWeixinTemplates.delete(tenantId), 11 * 60_000).unref();
+    try {
+      const session = await weixinLogin.start(tenantId);
+      res.json({
+        ok: true,
+        sessionId: session.id,
+        qrImage: session.qrImage,
+        expiresIn: Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000)),
+      });
+    } catch (error) {
+      pendingWeixinTemplates.delete(tenantId);
+      throw error;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
 app.post("/v1/channels/weixin/login", async (req, res, next) => {
   try {
     const tenantId = req.body?.tenantId || config.trialTenantId;
@@ -186,6 +226,7 @@ app.get("/v1/channels/weixin/login/:sessionId", (req, res) => {
   res.json({
     status: session.status,
     needVerifyCode: !!session.needVerifyCode,
+    tenantId: session.status === 'completed' ? session.tenantId : undefined,
     accountId: session.accountId,
     error: session.error,
     expiresIn: Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000)),

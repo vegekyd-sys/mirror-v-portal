@@ -92,6 +92,7 @@ export function createApp() {
   // In production, replace with Redis/DB-backed store.
   // ═══════════════════════════════════════════════════════════
   const sessions = new Map<string, RegistrationSession>();
+  const weixinSessions = new Map<string, { startedAt: number }>();
 
   // Clean stale sessions every 5 minutes
   setInterval(() => {
@@ -108,6 +109,9 @@ export function createApp() {
         sessions.delete(key);
       }
     }
+    for (const [id, session] of weixinSessions) {
+      if (now - session.startedAt > 20 * 60_000) weixinSessions.delete(id);
+    }
   }, 5 * 60 * 1000);
 
   // ═══════════════════════════════════════════════════════════
@@ -123,6 +127,98 @@ export function createApp() {
   app.get('/onboard/templates', async (_req, res) => {
     try { res.json({ templates: await loadSignupTemplates(config) }); }
     catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
+  });
+
+  // WeChat portal scan: the manager keeps the iLink poll and only creates an
+  // Elastic tenant after the phone confirms the scan.
+  app.post('/onboard/weixin/start', onboardingRateLimit(5, 60_000), async (req, res) => {
+    try {
+      const template = await selectSignupTemplate(config, req.body?.templateId);
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/portal-login`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {}),
+        },
+        body: JSON.stringify({ templateId: template.id, templateVersion: template.version }),
+        signal: AbortSignal.timeout(22_000),
+      });
+      if (!response.ok) throw new Error(`WEIXIN_LOGIN_${response.status}`);
+      const session = await response.json() as { sessionId: string; qrImage: string; expiresIn: number };
+      if (!session.sessionId || !session.qrImage) throw new Error('WEIXIN_QR_INVALID');
+      weixinSessions.set(session.sessionId, { startedAt: Date.now() });
+      res.json({
+        ok: true,
+        deviceCode: session.sessionId,
+        qrDataUri: await QRCode.toDataURL(session.qrImage, { width: 300, margin: 1 }),
+        expireIn: session.expiresIn,
+        templateId: template.id,
+        templateVersion: template.version,
+      });
+    } catch (error) {
+      console.error('[weixin-onboard] start failed', error);
+      res.status(503).json({ code: 'WEIXIN_LOGIN_UNAVAILABLE', message: '微信扫码暂时不可用，请稍后重试' });
+    }
+  });
+
+  app.get('/onboard/weixin/status/:sessionId', async (req, res) => {
+    if (!weixinSessions.has(req.params.sessionId)) {
+      res.status(404).json({ code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(req.params.sessionId)}`, {
+        headers: config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {},
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error(`WEIXIN_STATUS_${response.status}`);
+      const data = await response.json();
+      res.json(data);
+    } catch {
+      res.status(503).json({ code: 'WEIXIN_STATUS_UNAVAILABLE' });
+    }
+  });
+
+  app.post('/onboard/weixin/verify/:sessionId', async (req, res) => {
+    if (!weixinSessions.has(req.params.sessionId)) {
+      res.status(404).json({ code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    const code = String(req.body?.code || '').trim();
+    if (!/^\d{4,8}$/.test(code)) {
+      res.status(400).json({ code: 'INVALID_CODE' });
+      return;
+    }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(req.params.sessionId)}/verify`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {}),
+        },
+        body: JSON.stringify({ code }),
+        signal: AbortSignal.timeout(5000),
+      });
+      res.status(response.status).json(await response.json());
+    } catch {
+      res.status(503).json({ code: 'WEIXIN_VERIFY_UNAVAILABLE' });
+    }
+  });
+
+  app.post('/onboard/weixin/cancel', async (req, res) => {
+    const sessionId = String(req.body?.deviceCode || '');
+    if (!weixinSessions.delete(sessionId)) {
+      res.status(404).json({ code: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    try {
+      await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+        headers: config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {},
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch { /* The manager session also expires automatically. */ }
+    res.json({ ok: true });
   });
 
   // ═══════════════════════════════════════════════════════════
