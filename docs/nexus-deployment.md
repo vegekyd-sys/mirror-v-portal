@@ -58,3 +58,11 @@ journalctl -u nexus-runtime-manager -f      # 或 tail -f /var/log/nexus-runtime
 - `snapshotId` 有 30 天有效期，过期前需重跑 `pnpm snapshot` 并更新 `config.json`。
 - 数据库是本机 PostgreSQL，无备份、无高可用；控制面磁盘丢失即丢租户状态。
 - 代码用 `git archive` 推送，没有 CI/CD；更新需重跑同样的推送与 `pnpm build`。
+
+## 多 Agent 模板
+
+入驻页从控制面 `/v1/templates` 获取已配置的模板目录。扫码会话固定模板 ID 和版本；创建租户时持久化模板 ID、版本与快照 ID。已有租户默认保留 DealClaw，后续更新模板快照不会改变已创建实例的起始快照。
+
+`dealclaw` 使用 `config.json` 的 `snapshotId`。`mirror-v` 使用 `templates.mirror-v = { "version": "mirror-v.v1", "snapshotId": "..." }`。只有快照配置完成，模板才会出现在入驻页。Mirror V 源码位于 `packages/agent-templates/mirror-v/payload`，只包含公开通用的启动文件，不使用私人 V 的记忆归档。
+
+构建 Mirror V 快照：在 VLab 的 `/opt/nexus/app/packages/runtime-manager` 执行 `pnpm snapshot --template mirror-v`，然后重启 `nexus-runtime-manager` 以加载更新后的配置。快照脚本只更新 `templates.mirror-v`，不会覆盖 DealClaw 的 `snapshotId`。扫码后每个飞书应用对应一个独立租户和沙箱；首次发消息时启动 OpenClaw 并使用该模板工作区。

@@ -4,6 +4,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
+import { availableTemplates, requireTemplate } from "./templates.js";
 import { VercelProvider } from "./provider.js";
 import { AlibabaProvider, alibabaReady } from "./alibaba-provider.js";
 import { ProviderRouter } from "./provider-router.js";
@@ -202,6 +203,9 @@ app.delete("/v1/channels/weixin/login/:sessionId", (req, res) => {
   weixinLogin.cancel(req.params.sessionId);
   res.json({ ok: true });
 });
+app.get("/v1/templates", (_req, res) => {
+  res.json({ templates: availableTemplates(config).map(({ snapshotId: _snapshotId, ...template }) => template) });
+});
 app.post("/v1/tenants", async (req, res, next) => {
   try {
     const { botAppId, botAppSecret } = req.body;
@@ -216,15 +220,25 @@ app.post("/v1/tenants", async (req, res, next) => {
       res.status(400).json({ error: "APP_CREDENTIALS_REQUIRED" });
       return;
     }
+    let template;
+    try {
+      template = requireTemplate(config, req.body.templateId || "dealclaw", req.body.templateVersion);
+    } catch {
+      res.status(400).json({ error: "TEMPLATE_NOT_AVAILABLE" }); return;
+    }
+    if (runtimeProvider === "alibaba" && template.id !== "dealclaw") {
+      res.status(400).json({ error: "TEMPLATE_PROVIDER_UNSUPPORTED" }); return;
+    }
     const t = await store.createTenant(
       randomUUID(),
-      "扫码创建的 DealClaw",
+      `扫码创建的 ${template.name}`,
       botAppId,
       botAppSecret,
       runtimeProvider,
+      template,
     );
-    edge.connect(t);
-    res.json({ tenant: { tenantId: t.id } });
+    await edge.connect(t);
+    res.json({ tenant: { tenantId: t.id, templateId: t.template_id, templateVersion: t.template_version } });
   } catch (e) {
     next(e);
   }

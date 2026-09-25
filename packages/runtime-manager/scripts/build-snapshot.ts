@@ -6,12 +6,14 @@ import { loadConfig } from "../src/config.js";
 
 const config = loadConfig();
 const root = path.resolve("../..");
+const templateId = process.argv[2] === "--template" ? process.argv[3] : "dealclaw";
+if (!["dealclaw", "mirror-v"].includes(templateId)) throw new Error("UNKNOWN_TEMPLATE");
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
 //     e.g. an agent exported from another host. Kept out of git: these run to
 //     hundreds of MB and carry an agent's accumulated memory.
-const external = config.payloadArchive;
+const external = templateId === "dealclaw" ? config.payloadArchive : undefined;
 let archive: string;
 let stripComponents: number;
 if (external) {
@@ -20,12 +22,15 @@ if (external) {
   stripComponents = 1; // entries are ./AGENTS.md, ./memory/...
   console.log(JSON.stringify({ phase: "payload-external", archive, bytes: fs.statSync(archive).size }));
 } else {
-  archive = path.join(config.dataDir, "dealclaw-payload.tar");
-  stripComponents = 3; // entries are packages/dealclaw-agent/payload/...
+  const payloadPath = templateId === "dealclaw"
+    ? "packages/dealclaw-agent/payload"
+    : "packages/agent-templates/mirror-v/payload";
+  archive = path.join(config.dataDir, `${templateId}-payload.tar`);
+  stripComponents = templateId === "dealclaw" ? 3 : 4;
   // Only version-controlled payload, never local customer data or environment files.
   execFileSync(
     "git",
-    ["archive", "--format=tar", "--output", archive, "HEAD", "packages/dealclaw-agent/payload"],
+    ["archive", "--format=tar", "--output", archive, "HEAD", payloadPath],
     { cwd: root },
   );
 }
@@ -114,11 +119,16 @@ try {
   snapshotted = true;
   const file = path.join(config.dataDir, "config.json");
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-  saved.snapshotId = snapshot.snapshotId;
+  if (templateId === "dealclaw") saved.snapshotId = snapshot.snapshotId;
+  else {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "packages/agent-templates/mirror-v/payload/payload-manifest.json"), "utf8"));
+    saved.templates = { ...saved.templates, [templateId]: { version: manifest.version, snapshotId: snapshot.snapshotId } };
+  }
   fs.writeFileSync(file, JSON.stringify(saved, null, 2), { mode: 0o600 });
   console.log(
     JSON.stringify({
       phase: "snapshot-ready",
+      templateId,
       snapshotId: snapshot.snapshotId,
     }),
   );

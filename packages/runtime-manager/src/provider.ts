@@ -114,13 +114,16 @@ export class VercelProvider implements RuntimeProvider {
       name: tenant.sandbox_name || this.name(tenant.id),
     });
   }
-  protected checkConfiguration() {
-    if (!this.config.snapshotId) throw new Error("SNAPSHOT_NOT_READY");
+  protected checkConfiguration(tenant: Tenant) {
+    if (!tenant.template_snapshot_id && tenant.template_id !== "dealclaw") throw new Error("TEMPLATE_SNAPSHOT_NOT_READY");
+    if (!tenant.template_snapshot_id && !this.config.snapshotId) throw new Error("SNAPSHOT_NOT_READY");
   }
   protected async create(tenant: Tenant, name: string): Promise<RuntimeSandbox> {
+    const snapshotId = tenant.template_snapshot_id || (tenant.template_id === "dealclaw" ? this.config.snapshotId : undefined);
+    if (!snapshotId) throw new Error("TEMPLATE_SNAPSHOT_NOT_READY");
     return Sandbox.getOrCreate({
       ...this.config.vercel, name,
-      source: { type: "snapshot", snapshotId: this.config.snapshotId! },
+      source: { type: "snapshot", snapshotId },
       persistent: true, snapshotExpiration: 0,
       keepLastSnapshots: { count: 2, expiration: 0 },
       resources: { vcpus: 2 }, timeout: 1_200_000,
@@ -131,7 +134,7 @@ export class VercelProvider implements RuntimeProvider {
     tenant: Tenant,
     onProvision?: (name: string) => Promise<void>,
   ): Promise<RuntimeHandle> {
-    this.checkConfiguration();
+    this.checkConfiguration(tenant);
     const start = Date.now();
     let name = tenant.sandbox_name || this.name(tenant.id);
     // Never silently recreate a previously provisioned tenant whose snapshot expired.
@@ -185,6 +188,7 @@ export class VercelProvider implements RuntimeProvider {
         NEXUS_MODEL_KEY: this.config.model.apiKey,
         NEXUS_MODEL_BASE_URL: this.config.model.baseUrl,
         NEXUS_MODEL_ID: this.config.model.id,
+        NEXUS_AGENT_ID: tenant.template_id || "dealclaw",
         NEXUS_OPTIMIZE: this.config.optimizeRuntime === false ? "0" : "1",
         NEXUS_CPU_PROFILE: process.env.NEXUS_CPU_PROFILE || "0",
       },
@@ -306,6 +310,7 @@ export class VercelProvider implements RuntimeProvider {
       args: ["/vercel/sandbox/nexus/invoke.mjs"],
       env: {
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
+        NEXUS_AGENT_ID: tenant.template_id || "dealclaw",
         NEXUS_REQUEST_B64: Buffer.from(
           JSON.stringify({
             sessionKey,

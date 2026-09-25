@@ -33,7 +33,7 @@ try {
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${process.env.NEXUS_GATEWAY_TOKEN}`,
-      "x-openclaw-agent-id": "dealclaw",
+      "x-openclaw-agent-id": process.env.NEXUS_AGENT_ID || "dealclaw",
       "x-openclaw-session-key": request.sessionKey,
       // Tell the runtime which surface this turn came from. Absent it, every
       // turn looks like webchat and the agent describes itself accordingly.
@@ -42,7 +42,7 @@ try {
       ...(request.caps ? { "x-openclaw-client-caps": request.caps } : {}),
     },
     body: JSON.stringify({
-      model: "openclaw/dealclaw",
+      model: `openclaw/${process.env.NEXUS_AGENT_ID || "dealclaw"}`,
       input: request.text,
       instructions: [
         "定时任务和心跳必须用 nexus_schedule 工具登记到 Nexus，不能改 OpenClaw 配置或本地 cron。对于需要调用工具或多步骤处理的任务，在开始前和关键步骤之间用简短中文向用户说明正在做什么；这些是公开的执行进展，不要输出内部推理。完成后给出结果。",

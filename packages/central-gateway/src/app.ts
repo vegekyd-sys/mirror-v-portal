@@ -16,6 +16,24 @@ import { relayNotification, type NotifyPayload } from './services/notify-relay.j
 import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-onboarding.js';
 import { ONBOARD_HTML } from './services/onboard-page.js';
 
+interface SignupTemplate { id: string; version: string; name: string; description: string }
+async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promise<SignupTemplate[]> {
+  const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/templates`, {
+    headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error(`TEMPLATE_CATALOG_UNAVAILABLE:${response.status}`);
+  const body = await response.json() as { templates?: SignupTemplate[] };
+  if (!Array.isArray(body.templates)) throw new Error('TEMPLATE_CATALOG_INVALID');
+  return body.templates;
+}
+async function selectSignupTemplate(config: ReturnType<typeof loadConfig>, id: unknown): Promise<SignupTemplate> {
+  const templates = await loadSignupTemplates(config);
+  const template = templates.find((item) => item.id === (id ?? 'dealclaw'));
+  if (!template) throw new Error('TEMPLATE_NOT_AVAILABLE');
+  return template;
+}
+
 // NB8 FIX: Simple in-memory rate limiter for onboarding endpoints
 const onboardRateLimits = new Map<string, { count: number; resetAt: number }>();
 function onboardingRateLimit(maxRequests: number, windowMs: number) {
@@ -99,6 +117,11 @@ export function createApp() {
     res.json({ ok: true, service: 'central-gateway' });
   });
 
+  app.get('/onboard/templates', async (_req, res) => {
+    try { res.json({ templates: await loadSignupTemplates(config) }); }
+    catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
+  });
+
   // ═══════════════════════════════════════════════════════════
   // 入驻页面（HTML + JSON）
   // 正式流程：页面展示二维码 → 飞书扫码 → registerApp 自动创建 Bot
@@ -136,8 +159,9 @@ export function createApp() {
   // POST /onboard/feishu/start
   // NB8 FIX: rate limit to prevent abuse
   // ═══════════════════════════════════════════════════════════
-  app.post('/onboard/feishu/start', onboardingRateLimit(5, 60_000), async (_req: Request, res: Response) => {
+  app.post('/onboard/feishu/start', onboardingRateLimit(5, 60_000), async (req: Request, res: Response) => {
     try {
+      const template = await selectSignupTemplate(config, req.body?.templateId);
       const session = await startFeishuRegistration(async (registeredSession: RegistrationSession) => {
         // Orchestrate tenant creation after registration completes
         const result = await orchestrateOnboarding(registeredSession, {
@@ -164,7 +188,7 @@ export function createApp() {
             console.warn(`[onboarding] missing credentials: tenantId=${!!result.tenantId}, appId=${!!result.appId}, token=${!!result.tenantAccessToken}`);
           }
         }
-      });
+      }, template);
 
       // Wait for begin() to complete and deviceCode to be set
       for (let i = 0; i < 50; i++) {
@@ -201,10 +225,12 @@ export function createApp() {
         expireIn: session.expireIn,
         status: session.status,
         progress: session.progress,
+        templateId: session.templateId,
+        templateVersion: session.templateVersion,
       });
     } catch (err: any) {
       console.error('start registration error:', err);
-      res.status(500).json({ code: 'INTERNAL', message: err.message });
+      res.status(err.message === 'TEMPLATE_NOT_AVAILABLE' ? 400 : 503).json({ code: err.message === 'TEMPLATE_NOT_AVAILABLE' ? 'TEMPLATE_NOT_AVAILABLE' : 'REGISTRATION_UNAVAILABLE', message: err.message });
     }
   });
 
@@ -229,6 +255,8 @@ export function createApp() {
       deviceCode: session.deviceCode,
       qrUrl: session.qrUrl,
       status: session.status,
+      templateId: session.templateId,
+      templateVersion: session.templateVersion,
       progress: statusInfo.progress,
       message: statusInfo.message,
       result: session.status === 'completed' ? {
@@ -492,6 +520,7 @@ async function handleFeishuJsonOnboard(
   config: ReturnType<typeof loadConfig>,
 ) {
   try {
+    const template = await selectSignupTemplate(config, req.query.templateId);
     const session = await startFeishuRegistration(async (registeredSession: RegistrationSession) => {
       const result = await orchestrateOnboarding(registeredSession, {
         provisioningServiceUrl: config.provisioningServiceUrl,
@@ -503,7 +532,7 @@ async function handleFeishuJsonOnboard(
         registeredSession.error = result.error || 'Orchestration failed';
         registeredSession.progress = 0;
       }
-    });
+    }, template);
 
     // Wait for begin() to complete
     for (let i = 0; i < 50; i++) {
@@ -541,5 +570,4 @@ async function handleFeishuJsonOnboard(
 // 流程：打开页面 → 点击「开始入驻」→ 获取真实二维码 → 飞书扫码
 //       → 页面自动轮询状态 → 入驻完成展示租户信息
 // ═══════════════════════════════════════════════════════════
-
 

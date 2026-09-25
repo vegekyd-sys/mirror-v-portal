@@ -1,9 +1,7 @@
 /**
  * Nexus Onboarding — the gate.
  *
- * One QR code, nothing else. No forms, no tenant identifiers, no plan tiers:
- * the page shows a portal, you scan it, you are through. Customer-identifying
- * details are deliberately absent from every state, including success.
+ * Choose an Agent template, then scan a QR code to create its own instance.
  *
  * Backend contract (unchanged):
  *   POST /onboard/feishu/start          -> { ok, deviceCode, qrDataUri|qrUrl, expireIn }
@@ -37,6 +35,14 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .brand { width:170px; height:auto; display:block; mix-blend-mode:screen; }
   .signature { font-size:12px; color:#c4c5cf; letter-spacing:.02em; }
   .gateway { mix-blend-mode:multiply; position:absolute; top:47%; left:50%; transform:translate(-50%,-50%); width:250px; display:flex; flex-direction:column; align-items:center; }
+  .template-picker { position:absolute; z-index:4; top:13%; left:50%; transform:translateX(-50%); width:min(540px,calc(100% - 40px)); text-align:center; }
+  .template-picker h1 { margin:0 0 14px; font-size:15px; font-weight:500; letter-spacing:.12em; text-shadow:0 1px 12px #000; }
+  .template-list { display:flex; justify-content:center; gap:10px; }
+  .template-card { flex:1; max-width:250px; min-height:72px; padding:12px 14px; border:1px solid #ffffff77; border-radius:12px; background:#09121bc9; color:#fff; text-align:left; cursor:pointer; font:inherit; backdrop-filter:blur(14px); }
+  .template-card[aria-pressed="true"] { border-color:#fff; background:#e9f2ffe8; color:#142032; }
+  .template-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+  .template-name { display:block; font-size:14px; font-weight:600; }
+  .template-description { display:block; margin-top:4px; font-size:11px; line-height:1.35; opacity:.8; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
   .gate { width:216px; height:216px; display:grid; place-items:center; transition:transform 1s, filter 1s; }
   .portal { position:relative; width:100%; height:100%; display:grid; place-items:center; padding:6px; background:transparent; }
@@ -69,7 +75,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .edge span { font-size:11px; color:#c4c5cf; }
   .edge-line { height:1px; width:44px; background:#ffffff55; }
   @media(min-aspect-ratio:19/10) { .world img { object-fit:contain; } }
-  @media(max-width:600px) { .experience { min-height:620px; } .masthead { padding:24px; } .brand { width:140px; } .signature { font-size:11px; } .world img { object-fit:cover; } .gateway { top:47%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
+  @media(max-width:600px) { .experience { min-height:620px; } .masthead { padding:24px; } .brand { width:140px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:15%; } .gateway { top:55%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>
 </head>
@@ -80,6 +86,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
   <header class="masthead"><img class="brand" src="/onboard/assets/nexus-logo-v2.webp" alt="NEXUS"><span class="signature">a world with V</span></header>
+  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div></section>
   <section class="gateway" aria-label="飞书扫码开通 V">
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
@@ -88,7 +95,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
     </div></div>
     <div class="beam-track" id="beamTrack"><div class="beam-fill" id="beamFill"></div></div>
-    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在生成二维码…</div><div class="meta" id="meta"></div></div>
+    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div></div>
     <button class="retry" id="retry" type="button">重新生成二维码</button>
   </section>
   <div class="edge" aria-hidden="true"><span class="edge-line"></span><span>另一种可能</span><span class="edge-line"></span></div>
@@ -167,6 +174,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 })();
 (function () {
   var deviceCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
+  var selectedTemplate = null, generation = 0;
   // Edge providers treat sub-second-scale polling from many clients as an attack;
   // 3s is still responsive for a scan while roughly halving requests per session.
   var POLL_MS = 3000;
@@ -179,6 +187,33 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var beamTrack = document.getElementById('beamTrack');
   var beamFill = document.getElementById('beamFill');
   var retry = document.getElementById('retry');
+  var templateList = document.getElementById('templateList');
+
+  async function loadTemplates() {
+    try {
+      var response = await fetch('/onboard/templates');
+      if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
+      var data = await response.json();
+      if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');
+      templateList.replaceChildren();
+      data.templates.forEach(function (template) {
+        var card = document.createElement('button');
+        card.type = 'button'; card.className = 'template-card';
+        card.setAttribute('aria-pressed', 'false');
+        var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
+        var desc = document.createElement('span'); desc.className = 'template-description'; desc.textContent = template.description;
+        card.append(name, desc);
+        card.addEventListener('click', function () {
+          if (selectedTemplate && selectedTemplate.id === template.id) return;
+          selectedTemplate = template;
+          templateList.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button === card)); });
+          open();
+        });
+        templateList.appendChild(card);
+      });
+      say('请选择 Agent，生成专属二维码');
+    } catch (error) { closeGate(error.message || '模板加载失败'); }
+  }
 
   function setState(cls) { gate.className = 'gate' + (cls ? ' ' + cls : ''); }
   function say(text, warn) {
@@ -210,6 +245,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   }
 
   async function open() {
+    if (!selectedTemplate) { loadTemplates(); return; }
+    var currentGeneration = ++generation;
+    var template = selectedTemplate;
+    var previousCode = deviceCode;
     stopTimers();
     active = false;
     deviceCode = null;
@@ -223,12 +262,21 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     metaEl.textContent = '';
     beamTrack.classList.remove('on');
     beamFill.style.width = '0%';
+    if (previousCode) fetch('/onboard/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCode: previousCode }), keepalive: true,
+    }).catch(function () {});
 
     try {
       var res = await fetch('/onboard/feishu/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId: template.id }),
       });
       var data = await res.json();
+      if (currentGeneration !== generation) {
+        if (data.deviceCode) fetch('/onboard/cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:data.deviceCode}), keepalive:true }).catch(function () {});
+        return;
+      }
       if (!data.ok) throw new Error(data.message || '通道开启失败');
 
       active = true;
@@ -238,7 +286,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       code.style.display = 'block';
       sweep.style.display = 'block';
       setState('live');
-      say('飞书扫码，进入 V');
+      say('飞书扫码，创建 ' + template.name);
 
       expireAt = Date.now() + (data.expireIn || 300) * 1000;
       tick();
@@ -247,15 +295,17 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       pollTimer = setInterval(poll, POLL_MS);
       tickTimer = setInterval(tick, 1000);
     } catch (err) {
-      closeGate(err.message || '通道开启失败');
+      if (currentGeneration === generation) closeGate(err.message || '通道开启失败');
     }
   }
 
   async function poll() {
     if (!deviceCode || !active) return;
+    var checkedCode = deviceCode;
     try {
-      var res = await fetch('/onboard/feishu/status/' + deviceCode);
+      var res = await fetch('/onboard/feishu/status/' + checkedCode);
       var data = await res.json();
+      if (checkedCode !== deviceCode) return;
 
       if (typeof data.progress === 'number') progress(data.progress);
 
@@ -264,7 +314,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         tickTimer = null;
         expireAt = null;
         setState('opening');
-        say('正在为你开通 V…');
+        say('正在为你开通 ' + selectedTemplate.name + '…');
         metaEl.textContent = '';
         sweep.style.display = 'none';
         code.style.display = 'none';
@@ -276,7 +326,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         code.style.display = 'none';
         progress(100);
         setState('through');
-        say('V 已就绪');
+        say(selectedTemplate.name + ' 已就绪');
         metaEl.textContent = '回到飞书，开始对话';
         setTimeout(function () { beamTrack.classList.remove('on'); }, 900);
       } else if (data.status === 'failed' || data.status === 'expired' || data.status === 'cancelled') {
@@ -285,7 +335,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     } catch (e) { /* transient — keep polling */ }
   }
 
-  retry.addEventListener('click', open);
+  retry.addEventListener('click', function () { if (selectedTemplate) open(); else loadTemplates(); });
 
   // While the user is away in Feishu scanning, this tab is hidden and every poll
   // it fires is wasted load. Resume with an immediate check so nothing is missed.
@@ -308,7 +358,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     } catch (e) {}
   });
 
-  open();
+  loadTemplates();
 })();
 </script>
 </body>

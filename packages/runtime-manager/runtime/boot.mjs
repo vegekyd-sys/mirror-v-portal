@@ -10,6 +10,7 @@ const fingerprint = createHash("sha256")
       process.env.NEXUS_MODEL_ID,
       process.env.NEXUS_MODEL_BASE_URL,
       process.env.NEXUS_MODEL_KEY,
+      process.env.NEXUS_AGENT_ID,
       process.env.NEXUS_OPTIMIZE,
       "runtime-v4-scheduler",
     ].join("\0"),
@@ -26,7 +27,7 @@ fs.mkdirSync(state, { recursive: true });
 if (!fs.existsSync(`${data}/seeded`)) {
   fs.mkdirSync(workspace, { recursive: true });
   fs.cpSync(`${base}/payload`, workspace, { recursive: true });
-  fs.writeFileSync(`${data}/seeded`, "dealclaw-2026-09-14");
+  fs.writeFileSync(`${data}/seeded`, process.env.NEXUS_AGENT_ID || "dealclaw");
 }
 const env = {
   ...process.env,
@@ -95,7 +96,7 @@ const cfg = {
       memorySearch: { enabled: false },
       compaction: { mode: "safeguard" },
     },
-    list: [{ id: "dealclaw", default: true, workspace }],
+    list: [{ id: process.env.NEXUS_AGENT_ID || "dealclaw", default: true, workspace }],
   },
   tools: {
     profile: "coding",

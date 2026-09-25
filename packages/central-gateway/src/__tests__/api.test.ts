@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../app.js';
 import { detectPlatform, routeOnboarding, getRedirectUrl } from '../services/channel.js';
@@ -147,6 +147,21 @@ describe('GET /healthz', () => {
 });
 
 describe('GET /onboard — Feishu registration', () => {
+  it('shows only manager-approved templates and rejects an unknown selection before registration', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
+      { id: 'dealclaw', version: 'dealclaw-base.v2', name: 'DealClaw', description: '出海顾问' },
+      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+    ] }));
+    try {
+      const catalog = await request(app).get('/onboard/templates');
+      expect(catalog.status).toBe(200);
+      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['dealclaw', 'mirror-v']);
+      const invalid = await request(app).post('/onboard/feishu/start').send({ templateId: 'unapproved' });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.code).toBe('TEMPLATE_NOT_AVAILABLE');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally { fetchMock.mockRestore(); }
+  });
   it('returns JSON for feishu UA (registerApp may need real network)', async () => {
     const res = await request(app).get('/onboard').set('User-Agent', 'Feishu/7.0');
     // RegisterApp may fail in test env (needs real Feishu network).

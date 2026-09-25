@@ -12,6 +12,9 @@ export type RegistrationStatus =
   | 'completed' | 'failed' | 'cancelled' | 'expired';
 
 export interface RegistrationSession {
+  templateId: string;
+  templateVersion: string;
+  templateName: string;
   deviceCode: string;
   qrUrl: string;
   expireIn: number;
@@ -34,8 +37,6 @@ export interface RegistrationSession {
 // that contradicts the payload is worse than either one alone — and the
 // description traces V's own Evolution Direction: Mirror, Match, Exceed.
 const APP_PRESET = {
-  name: process.env.FEISHU_APP_NAME || 'V from Versa',
-  desc: process.env.FEISHU_APP_DESC || '自进化智能体',
   // 1-6 publicly reachable image URLs; the first is pre-selected. Without this
   // Feishu offers its own stock avatars and the agent has no face of its own.
   ...(process.env.FEISHU_APP_AVATAR
@@ -45,10 +46,16 @@ const APP_PRESET = {
 
 export async function startFeishuRegistration(
   onRegistered?: (session: RegistrationSession) => Promise<void>,
+  template: { id: string; version: string; name: string; description: string } = {
+    id: 'dealclaw', version: 'dealclaw-base.v2', name: 'DealClaw', description: '面向出海业务的 AI 顾问',
+  },
 ): Promise<RegistrationSession> {
   const abortController = new AbortController();
 
   const session: RegistrationSession = {
+    templateId: template.id,
+    templateVersion: template.version,
+    templateName: template.name,
     deviceCode: '',
     qrUrl: '',
     expireIn: 600,
@@ -82,7 +89,11 @@ export async function startFeishuRegistration(
           }
           console.log('[registerApp] status change:', info.status);
         },
-        appPreset: APP_PRESET,
+        appPreset: {
+          name: template.name,
+          desc: template.description,
+          ...APP_PRESET,
+        },
         addons: {
           preset: true,
           // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录

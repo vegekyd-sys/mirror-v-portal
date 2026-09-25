@@ -45,6 +45,8 @@ export async function orchestrateOnboarding(
       appId,
       appSecret,
       config.provisioningApiToken,
+      session.templateId,
+      session.templateVersion,
     );
     if (!tenantResult.ok || !tenantResult.tenantId) {
       return { ok: false, error: tenantResult.error || 'Failed to create tenant' };
@@ -78,7 +80,7 @@ export async function orchestrateOnboarding(
 
     // Step 4: Send welcome message
     if (tenantAccessToken) {
-      const welcomeMessage = generateWelcome(tenantId, botWebhookUrl);
+      const welcomeMessage = generateWelcome(session.templateName, tenantId, botWebhookUrl);
       await sendWelcomeMessage(appId, tenantAccessToken, welcomeMessage);
     }
 
@@ -217,6 +219,8 @@ async function createTenant(
   appId: string,
   appSecret: string,
   provisioningApiToken?: string,
+  templateId = 'dealclaw',
+  templateVersion = 'dealclaw-base.v2',
 ): Promise<{ ok: boolean; tenantId?: string; error?: string }> {
   try {
     const res = await fetch(`${provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants`, {
@@ -231,6 +235,8 @@ async function createTenant(
         planTier: 'starter',
         botAppId: appId,
         botAppSecret: appSecret,
+        templateId,
+        templateVersion,
       }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -247,14 +253,14 @@ async function createTenant(
   }
 }
 
-function generateWelcome(tenantId: string, _webhookUrl: string): string {
-  return `🎉 DealClaw AI 销售助手已就绪！
+function generateWelcome(templateName: string, tenantId: string, _webhookUrl: string): string {
+  return `🎉 ${templateName} 已就绪！
 
 ✅ 你的专属 Agent 已创建
 🆔 租户 ID: ${tenantId}
 
 接下来我可以在飞书中直接与你对话。
-请告诉我你的公司名称和主要业务，我会为你定制专属的 AI 销售助手。`;
+现在可以直接给我发消息，开始聊天。`;
 }
 
 /** Start WebSocket long-connection — no webhook URL needed.

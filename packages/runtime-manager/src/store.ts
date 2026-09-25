@@ -21,6 +21,9 @@ export interface Tenant {
   wake_count: number;
   last_wake_ms: number | null;
   snapshot_id: string | null;
+  template_id: string;
+  template_version: string;
+  template_snapshot_id: string | null;
   runtime_provider?: "vercel" | "alibaba";
 }
 export interface ChannelBinding {
@@ -115,6 +118,9 @@ export class Store {
         ON elastic_channel_bindings(channel) WHERE state = 'active';
     `);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS runtime_provider text NOT NULL DEFAULT 'vercel' CHECK (runtime_provider IN ('vercel','alibaba'))`);
+    await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_id text NOT NULL DEFAULT 'dealclaw'`);
+    await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_version text NOT NULL DEFAULT 'dealclaw-base.v2'`);
+    await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_snapshot_id text`);
     await this.boss.start();
     await this.boss.createQueue("agent-turn", {
       retryLimit: 1000,
@@ -243,6 +249,9 @@ export class Store {
     appId?: string,
     appSecret?: string,
     runtimeProvider: "vercel" | "alibaba" = "vercel",
+    template: { id: string; version: string; snapshotId: string } = {
+      id: "dealclaw", version: "dealclaw-base.v2", snapshotId: this.config.snapshotId ?? "",
+    },
   ) {
     const existing = appId
       ? await this.pool.query<Tenant>(
@@ -253,10 +262,12 @@ export class Store {
     if (existing.rows[0]) {
       if ((existing.rows[0].runtime_provider ?? "vercel") !== runtimeProvider)
         throw Error("TENANT_PROVIDER_IMMUTABLE");
+      if (existing.rows[0].template_id !== template.id || existing.rows[0].template_version !== template.version)
+        throw Error("TENANT_TEMPLATE_IMMUTABLE");
       return existing.rows[0];
     }
     await this.pool.query(
-      "INSERT INTO elastic_tenants(id,name,app_id,secret,idle_seconds,runtime_provider) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING",
+      "INSERT INTO elastic_tenants(id,name,app_id,secret,idle_seconds,runtime_provider,template_id,template_version,template_snapshot_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING",
       [
         id,
         name,
@@ -264,6 +275,9 @@ export class Store {
         appSecret ? this.seal(appSecret) : null,
         this.config.idleTimeoutSeconds,
         runtimeProvider,
+        template.id,
+        template.version,
+        template.snapshotId || null,
       ],
     );
     return this.tenant(id);
