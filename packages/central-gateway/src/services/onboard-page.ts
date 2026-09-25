@@ -14,7 +14,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
-<title>NEXUS · 与 V 相遇</title>
+<title>NEXUS · 选择你的 Agent</title>
 <link rel="preload" as="image" href="/onboard/assets/nexus-world-v2.webp" media="(min-width: 601px)">
 <link rel="preload" as="image" href="/onboard/assets/nexus-world-mobile-v2.webp" media="(max-width: 600px)">
 <style>
@@ -80,17 +80,17 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<main class="experience" aria-label="Nexus，进入 V 的世界">
+<main class="experience" aria-label="Nexus，选择 Agent">
   <picture class="world" aria-hidden="true"><source media="(max-width: 600px)" srcset="/onboard/assets/nexus-world-mobile-v2.webp"><img src="/onboard/assets/nexus-world-v2.webp" alt="" fetchpriority="high"></picture>
   <video class="world-video" id="worldVideo" muted playsinline preload="none" aria-hidden="true"></video>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
-  <header class="masthead"><img class="brand" src="/onboard/assets/nexus-logo-v2.webp" alt="NEXUS"><span class="signature">a world with V</span></header>
+  <header class="masthead"><img class="brand" src="/onboard/assets/nexus-logo-v2.webp" alt="NEXUS"><span class="signature">your agent, your world</span></header>
   <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div></section>
-  <section class="gateway" aria-label="飞书扫码开通 V">
+  <section class="gateway" aria-label="飞书扫码创建 Agent">
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
-      <img id="code" alt="飞书扫码开通 V">
+      <img id="code" alt="飞书扫码创建 Agent">
       <div class="sweep" id="sweep"></div>
       <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
     </div></div>
