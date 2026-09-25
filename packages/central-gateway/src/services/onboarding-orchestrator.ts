@@ -79,9 +79,9 @@ export async function orchestrateOnboarding(
     }
 
     // Step 4: Send welcome message
-    if (tenantAccessToken) {
+    if (tenantAccessToken && session.userOpenId) {
       const welcomeMessage = generateWelcome(session.templateName, tenantId, botWebhookUrl);
-      await sendWelcomeMessage(appId, tenantAccessToken, welcomeMessage);
+      await sendWelcomeMessage(session.userOpenId, tenantAccessToken, welcomeMessage);
     }
 
     // Nexus-gateway Pod will auto-start WSClient on startup.
@@ -179,15 +179,14 @@ async function configureEventSubscription(
 
 /** Send welcome message via Bot API. */
 async function sendWelcomeMessage(
-  appId: string,
+  userOpenId: string,
   accessToken: string,
   message: string,
 ): Promise<void> {
   try {
-    // Bot sends message — the user can find the bot in Feishu and start chatting
-    // Since we don't have the user's open_id yet, send to self (creates a bot conversation)
+    // The registerApp result identifies the person who scanned this QR code.
     const res = await fetch(
-      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=app_id',
+      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id',
       {
         method: 'POST',
         headers: {
@@ -195,7 +194,7 @@ async function sendWelcomeMessage(
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          receive_id: appId,
+          receive_id: userOpenId,
           msg_type: 'text',
           content: JSON.stringify({ text: message }),
         }),
@@ -204,7 +203,7 @@ async function sendWelcomeMessage(
     );
 
     const respData = await res.json().catch(() => ({}));
-    if (!res.ok) {
+    if (!res.ok || respData.code !== 0) {
       console.warn('Welcome message: HTTP', res.status, JSON.stringify(respData).slice(0, 200));
     } else {
       console.log('Welcome message sent');

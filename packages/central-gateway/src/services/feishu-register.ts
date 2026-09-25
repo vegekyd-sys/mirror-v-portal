@@ -23,6 +23,7 @@ export interface RegistrationSession {
   completedAt?: Date;
   appId?: string;
   appSecret?: string;
+  userOpenId?: string;
   tenantId?: string;
   webhookUrl?: string;
   error?: string;
@@ -99,6 +100,7 @@ export async function startFeishuRegistration(
           // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录
           // 基本信息只读（feishu 插件解析发送者姓名必需，缺失会报 41050）。
           scopes: { tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'], user: [] },
+          events: { items: { tenant: ['im.message.receive_v1'] } },
         } as lark.AppAddons,
         createOnly: true,
         signal: abortController.signal,
@@ -109,6 +111,7 @@ export async function startFeishuRegistration(
       // 不存在可观察的"创建中"阶段，因此直接进入租户编排/部署。
       session.appId = result.client_id;
       session.appSecret = result.client_secret;
+      session.userOpenId = result.user_info?.open_id;
 
       if (onRegistered) {
         session.status = 'provisioning';

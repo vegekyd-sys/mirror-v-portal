@@ -247,7 +247,12 @@ export class FeishuEdge implements ChannelEdge {
       },
     });
     this.clients.set(tenant.id, { ws, api });
-    void ws.start({ eventDispatcher: dispatcher });
+    void ws.start({ eventDispatcher: dispatcher }).catch(async (error: unknown) => {
+      this.clients.delete(tenant.id);
+      await this.store.event(tenant.id, "feishu-connect-failed", {
+        message: String((error as Error)?.message ?? error).slice(0, 200),
+      }).catch(() => {});
+    });
   }
   close() {
     if(this.connectionTimer) clearInterval(this.connectionTimer);
