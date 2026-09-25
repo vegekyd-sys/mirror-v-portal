@@ -26,13 +26,21 @@ if (external) {
     ? "packages/dealclaw-agent/payload"
     : "packages/agent-templates/mirror-v/payload";
   archive = path.join(config.dataDir, `${templateId}-payload.tar`);
-  stripComponents = templateId === "dealclaw" ? 3 : 4;
-  // Only version-controlled payload, never local customer data or environment files.
-  execFileSync(
-    "git",
-    ["archive", "--format=tar", "--output", archive, "HEAD", payloadPath],
-    { cwd: root },
-  );
+  if (templateId === "mirror-v") {
+    // The VLab release is a git archive without .git. Package an explicit
+    // public allowlist so stale files or private memories can never join it.
+    const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "payload-manifest.json"];
+    execFileSync("tar", ["-cf", archive, "-C", path.join(root, payloadPath), ...files]);
+    stripComponents = 0;
+  } else {
+    stripComponents = 3;
+    // DealClaw's original build still requires a version-controlled payload.
+    execFileSync(
+      "git",
+      ["archive", "--format=tar", "--output", archive, "HEAD", payloadPath],
+      { cwd: root },
+    );
+  }
 }
 const name = `${config.sandboxPrefix}-build-${Date.now()}`;
 fs.writeFileSync(
