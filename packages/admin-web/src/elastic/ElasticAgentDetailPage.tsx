@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, errMsg } from '../lib/api';
 import { fmtTime } from '../components/badges';
 import type { ElasticAgent } from './ElasticAgentsPage';
+import { agentChannelLabel, agentStateLabel } from './labels';
 
 interface RunRow { id: string; channel: string; status: string; delivery: string; createdAt: string; completedAt: string | null; error: string | null }
 
@@ -29,9 +30,9 @@ export default function ElasticAgentDetailPage() {
     <div className="page-head"><div><Link to="/agents" className="link-back">← 返回 Agent 实例</Link><div className="section-title">{agent.name}</div><div className="page-sub mono">{agent.tenantId}</div></div></div>
     <div className="stat-grid">
       <div className="stat-card"><div className="label">模板</div><div className="num">{agent.templateId}</div><div className="stat-sub">{agent.templateVersion}</div></div>
-      <div className="stat-card"><div className="label">运行状态</div><div className="num">{agent.state}</div><div className="stat-sub">{agent.runtimeProvider}</div></div>
+      <div className="stat-card"><div className="label">运行状态</div><div className="num">{agentStateLabel(agent.state)}</div><div className="stat-sub">{agent.runtimeProvider}</div></div>
       <div className="stat-card"><div className="label">唤醒次数</div><div className="num">{agent.wakeCount}</div><div className="stat-sub">最近活动 {fmtTime(agent.lastActivity)}</div></div>
-      <div className="stat-card"><div className="label">渠道</div><div className="num">{agent.feishuBound ? '飞书' : '未绑定飞书'}</div><div className="stat-sub">{agent.channels.join('、') || '暂无其他渠道'}</div></div>
+      <div className="stat-card"><div className="label">渠道</div><div className="num">{agent.feishuBound ? '飞书' : '未绑定飞书'}</div><div className="stat-sub">{agent.channels.map(agentChannelLabel).join('、') || '暂无其他渠道'}</div></div>
     </div>
     {agent.lastError && <div className="msg msg-err">最近错误：{agent.lastError}</div>}
     <div className="section-title">最近运行</div>

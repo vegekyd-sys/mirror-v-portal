@@ -1,5 +1,5 @@
 import { LOCAL_PREVIEW } from "../lib/local-preview";
-// App shell: dark sidebar navigation + light content area (phase 3 redesign).
+// App shell shared by the legacy console and the Mirror V portal.
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { IconLogout, IconNexus } from './icons';
@@ -37,18 +37,29 @@ const SYSTEM: NavItem[] = [
 ];
 
 const ELASTIC_WORKBENCH: NavItem[] = [
-  { to: '/', icon: '◈', label: '总览', end: true },
-  { to: '/agents', icon: '✦', label: 'Agent 阵容' },
-  { to: '/customers', icon: '客', label: '客户与 Credits' },
-  { to: '/plans', icon: '套', label: '套餐模板' },
-  { to: '/pricing', icon: '价', label: 'Skill 定价' },
+  { to: '/', icon: 'overview', label: '总览', end: true },
+  { to: '/agents', icon: 'agents', label: 'Agent' },
+  { to: '/customers', icon: 'customers', label: '客户' },
+  { to: '/plans', icon: 'plans', label: '套餐' },
+  { to: '/pricing', icon: 'pricing', label: '定价' },
 ];
 
 const ELASTIC_SYSTEM: NavItem[] = [
-  { to: '/users', icon: '户', label: '管理员' },
+  { to: '/users', icon: 'users', label: '管理员' },
 ];
 
-function SideNav({ items }: { items: NavItem[] }) {
+function ElasticNavIcon({ name }: { name: string }) {
+  return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === 'overview' && <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>}
+    {name === 'agents' && <><circle cx="12" cy="12" r="3" /><ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(-35 12 12)" /><ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(35 12 12)" /></>}
+    {name === 'customers' && <><circle cx="9" cy="8" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2" /></>}
+    {name === 'plans' && <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 9h8M8 13h8M8 17h5" /></>}
+    {name === 'pricing' && <><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none" /><circle cx="11" cy="17" r="2" fill="currentColor" stroke="none" /></>}
+    {name === 'users' && <><circle cx="12" cy="8" r="3.5" /><path d="M5 20v-2a7 7 0 0 1 14 0v2" /></>}
+  </svg>;
+}
+
+function SideNav({ items, elastic = false }: { items: NavItem[]; elastic?: boolean }) {
   return (
     <>
       {items.map((it) => (
@@ -58,7 +69,7 @@ function SideNav({ items }: { items: NavItem[] }) {
           end={it.end}
           className={({ isActive }) => `side-item ${isActive ? 'active' : ''}`}
         >
-          <span className="side-icon">{it.icon}</span>
+          <span className="side-icon">{elastic ? <ElasticNavIcon name={it.icon} /> : it.icon}</span>
           <span className="nav-label">{it.label}</span>
         </NavLink>
       ))}
@@ -80,19 +91,19 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
             <div className="brand-sub">{elastic ? 'Mirror V 门户' : '控制台'}</div>
           </div>}
         </div>
-        {elastic && <div className="elastic-side-caption">Mirror V 门户 / 管理工作台</div>}
+        {elastic && <div className="elastic-side-caption">Mirror V</div>}
         <nav className="side-nav">
-          <div className="side-section">工作台</div>
-          <SideNav items={elastic ? ELASTIC_WORKBENCH : WORKBENCH} />
-          <div className="side-section">系统</div>
-          <SideNav items={elastic ? ELASTIC_SYSTEM : SYSTEM} />
+          {!elastic && <div className="side-section">工作台</div>}
+          <SideNav items={elastic ? ELASTIC_WORKBENCH : WORKBENCH} elastic={elastic} />
+          {elastic ? <div className="elastic-nav-divider" /> : <div className="side-section">系统</div>}
+          <SideNav items={elastic ? ELASTIC_SYSTEM : SYSTEM} elastic={elastic} />
         </nav>
         <div className="side-foot">
           <div className="side-status">
             <span className="status-dot" />
             <div>
-              {LOCAL_PREVIEW ? "本地结构预览 · 示例数据" : "服务运行正常"}
-              <div className="sub">{LOCAL_PREVIEW ? "不连接线上 · 操作不执行" : "前端静态托管 · API 实时同步"}</div>
+              {LOCAL_PREVIEW ? "本地预览" : "服务正常"}
+              {!elastic && <div className="sub">{LOCAL_PREVIEW ? "不连接线上 · 操作不执行" : "前端静态托管 · API 实时同步"}</div>}
             </div>
           </div>
           <div className="side-user">
@@ -110,9 +121,9 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
         </div>
       </aside>
       <main className="main">
-        {elastic && <div className="elastic-topbar"><span>管理工作台</span><div><a href="/onboard">打开门户 <span aria-hidden="true">↗</span></a><span className="elastic-topbar-user">{user?.displayName || user?.username || 'Admin'}</span></div></div>}
         <div className="container">
-          {LOCAL_PREVIEW && <div className="hint" style={{marginBottom:16}}>本地页面结构预览 · 全部为示例数据与示例价格 · 不连接线上服务</div>}
+          {elastic && <div className="elastic-utility"><span>{LOCAL_PREVIEW ? '本地预览' : 'Nexus'}</span><a href="/onboard">进入门户 <IconLogout size={14} /></a></div>}
+          {LOCAL_PREVIEW && !elastic && <div className="hint" style={{marginBottom:16}}>本地页面结构预览 · 全部为示例数据与示例价格 · 不连接线上服务</div>}
           <Outlet />
         </div>
       </main>

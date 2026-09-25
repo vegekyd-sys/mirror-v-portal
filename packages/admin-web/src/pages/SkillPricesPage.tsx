@@ -1,7 +1,7 @@
 // Skill 定价 — migrated from the legacy prebuilt SPA (view: pricing).
 // Data: credits-ledger /v1/skill-prices (GET / PUT / history) plus
 // /v1/admin/skills/:id/activate|launch for state transitions.
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api, errMsg } from '../lib/api';
 import { fmtNum } from '../components/badges';
 import Modal from '../components/Modal';
@@ -53,7 +53,9 @@ const emptyEdit = {
 };
 
 export default function SkillPricesPage() {
+  const elastic = import.meta.env.VITE_NEXUS_ELASTIC === 'true';
   const [prices, setPrices] = useState<SkillPrice[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [summary, setSummary] = useState<CategorySummary[]>([]);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -200,7 +202,7 @@ export default function SkillPricesPage() {
       <div className="page-head">
         <div>
           <div className="section-title">Skill 定价</div>
-          <div className="page-sub">按分类维护 Skill 单价、成本与计费状态 · 共 {prices.length} 个</div>
+          <div className="page-sub">{elastic ? `共 ${prices.length} 项` : `按分类维护 Skill 单价、成本与计费状态 · 共 ${prices.length} 个`}</div>
         </div>
         <div className="page-actions">
           <button className="btn-secondary" onClick={() => void load()}>
@@ -211,7 +213,7 @@ export default function SkillPricesPage() {
       {error && <div className="msg msg-err">{error}</div>}
       {msg && <div className="msg msg-ok">{msg}</div>}
 
-      {summary.length > 0 && (
+      {!elastic && summary.length > 0 && (
         <div className="stat-grid">
           {summary.map((s) => (
             <div className="stat-card" key={s.category}>
@@ -229,6 +231,32 @@ export default function SkillPricesPage() {
 
       {prices.length === 0 ? (
         <div className="empty">暂无已注册 Skill</div>
+      ) : elastic ? (
+        <div className="panel pricing-compact">
+          <table>
+            <thead><tr><th>Skill</th><th>分类</th><th>Credits / 单位</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody>{prices.map((p) => <Fragment key={p.skillId}>
+              <tr>
+                <td><strong>{p.skillName || p.skillId}</strong><div className="mono">{p.skillId}</div></td>
+                <td>{p.category || '—'}</td>
+                <td className="mono">{fmtNum(p.creditPerUnit)}</td>
+                <td>{statusBadge(p)}</td>
+                <td><button className="btn-secondary btn-sm" aria-expanded={expanded === p.skillId} onClick={() => setExpanded(expanded === p.skillId ? null : p.skillId)}>{expanded === p.skillId ? '收起' : '查看'}</button></td>
+              </tr>
+              {expanded === p.skillId && <tr className="pricing-detail-row"><td colSpan={5}>
+                <div className="pricing-detail">
+                  <div className="pricing-detail-facts"><span>成本 <b>{p.cost != null ? fmtNum(p.cost) : '—'}</b></span><span>毛利率 <b>{margin(p)}</b></span><span>计费单位 <b>{p.billingUnit || '—'}</b></span><span>负责人 <b>{p.responsiblePerson || '—'}</b></span>{p.serviceLine && <span>服务线 <b>{p.serviceLine}</b></span>}</div>
+                  <div className="pricing-detail-actions">
+                    <button className="btn-secondary btn-sm" onClick={() => void openHistory(p)}>历史</button>
+                    {p.activationStatus !== 'approved' && <button className="btn-secondary btn-sm" onClick={() => void activate(p)}>审核通过</button>}
+                    {p.activationStatus === 'approved' && p.status === 'shadow' && <button className="btn-primary btn-sm" onClick={() => void launch(p)}>正式上线</button>}
+                    <button className="btn-secondary btn-sm" onClick={() => openEdit(p)}>编辑</button>
+                  </div>
+                </div>
+              </td></tr>}
+            </Fragment>)}</tbody>
+          </table>
+        </div>
       ) : (
         <div className="panel">
           <table>
