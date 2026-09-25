@@ -4,14 +4,16 @@ import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 
 const bootStart = Date.now();
+const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
 const fingerprint = createHash("sha256")
   .update(
     [
       process.env.NEXUS_MODEL_ID,
       process.env.NEXUS_MODEL_BASE_URL,
       process.env.NEXUS_MODEL_KEY,
-      process.env.NEXUS_AGENT_ID,
       process.env.NEXUS_OPTIMIZE,
+      // Preserve the existing DealClaw fingerprint for already-running VMs.
+      ...(agentId === "dealclaw" ? [] : [agentId]),
       "runtime-v4-scheduler",
     ].join("\0"),
   )
@@ -27,7 +29,7 @@ fs.mkdirSync(state, { recursive: true });
 if (!fs.existsSync(`${data}/seeded`)) {
   fs.mkdirSync(workspace, { recursive: true });
   fs.cpSync(`${base}/payload`, workspace, { recursive: true });
-  fs.writeFileSync(`${data}/seeded`, process.env.NEXUS_AGENT_ID || "dealclaw");
+  fs.writeFileSync(`${data}/seeded`, agentId);
 }
 const env = {
   ...process.env,
@@ -96,7 +98,7 @@ const cfg = {
       memorySearch: { enabled: false },
       compaction: { mode: "safeguard" },
     },
-    list: [{ id: process.env.NEXUS_AGENT_ID || "dealclaw", default: true, workspace }],
+    list: [{ id: agentId, default: true, workspace }],
   },
   tools: {
     profile: "coding",
