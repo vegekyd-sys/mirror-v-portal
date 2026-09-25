@@ -40,3 +40,21 @@ export async function setupElasticAccounts() {
     await query("UPDATE skill_prices SET status='shadow', activation_status='unapproved', updated_at=now()");
   }
 }
+
+/** Mirror completed Elastic turns into zero-credit shadow usage records. */
+export async function reconcileElasticUsage() {
+  await query(`
+    INSERT INTO skill_billing_events
+      (id, tenant_id, task_id, skill_id, skill_name, quantity,
+       credit_amount, unit_price, status, billing_mode, result_summary,
+       metadata, created_at)
+    SELECT r.id::text, r.tenant_id, r.id::text, 'gateway.chat',
+           'Agent 对话', 1, 0, 0, 'settled', 'shadow', 'Agent 对话完成',
+           jsonb_build_object('channel', r.channel, 'templateId', t.template_id),
+           coalesce(r.completed_at, r.created_at)
+    FROM elastic_runs r
+    JOIN elastic_tenants t ON t.id = r.tenant_id
+    WHERE r.status = 'succeeded'
+    ON CONFLICT (id) DO NOTHING
+  `);
+}

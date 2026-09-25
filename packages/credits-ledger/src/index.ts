@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { migrate } from './db/migrate.js';
-import { setupElasticAccounts } from './db/elastic-accounts.js';
+import { reconcileElasticUsage, setupElasticAccounts } from './db/elastic-accounts.js';
 import { runMonthlyReset } from './services/monthly-reset.js';
 
 const PORT = Number(process.env.PORT ?? 8081);
@@ -8,7 +8,13 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 
 async function main() {
   await migrate();
-  if (process.env.NEXUS_ELASTIC_MODE === '1') await setupElasticAccounts();
+  if (process.env.NEXUS_ELASTIC_MODE === '1') {
+    await setupElasticAccounts();
+    await reconcileElasticUsage();
+    setInterval(() => {
+      void reconcileElasticUsage().catch(error => console.error('Elastic shadow usage reconciliation failed:', error));
+    }, 60_000).unref();
+  }
 
   // Run monthly reset on startup to catch any overdue accounts
   try {

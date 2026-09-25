@@ -39,7 +39,8 @@ The origin certificate is a short-lived Let's Encrypt IP certificate. The
 The legacy DealClaw plans are frozen and legacy Skill prices remain in
 shadow/unapproved state until their Mirror V terms are reviewed. Existing
 Elastic tenants are backfilled with zero-balance accounts and future tenants
-receive accounts at creation. Model usage and billable rates require separate
+receive accounts at creation. Completed conversations appear as zero-credit
+shadow usage events. Model token usage and billable rates require separate
 product approval; the presence of a credits account alone does not authorize
 charging. For channel acceptance, verify a real scan, instance creation and a
 human-visible agent response, not only `/healthz`.
