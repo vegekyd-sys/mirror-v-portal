@@ -266,6 +266,9 @@ describe('One-scan Portal entry', () => {
       expect(scan.status).toBe(200);
       expect(scan.text).toContain('MicroMessenger');
       expect(scan.text).toContain('Lark|Feishu');
+      expect(scan.text).toContain('在微信确认开通');
+      expect(scan.text).toContain('长按授权码');
+      expect(scan.text).not.toContain('location.assign(');
       expect(scan.text).not.toContain('飞书扫码</button>');
       const before = await request(app).get(`/onboard/portal/${id}/status`);
       expect(before.body).toMatchObject({ templateId: 'mirror-v', channel: null, status: 'pending' });
@@ -277,10 +280,16 @@ describe('One-scan Portal entry', () => {
       expect(linked.body.redirectUrl).toBe('https://liteapp.weixin.qq.com/test');
       expect((await request(app).post(`/onboard/portal/${id}/link`).send({ channel: 'weixin', deviceCode: native.body.deviceCode })).status).toBe(409);
       const after = await request(app).get(`/onboard/portal/${id}/status`);
-      expect(after.body).toMatchObject({ channel: 'weixin', status: 'pending', progress: 12 });
+      expect(after.body).toMatchObject({ channel: 'weixin', status: 'pending', progress: 12, actionUrl: 'https://liteapp.weixin.qq.com/test', qrImageUrl: `/onboard/portal/${id}/weixin-qr.png` });
       expect(after.text).not.toContain(native.body.deviceCode);
+      const image = await request(app).get(after.body.qrImageUrl);
+      expect(image.status).toBe(200);
+      expect(image.headers['content-type']).toContain('image/png');
+      expect(image.headers['cache-control']).toBe('no-store');
+      expect(image.body.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
       expect((await request(app).post(`/onboard/portal/${id}/cancel`)).body.ok).toBe(true);
       expect((await request(app).get(`/onboard/portal/${id}/status`)).status).toBe(410);
+      expect((await request(app).get(after.body.qrImageUrl)).status).toBe(404);
     } finally { fetchMock.mockRestore(); }
   });
 

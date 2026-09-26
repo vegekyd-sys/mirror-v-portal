@@ -174,7 +174,14 @@ export function createApp() {
   app.get('/onboard/portal/:entryId/status', async (req, res) => {
     const entry = portalEntry(req.params.entryId);
     if (!entry) { res.status(410).json({ status: 'expired', message: '入口码已过期' }); return; }
-    const base = { templateId: entry.template.id, templateName: entry.template.name, channel: entry.channel || null };
+    const base = {
+      templateId: entry.template.id,
+      templateName: entry.template.name,
+      channel: entry.channel || null,
+      actionUrl: entry.channel === 'feishu' && entry.deviceCode ? sessions.get(entry.deviceCode)?.qrUrl
+        : entry.channel === 'weixin' && entry.deviceCode ? weixinSessions.get(entry.deviceCode)?.qrUrl : undefined,
+      qrImageUrl: entry.channel === 'weixin' && entry.deviceCode ? `/onboard/portal/${encodeURIComponent(req.params.entryId)}/weixin-qr.png` : undefined,
+    };
     if (!entry.channel || !entry.deviceCode) { res.json({ ...base, status: 'pending', progress: 0 }); return; }
     if (entry.channel === 'feishu') {
       const session = sessions.get(entry.deviceCode);
@@ -191,7 +198,17 @@ export function createApp() {
       if (!response.ok) throw new Error('WEIXIN_STATUS_UNAVAILABLE');
       const status = await response.json() as { status: string; progress?: number; message?: string };
       res.json({ ...base, status: status.status, progress: status.progress, message: status.message });
-    } catch { res.status(503).json({ ...base, status: 'checking', message: '正在检查微信授权' }); }
+    } catch { res.json({ ...base, status: 'checking', message: '正在检查微信授权' }); }
+  });
+
+  app.get('/onboard/portal/:entryId/weixin-qr.png', async (req, res) => {
+    const entry = portalEntry(req.params.entryId);
+    const session = entry?.channel === 'weixin' && entry.deviceCode ? weixinSessions.get(entry.deviceCode) : undefined;
+    if (!session) { res.status(404).end(); return; }
+    try {
+      const png = await QRCode.toBuffer(session.qrUrl, { width: 360, margin: 2 });
+      res.set('Cache-Control', 'no-store').type('png').send(png);
+    } catch { res.status(503).end(); }
   });
 
   app.post('/onboard/portal/:entryId/link', (req, res) => {
