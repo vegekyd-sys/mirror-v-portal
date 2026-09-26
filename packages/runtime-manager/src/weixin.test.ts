@@ -122,4 +122,26 @@ describe("weixin reply buffering", () => {
     expect(s.channelBinding).not.toHaveBeenCalled();
     expect((edge as any).buffers.size).toBe(0);
   });
+
+  it("sends a completed reply with iLink's required message metadata", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ret: 0 }));
+    const s = store({
+      channelBinding: vi.fn(async () => ({ state: "active" })) as any,
+      channelCredentials: vi.fn(() => ({ botToken: "t", baseUrl: "https://region.weixin.qq.com" })) as any,
+    });
+    try {
+      const edge = new WeixinEdge(s);
+      const r = run({ message_id: encodeReplyTarget({ to: "u@im.wechat", ctx: "ctx-1" }) });
+      edge.delta(r, "你好");
+      edge.progress(r, "runtime-completed", {});
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(String(fetchMock.mock.calls[0][0])).toBe("https://region.weixin.qq.com/ilink/bot/sendmessage");
+      const body = JSON.parse(String(init.body));
+      expect((init.headers as Record<string, string>)["iLink-App-Id"]).toBe("bot");
+      expect(body.base_info).toMatchObject({ channel_version: "2.4.9", bot_agent: "MirrorVPortal/0.1.0" });
+      expect(body.msg).toMatchObject({ from_user_id: "", to_user_id: "u@im.wechat", context_token: "ctx-1", message_state: 2 });
+      expect(body.msg.client_id).toMatch(/^[0-9a-f-]{36}$/);
+    } finally { fetchMock.mockRestore(); }
+  });
 });

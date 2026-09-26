@@ -178,6 +178,8 @@ describe('GET /onboard — Feishu registration', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain('<title>Mirror V Portal · 选择你的 Agent</title>');
+    expect(res.text).toContain('id="channelWeixin"');
+    expect(res.text).toContain("'/onboard/weixin/start'");
     // The gate deliberately carries no customer-identifying content.
     expect(res.text).not.toContain('公司名称');
     expect(res.text).not.toContain('联系邮箱');
@@ -266,8 +268,10 @@ describe('One-scan Portal entry', () => {
       expect(scan.status).toBe(200);
       expect(scan.text).toContain('MicroMessenger');
       expect(scan.text).toContain('Lark|Feishu');
-      expect(scan.text).toContain('长按上方授权码');
+      expect(scan.text).not.toContain('长按上方授权码');
       expect(scan.text).not.toContain('在微信确认开通');
+      expect(scan.text).toContain('回到电脑上的 Portal，选择“微信”');
+      expect(scan.text).not.toContain('id="weixin">在微信开通');
       expect(scan.text).not.toContain('location.assign(');
       expect(scan.text).not.toContain('飞书扫码</button>');
       const before = await request(app).get(`/onboard/portal/${id}/status`);

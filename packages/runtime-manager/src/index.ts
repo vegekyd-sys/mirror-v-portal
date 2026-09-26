@@ -29,12 +29,12 @@ const weixin = new WeixinEdge(store);
 // WeChat user confirms. Ordinary channel binding still uses an existing tenant.
 const pendingWeixinTemplates = new Map<string, ReturnType<typeof requireTemplate>>();
 const weixinLogin = new WeixinLogin({
-  bind: async (tenantId, botToken, accountId) => {
+  bind: async (tenantId, botToken, accountId, baseUrl) => {
     const template = pendingWeixinTemplates.get(tenantId);
     if (template) {
       await store.createTenant(tenantId, `扫码创建的 ${template.name}`, undefined, undefined, 'vercel', template);
     }
-    await weixin.bind(tenantId, botToken, accountId);
+    await weixin.bind(tenantId, botToken, accountId, baseUrl);
     pendingWeixinTemplates.delete(tenantId);
   },
 });

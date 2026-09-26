@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ChannelEdge } from "./channel-edge.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { isSilentReply } from "./reply-sentinel.js";
+import { ilinkBaseInfo, ilinkBaseUrl, ilinkPostHeaders } from "./ilink-protocol.js";
 
 /**
  * Personal WeChat via iLink (Tencent's official ClawBot protocol).
@@ -16,13 +17,12 @@ import { isSilentReply } from "./reply-sentinel.js";
  * whatever arrived, and hands back a cursor to resume from. The cursor is
  * persisted per binding so a manager restart neither replays nor skips.
  */
-const ILINK_BASE = "https://ilinkai.weixin.qq.com";
-const CHANNEL_VERSION = "1.0.2";
 const POLL_TIMEOUT_MS = 45_000; // server holds ~35s; allow margin before aborting
 const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000];
 
 interface WeixinCredentials {
   botToken: string;
+  baseUrl?: string;
 }
 interface ILinkItem {
   type?: number;
@@ -79,20 +79,14 @@ export class WeixinEdge implements ChannelEdge {
   constructor(readonly store: Store) {}
 
   private headers(token: string) {
-    return {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-      AuthorizationType: "ilink_bot_token",
-      // iLink expects a per-client identifier; it is not a credential.
-      "X-WECHAT-UIN": Buffer.from(String(Math.floor(Math.random() * 4294967295))).toString("base64"),
-    };
+    return ilinkPostHeaders(token);
   }
 
-  private async call<T>(token: string, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-    const res = await fetch(`${ILINK_BASE}${path}`, {
+  private async call<T>(token: string, path: string, body: Record<string, unknown>, signal?: AbortSignal, baseUrl?: string): Promise<T> {
+    const res = await fetch(`${ilinkBaseUrl(baseUrl)}${path}`, {
       method: "POST",
       headers: this.headers(token),
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, base_info: ilinkBaseInfo() }),
       signal,
     });
     if (res.status === 401 || res.status === 403) throw Object.assign(new Error("ILINK_UNAUTHORIZED"), { fatal: true });
@@ -102,8 +96,8 @@ export class WeixinEdge implements ChannelEdge {
 
   async start() {
     for (const binding of await this.store.channelBindings(this.channel)) {
-      const { botToken } = this.store.channelCredentials<WeixinCredentials>(binding);
-      this.spawnPoll(binding.tenant_id, botToken, binding.cursor ?? "");
+      const { botToken, baseUrl } = this.store.channelCredentials<WeixinCredentials>(binding);
+      this.spawnPoll(binding.tenant_id, botToken, binding.cursor ?? "", baseUrl);
     }
   }
 
@@ -111,20 +105,20 @@ export class WeixinEdge implements ChannelEdge {
     if (this.polls.has(tenant.id)) return;
     const binding = await this.store.channelBinding(tenant.id, this.channel);
     if (!binding || binding.state !== "active") return;
-    const { botToken } = this.store.channelCredentials<WeixinCredentials>(binding);
-    this.spawnPoll(tenant.id, botToken, binding.cursor ?? "");
+    const { botToken, baseUrl } = this.store.channelCredentials<WeixinCredentials>(binding);
+    this.spawnPoll(tenant.id, botToken, binding.cursor ?? "", baseUrl);
   }
 
-  private spawnPoll(tenantId: string, token: string, cursor: string) {
+  private spawnPoll(tenantId: string, token: string, cursor: string, baseUrl?: string) {
     if (this.polls.has(tenantId)) return;
     const abort = new AbortController();
     this.polls.set(tenantId, abort);
-    void this.pollLoop(tenantId, token, cursor, abort.signal).finally(() => {
+    void this.pollLoop(tenantId, token, cursor, abort.signal, baseUrl).finally(() => {
       this.polls.delete(tenantId);
     });
   }
 
-  private async pollLoop(tenantId: string, token: string, cursor: string, signal: AbortSignal) {
+  private async pollLoop(tenantId: string, token: string, cursor: string, signal: AbortSignal, baseUrl?: string) {
     let failures = 0;
     while (!signal.aborted) {
       const timer = AbortSignal.timeout(POLL_TIMEOUT_MS);
@@ -133,9 +127,11 @@ export class WeixinEdge implements ChannelEdge {
         const res = await this.call<ILinkUpdates>(
           token,
           "/ilink/bot/getupdates",
-          { get_updates_buf: cursor, base_info: { channel_version: CHANNEL_VERSION } },
+          { get_updates_buf: cursor },
           merged,
+          baseUrl,
         );
+        if (res.ret && res.ret !== 0) throw new Error(`ILINK_GETUPDATES_RET_${res.ret}`);
         failures = 0;
         for (const msg of res.msgs ?? []) await this.ingest(tenantId, msg);
         // Advance only after the batch is durably enqueued, so a crash re-reads it.
@@ -210,18 +206,21 @@ export class WeixinEdge implements ChannelEdge {
     }
     const binding = await this.store.channelBinding(run.tenant_id, this.channel);
     if (!binding || binding.state !== "active") return;
-    const { botToken } = this.store.channelCredentials<WeixinCredentials>(binding);
+    const { botToken, baseUrl } = this.store.channelCredentials<WeixinCredentials>(binding);
     try {
-      await this.call(botToken, "/ilink/bot/sendmessage", {
+      const sent = await this.call<{ ret?: number }>(botToken, "/ilink/bot/sendmessage", {
         msg: {
+          from_user_id: "",
           to_user_id: target.to,
+          client_id: randomUUID(),
           ...(target.group ? { group_id: target.group } : {}),
           message_type: 2,
           message_state: 2,
           context_token: target.ctx,
           item_list: [{ type: 1, text_item: { text } }],
         },
-      });
+      }, undefined, baseUrl);
+      if (sent.ret && sent.ret !== 0) throw new Error(`ILINK_SEND_RET_${sent.ret}`);
       await this.store.event(run.tenant_id, "weixin-reply-sent", { chars: text.length }, run.id);
     } catch (error: any) {
       await this.store.event(run.tenant_id, "weixin-reply-failed", {
@@ -237,11 +236,12 @@ export class WeixinEdge implements ChannelEdge {
   }
 
   /** Called by the login flow once a QR scan yields a bot token. */
-  async bind(tenantId: string, botToken: string, accountId?: string) {
-    await this.store.bindChannel(tenantId, this.channel, { botToken }, accountId);
+  async bind(tenantId: string, botToken: string, accountId?: string, baseUrl?: string) {
+    const verifiedBaseUrl = ilinkBaseUrl(baseUrl);
+    await this.store.bindChannel(tenantId, this.channel, { botToken, baseUrl: verifiedBaseUrl }, accountId);
     this.polls.get(tenantId)?.abort();
     this.polls.delete(tenantId);
-    this.spawnPoll(tenantId, botToken, "");
+    this.spawnPoll(tenantId, botToken, "", verifiedBaseUrl);
   }
 
   /** Exposed for tests and diagnostics. */

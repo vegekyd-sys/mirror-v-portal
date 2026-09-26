@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ilinkBaseUrl, ilinkPollHeaders, ilinkPostHeaders } from "./ilink-protocol.js";
 
 /**
  * iLink QR login, run in the manager.
@@ -16,7 +17,7 @@ import { randomUUID } from "node:crypto";
 const ILINK_BASE = "https://ilinkai.weixin.qq.com";
 const BOT_TYPE = "3";
 const LONG_POLL_MS = 35_000;
-const SESSION_TTL_MS = 10 * 60_000;
+const SESSION_TTL_MS = 5 * 60_000;
 
 export type LoginStatus =
   | "pending"
@@ -54,7 +55,7 @@ interface StatusResponse {
 
 export interface LoginSink {
   /** Seal the token against the tenant and begin receiving. */
-  bind(tenantId: string, botToken: string, accountId?: string): Promise<void>;
+  bind(tenantId: string, botToken: string, accountId?: string, baseUrl?: string): Promise<void>;
 }
 
 export class WeixinLogin {
@@ -72,14 +73,14 @@ export class WeixinLogin {
       `${ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(BOT_TYPE)}`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: ilinkPostHeaders(),
         body: JSON.stringify({ local_token_list: [] }),
         signal: AbortSignal.timeout(15_000),
       },
     );
     if (!res.ok) throw new Error(`ILINK_QRCODE_HTTP_${res.status}`);
     const qr = (await res.json()) as QRCodeResponse;
-    if (!qr.qrcode) throw new Error("ILINK_QRCODE_MISSING");
+    if (!qr.qrcode || !qr.qrcode_img_content) throw new Error("ILINK_QRCODE_MISSING");
 
     const session: LoginSession & { aborted?: boolean } = {
       id: randomUUID(),
@@ -134,7 +135,7 @@ export class WeixinLogin {
           url += `&verify_code=${encodeURIComponent(s.verifyCode)}`;
           s.verifyCode = undefined;
         }
-        const res = await fetch(url, { signal: AbortSignal.timeout(LONG_POLL_MS + 5_000) });
+        const res = await fetch(url, { headers: ilinkPollHeaders(), signal: AbortSignal.timeout(LONG_POLL_MS + 5_000) });
         if (!res.ok) throw new Error(`HTTP_${res.status}`);
         body = (await res.json()) as StatusResponse;
       } catch (error: any) {
@@ -145,8 +146,10 @@ export class WeixinLogin {
       }
 
       // iLink moves a session to a regional host mid-scan.
-      if (body.redirect_host && (body.status === "scaned" || body.status === "scaned_but_redirect"))
-        base = `https://${body.redirect_host}`;
+      if (body.redirect_host && (body.status === "scaned" || body.status === "scaned_but_redirect")) {
+        try { base = ilinkBaseUrl(`https://${body.redirect_host}`); }
+        catch { s.status = "failed"; s.error = "ILINK_REDIRECT_INVALID"; return; }
+      }
 
       switch (body.status) {
         case "wait":
@@ -174,7 +177,8 @@ export class WeixinLogin {
             return;
           }
           try {
-            await this.sink.bind(s.tenantId, body.bot_token, body.ilink_bot_id);
+            const baseUrl = ilinkBaseUrl(body.baseurl);
+            await this.sink.bind(s.tenantId, body.bot_token, body.ilink_bot_id, baseUrl);
             s.status = "completed";
             s.accountId = body.ilink_bot_id;
             s.qrImage = undefined;
