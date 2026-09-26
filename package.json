@@ -1,5 +1,5 @@
 {
-  "name": "dealclaw-nexus",
+  "name": "mirror-v-portal",
   "private": true,
   "workspaces": [
     "packages/*"

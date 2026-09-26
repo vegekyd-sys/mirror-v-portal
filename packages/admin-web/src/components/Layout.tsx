@@ -3,7 +3,7 @@ import { LOCAL_PREVIEW } from "../lib/local-preview";
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { IconLogout, IconNexus } from './icons';
-import nexusLogo from '../../../central-gateway/public/onboard/nexus-logo-v2.webp';
+import PortalWordmark from '../elastic/PortalWordmark';
 
 interface NavItem {
   to: string;
@@ -84,14 +84,14 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
     <div className={`app-shell ${elastic ? 'elastic-shell' : ''}`}>
       <aside className="sidebar">
         <div className="side-logo">
-          {elastic ? <img className="elastic-logo" src={nexusLogo} alt="Nexus" /> : <div className="logo-mark"><IconNexus size={22} /></div>}
+          {elastic ? <PortalWordmark /> : <div className="logo-mark"><IconNexus size={22} /></div>}
           {!elastic &&
           <div>
-            <div className="brand">Nexus</div>
-            <div className="brand-sub">{elastic ? 'Mirror V 门户' : '控制台'}</div>
+            <div className="brand">Mirror V Portal</div>
+            <div className="brand-sub">控制台</div>
           </div>}
         </div>
-        {elastic && <div className="elastic-side-caption">Mirror V</div>}
+        {elastic && <div className="elastic-side-caption">Agent 工作台</div>}
         <nav className="side-nav">
           {!elastic && <div className="side-section">工作台</div>}
           <SideNav items={elastic ? ELASTIC_WORKBENCH : WORKBENCH} elastic={elastic} />
@@ -122,7 +122,7 @@ export default function Layout({ elastic = false }: { elastic?: boolean }) {
       </aside>
       <main className="main">
         <div className="container">
-          {elastic && <div className="elastic-utility"><span>{LOCAL_PREVIEW ? '本地预览' : 'Nexus'}</span><a href="/onboard">进入门户 <IconLogout size={14} /></a></div>}
+          {elastic && <div className="elastic-utility"><span>{LOCAL_PREVIEW ? '本地预览' : 'Mirror V Portal'}</span><a href="/onboard">进入门户 <IconLogout size={14} /></a></div>}
           {LOCAL_PREVIEW && !elastic && <div className="hint" style={{marginBottom:16}}>本地页面结构预览 · 全部为示例数据与示例价格 · 不连接线上服务</div>}
           <Outlet />
         </div>

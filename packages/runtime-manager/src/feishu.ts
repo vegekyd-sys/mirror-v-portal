@@ -142,7 +142,7 @@ export class FeishuEdge implements ChannelEdge {
           if(run.schedule_id && run.chat_id) {
             const quiet=run.status==='succeeded' && isSilentReply(run.output, run.schedule_kind);
             if(!quiet) {
-              const text=run.status==='succeeded'?run.output:'定时任务未能完成，请检查 Nexus 任务状态。';
+              const text=run.status==='succeeded'?run.output:'定时任务未能完成，请检查 Mirror V Portal 任务状态。';
               const chars=Array.from(text);
               for(let offset=0;offset<chars.length;offset+=5000){
                 const result=await client.api.im.message.create({params:{receive_id_type:'chat_id'},data:{receive_id:run.chat_id,msg_type:'text',content:JSON.stringify({text:chars.slice(offset,offset+5000).join('')}),uuid:createHash('sha256').update(`${run.id}:${offset}`).digest('hex').slice(0,40)}});
@@ -155,7 +155,7 @@ export class FeishuEdge implements ChannelEdge {
           }
           const text =
             run.output ||
-            "本次执行未能安全完成，请在 Nexus 试用页查看状态。为避免重复操作，系统没有自动重做。";
+            "本次执行未能安全完成，请在 Mirror V Portal 试用页查看状态。为避免重复操作，系统没有自动重做。";
           // The agent asked to stay silent — mark the turn delivered and send nothing.
           if (run.status === "succeeded" && isSilentReply(text, run.schedule_kind)) {
             await this.streams.get(run.id)?.discard();

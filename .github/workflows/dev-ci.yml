@@ -1,4 +1,4 @@
-name: Nexus dev
+name: Mirror V Portal dev
 
 on:
   push:

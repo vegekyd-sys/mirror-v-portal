@@ -6,7 +6,7 @@ GitHub repository's `dev` branch, based on the DealClaw Elastic runtime.
 
 ## Live topology
 
-Browser / Feishu → Vercel HTTPS `https://nexus-iota-topaz.vercel.app` →
+Browser / Feishu → Vercel HTTPS `https://mirror-v-portal.vercel.app` →
 Tencent Lighthouse `Mirror V` (`lhins-dpf9aill`, 43.134.135.143) Nginx →
 central-gateway on 127.0.0.1:8098, credits-ledger on 127.0.0.1:8081, and
 runtime-manager on 127.0.0.1:8097. PostgreSQL 16 is local. Agent sandboxes

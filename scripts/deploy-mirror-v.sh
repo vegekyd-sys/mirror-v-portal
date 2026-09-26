@@ -101,7 +101,7 @@ for attempt in {1..15}; do
       echo 'Admin page failed health check' >&2
       break
     fi
-    echo "Nexus release $revision healthy"
+    echo "Mirror V Portal release $revision healthy"
     exit 0
   fi
   sleep 2
@@ -116,7 +116,7 @@ if [[ -n "$old" ]]; then
     systemctl stop nexus-credits-ledger
   fi
 fi
-echo 'Nexus release failed health checks; previous release restored when present' >&2
+echo 'Mirror V Portal release failed health checks; previous release restored when present' >&2
 exit 1
 REMOTE
 }

@@ -1,6 +1,6 @@
-# Mirror V portal deployment
+# Mirror V Portal deployment
 
-Nexus is Mirror V's public portal. The product source is GitHub `dev`, based on
+Mirror V Portal is Mirror V's public multi-Agent portal. The product source is GitHub `dev`, based on
 the DealClaw Elastic runtime. The original GitLab services are reusable code,
 but their Kubernetes tenant provisioning must not be started on this 2 GB
 Lighthouse instance.
@@ -9,11 +9,12 @@ Lighthouse instance.
 
 - Lighthouse `lhins-dpf9aill`, 43.134.135.143, Ubuntu 24.04.
 - Existing OpenClaw gateway and `/feishu/events` Nginx route remain in place.
-- Nexus runtime-manager listens on 127.0.0.1:8097; central-gateway listens on
+- The runtime-manager listens on 127.0.0.1:8097; central-gateway listens on
   127.0.0.1:8098; credits-ledger listens on 127.0.0.1:8081. Nginx exposes
   `/`, `/onboard`, `/admin`, `/healthz`, `/v1/agent/` and ledger `/v1/`.
 - PostgreSQL 16 is local. Private config and database are outside releases at
-  `/opt/nexus/data`; no credential or private payload is committed to GitHub.
+  `/opt/nexus/data`; this legacy path stays in place during the brand rename.
+  No credential or private payload is committed to GitHub.
 - Nginx serves the origin through a Let's Encrypt IP certificate on 443.
   Certbot checks renewal four times daily and reloads Nginx after renewal.
 - `/opt/nexus/current` points at a committed release. The deploy script keeps

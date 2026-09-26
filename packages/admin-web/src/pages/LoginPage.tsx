@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { ApiError, errMsg } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { IconArrowRight, IconCheck, IconNexus } from '../components/icons';
-import nexusLogo from '../../../central-gateway/public/onboard/nexus-logo-v2.webp';
+import PortalWordmark from '../elastic/PortalWordmark';
 
 export default function LoginPage() {
   const elastic = import.meta.env.VITE_NEXUS_ELASTIC === 'true';
@@ -39,7 +39,7 @@ export default function LoginPage() {
     <div className={`login-shell ${elastic ? 'elastic-login' : ''}`}>
       <div className="login-hero">
         <div className="hero-brand">
-          {elastic ? <img className="elastic-logo" src={nexusLogo} alt="Nexus" /> : <><div className="logo-mark"><IconNexus size={22} /></div>Nexus · 控制台</>}
+          {elastic ? <PortalWordmark /> : <><div className="logo-mark"><IconNexus size={22} /></div>Mirror V Portal · 控制台</>}
         </div>
         <div className="hero-eyebrow">{elastic ? 'MIRROR V AGENT 门户' : 'AGENT 运行管理平台'}</div>
         <h1 className="hero-title">
@@ -49,8 +49,8 @@ export default function LoginPage() {
         </h1>
         <p className="hero-desc">
           {elastic
-            ? 'Nexus 是 Mirror V 的门户。扫码创建独立实例，选择 DealClaw 或 Mirror V 模板，并查看运行、客户账户和 Credits。'
-            : '多租户隔离运行、模型供应商、Credits 计费与 Skill 编排，统一在 Nexus 完成 —— 让 Agent 的开通、运行与运维清晰可控。'}
+            ? 'Mirror V Portal 是 Mirror V 的门户。扫码创建独立实例，选择 DealClaw 或 Mirror V 模板，并查看运行、客户账户和 Credits。'
+            : '多租户隔离运行、模型供应商、Credits 计费与 Skill 编排，统一在 Mirror V Portal 完成。'}
         </p>
         <div className="hero-foot">
           <span className="side-status">

@@ -1,8 +1,11 @@
-# Nexus edge
+# Mirror V Portal edge
 
-Vercel fronts the Nexus gateway so the onboarding page has a public HTTPS
+Vercel fronts the Mirror V Portal gateway so the onboarding page has a public HTTPS
 address without a registered domain. Everything is rewritten to the control
 plane host; nothing is served from Vercel itself.
+
+The canonical entry is `https://mirror-v-portal.vercel.app/onboard`; the older
+`nexus-iota-topaz.vercel.app` domain remains attached during the name transition.
 
 The control plane cannot run on Vercel: runtime-manager holds a Feishu long
 connection and an idle-collector timer, neither of which survives a

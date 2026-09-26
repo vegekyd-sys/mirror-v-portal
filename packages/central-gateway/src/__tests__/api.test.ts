@@ -177,14 +177,14 @@ describe('GET /onboard — Feishu registration', () => {
     const res = await request(app).get('/onboard').set('User-Agent', 'Chrome');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
-    expect(res.text).toContain('NEXUS');
+    expect(res.text).toContain('<title>Mirror V Portal · 选择你的 Agent</title>');
     // The gate deliberately carries no customer-identifying content.
     expect(res.text).not.toContain('公司名称');
     expect(res.text).not.toContain('联系邮箱');
   });
 
-  it('serves the generated onboarding artwork and logo', async () => {
-    for (const name of ['nexus-world-v2.webp', 'nexus-world-mobile-v2.webp', 'nexus-logo-v2.webp']) {
+  it('serves the generated onboarding artwork', async () => {
+    for (const name of ['nexus-world-v2.webp', 'nexus-world-mobile-v2.webp']) {
       const res = await request(app).get('/onboard/assets/' + name);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toContain('image/webp');

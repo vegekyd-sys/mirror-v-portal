@@ -1,5 +1,5 @@
 /**
- * Nexus Onboarding — the gate.
+ * Mirror V Portal onboarding — the gate.
  *
  * Choose an Agent template, then scan a QR code to create its own instance.
  *
@@ -14,7 +14,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
-<title>NEXUS · 选择你的 Agent</title>
+<title>Mirror V Portal · 选择你的 Agent</title>
 <link rel="preload" as="image" href="/onboard/assets/nexus-world-v2.webp" media="(min-width: 601px)">
 <link rel="preload" as="image" href="/onboard/assets/nexus-world-mobile-v2.webp" media="(max-width: 600px)">
 <style>
@@ -32,7 +32,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .world::after { content:""; position:absolute; inset:0; background:linear-gradient(#0007,transparent 22%,transparent 74%,#000b); }
   @keyframes arrival { from { opacity:0; } to { opacity:1; } }
   .masthead { position:absolute; top:0; left:0; right:0; padding:32px 40px; display:flex; justify-content:space-between; align-items:center; }
-  .brand { width:170px; height:auto; display:block; mix-blend-mode:screen; }
+  .brand { display:inline-flex; flex-direction:column; gap:2px; color:#fff; text-decoration:none; text-shadow:0 1px 18px #0009; }
+  .brand strong { font-size:23px; line-height:1; font-weight:650; letter-spacing:-.055em; }
+  .brand small { font-size:10px; font-weight:550; letter-spacing:.28em; text-transform:uppercase; }
   .signature { font-size:12px; color:#c4c5cf; letter-spacing:.02em; }
   .gateway { mix-blend-mode:multiply; position:absolute; top:47%; left:50%; transform:translate(-50%,-50%); width:250px; display:flex; flex-direction:column; align-items:center; }
   .template-picker { position:absolute; z-index:4; top:13%; left:50%; transform:translateX(-50%); width:min(540px,calc(100% - 40px)); text-align:center; }
@@ -83,17 +85,17 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .edge span { font-size:11px; color:#c4c5cf; }
   .edge-line { height:1px; width:44px; background:#ffffff55; }
   @media(min-aspect-ratio:19/10) { .world img { object-fit:contain; } }
-  @media(max-width:600px) { .experience { min-height:620px; } .masthead { padding:24px; } .brand { width:140px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:15%; } .gateway { top:55%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
+  @media(max-width:600px) { .experience { min-height:620px; } .masthead { padding:24px; } .brand strong { font-size:19px; } .brand small { font-size:9px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:15%; } .gateway { top:55%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>
 </head>
 <body>
-<main class="experience" aria-label="Nexus，选择 Agent">
+<main class="experience" aria-label="Mirror V Portal，选择 Agent">
   <picture class="world" aria-hidden="true"><source media="(max-width: 600px)" srcset="/onboard/assets/nexus-world-mobile-v2.webp"><img src="/onboard/assets/nexus-world-v2.webp" alt="" fetchpriority="high"></picture>
   <video class="world-video" id="worldVideo" muted playsinline preload="none" aria-hidden="true"></video>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
-  <header class="masthead"><img class="brand" src="/onboard/assets/nexus-logo-v2.webp" alt="NEXUS"><span class="signature">your agent, your world</span></header>
+  <header class="masthead"><span class="brand"><strong>Mirror V</strong><small>Portal</small></span><span class="signature">your agent, your world</span></header>
   <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><div class="channel-picker" role="group" aria-label="选择扫码渠道"><button type="button" class="channel-card" id="feishuChannel" aria-pressed="true">飞书扫码</button><button type="button" class="channel-card" id="weixinChannel" aria-pressed="false">微信扫码</button></div></section>
   <section class="gateway" aria-label="扫码创建 Agent">
     <div class="gate" id="gate"><div class="portal">

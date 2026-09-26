@@ -21,7 +21,7 @@ function RequireAuth({ children }: { children: ReactElement }) {
 }
 
 export default function ElasticApp() {
-  useEffect(() => { document.title = 'Nexus · Mirror V 管理后台'; }, []);
+  useEffect(() => { document.title = 'Mirror V Portal · 管理后台'; }, []);
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
       <AuthProvider>

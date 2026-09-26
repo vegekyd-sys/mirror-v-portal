@@ -1,94 +1,24 @@
-# DealClaw Nexus
+# Mirror V Portal
 
-Agent 多租户运行平台。客户飞书扫码 → 10 秒拥有自己的 AI 外贸销售 Agent。零表单、无需手动配置。
+Mirror V 的多 Agent 门户：访客选择 Agent 模板，扫码创建独立实例并在飞书或微信开始对话；管理员查看 Agent、客户、套餐、Skill 定价与管理员账户。当前提供 Mirror V 与 DealClaw 两个模板，模板列表由运行时接口提供，后续 Agent 可继续加入。
 
-## 当前部署
+## 代码与部署
 
-| 服务 | URL | 状态 |
-|------|-----|------|
-| 入驻页面 | http://43.156.232.2:8085/onboard | ✅ 已部署 |
-| Central Gateway API | http://43.156.232.2:8085 | ✅ 运行中 |
-| Provisioning Service | http://localhost:8082 (内网) | ✅ 运行中 |
+- 产品代码：GitHub 私有仓库 [`vegekyd-sys/mirror-v-portal`](https://github.com/vegekyd-sys/mirror-v-portal)，`dev` 是当前部署分支。
+- 历史来源：GitLab `d12/dealclaw` 中的网关、后台和计费代码，以及 DealClaw Elastic 运行时。历史模块与协议中的 `nexus` 标识暂时保留兼容。
+- 线上入口：`https://mirror-v-portal.vercel.app/onboard`。Vercel 提供 HTTPS 门户入口，请求转发到腾讯云 Mirror V Lighthouse `43.134.135.143`。旧入口 `https://nexus-iota-topaz.vercel.app/onboard` 暂留作兼容。
+- 管理后台：`https://mirror-v-portal.vercel.app/admin/agents`。
+- 本地试用：运行 `scripts/mirror-v-local-tunnel.sh`，打开 `http://127.0.0.1:18080/onboard`。它连接同一台线上主机。
 
-### 入驻流程实现状态 (2026-07-30)
+部署架构、发布和回滚步骤见 [Mirror V 部署说明](deploy/mirror-v/README.md)。仓库改名的兼容边界见 [品牌与内部标识](docs/portal-branding.md)。
 
-- ✅ 飞书扫码 → `lark.registerApp()` 生成设备授权二维码
-- ✅ 用户确认 → SDK 自动返回 App ID + App Secret
-- ✅ 创建租户 + 分配 K8s 资源
-- ✅ 前端轮询入驻状态，完成展示结果
-- ⬜ 飞书 App 内自动跳转授权页（当前浏览器扫码需手动打开飞书）
-- ⬜ Bot webhook 绑定飞书开放平台 API 调用
-- ⬜ 欢迎语通过客户 Bot 发送
+## 主要目录
 
-## 入驻流程
+- `packages/central-gateway`：扫码入口、模板选择、渠道接入。
+- `packages/runtime-manager`：Elastic 实例生命周期、Agent 调用与聊天。
+- `packages/admin-web`：管理后台。
+- `packages/credits-ledger`：客户账户与 Credits 账本。
+- `packages/agent-templates`：可上架的 Agent 模板与 payload。
+- `deploy/mirror-v`、`deploy/vercel-edge`：线上部署配置。
 
-```
-用户飞书扫码 → 飞书 App 内确认创建 → 后台异步创建租户+虚拟机 → 开始对话
-```
-
-无需填写表单。公司信息由 DealClaw Agent 在对话中收集。
-
-## 架构
-
-```
-Central Gateway (扫码入口 + registerApp 集成)
-        │
-        ├── lark SDK registerApp() ── 飞书一键创建应用
-        │
-        └── Onboarding 编排 ──▶ Provisioning Service ──▶ K8s
-                │
-                └── Tenant Registry (DB)
-
-每个租户独立 Pod:
-        ├── Nexus Agent Gateway (auth/credits/audit)
-        └── DealClaw Agent (skills orchestration)
-
-后台运维:
-        ├── Ops Agent (lifecycle management)
-        ├── Credits Ledger
-        └── Payment Service (规划中)
-```
-
-## 项目结构
-
-```
-dealclaw/
-├── packages/
-│   ├── central-gateway/       # 扫码入口 + registerApp 集成 + 入驻编排
-│   ├── nexus-gateway/         # 客户 Pod 内 Gateway（Node.js/TS）
-│   ├── provisioning-service/  # K8s 资源开通服务（Node.js/TS）
-│   ├── credits-ledger/        # Credits 账本服务
-│   ├── ops-agent/             # 全自动生命周期管理
-│   ├── mock-agent/            # Agent 模拟器（开发用）
-│   ├── dealclaw-agent/        # DealClaw Agent 核心（Skill 组合）
-│   └── admin-dashboard/       # 运维管理后台
-├── e2e/                       # 全链路端到端测试
-├── docs/                      # 技术设计文档
-├── k8s/                       # K8s 部署清单
-└── scripts/                   # 运维脚本
-```
-
-## 技术栈
-
-- **核心服务**: TypeScript + Node.js
-- **Agent 运行时**: OpenClaw
-- **容器编排**: K3s / Kubernetes
-- **数据库**: PostgreSQL
-- **飞书集成**: @larksuiteoapi/node-sdk (registerApp 一键创建)
-
-## 测试覆盖
-
-| 层级 | 服务数 | 测试数 | 状态 |
-|------|--------|--------|------|
-| 单元测试 | 8 | 127 | ✅ |
-| E2E 全链路 | 4 链 | 15 | ✅ |
-| **合计** | | **142** | ✅ |
-
-## 参考文档
-
-- [DealClaw Nexus 系统设计](./docs/architecture.md)
-- [模块详情](./docs/modules/)
-- [测试设计](./docs/testing.md)
-- [任务列表](./docs/tasks.md)
-- [DealClaw Nexus 技术方案 v3.0](https://versa-ai.feishu.cn/docx/EPGvdMIb6onOdIxdRKScpj6tnxI)
-- [DealClaw 定价策略 v4](https://versa-ai.feishu.cn/docx/UmbpdM4h9o0qF2xkgy9cLSR3nff)
+历史 GitLab 架构与设计材料保留在 `docs/` 和其他 `packages/` 中，不能把其中的 Kubernetes 部署说明当作当前腾讯云主机的发布步骤。
