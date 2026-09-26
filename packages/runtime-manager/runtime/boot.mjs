@@ -95,7 +95,11 @@ const cfg = {
       timeoutSeconds: 600,
       maxConcurrent: 1,
       heartbeat: { every: "0m" },
-      memorySearch: { enabled: false },
+      // Mirror V inherits V001's Markdown memory. Its isolated sandbox has no
+      // embedding credential, so index it with OpenClaw's built-in FTS mode.
+      memorySearch: agentId === "mirror-v"
+        ? { provider: "none", fallback: "none" }
+        : { enabled: false },
       compaction: { mode: "safeguard" },
     },
     list: [{ id: agentId, default: true, workspace }],
@@ -108,12 +112,27 @@ const cfg = {
   },
   plugins: {
     enabled: true,
-    allow: ["nexus-scheduler"],
+    allow: agentId === "mirror-v" ? ["nexus-scheduler", "memory-core"] : ["nexus-scheduler"],
+    slots: agentId === "mirror-v" ? { memory: "memory-core" } : undefined,
     load: { paths: [pluginDir] },
-    entries: { "nexus-scheduler": { enabled: true } },
+    entries: {
+      "nexus-scheduler": { enabled: true },
+      ...(agentId === "mirror-v" ? { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } } : {}),
+    },
   },
 };
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
+function indexMirrorMemory() {
+  if (agentId !== "mirror-v") return;
+  try {
+    execFileSync("node", [
+      `${base}/runtime/node_modules/openclaw/openclaw.mjs`,
+      "memory", "index", "--agent", agentId,
+    ], { env, timeout: 90_000, stdio: "pipe" });
+  } catch {
+    throw new Error("MIRROR_V_MEMORY_INDEX_FAILED");
+  }
+}
 // A repeated ensure call must reuse the healthy process within this VM boot.
 try {
   const r = await fetch("http://127.0.0.1:18790/healthz", {
@@ -175,6 +194,7 @@ for (let i = 0; i < 180; i++) {
       signal: AbortSignal.timeout(1000),
     });
     if (r.ok) {
+      indexMirrorMemory();
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(
         "/tmp/nexus-baseline-pids",

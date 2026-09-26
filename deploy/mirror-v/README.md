@@ -53,6 +53,36 @@ The portal supports Feishu registration and WeChat iLink scans. WeChat QR
 sessions remain in manager memory; the tenant is created only after the phone
 confirms. A manager restart expires an unfinished scan, which can be retried.
 
+## Mirror V V001 payload
+
+The public `mirror-v` starter in Git does not contain V001 memory. To make a
+versioned V001-derived template, prepare a private text archive on the Mirror V
+host from its existing `mirror-v-001` workspace:
+
+```sh
+python3 packages/runtime-manager/scripts/prepare-mirror-v001-payload.py \
+  --source /root/makaron-openclaw/.openclaw-local/workspace \
+  --output /opt/nexus/data/mirror-v-v001-payload.tar
+```
+
+The script copies Markdown, JSON and text memory/skills, rewrites the top-level
+identity for independent Mirror V instances, redacts credential assignments,
+and excludes media, logs, backups and runtime state. Review its file counts and
+private archive before building. The archive must remain outside Git and have
+mode `0600`. Build the Vercel snapshot from the private archive:
+
+```sh
+pnpm --filter @dealclaw/runtime-manager exec tsx scripts/build-snapshot.ts \
+  --template mirror-v \
+  --payload-archive /opt/nexus/data/mirror-v-v001-payload.tar
+```
+
+The builder stores the snapshot ID and `mirror-v.v001-full.v1` version in the
+private config. New tenants get separate sandboxes seeded from that snapshot.
+Existing tenants remain pinned to their original snapshot until migrated.
+The V001 knowledge seed does not install old host credentials or tools; verify
+memory indexing and real replies before exposing the new template.
+
 For local acceptance on a trusted Mac, run `scripts/mirror-v-local-tunnel.sh`
 and open `http://127.0.0.1:18080/onboard`. The tunnel points to this same
 deployed server and also exposes `/admin/login` locally without public HTTP.

@@ -8,6 +8,10 @@ const config = loadConfig();
 const root = path.resolve("../..");
 const templateId = process.argv[2] === "--template" ? process.argv[3] : "legacy";
 if (!["legacy", "dealclaw", "mirror-v"].includes(templateId)) throw new Error("UNKNOWN_TEMPLATE");
+const payloadArchiveArg = process.argv.indexOf("--payload-archive");
+const privatePayloadArchive = payloadArchiveArg >= 0 ? process.argv[payloadArchiveArg + 1] : undefined;
+if (privatePayloadArchive && templateId !== "mirror-v") throw new Error("PRIVATE_PAYLOAD_TEMPLATE_UNSUPPORTED");
+if (payloadArchiveArg >= 0 && !privatePayloadArchive) throw new Error("PAYLOAD_ARCHIVE_REQUIRED");
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
@@ -16,11 +20,21 @@ if (!["legacy", "dealclaw", "mirror-v"].includes(templateId)) throw new Error("U
 const external = templateId === "legacy" ? config.payloadArchive : undefined;
 let archive: string;
 let stripComponents: number;
+let payloadVersion: string | undefined;
 if (external) {
   archive = path.isAbsolute(external) ? external : path.join(config.dataDir, external);
   if (!fs.existsSync(archive)) throw new Error(`PAYLOAD_ARCHIVE_MISSING: ${archive}`);
   stripComponents = 1; // entries are ./AGENTS.md, ./memory/...
   console.log(JSON.stringify({ phase: "payload-external", archive, bytes: fs.statSync(archive).size }));
+} else if (privatePayloadArchive) {
+  archive = path.resolve(privatePayloadArchive);
+  if (!fs.existsSync(archive)) throw new Error("PAYLOAD_ARCHIVE_MISSING");
+  const privateManifest = JSON.parse(execFileSync("tar", ["-xOf", archive, "payload-manifest.json"], { encoding: "utf8" }));
+  if (privateManifest.name !== "mirror-v" || !/^mirror-v\.v001-full\.[a-z0-9.-]+$/.test(privateManifest.version))
+    throw new Error("PRIVATE_PAYLOAD_MANIFEST_INVALID");
+  payloadVersion = privateManifest.version;
+  stripComponents = 0;
+  console.log(JSON.stringify({ phase: "payload-v001", bytes: fs.statSync(archive).size, version: payloadVersion }));
 } else if (templateId === "legacy") {
   archive = path.join(config.dataDir, "dealclaw-payload.tar");
   stripComponents = 3;
@@ -122,7 +136,7 @@ try {
   if (templateId === "legacy") saved.snapshotId = snapshot.snapshotId;
   else {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, `packages/agent-templates/${templateId}/payload/payload-manifest.json`), "utf8"));
-    saved.templates = { ...saved.templates, [templateId]: { version: manifest.version, snapshotId: snapshot.snapshotId } };
+    saved.templates = { ...saved.templates, [templateId]: { version: payloadVersion || manifest.version, snapshotId: snapshot.snapshotId } };
   }
   fs.writeFileSync(file, JSON.stringify(saved, null, 2), { mode: 0o600 });
   console.log(
