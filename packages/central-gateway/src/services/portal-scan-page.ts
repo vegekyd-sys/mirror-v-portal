@@ -25,7 +25,7 @@ export const PORTAL_SCAN_HTML = `<!doctype html>
   <p id="status" role="status" aria-live="polite">正在读取入口码</p>
   <div class="choices" id="choices" hidden><button type="button" id="feishu">在飞书开通</button><button type="button" id="weixin">在微信开通</button></div>
   <a class="action" id="continue" hidden>继续授权</a>
-  <div class="qr" id="wechat-qr" hidden><img id="wechat-qr-image" alt="微信 Agent 授权二维码"><p>如果点击后页面空白，请返回这里，长按授权码并选择“识别图中二维码”。</p></div>
+  <div class="qr" id="wechat-qr" hidden><img id="wechat-qr-image" alt="微信 Agent 授权二维码"><p>长按上方授权码，选择“识别图中二维码”，然后在微信中确认开通。</p></div>
   <form id="verify" hidden><input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="微信验证码" aria-label="微信验证码"><button type="submit">提交</button></form>
   <div class="fine">一个入口，按扫码 App 进入对应的授权流程。</div>
 </main>
@@ -49,15 +49,15 @@ export const PORTAL_SCAN_HTML = `<!doctype html>
       choices.hidden=true;
       var active=data.status!=='completed'&&data.status!=='failed'&&data.status!=='expired';
       if(data.channel==='weixin'&&active&&data.qrImageUrl){
-        wechatQrImage.src=data.qrImageUrl;wechatQr.hidden=false;
-        if(data.actionUrl){continueLink.href=data.actionUrl;continueLink.textContent='在微信确认开通';continueLink.hidden=false;}
+        wechatQrImage.src=data.qrImageUrl;wechatQr.hidden=false;continueLink.hidden=true;
       }else if(data.channel==='feishu'&&active&&data.actionUrl){
         continueLink.href=data.actionUrl;continueLink.textContent='在飞书继续授权';continueLink.hidden=false;wechatQr.hidden=true;
       }else{continueLink.hidden=true;wechatQr.hidden=true;}
+      verify.hidden=data.status!=='need_verify_code';
       if(data.status==='completed')say('创建完成，回到'+(data.channel==='weixin'?'微信':'飞书')+'开始对话。');
-      else if(data.status==='need_verify_code'){verify.hidden=false;say('请填写微信提示的验证码。');}
+      else if(data.status==='need_verify_code')say('请填写微信提示的验证码。');
       else if(data.status==='failed'||data.status==='expired')say(data.message||'授权未完成，请在电脑上重新生成入口码。');
-      else if(data.channel==='weixin')say('授权已准备好，点击下方按钮在微信确认开通。');
+      else if(data.channel==='weixin')say('微信授权已准备好。');
       else say('授权已准备好，请点击下方按钮继续。');
     }
     return data;
@@ -75,11 +75,11 @@ export const PORTAL_SCAN_HTML = `<!doctype html>
       data=await response.json();
       if(!response.ok)throw new Error('入口已在别处使用，请在电脑上重新生成');
       if(channel==='weixin'){
-        wechatQrImage.src='/onboard/portal/'+encodeURIComponent(id)+'/weixin-qr.png';
+        if(!data.qrImageUrl)throw new Error('微信授权暂时不可用');
+        wechatQrImage.src=data.qrImageUrl;
         wechatQr.hidden=false;
-        if(!data.redirectUrl)throw new Error('微信授权暂时不可用');
-        continueLink.href=data.redirectUrl;continueLink.textContent='在微信确认开通';continueLink.hidden=false;
-        say('授权已准备好，点击下方按钮在微信确认开通。');
+        continueLink.hidden=true;
+        say('微信授权已准备好。');
       }else{
         if(!data.redirectUrl)throw new Error('飞书授权暂时不可用');
         continueLink.href=data.redirectUrl;continueLink.hidden=false;

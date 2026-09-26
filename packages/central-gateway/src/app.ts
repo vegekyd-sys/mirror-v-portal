@@ -178,8 +178,7 @@ export function createApp() {
       templateId: entry.template.id,
       templateName: entry.template.name,
       channel: entry.channel || null,
-      actionUrl: entry.channel === 'feishu' && entry.deviceCode ? sessions.get(entry.deviceCode)?.qrUrl
-        : entry.channel === 'weixin' && entry.deviceCode ? weixinSessions.get(entry.deviceCode)?.qrUrl : undefined,
+      actionUrl: entry.channel === 'feishu' && entry.deviceCode ? sessions.get(entry.deviceCode)?.qrUrl : undefined,
       qrImageUrl: entry.channel === 'weixin' && entry.deviceCode ? `/onboard/portal/${encodeURIComponent(req.params.entryId)}/weixin-qr.png` : undefined,
     };
     if (!entry.channel || !entry.deviceCode) { res.json({ ...base, status: 'pending', progress: 0 }); return; }
@@ -231,7 +230,9 @@ export function createApp() {
     if (!allowed.includes(host)) { res.status(503).json({ code: 'AUTH_URL_INVALID' }); return; }
     entry.channel = channel;
     entry.deviceCode = deviceCode;
-    res.json({ ok: true, redirectUrl });
+    res.json(channel === 'weixin'
+      ? { ok: true, qrImageUrl: `/onboard/portal/${encodeURIComponent(req.params.entryId)}/weixin-qr.png` }
+      : { ok: true, redirectUrl });
   });
 
   app.post('/onboard/portal/:entryId/verify', async (req, res) => {
