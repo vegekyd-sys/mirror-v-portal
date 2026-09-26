@@ -15,7 +15,7 @@ import re
 import tarfile
 from pathlib import Path
 
-VERSION = "mirror-v.v001-full.v1"
+VERSION = "mirror-v.v001-full.v2"
 CORE = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "PROJECTS.md", "HEARTBEAT.md", "TOOLS.md")
 TEXT_SUFFIXES = {".md", ".json", ".jsonl", ".txt"}
 BLOCKED_PARTS = {".dreams", "backups", "credentials", "imports", "logs", "raw", ".openclaw"}
@@ -57,10 +57,11 @@ def clean_text(data: bytes) -> tuple[str, int]:
 
 
 def identity_docs(source: dict[str, str]) -> dict[str, str]:
+    source_agents = source["AGENTS.md"]
     source_memory = source["MEMORY.md"]
     source_soul = source["SOUL.md"]
     source_identity = source["IDENTITY.md"]
-    header = (
+    agents = (
         "# Mirror V · V001 基线\n\n"
         "你是 Mirror V，是从旧 mirror-v-001 公司基线创建的独立分身。"
         "每个扫码用户有独立运行环境、会话和后续记忆。"
@@ -70,9 +71,17 @@ def identity_docs(source: dict[str, str]) -> dict[str, str]:
         "先读 MEMORY.md 与 memory/；不确定就说明资料日期和局限。"
         "TOOLS.md 和旧技能是能力说明，不代表本沙箱装有相同工具或凭据。"
         "调用前检查实际可用工具；不要声称已完成未执行的操作。\n\n"
+        "## 聊天回复\n\n"
+        "微信、飞书等私聊中的每条用户消息都应给出可见回复，包括问候、追问和确认。"
+        "不要因为消息简短、没有明确任务，或来自旧 V001 的群聊规则而保持静默。"
+        "只有明确的群聊元数据表明是群聊时，才考虑群聊中的静默规则。"
+        "当前运行环境不提供直接向聊天应用发送消息的工具；把最终答复写在正常回复中，"
+        "不要输出 NO_REPLY 等静默标记。\n\n"
+        "旧 AGENTS.md 是历史来源，存于 memory/v001-source-agents.md；"
+        "其中的群聊、主动发送和旧主机操作规则不是本实例的执行规则。\n"
     )
     return {
-        "AGENTS.md": header + source["AGENTS.md"],
+        "AGENTS.md": agents,
         "SOUL.md": (
             "# Mirror V\n\n继承旧 V001 的公司级工作风格：清楚、主动、以证据为准，"
             "帮助用户把上下文变成可交付的工作。你是独立 Mirror V 分身；"
@@ -106,6 +115,7 @@ def identity_docs(source: dict[str, str]) -> dict[str, str]:
         "PROJECTS.md": source["PROJECTS.md"],
         "HEARTBEAT.md": source["HEARTBEAT.md"],
         "memory/v001-source-memory.md": source_memory,
+        "memory/v001-source-agents.md": source_agents,
         "memory/v001-source-soul.md": source_soul,
         "memory/v001-source-identity.md": source_identity,
     }

@@ -19,6 +19,7 @@ class PrepareMirrorV001Tests(unittest.TestCase):
             root.mkdir()
             for name in module.CORE:
                 (root / name).write_text("V from Versa knows Makaron.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("Group Chat Rules: human discussion = NO_REPLY.\n", encoding="utf-8")
             (root / "memory").mkdir()
             (root / "memory" / "makaron.md").write_text("Makaron is a creative product.\n")
             (root / "memory" / "secret.md").write_text("export MAKARON_API_KEY=test-secret-value\n")
@@ -36,6 +37,10 @@ class PrepareMirrorV001Tests(unittest.TestCase):
                 identity = archive.extractfile("IDENTITY.md").read().decode()
                 self.assertIn("Mirror V", identity)
                 self.assertNotIn("V from Versa is the public", identity)
+                agents = archive.extractfile("AGENTS.md").read().decode()
+                self.assertIn("私聊中的每条用户消息都应给出可见回复", agents)
+                self.assertNotIn("human discussion = NO_REPLY", agents)
+                self.assertIn("human discussion = NO_REPLY", archive.extractfile("memory/v001-source-agents.md").read().decode())
                 secret = archive.extractfile("memory/secret.md").read().decode()
                 self.assertIn("<redacted>", secret)
                 self.assertNotIn("test-secret-value", secret)

@@ -77,7 +77,7 @@ pnpm --filter @dealclaw/runtime-manager exec tsx scripts/build-snapshot.ts \
   --payload-archive /opt/nexus/data/mirror-v-v001-payload.tar
 ```
 
-The builder stores the snapshot ID and `mirror-v.v001-full.v1` version in the
+The builder stores the snapshot ID and `mirror-v.v001-full.v2` version in the
 private config. New tenants get separate sandboxes seeded from that snapshot.
 Existing tenants remain pinned to their original snapshot until migrated.
 The V001 knowledge seed does not install old host credentials or tools; verify
