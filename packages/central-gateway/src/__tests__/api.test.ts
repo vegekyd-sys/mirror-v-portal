@@ -243,6 +243,59 @@ describe('WeChat portal onboarding', () => {
   });
 });
 
+describe('One-scan Portal entry', () => {
+  it('shows one QR before choosing a channel and routes the same entry to a native authorization', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/v1/templates')) return Response.json({ templates: [
+        { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+      ] });
+      if (url.endsWith('/v1/channels/weixin/portal-login')) return Response.json({
+        sessionId: 'portal-weixin-test', qrImage: 'https://liteapp.weixin.qq.com/test', expiresIn: 600,
+      });
+      if (url.endsWith('/v1/channels/weixin/login/portal-weixin-test'))
+        return Response.json({ status: 'pending', progress: 12 });
+      throw new Error(`Unexpected request: ${url} ${init?.method || 'GET'}`);
+    });
+    try {
+      const entry = await request(app).post('/onboard/portal/start').send({ templateId: 'mirror-v' });
+      expect(entry.status).toBe(200);
+      expect(entry.body.qrDataUri).toMatch(/^data:image\/png;base64,/);
+      const id = entry.body.entryId;
+      const scan = await request(app).get('/onboard/scan').query({ entry: id });
+      expect(scan.status).toBe(200);
+      expect(scan.text).toContain('MicroMessenger');
+      expect(scan.text).toContain('Lark|Feishu');
+      expect(scan.text).not.toContain('飞书扫码</button>');
+      const before = await request(app).get(`/onboard/portal/${id}/status`);
+      expect(before.body).toMatchObject({ templateId: 'mirror-v', channel: null, status: 'pending' });
+
+      const native = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v' });
+      expect(native.status).toBe(200);
+      const linked = await request(app).post(`/onboard/portal/${id}/link`).send({ channel: 'weixin', deviceCode: native.body.deviceCode });
+      expect(linked.status).toBe(200);
+      expect(linked.body.redirectUrl).toBe('https://liteapp.weixin.qq.com/test');
+      expect((await request(app).post(`/onboard/portal/${id}/link`).send({ channel: 'weixin', deviceCode: native.body.deviceCode })).status).toBe(409);
+      const after = await request(app).get(`/onboard/portal/${id}/status`);
+      expect(after.body).toMatchObject({ channel: 'weixin', status: 'pending', progress: 12 });
+      expect(after.text).not.toContain(native.body.deviceCode);
+      expect((await request(app).post(`/onboard/portal/${id}/cancel`)).body.ok).toBe(true);
+      expect((await request(app).get(`/onboard/portal/${id}/status`)).status).toBe(410);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  it('rejects expired or unapproved entries before any channel session starts', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
+      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+    ] }));
+    try {
+      expect((await request(app).post('/onboard/portal/start').send({ templateId: 'unknown' })).status).toBe(400);
+      expect((await request(app).get('/onboard/scan').query({ entry: 'unknown' })).status).toBe(410);
+      expect((await request(app).post('/onboard/portal/unknown/link').send({ channel: 'feishu', deviceCode: 'x' })).status).toBe(410);
+    } finally { fetchMock.mockRestore(); }
+  });
+});
+
 describe('GET /onboard/status', () => {
   it('returns a debug session list when deviceCode is missing', async () => {
     const res = await request(app).get('/onboard/status');

@@ -43,10 +43,6 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .template-card { flex:1; max-width:250px; min-height:72px; padding:12px 14px; border:1px solid #ffffff77; border-radius:12px; background:#09121bc9; color:#fff; text-align:left; cursor:pointer; font:inherit; backdrop-filter:blur(14px); }
   .template-card[aria-pressed="true"] { border-color:#fff; background:#e9f2ffe8; color:#142032; }
   .template-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
-  .channel-picker { display:flex; justify-content:center; gap:8px; margin-top:12px; }
-  .channel-card { min-width:92px; min-height:36px; border:1px solid #ffffff77; border-radius:20px; background:#09121bc9; color:#fff; font:inherit; font-size:12px; cursor:pointer; }
-  .channel-card[aria-pressed="true"] { background:#e9f2ffe8; color:#142032; border-color:#fff; }
-  .channel-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
   .template-name { display:block; font-size:14px; font-weight:600; }
   .template-description { display:block; margin-top:4px; font-size:11px; line-height:1.35; opacity:.8; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
@@ -55,7 +51,6 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   #code { display:none; width:204px; height:204px; object-fit:contain; mix-blend-mode:multiply; opacity:.88; }
   .core { width:28px; height:28px; border:1.5px solid #14151b22; border-top-color:#14151b; border-radius:50%; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .sweep { display:none!important; }
   .arrived { display:none; width:56px; height:56px; color:#151c2c; }
   .arrived svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
   .gate.opening { transform:scale(.92); }
@@ -73,10 +68,6 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .status.warn { color:#773b21; }
   .meta { color:#55647b; font-size:10px; font-variant-numeric:tabular-nums; margin-top:4px; }
   .meta:empty { display:none; }
-  .verify-form { display:flex; gap:6px; margin-top:8px; }
-  .verify-form[hidden] { display:none; }
-  .verify-form input { width:115px; min-height:36px; border:1px solid #8695a9; border-radius:6px; padding:6px; background:#fff; color:#1b2738; font-size:14px; }
-  .verify-form button { min-height:36px; border:0; border-radius:6px; padding:6px 10px; background:#26344b; color:#fff; cursor:pointer; }
   .retry { visibility:hidden; position:absolute; top:calc(100% + 12px); border:1px solid #26344b88; background:#f4f8ffcc; color:#26344b; border-radius:4px; font:inherit; font-size:13px; padding:12px 20px; min-height:44px; cursor:pointer; }
   .retry.on { visibility:visible; }
   .retry:hover { background:#dbe4f2; color:#000; }
@@ -96,16 +87,15 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
   <header class="masthead"><span class="brand"><strong>Mirror V</strong><small>Portal</small></span><span class="signature">your agent, your world</span></header>
-  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><div class="channel-picker" role="group" aria-label="选择扫码渠道"><button type="button" class="channel-card" id="feishuChannel" aria-pressed="true">飞书扫码</button><button type="button" class="channel-card" id="weixinChannel" aria-pressed="false">微信扫码</button></div></section>
+  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div></section>
   <section class="gateway" aria-label="扫码创建 Agent">
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
       <img id="code" alt="扫码创建 Agent">
-      <div class="sweep" id="sweep"></div>
       <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
     </div></div>
     <div class="beam-track" id="beamTrack"><div class="beam-fill" id="beamFill"></div></div>
-    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div><form id="verifyForm" class="verify-form" hidden><input id="verifyCode" inputmode="numeric" autocomplete="one-time-code" aria-label="微信验证码" placeholder="微信验证码"><button type="submit">提交验证码</button></form></div>
+    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div></div>
     <button class="retry" id="retry" type="button">重新生成二维码</button>
   </section>
   <div class="edge" aria-hidden="true"><span class="edge-line"></span><span>另一种可能</span><span class="edge-line"></span></div>
@@ -183,49 +173,52 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   syncMotion();
 })();
 (function () {
-  var deviceCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
-  var selectedTemplate = null, selectedChannel = 'feishu', generation = 0;
-  // Edge providers treat sub-second-scale polling from many clients as an attack;
-  // 3s is still responsive for a scan while roughly halving requests per session.
+  var entryId = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
+  var selectedTemplate = null, generation = 0;
   var POLL_MS = 3000;
   var gate = document.getElementById('gate');
   var core = document.getElementById('core');
   var code = document.getElementById('code');
-  var sweep = document.getElementById('sweep');
   var statusEl = document.getElementById('status');
   var metaEl = document.getElementById('meta');
   var beamTrack = document.getElementById('beamTrack');
   var beamFill = document.getElementById('beamFill');
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
-  var verifyForm = document.getElementById('verifyForm');
-  var verifyCode = document.getElementById('verifyCode');
-  var channelButtons = { feishu: document.getElementById('feishuChannel'), weixin: document.getElementById('weixinChannel') };
-  function cancelPath() { return selectedChannel === 'weixin' ? '/onboard/weixin/cancel' : '/onboard/cancel'; }
-  Object.keys(channelButtons).forEach(function (channel) {
-    channelButtons[channel].addEventListener('click', function () {
-      if (channel === selectedChannel) return;
-      var oldCancelPath = cancelPath(), oldCode = deviceCode;
-      selectedChannel = channel;
-      Object.keys(channelButtons).forEach(function (key) { channelButtons[key].setAttribute('aria-pressed', String(key === channel)); });
-      if (oldCode) fetch(oldCancelPath, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:oldCode}), keepalive:true }).catch(function () {});
-      deviceCode = null;
-      if (selectedTemplate) open();
-    });
-  });
 
+  function say(text, warn) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (warn ? ' warn' : '');
+  }
+  function setState(cls) { gate.className = 'gate' + (cls ? ' ' + cls : ''); }
+  function progress(pct) {
+    beamTrack.classList.toggle('on', pct > 4 && pct < 100);
+    beamFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+  function stopTimers() { clearInterval(pollTimer); clearInterval(tickTimer); pollTimer = tickTimer = null; }
+  function closeGate(message) {
+    stopTimers(); active = false; setState('lost'); say(message, true);
+    metaEl.textContent = ''; beamTrack.classList.remove('on'); retry.classList.add('on');
+  }
+  function tick() {
+    if (!expireAt) return;
+    var left = Math.max(0, Math.ceil((expireAt - Date.now()) / 1000));
+    metaEl.textContent = left <= 60 ? left + ' 秒后过期' : '';
+    if (left <= 0) closeGate('入口码已过期，请重新生成');
+  }
   async function loadTemplates() {
     try {
-      var requestedTemplate = new URLSearchParams(window.location.search).get('template');
+      var requested = new URLSearchParams(location.search).get('template');
       var response = await fetch('/onboard/templates');
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
       if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');
+      var preferred = data.templates.some(function (template) { return template.id === requested; }) ? requested : 'mirror-v';
+      var initialCard = null;
       templateList.replaceChildren();
       data.templates.forEach(function (template) {
         var card = document.createElement('button');
-        card.type = 'button'; card.className = 'template-card';
-        card.setAttribute('aria-pressed', 'false');
+        card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false');
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
         var desc = document.createElement('span'); desc.className = 'template-description'; desc.textContent = template.description;
         card.append(name, desc);
@@ -236,181 +229,63 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           open();
         });
         templateList.appendChild(card);
-        if (requestedTemplate === template.id) card.click();
+        if (preferred === template.id || (!initialCard && template === data.templates[0])) initialCard = card;
       });
-      if (!selectedTemplate) say('请选择 Agent，生成专属二维码');
+      initialCard.click();
     } catch (error) { closeGate(error.message || '模板加载失败'); }
   }
-
-  function setState(cls) { gate.className = 'gate' + (cls ? ' ' + cls : ''); }
-  function say(text, warn) {
-    statusEl.textContent = text;
-    statusEl.className = 'status' + (warn ? ' warn' : '');
-  }
-  function progress(pct) {
-    beamTrack.classList.toggle('on', pct > 4 && pct < 100);
-    beamFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
-  }
-  function stopTimers() { clearInterval(pollTimer); clearInterval(tickTimer); pollTimer = tickTimer = null; }
-
-  function closeGate(message) {
-    stopTimers();
-    active = false;
-    verifyForm.hidden = true;
-    setState('lost');
-    say(message, true);
-    metaEl.textContent = '';
-    beamTrack.classList.remove('on');
-    retry.classList.add('on');
-  }
-
-  function tick() {
-    if (!expireAt) return;
-    var left = Math.max(0, Math.ceil((expireAt - Date.now()) / 1000));
-    var m = Math.floor(left / 60), s = left % 60;
-    metaEl.textContent = left <= 60 ? left + ' 秒后过期' : '';
-    if (left <= 0) closeGate('二维码已过期，请重新生成');
-  }
-
   async function open() {
     if (!selectedTemplate) { loadTemplates(); return; }
     var currentGeneration = ++generation;
     var template = selectedTemplate;
-    var channel = selectedChannel;
-    var currentCancelPath = '/onboard/' + (channel === 'weixin' ? 'weixin/' : '') + 'cancel';
-    var previousCode = deviceCode;
-    stopTimers();
-    active = false;
-    deviceCode = null;
-    expireAt = null;
-    verifyForm.hidden = true;
-    verifyCode.value = '';
-    retry.classList.remove('on');
-    setState('');
-    core.style.display = 'block';
-    code.style.display = 'none';
-    sweep.style.display = 'none';
-    say('正在生成二维码…');
-    metaEl.textContent = '';
-    beamTrack.classList.remove('on');
-    beamFill.style.width = '0%';
-    if (previousCode) fetch(currentCancelPath, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceCode: previousCode }), keepalive: true,
-    }).catch(function () {});
-
+    var previousEntry = entryId;
+    stopTimers(); active = false; entryId = null; expireAt = null;
+    if (previousEntry) fetch('/onboard/portal/' + encodeURIComponent(previousEntry) + '/cancel', { method: 'POST', keepalive: true }).catch(function () {});
+    retry.classList.remove('on'); setState(''); core.style.display = 'block'; code.style.display = 'none';
+    say('正在生成入口码…'); metaEl.textContent = ''; progress(0);
     try {
-      var res = await fetch('/onboard/' + channel + '/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId: template.id }),
+      var response = await fetch('/onboard/portal/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: template.id }),
       });
-      var data = await res.json();
-      if (currentGeneration !== generation) {
-        if (data.deviceCode) fetch(currentCancelPath, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceCode:data.deviceCode}), keepalive:true }).catch(function () {});
-        return;
-      }
-      if (!data.ok) throw new Error(data.message || '通道开启失败');
-
-      active = true;
-      deviceCode = data.deviceCode;
-      core.style.display = 'none';
-      code.src = data.qrDataUri || data.qrUrl;
-      code.alt = (channel === 'weixin' ? '微信' : '飞书') + '扫码创建 ' + template.name;
-      code.style.display = 'block';
-      sweep.style.display = 'block';
-      setState('live');
-      say((channel === 'weixin' ? '微信' : '飞书') + '扫码，创建 ' + template.name);
-
-      expireAt = Date.now() + (data.expireIn || 300) * 1000;
-      tick();
-      progress(4);
-
-      pollTimer = setInterval(poll, POLL_MS);
-      tickTimer = setInterval(tick, 1000);
-    } catch (err) {
-      if (currentGeneration === generation) closeGate(err.message || '通道开启失败');
-    }
+      var data = await response.json();
+      if (currentGeneration !== generation) return;
+      if (!response.ok || !data.ok || !data.qrDataUri) throw new Error(data.message || '入口码生成失败');
+      entryId = data.entryId; active = true; core.style.display = 'none';
+      code.src = data.qrDataUri; code.alt = '用飞书或微信扫码创建 ' + template.name;
+      code.style.display = 'block'; setState('live');
+      say('用飞书或微信扫码，创建 ' + template.name);
+      expireAt = Date.now() + (data.expireIn || 600) * 1000;
+      tick(); pollTimer = setInterval(poll, POLL_MS); tickTimer = setInterval(tick, 1000);
+    } catch (error) { if (currentGeneration === generation) closeGate(error.message || '入口码生成失败'); }
   }
-
   async function poll() {
-    if (!deviceCode || !active) return;
-    var checkedCode = deviceCode;
+    if (!entryId || !active) return;
+    var checked = entryId;
     try {
-      var res = await fetch('/onboard/' + selectedChannel + '/status/' + checkedCode);
-      var data = await res.json();
-      if (checkedCode !== deviceCode) return;
-
+      var response = await fetch('/onboard/portal/' + encodeURIComponent(checked) + '/status');
+      var data = await response.json();
+      if (checked !== entryId) return;
+      if (!response.ok || data.status === 'expired') { closeGate(data.message || '入口码已过期'); return; }
       if (typeof data.progress === 'number') progress(data.progress);
-
-      if (data.status === 'scanned') {
-        say('已扫码，请在微信中确认');
-      } else if (data.status === 'need_verify_code') {
-        verifyForm.hidden = false;
-        say('请填写微信显示的验证码');
-      } else if (data.status === 'provisioning') {
-        clearInterval(tickTimer);
-        tickTimer = null;
-        expireAt = null;
-        setState('opening');
-        say('正在为你开通 ' + selectedTemplate.name + '…');
-        metaEl.textContent = '';
-        sweep.style.display = 'none';
-        code.style.display = 'none';
-        core.style.display = 'block';
-      } else if (data.status === 'completed') {
-        stopTimers();
-        active = false;
-        verifyForm.hidden = true;
-        core.style.display = 'none';
-        code.style.display = 'none';
-        progress(100);
-        setState('through');
-        say(selectedTemplate.name + ' 已就绪');
-        metaEl.textContent = selectedChannel === 'weixin' ? '回到微信，开始对话' : '回到飞书，开始对话';
+      if (!data.channel) return;
+      var channel = data.channel === 'weixin' ? '微信' : '飞书';
+      if (data.status === 'scanned' || data.status === 'need_verify_code') say('请在' + channel + '完成确认' + (data.status === 'need_verify_code' ? '和验证码' : ''));
+      else if (data.status === 'provisioning') { setState('opening'); say('正在为你开通 ' + selectedTemplate.name + '…'); }
+      else if (data.status === 'completed') {
+        stopTimers(); active = false; progress(100); setState('through');
+        code.style.display = 'none'; say(selectedTemplate.name + ' 已就绪');
+        metaEl.textContent = '回到' + channel + '，开始对话';
         setTimeout(function () { beamTrack.classList.remove('on'); }, 900);
-      } else if (data.status === 'failed' || data.status === 'expired' || data.status === 'cancelled') {
-        closeGate(data.message || '通道已关闭');
-      }
-    } catch (e) { /* transient — keep polling */ }
+      } else if (data.status === 'failed' || data.status === 'cancelled') closeGate(data.message || '授权未完成，请重新生成');
+      else say('请在' + channel + '完成授权');
+    } catch (error) { /* transient — keep polling */ }
   }
-
   retry.addEventListener('click', function () { if (selectedTemplate) open(); else loadTemplates(); });
-  verifyForm.addEventListener('submit', async function (event) {
-    event.preventDefault();
-    if (!deviceCode || selectedChannel !== 'weixin') return;
-    var entered = verifyCode.value.trim();
-    if (!/^\d{4,8}$/.test(entered)) { say('请输入 4–8 位验证码', true); return; }
-    try {
-      var response = await fetch('/onboard/weixin/verify/' + deviceCode, {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:entered}),
-      });
-      if (!response.ok) throw new Error('验证码提交失败');
-      verifyForm.hidden = true;
-      say('验证码已提交，请在微信中确认');
-    } catch (error) { say(error.message || '验证码提交失败', true); }
-  });
-
-  // While the user is away in Feishu scanning, this tab is hidden and every poll
-  // it fires is wasted load. Resume with an immediate check so nothing is missed.
   document.addEventListener('visibilitychange', function () {
-    if (!deviceCode || !active) return;
-    if (document.hidden) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    } else if (!pollTimer) {
-      poll();
-      pollTimer = setInterval(poll, POLL_MS);
-    }
+    if (!entryId || !active) return;
+    if (document.hidden) { clearInterval(pollTimer); pollTimer = null; }
+    else if (!pollTimer) { poll(); pollTimer = setInterval(poll, POLL_MS); }
   });
-
-  window.addEventListener('beforeunload', function () {
-    if (!deviceCode || !active) return;
-    try {
-      navigator.sendBeacon(cancelPath(),
-        new Blob([JSON.stringify({ deviceCode: deviceCode })], { type: 'application/json' }));
-    } catch (e) {}
-  });
-
   loadTemplates();
 })();
 </script>

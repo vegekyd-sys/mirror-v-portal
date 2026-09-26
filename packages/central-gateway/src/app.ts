@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import QRCode from 'qrcode';
@@ -15,6 +16,7 @@ import { orchestrateOnboarding } from './services/onboarding-orchestrator.js';
 import { relayNotification, type NotifyPayload } from './services/notify-relay.js';
 import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-onboarding.js';
 import { ONBOARD_HTML } from './services/onboard-page.js';
+import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 
 interface SignupTemplate { id: string; version: string; name: string; description: string }
 async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promise<SignupTemplate[]> {
@@ -38,7 +40,7 @@ async function selectSignupTemplate(config: ReturnType<typeof loadConfig>, id: u
 const onboardRateLimits = new Map<string, { count: number; resetAt: number }>();
 function onboardingRateLimit(maxRequests: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const ip = `${req.ip || req.socket.remoteAddress || 'unknown'}:${req.path}`;
     const now = Date.now();
     const entry = onboardRateLimits.get(ip);
 
@@ -92,7 +94,13 @@ export function createApp() {
   // In production, replace with Redis/DB-backed store.
   // ═══════════════════════════════════════════════════════════
   const sessions = new Map<string, RegistrationSession>();
-  const weixinSessions = new Map<string, { startedAt: number }>();
+  const weixinSessions = new Map<string, { startedAt: number; templateId: string; qrUrl: string }>();
+  const portalEntries = new Map<string, {
+    template: SignupTemplate;
+    createdAt: number;
+    channel?: 'feishu' | 'weixin';
+    deviceCode?: string;
+  }>();
 
   // Clean stale sessions every 5 minutes
   setInterval(() => {
@@ -112,6 +120,9 @@ export function createApp() {
     for (const [id, session] of weixinSessions) {
       if (now - session.startedAt > 20 * 60_000) weixinSessions.delete(id);
     }
+    for (const [id, entry] of portalEntries) {
+      if (now - entry.createdAt > 20 * 60_000) portalEntries.delete(id);
+    }
   }, 5 * 60 * 1000);
 
   // ═══════════════════════════════════════════════════════════
@@ -127,6 +138,118 @@ export function createApp() {
   app.get('/onboard/templates', async (_req, res) => {
     try { res.json({ templates: await loadSignupTemplates(config) }); }
     catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
+  });
+
+  // The desktop displays one Portal QR. The scanner's app chooses the native
+  // authorization flow after opening this URL; the entry keeps both devices in
+  // sync without starting unused Feishu and WeChat registrations up front.
+  app.post('/onboard/portal/start', onboardingRateLimit(10, 60_000), async (req, res) => {
+    try {
+      const template = await selectSignupTemplate(config, req.body?.templateId ?? 'mirror-v');
+      const entryId = randomUUID();
+      const url = new URL('/onboard/scan', config.portalBaseUrl);
+      url.searchParams.set('entry', entryId);
+      portalEntries.set(entryId, { template, createdAt: Date.now() });
+      res.json({ ok: true, entryId, templateId: template.id, qrDataUri: await QRCode.toDataURL(url.toString(), { width: 300, margin: 1 }), expireIn: 600 });
+    } catch (error) {
+      console.error('[portal-entry] start failed', error);
+      const invalidTemplate = error instanceof Error && error.message === 'TEMPLATE_NOT_AVAILABLE';
+      res.status(invalidTemplate ? 400 : 503).json({ code: invalidTemplate ? 'TEMPLATE_NOT_AVAILABLE' : 'PORTAL_ENTRY_UNAVAILABLE', message: invalidTemplate ? 'Agent 模板不可用' : '入口码暂时不可用' });
+    }
+  });
+
+  function portalEntry(id: string) {
+    const entry = portalEntries.get(id);
+    return entry && Date.now() - entry.createdAt < 10 * 60_000 ? entry : undefined;
+  }
+
+  app.get('/onboard/scan', (req, res) => {
+    if (!portalEntry(String(req.query.entry || ''))) {
+      res.status(410).type('html').send('<!doctype html><meta charset="utf-8"><title>入口码已过期</title><p>入口码已过期，请在电脑上重新生成。</p>');
+      return;
+    }
+    res.type('html').send(PORTAL_SCAN_HTML);
+  });
+
+  app.get('/onboard/portal/:entryId/status', async (req, res) => {
+    const entry = portalEntry(req.params.entryId);
+    if (!entry) { res.status(410).json({ status: 'expired', message: '入口码已过期' }); return; }
+    const base = { templateId: entry.template.id, templateName: entry.template.name, channel: entry.channel || null };
+    if (!entry.channel || !entry.deviceCode) { res.json({ ...base, status: 'pending', progress: 0 }); return; }
+    if (entry.channel === 'feishu') {
+      const session = sessions.get(entry.deviceCode);
+      if (!session) { res.json({ ...base, status: 'expired', message: '飞书授权已过期' }); return; }
+      const info = pollRegistrationStatus(session);
+      res.json({ ...base, status: session.status, progress: info.progress, message: info.message });
+      return;
+    }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(entry.deviceCode)}`, {
+        headers: config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {},
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error('WEIXIN_STATUS_UNAVAILABLE');
+      const status = await response.json() as { status: string; progress?: number; message?: string };
+      res.json({ ...base, status: status.status, progress: status.progress, message: status.message });
+    } catch { res.status(503).json({ ...base, status: 'checking', message: '正在检查微信授权' }); }
+  });
+
+  app.post('/onboard/portal/:entryId/link', (req, res) => {
+    const entry = portalEntry(req.params.entryId);
+    if (!entry) { res.status(410).json({ code: 'PORTAL_ENTRY_EXPIRED' }); return; }
+    if (entry.channel) { res.status(409).json({ code: 'PORTAL_ENTRY_IN_USE' }); return; }
+    const channel = req.body?.channel;
+    const deviceCode = String(req.body?.deviceCode || '');
+    const session = channel === 'feishu' ? sessions.get(deviceCode) : channel === 'weixin' ? weixinSessions.get(deviceCode) : undefined;
+    if (!session || session.templateId !== entry.template.id) { res.status(400).json({ code: 'INVALID_AUTH_SESSION' }); return; }
+    const redirectUrl = channel === 'feishu' ? (session as RegistrationSession).qrUrl : (session as { qrUrl: string }).qrUrl;
+    let host: string;
+    try {
+      const url = new URL(redirectUrl);
+      if (url.protocol !== 'https:') throw new Error('AUTH_URL_INSECURE');
+      host = url.hostname;
+    }
+    catch { res.status(503).json({ code: 'AUTH_URL_INVALID' }); return; }
+    const allowed = channel === 'feishu' ? ['open.feishu.cn', 'open.larksuite.com', 'accounts.feishu.cn', 'accounts.larksuite.com'] : ['liteapp.weixin.qq.com'];
+    if (!allowed.includes(host)) { res.status(503).json({ code: 'AUTH_URL_INVALID' }); return; }
+    entry.channel = channel;
+    entry.deviceCode = deviceCode;
+    res.json({ ok: true, redirectUrl });
+  });
+
+  app.post('/onboard/portal/:entryId/verify', async (req, res) => {
+    const entry = portalEntry(req.params.entryId);
+    if (!entry || entry.channel !== 'weixin' || !entry.deviceCode) { res.status(404).json({ code: 'SESSION_NOT_FOUND' }); return; }
+    const code = String(req.body?.code || '').trim();
+    if (!/^\d{4,8}$/.test(code)) { res.status(400).json({ code: 'INVALID_CODE' }); return; }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(entry.deviceCode)}/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {}) },
+        body: JSON.stringify({ code }),
+        signal: AbortSignal.timeout(5000),
+      });
+      res.status(response.status).json(await response.json());
+    } catch { res.status(503).json({ code: 'VERIFY_UNAVAILABLE' }); }
+  });
+
+  app.post('/onboard/portal/:entryId/cancel', async (req, res) => {
+    const entry = portalEntries.get(req.params.entryId);
+    if (!entry) { res.json({ ok: true }); return; }
+    portalEntries.delete(req.params.entryId);
+    if (entry.channel === 'feishu' && entry.deviceCode) {
+      const session = sessions.get(entry.deviceCode);
+      if (session && session.status !== 'completed') cancelRegistration(sessions, entry.deviceCode);
+    } else if (entry.channel === 'weixin' && entry.deviceCode && weixinSessions.delete(entry.deviceCode)) {
+      try {
+        await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/login/${encodeURIComponent(entry.deviceCode)}`, {
+          method: 'DELETE',
+          headers: config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {},
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch { /* Manager sessions expire even if cancellation is unavailable. */ }
+    }
+    res.json({ ok: true });
   });
 
   // WeChat portal scan: the manager keeps the iLink poll and only creates an
@@ -146,7 +269,7 @@ export function createApp() {
       if (!response.ok) throw new Error(`WEIXIN_LOGIN_${response.status}`);
       const session = await response.json() as { sessionId: string; qrImage: string; expiresIn: number };
       if (!session.sessionId || !session.qrImage) throw new Error('WEIXIN_QR_INVALID');
-      weixinSessions.set(session.sessionId, { startedAt: Date.now() });
+      weixinSessions.set(session.sessionId, { startedAt: Date.now(), templateId: template.id, qrUrl: session.qrImage });
       res.json({
         ok: true,
         deviceCode: session.sessionId,
