@@ -1,5 +1,7 @@
 # Mirror V Portal deployment
 
+V 的版本矩阵、Payload 更新和未来 OpenClaw 升级流程见 [V-OPERATIONS.md](V-OPERATIONS.md)。
+
 Mirror V Portal is Mirror V's public multi-Agent portal. The product source is GitHub `dev`, based on
 the DealClaw Elastic runtime. The original GitLab services are reusable code,
 but their Kubernetes tenant provisioning must not be started on this 2 GB
