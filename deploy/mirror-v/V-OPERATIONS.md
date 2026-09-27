@@ -17,7 +17,7 @@ Portal 主机上的 `nexus-runtime-manager`、`nexus-central-gateway` 和 `nexus
 Payload 是 `AGENTS.md`、`SOUL.md`、`MEMORY.md`、`memory/`、`skills/` 等工作区内容；OpenClaw `2026.7.1` 是解释和运行这些内容的程序。两者应分别记录版本，且每次发布要验证二者的组合。当前组合为：
 
 - OpenClaw：`2026.7.1`，由 `packages/runtime-manager/scripts/build-snapshot.ts` 固定安装。
-- Mirror V 知识种子：`mirror-v.v001-full.v2`，由 `prepare-mirror-v001-payload.py` 从旧 V001 的实时工作区生成私有文本包。当前这份种子包含 937 个来源文件，其中 923 个记忆文件；不含旧会话、媒体、运行状态或凭据。
+- Mirror V 知识种子：`mirror-v.v001-full.v2`，由 `prepare-mirror-v001-payload.py` 从旧 V001 的实时工作区生成私有文本包。当前这份种子包含 937 个文本文件，其中 923 个位于 `memory/`；构建流程排除旧会话、媒体、运行状态和已识别的凭据。
 - GitHub 发布代码：以 `dev` 的提交 SHA 为准；Portal 生产 release 在 `/opt/nexus/current`。
 
 私有源工作区在 Portal 主机 `/root/makaron-openclaw/.openclaw-local/workspace`，生成包保存在 `/opt/nexus/data/`，权限为 `0600`。GitHub 只保存构建脚本和可公开的 starter，不保存完整 V001 知识包。更新前需逐项审查将向所有新扫码实例分发的知识范围；正则凭据脱敏不等于完成隐私审查。
