@@ -46,4 +46,4 @@ Payload 是 `AGENTS.md`、`SOUL.md`、`MEMORY.md`、`memory/`、`skills/` 等工
 
 ## 交接与权限现状
 
-2026-09-27 核查时，生产 V 主机可以运行 OpenClaw 9.1，但**尚不能读取这个私有 GitHub 仓库**：`git ls-remote` 和 `gh auth` 都未通过。V 可以先依据本手册提出变更方案；要让 V 自己提交 `dev` 更新，需要给它单独的最小权限 GitHub 身份，并保留 CI、审查和生产发布边界。不要把 Portal 的生产 SSH 私钥、数据库 URL、模型密钥或 V001 私有 tar 复制到 V 主机。
+2026-09-27 已用生产 V 实际运行的 `openclaw` 身份核查：`gh auth status` 与私有仓库 `git ls-remote` 均通过，V 可以读取 `dev`。最初用 SSH 登录账号 `ubuntu` 检查失败，不能代表 V 的权限。**向 `dev` 写入及分支保护门禁尚未实测**；V 准备自行提交时须按仓库规则验证，并保留 CI、审查和生产发布边界。不要把 Portal 的生产 SSH 私钥、数据库 URL、模型密钥或 V001 私有 tar 复制到 V 主机。
