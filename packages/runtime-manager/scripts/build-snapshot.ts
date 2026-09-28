@@ -109,7 +109,8 @@ try {
   // Only the private V001 archive path carries no manifest tools.
   if (template?.wheels.length && !privatePayloadArchive) {
     const tools = "/vercel/sandbox/nexus/tools";
-    await run("tools-python", "dnf", ["install", "-y", "python3", "python3-pip"], true);
+    // The node:24 builder image is Ubuntu without Python; use the distro packages.
+    await run("tools-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv"], true);
     await run("tools-directories", "mkdir", ["-p", `${tools}/wheels`, `${tools}/bin`]);
     await sbx.writeFiles(template.wheels.map((wheel) => ({
       path: `${tools}/wheels/${path.basename(wheel)}`,
