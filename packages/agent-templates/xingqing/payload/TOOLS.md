@@ -4,7 +4,8 @@
 
 ## xingqing-cli（星擎数据，只读）
 
-- 凭证已由运行时注入环境变量，直接运行命令即可；不要在命令参数、日志或回复里写出凭证。
+- 已绑定时直接运行命令即可（运营绑定走环境变量，客户自己绑定走 `login` 缓存的会话）。绑定流程见 AGENTS.md「企业绑定」。
+- 不要在命令参数、日志或回复里写出凭证；登录用 `--password-stdin`。
 - 不确定命令或参数时先自发现：`xingqing-cli commands`、`xingqing-cli schema <命令>`。
 - stdout 是一个 JSON 信封 `{"data":…,"error":null,"meta":{…}}`。回答前看 `meta`：时间范围、来源、`partial`、`remaining`。
 
