@@ -39,7 +39,7 @@ export default function AgentSecretsPanel({ tenantId }: { tenantId: string }) {
   const complete = status.required.every((name) => values[name]?.trim());
   return <div className="panel">
     <div className="panel-title">企业账号绑定</div>
-    <div className="panel-sub">{status.bound ? `已绑定 · 更新于 ${status.updatedAt ? fmtTime(status.updatedAt) : '—'}` : '未绑定：实例不会返回任何企业数据'}</div>
+    <div className="panel-sub">{status.bound ? `后台已绑定 · 更新于 ${status.updatedAt ? fmtTime(status.updatedAt) : '—'}` : '后台未绑定：客户也可以在对话里自己提供账号完成绑定'}</div>
     <div className="panel-body">
       {status.required.map((name) => {
         const meta = LABELS[name] ?? { label: name, secret: true };
@@ -49,7 +49,7 @@ export default function AgentSecretsPanel({ tenantId }: { tenantId: string }) {
             value={values[name] ?? ''} onChange={(event) => setValues({ ...values, [name]: event.target.value })} />
         </div>;
       })}
-      <div className="hint">只能绑定该客户企业自己的账号，禁止绑定 admin 或其他企业账号。保存后不会再显示账号密码。</div>
+      <div className="hint">只能绑定该客户企业自己的账号，禁止绑定 admin 或其他企业账号。后台绑定优先于客户在对话里的绑定；保存后不会再显示账号密码。</div>
       {message && <div className={message.ok ? 'msg msg-ok' : 'msg msg-err'}>{message.text}</div>}
       <div className="page-actions">
         <button className="btn-primary btn-sm" disabled={busy || !complete} onClick={submit}>{status.bound ? '更新绑定' : '保存绑定'}</button>

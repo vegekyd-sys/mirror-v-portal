@@ -105,8 +105,11 @@ the first time is written with `"listed": false`: it can be created by explicit
 acceptance, set `"listed": true`. The runtime-manager reads templates at start,
 so both steps need a `nexus-runtime-manager` restart.
 
-Each 星擎 tenant needs the customer's own 星擎 account. Operators bind it on the
-agent's page in `/admin`; the runtime-manager seals it in
+A 星擎 tenant works without an account (product questions only) and needs the
+customer's own 星擎 account for data. The customer can send it in chat — the
+agent logs in with `xingqing-cli login`, which caches only a session token under
+`agent-data/xingqing` — or an operator binds it on the agent's page in `/admin`,
+which takes precedence. The runtime-manager seals operator bindings in
 `elastic_tenant_secrets` and injects `XINGQING_USERNAME` / `XINGQING_PASSWORD`
 when the sandbox boots. A new binding takes effect after the next idle sleep.
 Never bind an admin or another company's account. The admin page relays through

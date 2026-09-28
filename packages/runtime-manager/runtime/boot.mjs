@@ -38,6 +38,9 @@ const env = {
   ...process.env,
   // Template CLIs installed by the snapshot builder (e.g. xingqing-cli).
   ...(fs.existsSync(toolsBin) ? { PATH: `${toolsBin}:${process.env.PATH ?? ""}` } : {}),
+  // A customer who binds by chat logs in through xingqing-cli, which caches only
+  // a session token. Keep it in agent-data so backups carry it across sleeps.
+  ...(agentId === "xingqing" ? { XINGQING_CONFIG_DIR: `${data}/xingqing` } : {}),
   OPENCLAW_STATE_DIR: state,
   OPENCLAW_CONFIG_PATH: `${data}/openclaw.json`,
   OPENCLAW_WORKSPACE_DIR: workspace,
