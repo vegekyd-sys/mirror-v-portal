@@ -90,6 +90,7 @@ export class RuntimeManager {
           runId,
         );
         this.onProgress?.(current, "waking", {});
+        tenant.runtime_env = await this.store.tenantSecretEnv(tenant.id);
         const handle = await this.provider.ensure(tenant, async (name) => {
           tenant.sandbox_name = name;
           await db.query(

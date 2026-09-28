@@ -1,0 +1,25 @@
+{
+  "name": "xingqing",
+  "version": "xingqing-starter.v1",
+  "description": "Independent 星擎 customer data assistant without private customer data or credentials",
+  "files": [
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "TOOLS.md",
+    "MEMORY.md",
+    "memory/base/xingqing-knowledge-base.md",
+    "payload-manifest.json"
+  ],
+  "memory": {
+    "search": true,
+    "base": "memory/base",
+    "knowledgeBaseVersion": "v0.3"
+  },
+  "tools": {
+    "pythonWheels": ["vendor/xingqing_cli-0.5.6-py3-none-any.whl"],
+    "commands": ["xingqing-cli"],
+    "versions": { "xingqing-cli": "0.5.6" }
+  }
+}

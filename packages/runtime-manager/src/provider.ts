@@ -184,6 +184,8 @@ export class VercelProvider implements RuntimeProvider {
       cmd: "node",
       args: ["/vercel/sandbox/nexus/boot.mjs"],
       env: {
+        // Operator-bound tenant secrets first, so they can never shadow runtime variables.
+        ...tenant.runtime_env,
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
         NEXUS_MODEL_KEY: this.config.model.apiKey,
         NEXUS_MODEL_BASE_URL: this.config.model.baseUrl,

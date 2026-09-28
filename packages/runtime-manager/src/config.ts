@@ -2,6 +2,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** A built template snapshot. The build script records when it expires and what it runs. */
+export interface TemplateRecord {
+  version: string;
+  snapshotId: string;
+  name?: string;
+  description?: string;
+  /** false = selectable by explicit id (tests, migrations) but hidden from the signup catalog. */
+  listed?: boolean;
+  builtAt?: string;
+  expiresAt?: string;
+  runtime?: Record<string, string>;
+}
+
 export interface Config {
   databaseUrl: string;
   adminToken: string;
@@ -11,7 +24,7 @@ export interface Config {
   trialTenantId: string;
   snapshotId?: string;
   /** Versioned, approved snapshots for additional signup templates. */
-  templates?: Record<string, { version: string; snapshotId: string; name?: string; description?: string }>;
+  templates?: Record<string, TemplateRecord>;
   optimizeRuntime?: boolean;
   sandboxPrefix: string;
   /** External payload tar, rooted at the workspace. Overrides the in-repo payload. */

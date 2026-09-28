@@ -5,6 +5,8 @@ import { spawn, execFileSync } from "node:child_process";
 
 const bootStart = Date.now();
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
+// Templates whose payload ships Markdown memory (MEMORY.md + memory/**) to index and search.
+const memoryAgent = ["mirror-v", "xingqing"].includes(agentId);
 const fingerprint = createHash("sha256")
   .update(
     [
@@ -31,8 +33,11 @@ if (!fs.existsSync(`${data}/seeded`)) {
   fs.cpSync(`${base}/payload`, workspace, { recursive: true });
   fs.writeFileSync(`${data}/seeded`, agentId);
 }
+const toolsBin = `${base}/tools/bin`;
 const env = {
   ...process.env,
+  // Template CLIs installed by the snapshot builder (e.g. xingqing-cli).
+  ...(fs.existsSync(toolsBin) ? { PATH: `${toolsBin}:${process.env.PATH ?? ""}` } : {}),
   OPENCLAW_STATE_DIR: state,
   OPENCLAW_CONFIG_PATH: `${data}/openclaw.json`,
   OPENCLAW_WORKSPACE_DIR: workspace,
@@ -95,9 +100,10 @@ const cfg = {
       timeoutSeconds: 600,
       maxConcurrent: 1,
       heartbeat: { every: "0m" },
-      // Mirror V inherits V001's Markdown memory. Its isolated sandbox has no
-      // embedding credential, so index it with OpenClaw's built-in FTS mode.
-      memorySearch: agentId === "mirror-v"
+      // Mirror V inherits V001's Markdown memory; 星擎 ships its knowledge base
+      // as base memory. The isolated sandbox has no embedding credential, so
+      // index with OpenClaw's built-in FTS mode.
+      memorySearch: memoryAgent
         ? { provider: "none", fallback: "none" }
         : { enabled: false },
       compaction: { mode: "safeguard" },
@@ -112,25 +118,25 @@ const cfg = {
   },
   plugins: {
     enabled: true,
-    allow: agentId === "mirror-v" ? ["nexus-scheduler", "memory-core"] : ["nexus-scheduler"],
-    slots: agentId === "mirror-v" ? { memory: "memory-core" } : undefined,
+    allow: memoryAgent ? ["nexus-scheduler", "memory-core"] : ["nexus-scheduler"],
+    slots: memoryAgent ? { memory: "memory-core" } : undefined,
     load: { paths: [pluginDir] },
     entries: {
       "nexus-scheduler": { enabled: true },
-      ...(agentId === "mirror-v" ? { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } } : {}),
+      ...(memoryAgent ? { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } } : {}),
     },
   },
 };
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
-function indexMirrorMemory() {
-  if (agentId !== "mirror-v") return;
+function indexMemory() {
+  if (!memoryAgent) return;
   try {
     execFileSync("node", [
       `${base}/runtime/node_modules/openclaw/openclaw.mjs`,
       "memory", "index", "--agent", agentId,
     ], { env, timeout: 90_000, stdio: "pipe" });
   } catch {
-    throw new Error("MIRROR_V_MEMORY_INDEX_FAILED");
+    throw new Error(agentId === "mirror-v" ? "MIRROR_V_MEMORY_INDEX_FAILED" : "MEMORY_INDEX_FAILED");
   }
 }
 // A repeated ensure call must reuse the healthy process within this VM boot.
@@ -194,7 +200,7 @@ for (let i = 0; i < 180; i++) {
       signal: AbortSignal.timeout(1000),
     });
     if (r.ok) {
-      indexMirrorMemory();
+      indexMemory();
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(
         "/tmp/nexus-baseline-pids",

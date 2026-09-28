@@ -18,7 +18,8 @@ import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-o
 import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 
-interface SignupTemplate { id: string; version: string; name: string; description: string }
+// listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
+interface SignupTemplate { id: string; version: string; name: string; description: string; listed?: boolean }
 async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promise<SignupTemplate[]> {
   const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/templates`, {
     headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},
@@ -136,7 +137,7 @@ export function createApp() {
   });
 
   app.get('/onboard/templates', async (_req, res) => {
-    try { res.json({ templates: await loadSignupTemplates(config) }); }
+    try { res.json({ templates: (await loadSignupTemplates(config)).filter((template) => template.listed !== false) }); }
     catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
   });
 
