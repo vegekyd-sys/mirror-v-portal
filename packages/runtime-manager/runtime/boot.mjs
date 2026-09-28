@@ -113,6 +113,8 @@ const cfg = {
     },
     list: [{ id: agentId, default: true, workspace }],
   },
+  // Customers should not see "Source: memory/…#L" footers from memory search.
+  ...(agentId === "xingqing" ? { memory: { citations: "off" } } : {}),
   tools: {
     profile: "coding",
     alsoAllow: ["nexus_schedule"],
