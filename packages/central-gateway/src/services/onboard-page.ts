@@ -20,7 +20,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   [hidden] { display:none!important; }
   :root { color-scheme:dark; font-family:"Helvetica Neue","PingFang SC",sans-serif; color:#fff; background:#000; }
   body { margin:0; min-width:280px; -webkit-font-smoothing:antialiased; }
-  .experience { min-height:700px; height:100svh; position:relative; overflow:hidden; isolation:isolate; background:#000; }
+  .experience { height:max(700px,100svh); position:relative; overflow:hidden; isolation:isolate; background:#000; }
   .world { position:absolute; inset:0; z-index:-3; }
   .world img { width:100%; height:100%; object-fit:cover; object-position:50% 50%; animation:arrival 1.8s cubic-bezier(.2,.7,.2,1) both; }
   .world-video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:-1; opacity:0; transition:opacity 1.6s; pointer-events:none; }
@@ -35,15 +35,17 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .brand strong { font-size:23px; line-height:1; font-weight:650; letter-spacing:-.055em; }
   .brand small { font-size:10px; font-weight:550; letter-spacing:.28em; text-transform:uppercase; }
   .signature { font-size:12px; color:#c4c5cf; letter-spacing:.02em; }
-  .gateway { position:absolute; top:54%; left:50%; transform:translate(-50%,-50%); width:250px; display:flex; flex-direction:column; align-items:center; }
-  .template-picker { position:absolute; z-index:4; top:13%; left:50%; transform:translateX(-50%); width:min(540px,calc(100% - 40px)); text-align:center; }
-  .template-picker h1 { margin:0 0 14px; font-size:15px; font-weight:500; letter-spacing:.12em; text-shadow:0 1px 12px #000; }
-  .template-list { display:flex; justify-content:center; gap:10px; }
-  .template-card { flex:1; max-width:250px; min-height:72px; padding:12px 14px; border:1px solid #ffffff77; border-radius:12px; background:#09121bc9; color:#fff; text-align:left; cursor:pointer; font:inherit; backdrop-filter:blur(14px); }
-  .template-card[aria-pressed="true"] { border-color:#fff; background:#e9f2ffe8; color:#142032; }
-  .template-card:focus-visible { outline:3px solid #fff; outline-offset:3px; }
-  .template-name { display:block; font-size:14px; font-weight:600; }
-  .template-description { display:block; margin-top:4px; font-size:11px; line-height:1.35; opacity:.8; }
+  .gateway { position:absolute; top:56%; left:50%; transform:translate(-50%,-50%); width:250px; display:flex; flex-direction:column; align-items:center; }
+  .template-picker { position:absolute; z-index:4; top:13%; left:50%; transform:translateX(-50%); width:min(650px,calc(100% - 40px)); text-align:center; color:#fff; text-shadow:0 2px 12px #000; }
+  .template-picker::before { content:""; position:absolute; z-index:-1; inset:-12px -20px -6px; background:radial-gradient(ellipse at center,#030710cc 10%,#030710a8 58%,transparent 100%); pointer-events:none; }
+  .template-picker h1 { margin:0 0 18px; font-size:23px; line-height:1.2; font-weight:500; letter-spacing:.01em; }
+  .template-list { display:flex; justify-content:center; border-bottom:1px solid #ffffff66; }
+  .template-card { position:relative; flex:1; min-width:0; min-height:52px; padding:12px 8px 17px; border:0; background:transparent; color:#ffffffa8; text-align:center; cursor:pointer; font:inherit; transition:color .2s; }
+  .template-card:hover,.template-card[aria-pressed="true"] { color:#fff; }
+  .template-card[aria-pressed="true"]::after { content:""; position:absolute; left:15%; right:15%; bottom:-1px; height:2px; background:#fff; box-shadow:0 0 14px #fff9; }
+  .template-card:focus-visible { outline:2px solid #fff; outline-offset:-5px; }
+  .template-name { display:block; font-size:16px; line-height:1.3; font-weight:580; }
+  .template-description { min-height:20px; margin:14px 0 0; font-size:12px; line-height:1.5; color:#e3e8f1; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
   .gate { width:216px; height:216px; display:grid; place-items:center; transition:transform 1s, filter 1s; }
   .portal { position:relative; width:100%; height:100%; display:grid; place-items:center; padding:6px; background:transparent; }
@@ -71,9 +73,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .retry.on { visibility:visible; }
   .retry:hover { background:#dbe4f2; color:#000; }
   .retry:focus-visible { outline:3px solid #fff; outline-offset:5px; }
-  .channel-picker { display:flex; width:216px; margin-top:18px; padding:3px; border:1px solid #2c3c54; border-radius:999px; background:#eef4fc; }
-  .channel-picker button { flex:1; min-height:36px; border:0; border-radius:999px; background:transparent; color:#172b45; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
-  .channel-picker button[aria-pressed="true"] { background:#243a59; color:#fff; }
+  .channel-picker { display:flex; justify-content:center; gap:30px; width:216px; margin-top:16px; border-top:1px solid #27344c66; }
+  .channel-picker button { position:relative; min-width:58px; min-height:44px; padding:9px 4px 4px; border:0; background:transparent; color:#42526b; font:inherit; font-size:13px; font-weight:550; cursor:pointer; }
+  .channel-picker button:hover,.channel-picker button[aria-pressed="true"] { color:#162b49; }
+  .channel-picker button[aria-pressed="true"]::after { content:""; position:absolute; left:4px; right:4px; bottom:2px; height:2px; background:#243a59; }
   .channel-picker button:focus-visible,.verify button:focus-visible,.verify input:focus-visible { outline:2px solid #243a59; outline-offset:2px; }
   .verify { width:216px; margin-top:12px; display:flex; gap:6px; }
   .verify input { min-width:0; flex:1; height:38px; padding:0 10px; border:1px solid #435774; border-radius:5px; background:#eef4fc; color:#172944; font:inherit; font-size:12px; }
@@ -82,7 +85,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .edge span { font-size:11px; color:#c4c5cf; }
   .edge-line { height:1px; width:44px; background:#ffffff55; }
   @media(min-aspect-ratio:19/10) { .world img { object-fit:contain; } }
-  @media(max-width:600px) { .experience { min-height:620px; } .masthead { padding:24px; } .brand strong { font-size:19px; } .brand small { font-size:9px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:15%; } .gateway { top:55%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
+  @media(max-width:600px) { .experience { height:max(620px,100svh); } .masthead { padding:24px; } .brand strong { font-size:19px; } .brand small { font-size:9px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:14%; width:calc(100% - 32px); } .template-picker h1 { font-size:20px; margin-bottom:12px; } .template-card { min-height:47px; padding:10px 4px 14px; } .template-name { font-size:14px; } .template-description { max-width:270px; margin:10px auto 0; font-size:11px; } .gateway { top:57%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>
 </head>
@@ -93,7 +96,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
   <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
   <header class="masthead"><span class="brand"><strong>Mirror V</strong><small>Portal</small></span><span class="signature">your agent, your world</span></header>
-  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div></section>
+  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><p class="template-description" id="templateDescription"></p></section>
   <section class="gateway" aria-label="扫码创建 Agent">
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
@@ -193,6 +196,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var beamFill = document.getElementById('beamFill');
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
+  var templateDescription = document.getElementById('templateDescription');
   var channelFeishu = document.getElementById('channelFeishu');
   var channelWeixin = document.getElementById('channelWeixin');
   var verify = document.getElementById('verify');
@@ -232,12 +236,14 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         var card = document.createElement('button');
         card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false');
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
-        var desc = document.createElement('span'); desc.className = 'template-description'; desc.textContent = template.description;
-        card.append(name, desc);
+        card.setAttribute('aria-label', template.name + '，' + template.description);
+        card.append(name);
         card.addEventListener('click', function () {
           if (selectedTemplate && selectedTemplate.id === template.id) return;
           selectedTemplate = template;
           templateList.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button === card)); });
+          templateDescription.textContent = template.description;
+          var url = new URL(location.href); url.searchParams.set('template', template.id); history.replaceState(null, '', url);
           open();
         });
         templateList.appendChild(card);
