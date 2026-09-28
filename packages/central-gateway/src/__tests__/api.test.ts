@@ -190,6 +190,11 @@ describe('GET /onboard — Feishu registration', () => {
     expect(res.text).toContain('<title>Mirror V Portal · 选择你的 Agent</title>');
     expect(res.text).toContain('id="channelWeixin"');
     expect(res.text).toContain("'/onboard/weixin/start'");
+    // Feishu's app-creation launcher only works from the Feishu scanner, so the
+    // desktop shows its native QR instead of a Portal entry.
+    expect(res.text).toContain("'/onboard/feishu/start'");
+    expect(res.text).toContain("'/onboard/feishu/status/'");
+    expect(res.text).not.toContain("'/onboard/portal/start'");
     // The gate deliberately carries no customer-identifying content.
     expect(res.text).not.toContain('公司名称');
     expect(res.text).not.toContain('联系邮箱');

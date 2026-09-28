@@ -3,7 +3,8 @@
  *
  * Choose an Agent template, then scan a QR code to create its own instance.
  *
- * Feishu uses a Portal entry; WeChat displays its native iLink QR on desktop.
+ * Feishu and WeChat both display their native QR on desktop. A Feishu webview
+ * cannot open the app-creation launcher page; only the Feishu scanner can.
  */
 export const ONBOARD_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -180,7 +181,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   syncMotion();
 })();
 (function () {
-  var entryId = null, weixinCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
+  var feishuCode = null, weixinCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
   var selectedTemplate = null, selectedChannel = 'feishu', generation = 0;
   var POLL_MS = 3000;
   var gate = document.getElementById('gate');
@@ -250,27 +251,27 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     var currentGeneration = ++generation;
     var template = selectedTemplate;
     var channel = selectedChannel;
-    var previousEntry = entryId, previousWeixin = weixinCode;
-    stopTimers(); active = false; entryId = null; weixinCode = null; expireAt = null;
-    if (previousEntry) fetch('/onboard/portal/' + encodeURIComponent(previousEntry) + '/cancel', { method: 'POST', keepalive: true }).catch(function () {});
+    var previousFeishu = feishuCode, previousWeixin = weixinCode;
+    stopTimers(); active = false; feishuCode = null; weixinCode = null; expireAt = null;
+    if (previousFeishu) fetch('/onboard/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: previousFeishu }), keepalive: true }).catch(function () {});
     if (previousWeixin) fetch('/onboard/weixin/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: previousWeixin }), keepalive: true }).catch(function () {});
     retry.classList.remove('on'); setState(''); core.style.display = 'block'; code.style.display = 'none';
     verify.hidden = true; verifyCode.value = '';
-    say('正在生成' + (channel === 'weixin' ? '微信授权码' : '飞书入口码') + '…'); metaEl.textContent = ''; progress(0);
+    say('正在生成' + (channel === 'weixin' ? '微信授权码' : '飞书授权码') + '…'); metaEl.textContent = ''; progress(0);
     try {
-      var response = await fetch(channel === 'weixin' ? '/onboard/weixin/start' : '/onboard/portal/start', {
+      var response = await fetch(channel === 'weixin' ? '/onboard/weixin/start' : '/onboard/feishu/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: template.id }),
       });
       var data = await response.json();
       if (currentGeneration !== generation) {
         if (channel === 'weixin' && data.deviceCode) fetch('/onboard/weixin/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: data.deviceCode }), keepalive: true }).catch(function () {});
-        if (channel === 'feishu' && data.entryId) fetch('/onboard/portal/' + encodeURIComponent(data.entryId) + '/cancel', { method: 'POST', keepalive: true }).catch(function () {});
+        if (channel === 'feishu' && data.deviceCode) fetch('/onboard/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: data.deviceCode }), keepalive: true }).catch(function () {});
         return;
       }
       if (!response.ok || !data.ok || !data.qrDataUri) throw new Error(data.message || '入口码生成失败');
       if (channel === 'weixin') weixinCode = data.deviceCode;
-      else entryId = data.entryId;
-      if (channel === 'weixin' ? !weixinCode : !entryId) throw new Error('授权会话不可用，请重新生成');
+      else feishuCode = data.deviceCode;
+      if (channel === 'weixin' ? !weixinCode : !feishuCode) throw new Error('授权会话不可用，请重新生成');
       active = true; core.style.display = 'none';
       code.src = data.qrDataUri; code.alt = '用' + (channel === 'weixin' ? '微信' : '飞书') + '扫码创建 ' + template.name;
       code.style.display = 'block'; setState('live');
@@ -282,12 +283,12 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   async function poll() {
     if (!active) return;
     var channel = selectedChannel;
-    var checked = channel === 'weixin' ? weixinCode : entryId;
+    var checked = channel === 'weixin' ? weixinCode : feishuCode;
     if (!checked) return;
     try {
-      var response = await fetch(channel === 'weixin' ? '/onboard/weixin/status/' + encodeURIComponent(checked) : '/onboard/portal/' + encodeURIComponent(checked) + '/status');
+      var response = await fetch(channel === 'weixin' ? '/onboard/weixin/status/' + encodeURIComponent(checked) : '/onboard/feishu/status/' + encodeURIComponent(checked));
       var data = await response.json();
-      if (channel !== selectedChannel || checked !== (channel === 'weixin' ? weixinCode : entryId)) return;
+      if (channel !== selectedChannel || checked !== (channel === 'weixin' ? weixinCode : feishuCode)) return;
       if (!response.ok || data.status === 'expired') { closeGate(data.message || '入口码已过期'); return; }
       if (typeof data.progress === 'number') progress(data.progress);
       if (channel === 'weixin') {
@@ -302,8 +303,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         else say('用微信扫一扫，创建 ' + selectedTemplate.name);
         return;
       }
-      if (!data.channel) return;
-      if (data.status === 'scanned' || data.status === 'need_verify_code') say('请在飞书完成确认');
+      if (data.status === 'pending') say('用飞书扫一扫，创建 ' + selectedTemplate.name);
       else if (data.status === 'provisioning') { setState('opening'); say('正在为你开通 ' + selectedTemplate.name + '…'); }
       else if (data.status === 'completed') {
         stopTimers(); active = false; progress(100); setState('through');
