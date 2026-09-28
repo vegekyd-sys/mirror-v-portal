@@ -4,6 +4,7 @@ import { api, errMsg } from '../lib/api';
 import { fmtTime } from '../components/badges';
 import type { ElasticAgent } from './ElasticAgentsPage';
 import { agentChannelLabel, agentStateLabel } from './labels';
+import AgentSecretsPanel from './AgentSecretsPanel';
 
 interface RunRow { id: string; channel: string; status: string; delivery: string; createdAt: string; completedAt: string | null; error: string | null }
 
@@ -35,6 +36,7 @@ export default function ElasticAgentDetailPage() {
       <div className="stat-card"><div className="label">渠道</div><div className="num">{agent.feishuBound ? '飞书' : '未绑定飞书'}</div><div className="stat-sub">{agent.channels.map(agentChannelLabel).join('、') || '暂无其他渠道'}</div></div>
     </div>
     {agent.lastError && <div className="msg msg-err">最近错误：{agent.lastError}</div>}
+    <AgentSecretsPanel tenantId={agent.tenantId} />
     <div className="section-title">最近运行</div>
     <div className="table-wrap"><table><thead><tr><th>时间</th><th>渠道</th><th>结果</th><th>送达</th><th>错误</th></tr></thead><tbody>
       {runs.map((run) => <tr key={run.id}><td>{fmtTime(run.createdAt)}</td><td>{run.channel}</td><td>{run.status}</td><td>{run.delivery}</td><td>{run.error || '—'}</td></tr>)}

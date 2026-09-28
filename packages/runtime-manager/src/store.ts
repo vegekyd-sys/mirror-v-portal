@@ -25,6 +25,8 @@ export interface Tenant {
   template_version: string;
   template_snapshot_id: string | null;
   runtime_provider?: "vercel" | "alibaba";
+  /** Unsealed per-tenant secrets, attached just before boot; never persisted on this object. */
+  runtime_env?: Record<string, string>;
 }
 export interface ChannelBinding {
   tenant_id: string;
@@ -116,6 +118,15 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS elastic_channel_bindings_active
         ON elastic_channel_bindings(channel) WHERE state = 'active';
+      -- Operator-bound runtime secrets (e.g. a customer's own 星擎 account),
+      -- sealed like channel credentials and injected as env at sandbox boot.
+      CREATE TABLE IF NOT EXISTS elastic_tenant_secrets (
+        tenant_id text NOT NULL REFERENCES elastic_tenants(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        value text NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, name)
+      );
     `);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS runtime_provider text NOT NULL DEFAULT 'vercel' CHECK (runtime_provider IN ('vercel','alibaba'))`);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_id text NOT NULL DEFAULT 'dealclaw'`);
@@ -185,6 +196,43 @@ export class Store {
       "UPDATE elastic_channel_bindings SET state='revoked', last_error=$3, updated_at=now() WHERE tenant_id=$1 AND channel=$2",
       [tenantId, channel, reason ?? null],
     );
+  }
+  /** Replace a tenant's whole secret set; an empty set unbinds. */
+  async setTenantSecrets(tenantId: string, values: Record<string, string>) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM elastic_tenant_secrets WHERE tenant_id=$1", [tenantId]);
+      for (const [name, value] of Object.entries(values))
+        await client.query(
+          "INSERT INTO elastic_tenant_secrets(tenant_id,name,value) VALUES($1,$2,$3)",
+          [tenantId, name, this.seal(value)],
+        );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async tenantSecretEnv(tenantId: string): Promise<Record<string, string>> {
+    const { rows } = await this.pool.query<{ name: string; value: string }>(
+      "SELECT name,value FROM elastic_tenant_secrets WHERE tenant_id=$1",
+      [tenantId],
+    );
+    return Object.fromEntries(rows.map((row) => [row.name, this.unseal(row.value)]));
+  }
+  /** Names and timestamps only: secret values never leave the manager. */
+  async tenantSecretStatus(tenantId: string) {
+    const { rows } = await this.pool.query<{ name: string; updated_at: Date }>(
+      "SELECT name,updated_at FROM elastic_tenant_secrets WHERE tenant_id=$1 ORDER BY name",
+      [tenantId],
+    );
+    return {
+      names: rows.map((row) => row.name),
+      updatedAt: rows.reduce<Date | null>((latest, row) => (!latest || row.updated_at > latest ? row.updated_at : latest), null),
+    };
   }
   seal(value: string): string {
     const iv = randomBytes(12);

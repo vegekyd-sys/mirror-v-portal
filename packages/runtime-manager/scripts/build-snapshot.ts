@@ -3,11 +3,13 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Sandbox } from "@vercel/sandbox";
 import { loadConfig } from "../src/config.js";
+import { resolveTemplatePayload, templateRecord, TEMPLATE_OPENCLAW_VERSION, TEMPLATE_SNAPSHOT_TTL_MS, type TemplatePayload } from "../src/template-payload.js";
 
 const config = loadConfig();
 const root = path.resolve("../..");
 const templateId = process.argv[2] === "--template" ? process.argv[3] : "legacy";
-if (!["legacy", "dealclaw", "mirror-v"].includes(templateId)) throw new Error("UNKNOWN_TEMPLATE");
+// Any in-repo template with a payload manifest can be built; see src/template-payload.ts.
+const template: TemplatePayload | undefined = templateId === "legacy" ? undefined : resolveTemplatePayload(root, templateId);
 const payloadArchiveArg = process.argv.indexOf("--payload-archive");
 const privatePayloadArchive = payloadArchiveArg >= 0 ? process.argv[payloadArchiveArg + 1] : undefined;
 if (privatePayloadArchive && templateId !== "mirror-v") throw new Error("PRIVATE_PAYLOAD_TEMPLATE_UNSUPPORTED");
@@ -40,12 +42,10 @@ if (external) {
   stripComponents = 3;
   execFileSync("git", ["archive", "--format=tar", "--output", archive, "HEAD", "packages/dealclaw-agent/payload"], { cwd: root });
 } else {
-  const payloadPath = `packages/agent-templates/${templateId}/payload`;
   archive = path.join(config.dataDir, `${templateId}-payload.tar`);
-  // The VLab release is a git archive without .git. Package an explicit
-  // public allowlist so stale files or private memories can never join it.
-  const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "payload-manifest.json"];
-  execFileSync("tar", ["-cf", archive, "-C", path.join(root, payloadPath), ...files]);
+  // The VLab release is a git archive without .git. Package the manifest's
+  // explicit public allowlist so stale files or private memories can never join it.
+  execFileSync("tar", ["-cf", archive, "-C", template!.dir, ...template!.files]);
   stripComponents = 0;
 }
 const name = `${config.sandboxPrefix}-build-${Date.now()}`;
@@ -103,8 +103,29 @@ try {
     "--omit=dev",
     "--no-audit",
     "--no-fund",
-    "openclaw@2026.7.1",
+    `openclaw@${TEMPLATE_OPENCLAW_VERSION}`,
   ]);
+  // Template CLIs go into a private venv; boot.mjs puts tools/bin on PATH.
+  // Only the private V001 archive path carries no manifest tools.
+  if (template?.wheels.length && !privatePayloadArchive) {
+    const tools = "/vercel/sandbox/nexus/tools";
+    await run("tools-python", "dnf", ["install", "-y", "python3", "python3-pip"], true);
+    await run("tools-directories", "mkdir", ["-p", `${tools}/wheels`, `${tools}/bin`]);
+    await sbx.writeFiles(template.wheels.map((wheel) => ({
+      path: `${tools}/wheels/${path.basename(wheel)}`,
+      content: fs.readFileSync(wheel),
+    })));
+    await run("tools-venv", "python3", ["-m", "venv", `${tools}/venv`]);
+    await run("tools-install", `${tools}/venv/bin/pip`, [
+      "install", "--no-cache-dir", "--disable-pip-version-check",
+      ...template.wheels.map((wheel) => `${tools}/wheels/${path.basename(wheel)}`),
+    ]);
+    for (const command of template.commands) {
+      await run(`link-${command}`, "ln", ["-sf", `${tools}/venv/bin/${command}`, `${tools}/bin/${command}`]);
+      await run(`verify-${command}`, `${tools}/bin/${command}`, ["--version"]);
+    }
+    await run("remove-tool-wheels", "rm", ["-rf", `${tools}/wheels`]);
+  }
   for (const filename of [
     "boot.mjs",
     "invoke.mjs",
@@ -129,21 +150,33 @@ try {
     "-f",
     "/vercel/sandbox/payload.tar",
   ]);
-  const snapshot = await sbx.snapshot({ expiration: 30 * 24 * 60 * 60 * 1000 });
+  const builtAt = new Date();
+  const snapshot = await sbx.snapshot({ expiration: TEMPLATE_SNAPSHOT_TTL_MS });
   snapshotted = true;
   const file = path.join(config.dataDir, "config.json");
+  // Keep the previous template pointers restorable before changing them.
+  const backup = `${file}.before-${templateId}-${builtAt.toISOString().replace(/[:.]/g, "-")}`;
+  fs.copyFileSync(file, backup);
+  fs.chmodSync(backup, 0o600);
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
   if (templateId === "legacy") saved.snapshotId = snapshot.snapshotId;
-  else {
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, `packages/agent-templates/${templateId}/payload/payload-manifest.json`), "utf8"));
-    saved.templates = { ...saved.templates, [templateId]: { version: payloadVersion || manifest.version, snapshotId: snapshot.snapshotId } };
-  }
+  else saved.templates = {
+    ...saved.templates,
+    [templateId]: templateRecord(saved.templates?.[templateId], {
+      version: payloadVersion || template!.manifest.version,
+      snapshotId: snapshot.snapshotId,
+      builtAt,
+      tools: privatePayloadArchive ? undefined : template!.manifest.tools?.versions,
+    }),
+  };
   fs.writeFileSync(file, JSON.stringify(saved, null, 2), { mode: 0o600 });
   console.log(
     JSON.stringify({
       phase: "snapshot-ready",
       templateId,
       snapshotId: snapshot.snapshotId,
+      configBackup: backup,
+      listed: saved.templates?.[templateId]?.listed ?? true,
     }),
   );
 } finally {

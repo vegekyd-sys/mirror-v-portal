@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { query } from '../db/pool.js';
 
 /** Read-only administration of the Elastic runtime on the shared Nexus DB. */
@@ -62,5 +62,34 @@ router.get('/agents/:tenantId/runs', async (req, res) => {
     res.status(503).json({ code: 'ELASTIC_ADMIN_UNAVAILABLE' });
   }
 });
+
+// Runtime secrets (e.g. the customer's own 星擎 account) are sealed and
+// injected by the runtime-manager, which owns the encryption key. The ledger
+// only relays the operator's request over loopback and never stores or echoes values.
+const runtimeManagerUrl = (process.env.RUNTIME_MANAGER_URL ?? 'http://127.0.0.1:8097').replace(/\/$/, '');
+function relaySecrets(method: 'GET' | 'PUT' | 'DELETE') {
+  return async (req: Request, res: Response) => {
+    // The runtime-manager's admin token (its config.json adminToken), set in ledger.env.
+    const token = process.env.RUNTIME_MANAGER_TOKEN;
+    if (!token) { res.status(503).json({ code: 'RUNTIME_MANAGER_TOKEN_MISSING' }); return; }
+    try {
+      const response = await fetch(`${runtimeManagerUrl}/v1/tenants/${encodeURIComponent(req.params.tenantId)}/secrets`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(method === 'PUT' ? { 'Content-Type': 'application/json' } : {}) },
+        body: method === 'PUT' ? JSON.stringify({ secrets: req.body?.secrets }) : undefined,
+        signal: AbortSignal.timeout(10_000),
+      });
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (response.ok) res.json(body);
+      else res.status(response.status).json({ code: typeof body.error === 'string' ? body.error : 'ELASTIC_SECRETS_REQUEST_FAILED' });
+    } catch (error) {
+      console.error('[elastic-admin] secrets relay failed', (error as Error).message);
+      res.status(503).json({ code: 'ELASTIC_ADMIN_UNAVAILABLE' });
+    }
+  };
+}
+router.get('/agents/:tenantId/secrets', relaySecrets('GET'));
+router.put('/agents/:tenantId/secrets', relaySecrets('PUT'));
+router.delete('/agents/:tenantId/secrets', relaySecrets('DELETE'));
 
 export default router;

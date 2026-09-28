@@ -85,6 +85,38 @@ Existing tenants remain pinned to their original snapshot until migrated.
 The V001 knowledge seed does not install old host credentials or tools; verify
 memory indexing and real replies before exposing the new template.
 
+## 星擎 template (`xingqing`)
+
+The third template is a public starter in `packages/agent-templates/xingqing/`.
+Its manifest lists every packaged file, including the 星擎 knowledge base as
+read-only base memory at `memory/base/`, and the vendored `xingqing-cli` wheel.
+The builder installs that wheel into `/vercel/sandbox/nexus/tools/venv`, and
+`boot.mjs` puts `tools/bin` on `PATH` and turns on FTS memory search for it.
+It uses the same tool profile as DealClaw.
+
+```sh
+pnpm --filter @dealclaw/runtime-manager exec tsx scripts/build-snapshot.ts --template xingqing
+```
+
+Every build backs up `config.json` first and records `builtAt`, `expiresAt`
+(30 days) and the runtime versions on the template entry. A template built for
+the first time is written with `"listed": false`: it can be created by explicit
+`templateId` for acceptance tests but is not shown on the signup page. After
+acceptance, set `"listed": true`. The runtime-manager reads templates at start,
+so both steps need a `nexus-runtime-manager` restart.
+
+Each 星擎 tenant needs the customer's own 星擎 account. Operators bind it on the
+agent's page in `/admin`; the runtime-manager seals it in
+`elastic_tenant_secrets` and injects `XINGQING_USERNAME` / `XINGQING_PASSWORD`
+when the sandbox boots. A new binding takes effect after the next idle sleep.
+Never bind an admin or another company's account. The admin page relays through
+the credits-ledger, which needs `RUNTIME_MANAGER_TOKEN` (the runtime-manager
+`adminToken`) in `/opt/nexus/data/ledger.env`.
+
+Payload updates, including a new knowledge base, reach new tenants only.
+Existing tenants keep their seeded workspace until migrated; for a knowledge
+update, replace only `memory/base/` in their workspace.
+
 For local acceptance on a trusted Mac, run `scripts/mirror-v-local-tunnel.sh`
 and open `http://127.0.0.1:18080/onboard`. The tunnel points to this same
 deployed server and also exposes `/admin/login` locally without public HTTP.

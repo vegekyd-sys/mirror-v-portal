@@ -4,7 +4,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
-import { availableTemplates, requireTemplate } from "./templates.js";
+import { availableTemplates, requireTemplate, templateSecretNames, validateTenantSecrets } from "./templates.js";
 import { VercelProvider } from "./provider.js";
 import { AlibabaProvider, alibabaReady } from "./alibaba-provider.js";
 import { ProviderRouter } from "./provider-router.js";
@@ -294,6 +294,44 @@ app.put("/v1/tenants/:id/credentials", async (req, res, next) => {
     edge.connect(t);
     res.json({ ok: true });
   } catch (e) {
+    next(e);
+  }
+});
+// Operator-bound runtime secrets. Values go in, never come back out; a new
+// binding reaches the agent the next time its sandbox boots (after idle sleep).
+app.get("/v1/tenants/:id/secrets", async (req, res, next) => {
+  try {
+    const t = await store.tenant(req.params.id);
+    const status = await store.tenantSecretStatus(t.id);
+    const required = templateSecretNames(t.template_id);
+    res.json({ templateId: t.template_id, required, bound: required.length > 0 && required.every((name) => status.names.includes(name)), ...status });
+  } catch (e) {
+    if (e instanceof Error && e.message === "TENANT_NOT_FOUND") { res.sendStatus(404); return; }
+    next(e);
+  }
+});
+app.put("/v1/tenants/:id/secrets", async (req, res, next) => {
+  try {
+    const t = await store.tenant(req.params.id);
+    let secrets: Record<string, string>;
+    try { secrets = validateTenantSecrets(t.template_id, req.body?.secrets); }
+    catch (e) { res.status(400).json({ error: (e as Error).message }); return; }
+    await store.setTenantSecrets(t.id, secrets);
+    await store.event(t.id, "secrets-bound", { names: Object.keys(secrets) });
+    res.json({ ok: true, names: Object.keys(secrets) });
+  } catch (e) {
+    if (e instanceof Error && e.message === "TENANT_NOT_FOUND") { res.sendStatus(404); return; }
+    next(e);
+  }
+});
+app.delete("/v1/tenants/:id/secrets", async (req, res, next) => {
+  try {
+    const t = await store.tenant(req.params.id);
+    await store.setTenantSecrets(t.id, {});
+    await store.event(t.id, "secrets-unbound", {});
+    res.json({ ok: true });
+  } catch (e) {
+    if (e instanceof Error && e.message === "TENANT_NOT_FOUND") { res.sendStatus(404); return; }
     next(e);
   }
 });

@@ -162,6 +162,16 @@ describe('GET /onboard — Feishu registration', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally { fetchMock.mockRestore(); }
   });
+  it('hides unlisted templates from the signup page', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
+      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent', listed: true },
+      { id: 'xingqing', version: 'xingqing-starter.v1', name: '星擎助手', description: '数据问答', listed: false },
+    ] }));
+    try {
+      const catalog = await request(app).get('/onboard/templates');
+      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['mirror-v']);
+    } finally { fetchMock.mockRestore(); }
+  });
   it('returns JSON for feishu UA (registerApp may need real network)', async () => {
     const res = await request(app).get('/onboard').set('User-Agent', 'Feishu/7.0');
     // RegisterApp may fail in test env (needs real Feishu network).

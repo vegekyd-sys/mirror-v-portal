@@ -140,6 +140,25 @@ test("credentials are encrypted with authenticated encryption", () => {
   bytes[15] ^= 1;
   expect(() => s.unseal(bytes.toString("base64"))).toThrow();
 });
+test("tenant secrets are sealed at rest, replaced as a set, and reach ensure", async () => {
+  const t = await tenant();
+  await s.setTenantSecrets(t.id, { XINGQING_USERNAME: "acme", XINGQING_PASSWORD: "pw-1" });
+  const raw = await s.pool.query("SELECT value FROM elastic_tenant_secrets WHERE tenant_id=$1", [t.id]);
+  expect(raw.rows.map((row) => row.value).join()).not.toContain("pw-1");
+  await s.setTenantSecrets(t.id, { XINGQING_USERNAME: "acme", XINGQING_PASSWORD: "pw-2" });
+  expect(await s.tenantSecretEnv(t.id)).toEqual({ XINGQING_USERNAME: "acme", XINGQING_PASSWORD: "pw-2" });
+  expect((await s.tenantSecretStatus(t.id)).names).toEqual(["XINGQING_PASSWORD", "XINGQING_USERNAME"]);
+  let seen: Record<string, string> | undefined;
+  const m = new RuntimeManager(s, {
+    ...provider(),
+    ensure: async (booted) => { seen = booted.runtime_env; return { name: "test-" + randomUUID(), wakeMs: 1, reused: false }; },
+  });
+  const run = await s.enqueue(t.id, "secret-run", "main", "hello");
+  await m.process(run.id);
+  expect(seen).toEqual({ XINGQING_USERNAME: "acme", XINGQING_PASSWORD: "pw-2" });
+  await s.setTenantSecrets(t.id, {});
+  expect(await s.tenantSecretEnv(t.id)).toEqual({});
+});
 test("real queue drains concurrent messages in tenant order", async () => {
   const t = await tenant();
   let active = 0,
