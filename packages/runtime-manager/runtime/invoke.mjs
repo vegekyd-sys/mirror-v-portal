@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { prepareInboundInput } from "./inbound-input.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
@@ -28,6 +29,15 @@ try {
   const request = JSON.parse(
     Buffer.from(process.env.NEXUS_REQUEST_B64, "base64").toString(),
   );
+  let inbound;
+  try {
+    const config = request.images?.length ? JSON.parse(fs.readFileSync("/vercel/sandbox/agent-data/openclaw.json", "utf8")) : undefined;
+    inbound = prepareInboundInput(request,config,{agentId:process.env.NEXUS_AGENT_ID || "dealclaw"});
+  } catch (error) {
+    const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE)[A-Z_]*$/.test(error?.message || "") ? error.message : "INBOUND_MEDIA_INPUT_REJECTED";
+    process.stdout.write("data: " + JSON.stringify({type:"nexus.input_rejected",code}) + "\n\n");
+    throw Error("INBOUND_MEDIA_INPUT_REJECTED");
+  }
   const response = await fetch("http://127.0.0.1:18790/v1/responses", {
     method: "POST",
     headers: {
@@ -43,8 +53,9 @@ try {
     },
     body: JSON.stringify({
       model: `openclaw/${process.env.NEXUS_AGENT_ID || "dealclaw"}`,
-      input: request.text,
+      input: inbound.input,
       instructions: [
+        ...(inbound.instructions ? [inbound.instructions] : []),
         "定时任务和心跳必须用 nexus_schedule 工具登记到 Nexus，不能改 OpenClaw 配置或本地 cron。对于需要调用工具或多步骤处理的任务，在开始前和关键步骤之间用简短中文向用户说明正在做什么；这些是公开的执行进展，不要输出内部推理。完成后给出结果。",
         // Knowing the channel accepts files is not the same as knowing how to
         // hand one over: the agent announced it was sending an image and then

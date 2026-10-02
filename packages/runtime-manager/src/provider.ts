@@ -6,6 +6,7 @@ import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
 import { parseReply, resolveRef, mediaKind } from "./media-directive.js";
+import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
 import type { Tenant } from "./store.js";
 
@@ -55,6 +56,8 @@ const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
 /** What the agent needs to know about where this turn came from. */
 export interface TurnContext {
   channel?: string;
+  attachments?: InboundAttachment[];
+  attachmentsFromPreviousTurn?: boolean;
 }
 
 /**
@@ -170,6 +173,7 @@ export class VercelProvider implements RuntimeProvider {
       const files = [
         "boot.mjs",
         "invoke.mjs",
+        "inbound-input.mjs",
         "quiesce.mjs",
         "model-proxy.mjs",
         "backup.mjs",
@@ -260,6 +264,18 @@ export class VercelProvider implements RuntimeProvider {
         : this.handles.get(tenant.id) || (await this.get(tenant));
     if (this.config.optimizeRuntime === false)
       await sbx.update({ timeout: 1_200_000 });
+    let materialized: ReturnType<typeof readInboundImage>[] = [];
+    try {
+      const inbound = normalizeInboundAttachments(context?.attachments ?? [],tenant.id);
+      materialized = inbound.map(item => readInboundImage(this.config.dataDir,tenant.id,item));
+      if (materialized.length) {
+        await sbx.writeFiles(materialized.map(({image,buffer}) => ({path:image.path,content:buffer})));
+        await onEvent("inbound-materialized", { count: materialized.length, images: materialized.map(({image}) => image), fromPreviousTurn: !!context?.attachmentsFromPreviousTurn });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      throw new InboundMediaError(/^(?:INVALID_INBOUND|INBOUND_ATTACHMENT)[A-Z_]*$/.test(message) ? message : "INBOUND_MEDIA_PREPARATION_FAILED");
+    }
     await onEvent("dispatch", {
       at: Date.now(),
       executeSetupMs: Date.now() - executeStart,
@@ -290,7 +306,10 @@ export class VercelProvider implements RuntimeProvider {
             } catch {
               continue;
             }
-            if(event.type === "nexus.schedule.request") {
+            if(event.type === "nexus.input_rejected") {
+              const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE)[A-Z_]*$/.test(event.code || "") ? event.code : "INBOUND_MEDIA_INPUT_REJECTED";
+              throw new InboundMediaError(code);
+            } else if(event.type === "nexus.schedule.request") {
               if(!/^[a-f0-9-]{36}$/.test(event.id))throw Error("INVALID_SCHEDULE_REQUEST_ID");
               await onEvent("schedule-request",event);
               await sbx.writeFiles([{path:`/tmp/nexus-schedule-rpc/${event.id}.response`,content:Buffer.from(JSON.stringify(event.result||{error:"SCHEDULER_UNAVAILABLE"}))}]);
@@ -337,6 +356,7 @@ export class VercelProvider implements RuntimeProvider {
           JSON.stringify({
             sessionKey,
             text,
+            ...(materialized.length ? { images: materialized.map(({image}) => image), imagesFromPreviousTurn: !!context?.attachmentsFromPreviousTurn } : {}),
             channel: openclawChannel(context?.channel),
             caps: channelCaps(context?.channel),
           }),

@@ -147,6 +147,7 @@ try {
   for (const filename of [
     "boot.mjs",
     "invoke.mjs",
+    "inbound-input.mjs",
     "quiesce.mjs",
     "model-proxy.mjs",
     "backup.mjs",

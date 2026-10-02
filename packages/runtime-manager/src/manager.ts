@@ -1,3 +1,4 @@
+import { InboundMediaError } from "./inbound-media.js";
 import { Scheduler } from './scheduler.js';
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
@@ -117,6 +118,7 @@ export class RuntimeManager {
           },
           runId,
         );
+        const attachments = current.attachments?.length ? current.attachments : current.inherit_attachments === false ? [] : await this.store.previousAttachments(current);
         submitted = true;
         const { output, media } = await this.provider.execute(
           tenant,
@@ -133,7 +135,7 @@ export class RuntimeManager {
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);
           },
-          { channel: current.channel },
+          { channel: current.channel, attachments, attachmentsFromPreviousTurn: !current.attachments?.length && attachments.length > 0 },
         );
         // Hand files to the edge before the reply is marked deliverable, so the
         // attachment and the text arrive together rather than in two turns.
@@ -165,14 +167,15 @@ export class RuntimeManager {
         await this.store.event(tenant.id, "completed", { output }, runId);
       } catch (e) {
         const message = e instanceof Error ? e.message : "RUNTIME_ERROR";
-        const status = submitted ? "uncertain" : "failed";
+        const sent = submitted && !(e instanceof InboundMediaError);
+        const status = sent ? "uncertain" : "failed";
         await db.query(
           "UPDATE elastic_runs SET status=$2,error=$3,completed_at=now() WHERE id=$1",
           [runId, status, message],
         );
         await db.query(
           "UPDATE elastic_tenants SET state=$2,last_error=$3,last_activity=now() WHERE id=$1",
-          [tenant.id, submitted ? "blocked" : "ready", message],
+          [tenant.id, sent ? "blocked" : "ready", message],
         );
         await this.store.event(tenant.id, status, { error: message }, runId);
         if (current.channel === "feishu") {

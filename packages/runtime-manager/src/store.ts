@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import pg, { type PoolClient } from "pg";
 import { PgBoss } from "pg-boss";
+import { normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
 
 export interface Tenant {
@@ -47,6 +48,8 @@ export interface Run {
   session_key: string;
   channel: string;
   text: string;
+  attachments?: InboundAttachment[];
+  inherit_attachments?: boolean;
   status: string;
   output: string;
   error: string | null;
@@ -132,6 +135,8 @@ export class Store {
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_id text NOT NULL DEFAULT 'dealclaw'`);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_version text NOT NULL DEFAULT 'dealclaw-base.v2'`);
     await this.pool.query(`ALTER TABLE elastic_tenants ADD COLUMN IF NOT EXISTS template_snapshot_id text`);
+    await this.pool.query(`ALTER TABLE elastic_runs ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(attachments) = 'array')`);
+    await this.pool.query(`ALTER TABLE elastic_runs ADD COLUMN IF NOT EXISTS inherit_attachments boolean NOT NULL DEFAULT true`);
     await this.boss.start();
     await this.boss.createQueue("agent-turn", {
       retryLimit: 1000,
@@ -337,15 +342,19 @@ export class Store {
     text: string,
     channel = "web",
     messageId?: string,
+    attachments: InboundAttachment[] = [],
+    options: {inheritAttachments?: boolean} = {},
   ) {
-    if (!text.trim() || text.length > 32000 || !key || key.length > 250)
+    if (options.inheritAttachments !== undefined && typeof options.inheritAttachments !== "boolean") throw Error("INVALID_ATTACHMENT_POLICY");
+    const media = normalizeInboundAttachments(attachments,tenantId);
+    if (typeof text !== "string" || (!text.trim() && !media.length) || text.length > 32000 || !key || key.length > 250)
       throw new Error("INVALID_MESSAGE");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const result = await client.query<Run>(
-        `INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,message_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING *`,
+        `INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,message_id,attachments,inherit_attachments)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING *`,
         [
           randomUUID(),
           tenantId,
@@ -354,6 +363,8 @@ export class Store {
           text,
           channel,
           messageId || null,
+          JSON.stringify(media),
+          options.inheritAttachments !== false,
         ],
       );
       if (result.rows[0]) {
@@ -387,6 +398,19 @@ export class Store {
     } finally {
       client.release();
     }
+  }
+  /** Previous received image in this exact conversation; failed reception blocks inheritance. */
+  async previousAttachments(run: Run): Promise<InboundAttachment[]> {
+    const {rows} = await this.pool.query<{attachments: InboundAttachment[]; inherit_attachments: boolean}>(
+      `SELECT attachments,inherit_attachments FROM elastic_runs WHERE tenant_id=$1 AND session_key=$2 AND channel=$3
+       AND (created_at,id)<(SELECT created_at,id FROM elastic_runs WHERE id=$4 AND tenant_id=$1)
+       AND status NOT IN ('queued','running')
+       AND (jsonb_array_length(attachments)>0 OR inherit_attachments=false)
+       ORDER BY created_at DESC,id DESC LIMIT 1`,
+      [run.tenant_id,run.session_key,run.channel,run.id],
+    );
+    if(rows[0]?.inherit_attachments === false) return [];
+    return normalizeInboundAttachments(rows[0]?.attachments ?? [],run.tenant_id);
   }
   async locked<T>(
     tenantId: string,
