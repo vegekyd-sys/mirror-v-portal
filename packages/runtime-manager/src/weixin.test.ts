@@ -220,9 +220,19 @@ describe("weixin image ingress", () => {
     const unrelated = await fs.mkdtemp(path.join(os.tmpdir(), "weixin-private-"));
     roots.push(unrelated);
     await fs.symlink(unrelated,path.join(dataDir,"inbound"));
-    await expect(ingest(edge,message(2))).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    await expect(ingest(edge,message(2))).rejects.toThrow("ILINK_IMAGE_RECEIPT_RETRY");
     expect(await fs.readdir(unrelated)).toEqual([]);
     expect(s.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("never advances by finalizing a picture whose encrypted source receipt cannot be saved", async () => {
+    const {s,edge,download,dataDir} = await setup();
+    const unrelated = await fs.mkdtemp(path.join(os.tmpdir(),"weixin-vault-boundary-"));roots.push(unrelated);
+    await fs.symlink(unrelated,path.join(dataDir,"inbound"));
+    for(let retry=0;retry<4;retry++)await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_RECEIPT_RETRY");
+    expect(download).not.toHaveBeenCalled();
+    expect(s.enqueue).not.toHaveBeenCalled();
+    expect(await fs.readdir(unrelated)).toEqual([]);
   });
 
   it("ignores bot echoes instead of enqueueing its own images", async () => {

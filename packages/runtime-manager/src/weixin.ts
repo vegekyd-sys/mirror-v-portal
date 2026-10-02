@@ -244,7 +244,7 @@ export class WeixinEdge implements ChannelEdge {
     let stage = "receipt";
     try {
       const attachments: InboundAttachment[] = [];
-      if (images.length > MAX_INBOUND_IMAGES) throw Error("INBOUND_ATTACHMENTS_TOO_MANY");
+      if (images.length > MAX_INBOUND_IMAGES) {stage="validate";throw Error("INBOUND_ATTACHMENTS_TOO_MANY");}
       if (images.length) await this.persistEncryptedMessage(tenantId,messageHash,requestKey,msg);
       for (const image of images) {
         stage = "download";
@@ -271,6 +271,9 @@ export class WeixinEdge implements ChannelEdge {
             {stage,...(["EACCES","ENOENT","EPERM","EIO","ENOSPC","EMFILE","EROFS","EXDEV"].includes(error?.code) ? {filesystemCode:error.code} : {})})} : {}),
       });
       if (images.length) {
+        // Never consume the only source reference when its encrypted receipt did
+        // not reach durable storage. A filesystem repair can resume this cursor.
+        if (stage === "receipt") throw Error("ILINK_IMAGE_RECEIPT_RETRY");
         const failureKey = `${tenantId}:${messageHash}`;
         const failures = (this.ingressFailures.get(failureKey) ?? 0) + 1;
         this.ingressFailures.set(failureKey, failures);
