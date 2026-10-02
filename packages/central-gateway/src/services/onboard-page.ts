@@ -229,7 +229,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
       if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');
-      var preferred = data.templates.some(function (template) { return template.id === requested; }) ? requested : 'mirror-v';
+      // An explicit agent link must never open another agent's authorization.
+      if (requested !== null && !data.templates.some(function (template) { return template.id === requested; })) throw new Error('所选 Agent 暂未开放，请稍后重试');
+      var preferred = requested !== null ? requested : 'mirror-v';
       var initialCard = null;
       templateList.replaceChildren();
       data.templates.forEach(function (template) {

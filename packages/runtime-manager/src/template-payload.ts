@@ -65,11 +65,13 @@ export function resolveTemplatePayload(root: string, templateId: string): Templa
  */
 export function templateRecord(
   previous: TemplateRecord | undefined,
-  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string> },
+  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string>; agentKit?: TemplateRecord["agentKit"] },
 ): TemplateRecord {
   return {
     ...(previous?.name ? { name: previous.name } : {}),
     ...(previous?.description ? { description: previous.description } : {}),
+    ...(previous?.model ? { model: previous.model, modelVersion: previous.modelVersion || previous.version } : {}),
+    ...(build.agentKit ? { agentKit: build.agentKit } : {}),
     version: build.version,
     snapshotId: build.snapshotId,
     listed: previous ? previous.listed !== false : false,

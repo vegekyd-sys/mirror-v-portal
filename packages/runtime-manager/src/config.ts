@@ -13,6 +13,12 @@ export interface TemplateRecord {
   builtAt?: string;
   expiresAt?: string;
   runtime?: Record<string, string>;
+  /** Public provenance only; the full profile is immutable inside this snapshot. */
+  agentKit?: { archiveSha256: string; sourceCommit: string; requiredEnvKeys: string[] };
+  /** Private per-template planner override. Never copied into the payload/snapshot. */
+  model?: { id: string; baseUrl: string; apiKey: string };
+  /** Explicit version pin for a private model profile; old tenants fail closed on mismatch. */
+  modelVersion?: string;
 }
 
 export interface Config {

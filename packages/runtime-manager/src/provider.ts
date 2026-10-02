@@ -114,9 +114,25 @@ export class VercelProvider implements RuntimeProvider {
       name: tenant.sandbox_name || this.name(tenant.id),
     });
   }
+  protected modelForTenant(tenant: Tenant) {
+    const template = this.config.templates?.[tenant.template_id || "dealclaw"];
+    if (template?.model) {
+      if ((template.modelVersion || template.version) !== tenant.template_version) throw Error("TEMPLATE_MODEL_PROFILE_MISMATCH");
+      if (!template.model.id || !template.model.baseUrl || !template.model.apiKey) throw Error("TEMPLATE_MODEL_NOT_CONFIGURED");
+      return template.model;
+    }
+    if (template?.agentKit || tenant.template_id === "makaron") throw Error("TEMPLATE_MODEL_NOT_CONFIGURED");
+    return this.config.model;
+  }
   protected checkConfiguration(tenant: Tenant) {
     if (!tenant.template_snapshot_id && tenant.template_id !== "dealclaw") throw new Error("TEMPLATE_SNAPSHOT_NOT_READY");
     if (!tenant.template_snapshot_id && !this.config.snapshotId) throw new Error("SNAPSHOT_NOT_READY");
+    this.modelForTenant(tenant);
+    for (const key of this.config.templates?.[tenant.template_id]?.agentKit?.requiredEnvKeys || []) {
+      // All customer service credentials come from the sealed tenant record;
+      // never borrow a controller-process owner key for a public signup.
+      if (!tenant.runtime_env?.[key]) throw Error(`RUNTIME_ENV_KEY_MISSING:${key}`);
+    }
   }
   protected async create(tenant: Tenant, name: string): Promise<RuntimeSandbox> {
     const snapshotId = tenant.template_snapshot_id || (tenant.template_id === "dealclaw" ? this.config.snapshotId : undefined);
@@ -159,6 +175,7 @@ export class VercelProvider implements RuntimeProvider {
         "backup.mjs",
         "progress-patch.mjs",
         "scheduler-plugin.mjs",
+        "agent-config.mjs",
       ].map((file) => ({
         path: `/vercel/sandbox/nexus/${file}`,
         content: fs.readFileSync(
@@ -180,6 +197,7 @@ export class VercelProvider implements RuntimeProvider {
     }
     const scriptDeployMs = Date.now() - setupStart;
     const bootCommandStart = Date.now();
+    const model = this.modelForTenant(tenant);
     const result = await sbx.runCommand({
       cmd: "node",
       args: ["/vercel/sandbox/nexus/boot.mjs"],
@@ -187,10 +205,12 @@ export class VercelProvider implements RuntimeProvider {
         // Operator-bound tenant secrets first, so they can never shadow runtime variables.
         ...tenant.runtime_env,
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
-        NEXUS_MODEL_KEY: this.config.model.apiKey,
-        NEXUS_MODEL_BASE_URL: this.config.model.baseUrl,
-        NEXUS_MODEL_ID: this.config.model.id,
+        NEXUS_MODEL_KEY: model.apiKey,
+        NEXUS_MODEL_BASE_URL: model.baseUrl,
+        NEXUS_MODEL_ID: model.id,
         NEXUS_AGENT_ID: tenant.template_id || "dealclaw",
+        NEXUS_TEMPLATE_VERSION: tenant.template_version || "",
+        NEXUS_EXPECT_AGENT_KIT: this.config.templates?.[tenant.template_id]?.agentKit ? "1" : "0",
         NEXUS_OPTIMIZE: this.config.optimizeRuntime === false ? "0" : "1",
         NEXUS_CPU_PROFILE: process.env.NEXUS_CPU_PROFILE || "0",
       },
@@ -351,6 +371,7 @@ export class VercelProvider implements RuntimeProvider {
         : await sbx.runCommand({
             cmd: "node",
             args: ["/vercel/sandbox/nexus/backup.mjs"],
+            env: { NEXUS_AGENT_ID: tenant.template_id || "dealclaw" },
           });
     if (backup.exitCode) throw new Error("STATE_BACKUP_FAILED");
     const bytes = await sbx.readFileToBuffer({ path: "/tmp/nexus-state.tgz" });

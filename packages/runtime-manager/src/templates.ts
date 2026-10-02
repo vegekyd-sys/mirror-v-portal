@@ -14,6 +14,7 @@ const LABELS: Record<string, { name: string; description: string }> = {
   dealclaw: { name: "DealClaw", description: "面向出海业务的 AI 顾问" },
   "mirror-v": { name: "Mirror V", description: "与你一起思考、整理和行动的通用 Agent" },
   xingqing: { name: "星擎助手", description: "查询企业在星擎的账号、作品、播放与线索数据" },
+  makaron: { name: "Makaron", description: "与你一起创作图片、视频、音乐和动态设计" },
 };
 
 /**
@@ -24,6 +25,7 @@ const LABELS: Record<string, { name: string; description: string }> = {
  */
 const TEMPLATE_SECRETS: Record<string, readonly string[]> = {
   xingqing: ["XINGQING_USERNAME", "XINGQING_PASSWORD"],
+  makaron: ["MAKARON_API_KEY"],
 };
 
 export function templateSecretNames(templateId: string): readonly string[] {

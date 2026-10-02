@@ -2,11 +2,13 @@
 // Keep deletions explicit so restoring cannot resurrect user-deleted payload files.
 import fs from "node:fs";
 import path from "node:path";
+import { readAgentKitProfile, payloadWorkspace } from "./agent-config.mjs";
 import { execFileSync } from "node:child_process";
 const root = process.env.NEXUS_BACKUP_ROOT || "/vercel/sandbox",
   data = root + "/agent-data",
-  workspace = data + "/workspace",
-  base = root + "/nexus/payload";
+  workspace = data + "/workspace";
+const profile = readAgentKitProfile(root + "/nexus/agent-kit-runtime.json", process.env.NEXUS_AGENT_ID || "dealclaw");
+const base = profile ? payloadWorkspace(root + "/nexus/payload", profile.runtime) : root + "/nexus/payload";
 function entries(dir, prefix = "") {
   const out = [];
   for (const name of fs.readdirSync(dir)) {
@@ -49,7 +51,7 @@ const removed = entries(base)
 const manifest = "agent-data/.nexus-backup.json";
 fs.writeFileSync(
   root + "/" + manifest,
-  JSON.stringify({ version: 2, basePayload: "dealclaw-2026-09-14", removed }),
+  JSON.stringify({ version: 2, basePayload: profile?.version || "dealclaw-2026-09-14", ...(profile ? { agentId: profile.templateId, payloadLayout: profile.runtime.payloadLayout, archiveSha256: profile.archiveSha256 } : {}), removed }),
 );
 if (!files.includes(manifest)) files.push(manifest);
 const list = root + "/nexus-backup-files",

@@ -1,11 +1,20 @@
 import { installProgress } from "./progress-patch.mjs";
 import fs from "node:fs";
+import { readAgentKitProfile, seedWorkspace, createOpenClawConfig, assertAgentKitNode, agentKitFingerprint } from "./agent-config.mjs";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 
 const bootStart = Date.now();
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
 // Templates whose payload ships Markdown memory (MEMORY.md + memory/**) to index and search.
+const profile = readAgentKitProfile("/vercel/sandbox/nexus/agent-kit-runtime.json", agentId, process.env.NEXUS_TEMPLATE_VERSION);
+if (!profile && (process.env.NEXUS_EXPECT_AGENT_KIT === "1" || agentId === "makaron" ||
+  (fs.existsSync("/vercel/sandbox/nexus/payload/payload-manifest.json") &&
+    JSON.parse(fs.readFileSync("/vercel/sandbox/nexus/payload/payload-manifest.json", "utf8")).layout === "agent-kit-v1"))) throw Error("AGENT_KIT_PROFILE_MISSING");
+if (profile) {
+  assertAgentKitNode();
+  for (const key of profile.runtime.envKeys) if (!process.env[key]) throw Error(`RUNTIME_ENV_KEY_MISSING:${key}`);
+}
 const memoryAgent = ["mirror-v", "xingqing"].includes(agentId);
 const fingerprint = createHash("sha256")
   .update(
@@ -17,6 +26,7 @@ const fingerprint = createHash("sha256")
       // Preserve the existing DealClaw fingerprint for already-running VMs.
       ...(agentId === "dealclaw" ? [] : [agentId]),
       "runtime-v4-scheduler",
+      ...agentKitFingerprint(profile),
     ].join("\0"),
   )
   .digest("hex");
@@ -28,7 +38,8 @@ const token = process.env.NEXUS_GATEWAY_TOKEN;
 if (!token || !process.env.NEXUS_MODEL_KEY)
   throw new Error("Missing ephemeral runtime credentials");
 fs.mkdirSync(state, { recursive: true });
-if (!fs.existsSync(`${data}/seeded`)) {
+if (profile) seedWorkspace(`${base}/payload`, data, profile.runtime);
+else if (!fs.existsSync(`${data}/seeded`)) {
   fs.mkdirSync(workspace, { recursive: true });
   fs.cpSync(`${base}/payload`, workspace, { recursive: true });
   fs.writeFileSync(`${data}/seeded`, agentId);
@@ -37,7 +48,7 @@ const toolsBin = `${base}/tools/bin`;
 const env = {
   ...process.env,
   // Template CLIs installed by the snapshot builder (e.g. xingqing-cli).
-  ...(fs.existsSync(toolsBin) ? { PATH: `${toolsBin}:${process.env.PATH ?? ""}` } : {}),
+  PATH: [profile?.runtime.mediaBinaries ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"),
   // A customer who binds by chat logs in through xingqing-cli, which caches only
   // a session token. Keep it in agent-data so backups carry it across sleeps.
   ...(agentId === "xingqing" ? { XINGQING_CONFIG_DIR: `${data}/xingqing` } : {}),
@@ -68,7 +79,9 @@ fs.writeFileSync(
     configSchema: { type: "object", additionalProperties: false },
   }),
 );
-const cfg = {
+const cfg = profile ? createOpenClawConfig({
+  runtime: profile.runtime, workspace, payloadRoot: `${base}/payload`, schedulerPath: pluginDir, modelId: process.env.NEXUS_MODEL_ID,
+}) : {
   gateway: {
     mode: "local",
     bind: "loopback",

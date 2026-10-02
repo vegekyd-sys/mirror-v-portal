@@ -48,4 +48,29 @@ describe("signup template catalog", () => {
     expect(() => validateTenantSecrets("xingqing", { XINGQING_USERNAME: "acme", NEXUS_MODEL_KEY: "x" })).toThrow("INVALID_SECRETS");
     expect(() => validateTenantSecrets("xingqing", { XINGQING_USERNAME: "acme", XINGQING_PASSWORD: "a\nb" })).toThrow("INVALID_SECRETS");
   });
+
+  it("pins the configured Makaron version and keeps a private trial unlisted", () => {
+    const privateTrial = { ...config, templates: { ...config.templates, makaron: {
+      version: "makaron.v2.0.0", snapshotId: "snap_makaron", listed: false,
+    } } };
+    expect(requireTemplate(privateTrial, "makaron", "makaron.v2.0.0")).toEqual({
+      id: "makaron", version: "makaron.v2.0.0", snapshotId: "snap_makaron", listed: false,
+      name: "Makaron", description: "与你一起创作图片、视频、音乐和动态设计",
+    });
+    expect(() => requireTemplate(config, "makaron")).toThrow("TEMPLATE_NOT_AVAILABLE");
+    expect(() => requireTemplate(privateTrial, "makaron", "makaron.v1")).toThrow("TEMPLATE_NOT_AVAILABLE");
+  });
+
+  it("accepts only a tenant's own Makaron credential without runtime overrides", () => {
+    expect(templateSecretNames("makaron")).toEqual(["MAKARON_API_KEY"]);
+    expect(validateTenantSecrets("makaron", { MAKARON_API_KEY: " private-test-key " }))
+      .toEqual({ MAKARON_API_KEY: "private-test-key" });
+    for (const input of [
+      {}, { MAKARON_API_KEY: "" }, { MAKARON_API_KEY: "key\n" },
+      { MAKARON_API_KEY: "key", NEXUS_MODEL_KEY: "override" },
+      { MAKARON_API_KEY: "key", OPENCLAW_STATE_DIR: "/other-tenant" },
+      { XINGQING_PASSWORD: "key" },
+    ]) expect(() => validateTenantSecrets("makaron", input)).toThrow("INVALID_SECRETS");
+    expect(templateSecretNames("mirror-v")).toEqual([]);
+  });
 });
