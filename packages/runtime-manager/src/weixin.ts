@@ -1,8 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ChannelEdge } from "./channel-edge.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { isSilentReply } from "./reply-sentinel.js";
 import { ilinkBaseInfo, ilinkBaseUrl, ilinkPostHeaders } from "./ilink-protocol.js";
+import { downloadIlinkImage, type ILinkImageItem } from "./ilink-media.js";
+import { IMAGE_EXTENSIONS, MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 /**
  * Personal WeChat via iLink (Tencent's official ClawBot protocol).
@@ -24,11 +28,13 @@ interface WeixinCredentials {
   botToken: string;
   baseUrl?: string;
 }
-interface ILinkItem {
+interface ILinkItem extends ILinkImageItem {
   type?: number;
   text_item?: { text?: string };
 }
 interface ILinkMessage {
+  message_id?: number | string;
+  client_id?: string;
   from_user_id?: string;
   to_user_id?: string;
   group_id?: string;
@@ -63,7 +69,7 @@ export function decodeReplyTarget(value: string | null): ReplyTarget | null {
   }
 }
 
-/** Text lives in item_list entries of type 1; anything else is ignored for now. */
+/** Text and media are separate protocol items; an image needs no text caption. */
 export function extractText(msg: ILinkMessage): string {
   return (msg.item_list ?? [])
     .filter((i) => i.type === 1 && i.text_item?.text)
@@ -76,7 +82,8 @@ export class WeixinEdge implements ChannelEdge {
   readonly channel = "weixin";
   private polls = new Map<string, AbortController>();
   private buffers = new Map<string, string[]>();
-  constructor(readonly store: Store) {}
+  private ingressFailures = new Map<string, number>();
+  constructor(readonly store: Store, private readonly downloadImage = downloadIlinkImage) {}
 
   private headers(token: string) {
     return ilinkPostHeaders(token);
@@ -133,11 +140,11 @@ export class WeixinEdge implements ChannelEdge {
         );
         if (res.ret && res.ret !== 0) throw new Error(`ILINK_GETUPDATES_RET_${res.ret}`);
         failures = 0;
-        for (const msg of res.msgs ?? []) await this.ingest(tenantId, msg);
+        for (const msg of res.msgs ?? []) await this.ingest(tenantId, msg, signal);
         // Advance only after the batch is durably enqueued, so a crash re-reads it.
         if (res.get_updates_buf && res.get_updates_buf !== cursor) {
+          await this.store.saveChannelCursor(tenantId, this.channel, res.get_updates_buf);
           cursor = res.get_updates_buf;
-          await this.store.saveChannelCursor(tenantId, this.channel, cursor);
         }
       } catch (error: any) {
         if (signal.aborted) return;
@@ -159,20 +166,86 @@ export class WeixinEdge implements ChannelEdge {
     }
   }
 
-  private async ingest(tenantId: string, msg: ILinkMessage) {
+  private async persistImage(tenantId: string, messageHash: string, image: Awaited<ReturnType<typeof downloadIlinkImage>>): Promise<InboundAttachment> {
+    const storagePath = `inbound/${tenantId}/${messageHash}/${image.sha256}.${IMAGE_EXTENSIONS[image.mimeType]}`;
+    const [attachment] = normalizeInboundAttachments([{kind: "image", mimeType: image.mimeType, storagePath, sha256: image.sha256, bytes: image.bytes, filename: image.filename}], tenantId);
+    const root = await fs.realpath(this.store.config.dataDir);
+    let directory = root;
+    // Every intermediate directory is private, tenant-scoped and never a symlink.
+    for (const segment of path.posix.dirname(storagePath).split("/")) {
+      directory = path.join(directory, segment);
+      await fs.mkdir(directory, {mode: 0o700}).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+      const stat = await fs.lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error("INBOUND_ATTACHMENT_DIRECTORY_INVALID");
+    }
+    const filename = path.join(root, storagePath);
+    const temporary = path.join(directory, `.${randomUUID()}.tmp`);
+    try {
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try { await handle.writeFile(image.buffer); await handle.sync(); }
+      finally { await handle.close(); }
+      // Link a complete synced file atomically; a replay cannot replace existing bytes.
+      await fs.link(temporary, filename).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+        const stat = await fs.lstat(filename);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== image.bytes) throw Error("INBOUND_ATTACHMENT_CONFLICT");
+        const previous = await fs.readFile(filename);
+        if (createHash("sha256").update(previous).digest("hex") !== image.sha256) throw Error("INBOUND_ATTACHMENT_CONFLICT");
+      });
+      const dirHandle = await fs.open(directory, "r");
+      try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+    } finally {
+      await fs.unlink(temporary).catch((error: NodeJS.ErrnoException) => {if (error.code !== "ENOENT") throw error;});
+    }
+    return attachment;
+  }
+
+  private async ingest(tenantId: string, msg: ILinkMessage, signal?: AbortSignal) {
     const text = extractText(msg);
+    const images = (msg.item_list ?? []).filter(item => item.type === 2);
     const from = msg.from_user_id;
     const ctx = msg.context_token;
     // Without a context_token a reply cannot be threaded, so the turn is unanswerable.
-    if (!text || !from || !ctx) return;
+    if ((!text && !images.length) || !from || !ctx || msg.message_type === 2) return;
     const target: ReplyTarget = { to: from, ctx, ...(msg.group_id ? { group: msg.group_id } : {}) };
     const session = `${tenantId}:${msg.group_id || from}`;
+    // context_token addresses the reply and may be shared by consecutive messages.
+    // Prefer the actual wire message identity; retain old clients' fallback key.
+    const wireId = msg.message_id ?? msg.client_id;
+    const requestKey = wireId === undefined
+      ? images.length ? `weixin-media:${createHash("sha256").update(JSON.stringify([from, msg.group_id ?? "", ctx, text, images])).digest("hex")}` : ctx
+      : `weixin:${createHash("sha256").update(JSON.stringify([from, msg.group_id ?? "", wireId])).digest("hex")}`;
+    const messageHash = createHash("sha256").update(requestKey).digest("hex");
     try {
-      await this.store.enqueue(tenantId, ctx, session, text, this.channel, encodeReplyTarget(target));
+      const attachments: InboundAttachment[] = [];
+      if (images.length > MAX_INBOUND_IMAGES) throw Error("INBOUND_ATTACHMENTS_TOO_MANY");
+      for (const image of images) {
+        const received = await this.downloadImage(image, {signal, maxBytes: MAX_INBOUND_IMAGE_BYTES});
+        attachments.push(await this.persistImage(tenantId, messageHash, received));
+      }
+      normalizeInboundAttachments(attachments, tenantId);
+      const input = text || "用户发送了图片，尚未提出创作要求。请仅简短确认收到图片，等待用户说明怎么处理；不要自行生成或编辑。";
+      await this.store.enqueue(tenantId, requestKey, session, input, this.channel, encodeReplyTarget(target), ...(attachments.length ? [attachments] as const : []));
+      this.ingressFailures.delete(`${tenantId}:${messageHash}`);
+      if (attachments.length) await this.store.event(tenantId, "weixin-images-received", {count: attachments.length, bytes: attachments.reduce((total, a) => total + a.bytes, 0), sha256: attachments.map(a => a.sha256)});
     } catch (error: any) {
+      if (signal?.aborted) throw Error("ILINK_INGRESS_ABORTED");
       await this.store.event(tenantId, "weixin-ingress-rejected", {
-        message: String(error?.message ?? error).slice(0, 200),
+        // Downloader errors and filesystem paths can contain credentials. Use no raw exception strings for media.
+        message: images.length ? "ILINK_IMAGE_INGRESS_FAILED" : String(error?.message ?? error).slice(0, 200),
       });
+      if (images.length) {
+        const failureKey = `${tenantId}:${messageHash}`;
+        const failures = (this.ingressFailures.get(failureKey) ?? 0) + 1;
+        this.ingressFailures.set(failureKey, failures);
+        // Keep the cursor until retrying the download. A permanently bad attachment
+        // receives a durable failure turn so the user can resend and the poll can progress.
+        if (failures < 3) throw Error("ILINK_IMAGE_INGRESS_RETRY");
+        await this.store.enqueue(tenantId, requestKey, session,
+          "用户发来的图片下载或解密失败，尚未收到可用图片。请明确告知用户图片接收失败，请重新发送原图；不要根据旧图或猜测创作，也不要调用生成工具。",
+          this.channel, encodeReplyTarget(target), [], {inheritAttachments: false});
+        this.ingressFailures.delete(failureKey);
+      }
     }
   }
 
@@ -233,6 +306,7 @@ export class WeixinEdge implements ChannelEdge {
     for (const abort of this.polls.values()) abort.abort();
     this.polls.clear();
     this.buffers.clear();
+    this.ingressFailures.clear();
   }
 
   /** Called by the login flow once a QR scan yields a bot token. */

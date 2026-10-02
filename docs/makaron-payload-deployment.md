@@ -68,7 +68,24 @@ session lasts at most five minutes; the WeChat provider can expire its QR earlie
 Check its actual status and refresh a code for the same tenant if needed.
 The user confirms the scan on their own phone.
 
-The current WeChat edge receives text and returns text. Finished media must be
-delivered as usable links. A generated QR and a browser/native creative smoke
-do not prove phone-side ingress, reply delivery or attachment support; record
-those stages according to their actual evidence.
+The WeChat edge receives text and original image items. Image bytes are downloaded
+and AES-decrypted according to Tencent's iLink protocol, validated and saved in
+private tenant directories. Durable run metadata contains only a relative path,
+MIME, byte count and checksum, never the CDN reference or AES key. A message accepts
+at most four images, 10 MiB per image and 12 MiB total. An image-only message asks
+for acknowledgement without generating media. A following text message in the
+same tenant, channel and conversation receives the latest image. A failed new
+image blocks inheritance of an older image; replay uses the wire message ID and
+does not queue another creative turn.
+
+The sandbox receives the same checked bytes in `workspace/inbound`. A vision
+profile sends actual `input_image.source.base64` to OpenClaw 2026.7.1; legacy text
+profiles receive the real file path. Makaron imports that path and reads canonical
+project status to find its actual media index before editing it. The immutable
+`makaron.v2.0.0` archive and existing tenant snapshot pins remain unchanged.
+
+WeChat replies still contain text and usable media links. A generated QR and a
+browser/native creative smoke do not prove phone-side ingress, reply delivery or
+attachment support; record each stage according to its actual evidence. Photos
+discarded by the previous text-only ingress cannot be recovered from run storage;
+the user must resend them in the existing bound conversation after the fix.

@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { WeixinEdge, extractText, encodeReplyTarget, decodeReplyTarget } from "./weixin.js";
 import type { Run, Store } from "./store.js";
+import type { ILinkDecodedImage } from "./ilink-media.js";
 
 const store = (over: Partial<Store> = {}) =>
   ({
@@ -91,6 +96,124 @@ describe("weixin ingest", () => {
       item_list: [{ type: 1, text_item: { text: "hi" } }],
     });
     expect(s.event).toHaveBeenCalledWith("t1", "weixin-ingress-rejected", expect.anything());
+  });
+});
+
+describe("weixin image ingress", () => {
+  const roots: string[] = [];
+  afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, {recursive:true,force:true}))); });
+  const received = (): ILinkDecodedImage => {
+    const buffer = Buffer.from("verified-downloaded-image-bytes");
+    return {buffer,bytes:buffer.length,mimeType:"image/jpeg",filename:"wechat-image.jpg",sha256:createHash("sha256").update(buffer).digest("hex"),md5:createHash("md5").update(buffer).digest("hex"),encrypted:true};
+  };
+  const setup = async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weixin-inbound-"));
+    roots.push(dataDir);
+    const s = store({config:{dataDir} as any});
+    const download = vi.fn(async () => received());
+    return {s,download,dataDir,edge:new WeixinEdge(s,download)};
+  };
+  const message = (id = 1, text?: string) => ({message_id:id,from_user_id:"u@im.wechat",context_token:"secret-reply-token",
+    item_list:[{type:2,image_item:{aeskey:"secret-key",media:{encrypt_query_param:"secret-cdn-query"}}},...(text ? [{type:1,text_item:{text}}] : [])]});
+
+  it("accepts image-only messages, saves exact private bytes, and asks only for acknowledgement", async () => {
+    const {s,edge,dataDir,download} = await setup();
+    await ingest(edge,message());
+    expect(download).toHaveBeenCalledOnce();
+    const call = (s.enqueue as any).mock.calls[0];
+    expect(call[2]).toBe("t1:u@im.wechat");
+    expect(call[3]).toContain("不要自行生成或编辑");
+    expect(call[4]).toBe("weixin");
+    expect(call[6]).toHaveLength(1);
+    const attachment = call[6][0];
+    expect(attachment).toMatchObject({kind:"image",sha256:received().sha256,bytes:received().bytes,mimeType:"image/jpeg"});
+    expect(attachment.storagePath).toMatch(/^inbound\/t1\/[a-f0-9]{64}\/[a-f0-9]{64}\.jpg$/);
+    expect(await fs.readFile(path.join(dataDir,attachment.storagePath))).toEqual(received().buffer);
+    expect((await fs.stat(path.join(dataDir,attachment.storagePath))).mode & 0o777).toBe(0o600);
+    expect(JSON.stringify(attachment)).not.toMatch(/secret-|aeskey|encrypt_query_param/);
+    expect(s.event).toHaveBeenCalledWith("t1","weixin-images-received",expect.objectContaining({count:1,bytes:received().bytes}));
+  });
+
+  it("preserves text with an image and retains separate identities when image then caption share a reply context", async () => {
+    const {s,edge} = await setup();
+    await ingest(edge,message(1,"给这个小女孩做个海报"));
+    await ingest(edge,{message_id:2,from_user_id:"u@im.wechat",context_token:"secret-reply-token",item_list:[{type:1,text_item:{text:"保持原来的脸"}}]});
+    const calls = (s.enqueue as any).mock.calls;
+    expect(calls[0][3]).toBe("给这个小女孩做个海报");
+    expect(calls[0][0]).toBe(calls[1][0]);
+    expect(calls[0][2]).toBe(calls[1][2]);
+    expect(calls[0][1]).not.toBe(calls[1][1]);
+    expect(calls[1][3]).toBe("保持原来的脸");
+  });
+
+  it("replays with the same dedup identity and one immutable byte file", async () => {
+    const {s,edge,dataDir} = await setup();
+    await ingest(edge,message());
+    await ingest(edge,message());
+    const calls = (s.enqueue as any).mock.calls;
+    expect(calls[0]).toEqual(calls[1]);
+    const directory = path.dirname(path.join(dataDir,calls[0][6][0].storagePath));
+    expect(await fs.readdir(directory)).toEqual([`${received().sha256}.jpg`]);
+  });
+
+  it("enqueues image-only then a separate caption, including legacy messages without wire IDs", async () => {
+    const {s,edge} = await setup();
+    const photo = {...message(),message_id:undefined};
+    await ingest(edge,photo);
+    await ingest(edge,{from_user_id:photo.from_user_id,context_token:photo.context_token,item_list:[{type:1,text_item:{text:"给这个小女孩做个海报"}}]});
+    await ingest(edge,photo);
+    const calls = (s.enqueue as any).mock.calls;
+    expect(calls[0][1]).not.toBe(calls[1][1]);
+    expect(calls[0][1]).toBe(calls[2][1]);
+    expect(calls[0][2]).toBe(calls[1][2]);
+    expect(calls[0][6]).toHaveLength(1);
+    expect(calls[1][3]).toBe("给这个小女孩做个海报");
+  });
+
+  it("prefers the server message identity over a changing client identity", async () => {
+    const {s,edge} = await setup();
+    await ingest(edge,{...message(),client_id:"client-a"});
+    await ingest(edge,{...message(),client_id:"client-b"});
+    const calls = (s.enqueue as any).mock.calls;
+    expect(calls[0][1]).toBe(calls[1][1]);
+  });
+
+  it("keeps failures retryable without persisting or logging secret wire metadata", async () => {
+    const {s,dataDir} = await setup();
+    const download = vi.fn(async () => {throw Error("secret-cdn-query secret-key");});
+    const edge = new WeixinEdge(s,download);
+    await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    expect(s.enqueue).not.toHaveBeenCalled();
+    expect(await fs.readdir(dataDir)).toEqual([]);
+    await ingest(edge,message());
+    const call = (s.enqueue as any).mock.calls[0];
+    expect(call[3]).toContain("接收失败");
+    expect(call[3]).toContain("不要调用生成工具");
+    expect(call[6]).toEqual([]);
+    expect(call[7]).toEqual({inheritAttachments:false});
+    expect(JSON.stringify((s.event as any).mock.calls)).not.toMatch(/secret-cdn-query|secret-key/);
+  });
+
+  it("refuses oversized batches and cannot write through a controller symlink", async () => {
+    const {s,edge,dataDir,download} = await setup();
+    const over = message();
+    over.item_list = Array.from({length:5},() => over.item_list[0]);
+    await expect(ingest(edge,over)).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    expect(download).not.toHaveBeenCalled();
+    const unrelated = await fs.mkdtemp(path.join(os.tmpdir(), "weixin-private-"));
+    roots.push(unrelated);
+    await fs.symlink(unrelated,path.join(dataDir,"inbound"));
+    await expect(ingest(edge,message(2))).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    expect(await fs.readdir(unrelated)).toEqual([]);
+    expect(s.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("ignores bot echoes instead of enqueueing its own images", async () => {
+    const {s,edge,download} = await setup();
+    await ingest(edge,{...message(),message_type:2});
+    expect(download).not.toHaveBeenCalled();
+    expect(s.enqueue).not.toHaveBeenCalled();
   });
 });
 
