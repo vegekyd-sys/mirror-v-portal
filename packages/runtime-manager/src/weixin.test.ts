@@ -215,6 +215,18 @@ describe("weixin image ingress", () => {
     expect(download).not.toHaveBeenCalled();
     expect(s.enqueue).not.toHaveBeenCalled();
   });
+
+  it("advances the poll cursor only after image and subsequent caption are durably enqueued", async () => {
+    const {s,edge} = await setup();
+    const abort = new AbortController();
+    const order: string[] = [];
+    (s.enqueue as any).mockImplementation(async (...args: any[]) => {order.push(args[6]?.length ? "image" : "caption");return {id:"run-1"};});
+    (s.saveChannelCursor as any).mockImplementation(async () => {order.push("cursor");abort.abort();});
+    (edge as any).call = vi.fn(async () => ({msgs:[message(),{message_id:2,from_user_id:"u@im.wechat",context_token:"secret-reply-token",item_list:[{type:1,text_item:{text:"做海报"}}]}],get_updates_buf:"next-cursor"}));
+    await (edge as any).pollLoop("t1","private-token","old-cursor",abort.signal);
+    expect(order).toEqual(["image","caption","cursor"]);
+    expect(s.saveChannelCursor).toHaveBeenCalledWith("t1","weixin","next-cursor");
+  });
 });
 
 describe("weixin reply buffering", () => {
