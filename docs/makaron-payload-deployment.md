@@ -63,8 +63,9 @@ Run a real creative request through the private acceptance tenant, check native
 tool receipts and a viewable artifact, and verify sleep/wake state separately.
 For the user's trial, call the loopback/admin-authorized
 `POST /v1/channels/weixin/login` with that exact tenant ID. Generate a PNG from
-the returned `qrImage` URL immediately before handing it to the user. iLink
-codes expire after five minutes; refresh a code for the same tenant if needed.
+the returned `qrImage` URL immediately before handing it to the user. The manager
+session lasts at most five minutes; the WeChat provider can expire its QR earlier.
+Check its actual status and refresh a code for the same tenant if needed.
 The user confirms the scan on their own phone.
 
 The current WeChat edge receives text and returns text. Finished media must be
