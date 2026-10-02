@@ -89,3 +89,30 @@ browser/native creative smoke do not prove phone-side ingress, reply delivery or
 attachment support; record each stage according to its actual evidence. Photos
 discarded by the previous text-only ingress cannot be recovered from run storage;
 the user must resend them in the existing bound conversation after the fix.
+
+## Inbound image repair acceptance (2026-10-03)
+
+Controller release `f11b302016c5` is active, with `d82277692266` retained for
+rollback. Private configuration and all 14 tenant template/version/snapshot pins
+match the pre-deploy record; the user's WeChat binding remains active. The two
+additive run columns are `attachments` and `inherit_attachments`.
+
+Runtime tests passed 148/148, including an isolated PostgreSQL cluster for
+durable image metadata, replay deduplication, conversation isolation, timestamp
+ordering and failed-new-image inheritance barriers. All release packages built.
+
+Fresh-session cloud run `e215953f-c6d4-4417-b9d6-82a33d80ab46` succeeded using the
+existing acceptance image (167,398-byte JPEG, SHA-256
+`a25109cce6ca9184707f013e512a2262f86a501c5f7c1cdd4aa6336cf5426a63`). The native user
+message contains typed image bytes matching the controller file and workspace
+backup. Before any tool call, the model correctly describes the pink macaron,
+navy background and gold rings. It then calls only project status, new_run,
+import and status, and confirms the imported Snapshot has actual media index 2.
+This demonstrates vision and preservation of the source through project import,
+without generating another image. Natural idle released the sandbox, and its
+backup retained the same inbound file hash.
+
+This controlled request uses the `web` channel and does not send a WeChat message.
+Phone-side image ingestion of the user's original photo still requires a resend;
+the previous text-only ingress discarded it. Do not report this technical test
+as that phone-side acceptance or as a completed poster.
