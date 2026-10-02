@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { WeixinEdge, extractText, encodeReplyTarget, decodeReplyTarget } from "./weixin.js";
-import type { Run, Store } from "./store.js";
-import type { ILinkDecodedImage } from "./ilink-media.js";
+import { Store, type Run } from "./store.js";
+import { ILinkMediaError, type ILinkDecodedImage } from "./ilink-media.js";
 
 const store = (over: Partial<Store> = {}) =>
   ({
@@ -16,6 +16,9 @@ const store = (over: Partial<Store> = {}) =>
     channelCredentials: vi.fn(() => ({ botToken: "t" })),
     saveChannelCursor: vi.fn(async () => {}),
     revokeChannel: vi.fn(async () => {}),
+    seal: Store.prototype.seal,
+    unseal: Store.prototype.unseal,
+    config: {encryptionKey:"0".repeat(64)},
     ...over,
   }) as unknown as Store;
 
@@ -109,7 +112,7 @@ describe("weixin image ingress", () => {
   const setup = async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weixin-inbound-"));
     roots.push(dataDir);
-    const s = store({config:{dataDir} as any});
+    const s = store({config:{dataDir,encryptionKey:"0".repeat(64)} as any});
     const download = vi.fn(async () => received());
     return {s,download,dataDir,edge:new WeixinEdge(s,download)};
   };
@@ -153,7 +156,7 @@ describe("weixin image ingress", () => {
     const calls = (s.enqueue as any).mock.calls;
     expect(calls[0]).toEqual(calls[1]);
     const directory = path.dirname(path.join(dataDir,calls[0][6][0].storagePath));
-    expect(await fs.readdir(directory)).toEqual([`${received().sha256}.jpg`]);
+    expect((await fs.readdir(directory)).sort()).toEqual([`${received().sha256}.jpg`,"message.sealed"].sort());
   });
 
   it("enqueues image-only then a separate caption, including legacy messages without wire IDs", async () => {
@@ -185,14 +188,27 @@ describe("weixin image ingress", () => {
     await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
     await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
     expect(s.enqueue).not.toHaveBeenCalled();
-    expect(await fs.readdir(dataDir)).toEqual([]);
+    const callSeal = await fs.readdir(path.join(dataDir,"inbound","t1"));
+    const sealed = await fs.readFile(path.join(dataDir,"inbound","t1",callSeal[0],"message.sealed"),"utf8");
+    expect(sealed).not.toMatch(/secret-|aeskey|encrypt_query_param/);
+    const recovered = JSON.parse(s.unseal(sealed));
+    expect(recovered.message).toEqual(message());
     await ingest(edge,message());
     const call = (s.enqueue as any).mock.calls[0];
     expect(call[3]).toContain("接收失败");
     expect(call[3]).toContain("不要调用生成工具");
+    expect(call[3]).toContain("不要建议用户换图");
     expect(call[6]).toEqual([]);
     expect(call[7]).toEqual({inheritAttachments:false});
     expect(JSON.stringify((s.event as any).mock.calls)).not.toMatch(/secret-cdn-query|secret-key/);
+  });
+
+  it("keeps safe downloader errors and HTTP status while sealing the original message for recovery", async () => {
+    const {s} = await setup();
+    const edge = new WeixinEdge(s,vi.fn(async () => {throw new ILinkMediaError("ILINK_MEDIA_HTTP_ERROR",404);}));
+    await expect(ingest(edge,message())).rejects.toThrow("ILINK_IMAGE_INGRESS_RETRY");
+    expect(s.event).toHaveBeenCalledWith("t1","weixin-ingress-rejected",expect.objectContaining({code:"ILINK_MEDIA_HTTP_ERROR",httpStatus:404}));
+    expect(JSON.stringify((s.event as any).mock.calls)).not.toMatch(/secret-key|secret-cdn-query/);
   });
 
   it("refuses oversized batches and cannot write through a controller symlink", async () => {

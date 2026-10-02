@@ -5,7 +5,7 @@ import type { ChannelEdge } from "./channel-edge.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { isSilentReply } from "./reply-sentinel.js";
 import { ilinkBaseInfo, ilinkBaseUrl, ilinkPostHeaders } from "./ilink-protocol.js";
-import { downloadIlinkImage, type ILinkImageItem } from "./ilink-media.js";
+import { downloadIlinkImage, ILinkMediaError, type ILinkImageItem } from "./ilink-media.js";
 import { IMAGE_EXTENSIONS, MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 /**
@@ -166,19 +166,43 @@ export class WeixinEdge implements ChannelEdge {
     }
   }
 
-  private async persistImage(tenantId: string, messageHash: string, image: Awaited<ReturnType<typeof downloadIlinkImage>>): Promise<InboundAttachment> {
-    const storagePath = `inbound/${tenantId}/${messageHash}/${image.sha256}.${IMAGE_EXTENSIONS[image.mimeType]}`;
-    const [attachment] = normalizeInboundAttachments([{kind: "image", mimeType: image.mimeType, storagePath, sha256: image.sha256, bytes: image.bytes, filename: image.filename}], tenantId);
+  private async receiptDirectory(tenantId: string, messageHash: string) {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(tenantId) || !/^[a-f0-9]{64}$/.test(messageHash)) throw Error("INBOUND_ATTACHMENT_DIRECTORY_INVALID");
     const root = await fs.realpath(this.store.config.dataDir);
     let directory = root;
     // Every intermediate directory is private, tenant-scoped and never a symlink.
-    for (const segment of path.posix.dirname(storagePath).split("/")) {
+    for (const segment of ["inbound", tenantId, messageHash]) {
       directory = path.join(directory, segment);
       await fs.mkdir(directory, {mode: 0o700}).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
       const stat = await fs.lstat(directory);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error("INBOUND_ATTACHMENT_DIRECTORY_INVALID");
     }
-    const filename = path.join(root, storagePath);
+    return directory;
+  }
+
+  /** Keep a recoverable encrypted wire receipt before the cursor can move. Never send it to the sandbox. */
+  private async persistEncryptedMessage(tenantId: string, messageHash: string, requestKey: string, message: ILinkMessage) {
+    const raw = JSON.stringify({schemaVersion:1,tenantId,messageHash,requestKey,receivedAt:new Date().toISOString(),message});
+    if (Buffer.byteLength(raw) > 512 * 1024) throw Error("INBOUND_RECEIPT_TOO_LARGE");
+    const directory = await this.receiptDirectory(tenantId,messageHash);
+    const filename = path.join(directory,"message.sealed");
+    const previous = await fs.lstat(filename).catch((error: NodeJS.ErrnoException) => {if(error.code !== "ENOENT") throw error; return undefined;});
+    if (previous && (!previous.isFile() || previous.isSymbolicLink())) throw Error("INBOUND_ATTACHMENT_DIRECTORY_INVALID");
+    const temporary = path.join(directory,`.${randomUUID()}.tmp`);
+    try {
+      const handle = await fs.open(temporary,"wx",0o600);
+      try {await handle.writeFile(this.store.seal(raw)); await handle.sync();} finally {await handle.close();}
+      await fs.rename(temporary,filename);
+      const dirHandle = await fs.open(directory,"r");
+      try {await dirHandle.sync();} finally {await dirHandle.close();}
+    } finally {await fs.unlink(temporary).catch((error: NodeJS.ErrnoException) => {if(error.code !== "ENOENT") throw error;});}
+  }
+
+  private async persistImage(tenantId: string, messageHash: string, image: Awaited<ReturnType<typeof downloadIlinkImage>>): Promise<InboundAttachment> {
+    const storagePath = `inbound/${tenantId}/${messageHash}/${image.sha256}.${IMAGE_EXTENSIONS[image.mimeType]}`;
+    const [attachment] = normalizeInboundAttachments([{kind: "image", mimeType: image.mimeType, storagePath, sha256: image.sha256, bytes: image.bytes, filename: image.filename}], tenantId);
+    const directory = await this.receiptDirectory(tenantId,messageHash);
+    const filename = path.join(directory,path.posix.basename(storagePath));
     const temporary = path.join(directory, `.${randomUUID()}.tmp`);
     try {
       const handle = await fs.open(temporary, "wx", 0o600);
@@ -216,15 +240,22 @@ export class WeixinEdge implements ChannelEdge {
       ? images.length ? `weixin-media:${createHash("sha256").update(JSON.stringify([from, msg.group_id ?? "", ctx, text, images])).digest("hex")}` : ctx
       : `weixin:${createHash("sha256").update(JSON.stringify([from, msg.group_id ?? "", wireId])).digest("hex")}`;
     const messageHash = createHash("sha256").update(requestKey).digest("hex");
+    const started = Date.now();
+    let stage = "receipt";
     try {
       const attachments: InboundAttachment[] = [];
       if (images.length > MAX_INBOUND_IMAGES) throw Error("INBOUND_ATTACHMENTS_TOO_MANY");
+      if (images.length) await this.persistEncryptedMessage(tenantId,messageHash,requestKey,msg);
       for (const image of images) {
+        stage = "download";
         const received = await this.downloadImage(image, {signal, maxBytes: MAX_INBOUND_IMAGE_BYTES});
+        stage = "persist";
         attachments.push(await this.persistImage(tenantId, messageHash, received));
       }
+      stage = "validate";
       normalizeInboundAttachments(attachments, tenantId);
-      const input = text || "用户发送了图片，尚未提出创作要求。请仅简短确认收到图片，等待用户说明怎么处理；不要自行生成或编辑。";
+      const input = text || "本条消息只有用户图片，没有附带文字。请确认收到；若此前同会话已有明确且未完成的创作要求，请使用这份实际原图继续完成。否则仅确认收到，等待用户说明怎么处理，不要自行生成或编辑。";
+      stage = "enqueue";
       await this.store.enqueue(tenantId, requestKey, session, input, this.channel, encodeReplyTarget(target), ...(attachments.length ? [attachments] as const : []));
       this.ingressFailures.delete(`${tenantId}:${messageHash}`);
       if (attachments.length) await this.store.event(tenantId, "weixin-images-received", {count: attachments.length, bytes: attachments.reduce((total, a) => total + a.bytes, 0), sha256: attachments.map(a => a.sha256)});
@@ -233,6 +264,11 @@ export class WeixinEdge implements ChannelEdge {
       await this.store.event(tenantId, "weixin-ingress-rejected", {
         // Downloader errors and filesystem paths can contain credentials. Use no raw exception strings for media.
         message: images.length ? "ILINK_IMAGE_INGRESS_FAILED" : String(error?.message ?? error).slice(0, 200),
+        ...(images.length ? {elapsedMs:Date.now()-started,imageCount:images.length,
+          code:error instanceof ILinkMediaError && /^ILINK_MEDIA_[A-Z_]{1,80}$/.test(error.code) ? error.code :
+            /^(?:INBOUND_ATTACHMENT|INBOUND_RECEIPT|INBOUND_ATTACHMENTS)[A-Z_]*$/.test(error?.message??"") ? error.message : "ILINK_IMAGE_INGRESS_FAILED",
+          ...(error instanceof ILinkMediaError ? {...error.details,...(error.httpStatus ? {httpStatus:error.httpStatus} : {})} :
+            {stage,...(["EACCES","ENOENT","EPERM","EIO","ENOSPC","EMFILE","EROFS","EXDEV"].includes(error?.code) ? {filesystemCode:error.code} : {})})} : {}),
       });
       if (images.length) {
         const failureKey = `${tenantId}:${messageHash}`;
@@ -242,7 +278,7 @@ export class WeixinEdge implements ChannelEdge {
         // receives a durable failure turn so the user can resend and the poll can progress.
         if (failures < 3) throw Error("ILINK_IMAGE_INGRESS_RETRY");
         await this.store.enqueue(tenantId, requestKey, session,
-          "用户发来的图片下载或解密失败，尚未收到可用图片。请明确告知用户图片接收失败，请重新发送原图；不要根据旧图或猜测创作，也不要调用生成工具。",
+          "微信图片在本系统接收处理时失败，尚未得到可用图片。这是接入链路问题，未证实是用户图片的问题。请简短说明图片接收失败、系统正在排查；不要建议用户换图、保存原图或反复重发。不要根据旧图或猜测创作，也不要调用生成工具。",
           this.channel, encodeReplyTarget(target), [], {inheritAttachments: false});
         this.ingressFailures.delete(failureKey);
       }

@@ -124,3 +124,26 @@ This controlled request uses the `web` channel and does not send a WeChat messag
 Phone-side image ingestion of the user's original photo still requires a resend;
 the previous text-only ingress discarded it. Do not report this technical test
 as that phone-side acceptance or as a completed poster.
+
+## Real phone failure follow-up
+
+The user's resends at 02:10 and 02:18 China time failed before native vision:
+the original image runs contained no attachments and the Edge emitted ingress
+rejection events. Those events initially discarded the downloader's safe error
+code, so they cannot establish whether CDN, AES or file validation failed.
+
+The follow-up removes an unsupported assumption that inbound `mid_size` must
+equal downloaded ciphertext size, and accepts decodable JPEG trailing data
+without changing the original bytes. Actual stream limits, AES padding, trusted
+expected hash/size checks and CDN host constraints remain enforced. Before
+download, the original image message is now sealed with the controller's
+AES-256-GCM key in a private 0600 receipt, so a failed download can be retried
+without another user upload. This receipt never enters the sandbox or logs.
+Events retain fixed stage/error codes, numeric size/HTTP fields and format/key
+source enums; they omit URLs, query strings, AES keys and raw packets.
+
+Image-only messages may continue a previously authorized unfinished creative
+request; otherwise they only acknowledge receipt. Reception failure replies
+identify the system problem and do not tell the user to change their photo
+without evidence. These changes are not phone acceptance until a real iLink
+image has downloaded, decrypted and reached the native runtime successfully.
