@@ -15,7 +15,7 @@ export interface ILinkImageItem {
   image_item?: {
     media?: { encrypt_query_param?: string; aes_key?: string; encrypt_type?: number; full_url?: string };
     aeskey?: string;
-    /** The official image sender puts ciphertext bytes here, not plaintext bytes. */
+    /** Sender metadata only; the official receiver does not require it to match downloaded bytes. */
     mid_size?: number;
   };
 }
@@ -40,9 +40,32 @@ export interface ILinkDecodedImage {
   encrypted: boolean;
 }
 
-/** Only fixed codes and an HTTP status are safe for channel/event logs. */
+export interface ILinkMediaErrorDetails {
+  stage: "reference" | "fetch" | "read" | "decrypt" | "validate" | "container" | "hash";
+  httpStatus?: number;
+  declaredMidSize?: number;
+  wireBytes?: number;
+  plaintextBytes?: number;
+  formatHint?: "png" | "jpeg" | "gif" | "webp" | "heic" | "avif" | "bmp" | "unknown";
+  keySource?: "top_hex" | "media_base64" | "none";
+}
+function safeDetails(input: ILinkMediaErrorDetails): Readonly<ILinkMediaErrorDetails> {
+  const result: ILinkMediaErrorDetails = {stage: ["reference", "fetch", "read", "decrypt", "validate", "container", "hash"].includes(input.stage) ? input.stage : "reference"};
+  for (const field of ["httpStatus", "declaredMidSize", "wireBytes", "plaintextBytes"] as const) {
+    const value = input[field];
+    if (Number.isSafeInteger(value) && value! >= 0) result[field] = value;
+  }
+  if (input.formatHint && ["png", "jpeg", "gif", "webp", "heic", "avif", "bmp", "unknown"].includes(input.formatHint)) result.formatHint = input.formatHint;
+  if (input.keySource && ["top_hex", "media_base64", "none"].includes(input.keySource)) result.keySource = input.keySource;
+  return Object.freeze(result);
+}
+/** Only fixed codes and allowlisted scalar diagnostics are safe for channel/event logs. */
 export class ILinkMediaError extends Error {
-  constructor(readonly code: string, readonly httpStatus?: number) { super(code); this.name = "ILinkMediaError"; }
+  readonly details: Readonly<ILinkMediaErrorDetails>;
+  constructor(readonly code: string, readonly httpStatus?: number, details: ILinkMediaErrorDetails = {stage: "reference"}) {
+    super(code); this.name = "ILinkMediaError";
+    this.details = safeDetails({...details, ...(httpStatus === undefined ? {} : {httpStatus})});
+  }
 }
 function fail(code: string): never { throw new ILinkMediaError(`ILINK_MEDIA_${code}`); }
 
@@ -98,7 +121,7 @@ async function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
       error => { signal.removeEventListener("abort", onAbort); reject(error); });
   });
 }
-async function readBounded(response: Response, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
+async function readBounded(response: Response, maxBytes: number, signal: AbortSignal, details: ILinkMediaErrorDetails): Promise<Buffer> {
   const length = response.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxBytes)) {
     void response.body?.cancel().catch(() => {});
@@ -113,6 +136,7 @@ async function readBounded(response: Response, maxBytes: number, signal: AbortSi
       const result = await bounded(reader.read(), signal);
       if (result.done) break;
       size += result.value.byteLength;
+      details.wireBytes = size;
       if (size > maxBytes) fail("TOO_LARGE");
       chunks.push(Buffer.from(result.value));
     }
@@ -157,12 +181,19 @@ function imageFormat(bytes: Buffer): { mimeType: ILinkDecodedImage["mimeType"]; 
     if (!hasData || !ended || offset !== bytes.length) fail("INVALID_IMAGE");
     return { mimeType: "image/png", extension: "png" };
   }
-  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9) {
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
     let offset = 2, frame = false, scan = false;
-    while (offset < bytes.length - 2) {
+    while (offset < bytes.length) {
       if (bytes[offset++] !== 0xff) fail("INVALID_IMAGE");
       while (bytes[offset] === 0xff) offset++;
       const marker = bytes[offset++];
+      if (marker === 0xd9) {
+        if (!frame || !scan) fail("INVALID_IMAGE");
+        // The first complete codestream ends here; preserve all original trailing bytes.
+        return { mimeType: "image/jpeg", extension: "jpg" };
+      }
+      if (marker === 0x01) continue; // Standalone TEM marker.
+      if (marker === 0x00 || marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) fail("INVALID_IMAGE");
       if (offset + 2 > bytes.length) fail("INVALID_IMAGE");
       const length = bytes.readUInt16BE(offset);
       if (length < 2 || offset + length > bytes.length) fail("INVALID_IMAGE");
@@ -170,11 +201,22 @@ function imageFormat(bytes: Buffer): { mimeType: ILinkDecodedImage["mimeType"]; 
         if (length < 8) fail("INVALID_IMAGE");
         dimensions(bytes.readUInt16BE(offset + 5), bytes.readUInt16BE(offset + 3)); frame = true;
       }
-      if (marker === 0xda) { scan = true; break; }
       offset += length;
+      if (marker === 0xda) {
+        if (!frame || length < 6) fail("INVALID_IMAGE");
+        scan = true;
+        // Skip entropy-coded data. FF00 is escaped data, FFD0..FFD7 are restart markers.
+        while (offset < bytes.length) {
+          if (bytes[offset] !== 0xff) { offset++; continue; }
+          const start = offset;
+          while (bytes[offset] === 0xff) offset++;
+          const next = bytes[offset];
+          if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) { offset++; continue; }
+          offset = start; break; // A real marker, including EOI or a progressive next scan.
+        }
+      }
     }
-    if (!frame || !scan) fail("INVALID_IMAGE");
-    return { mimeType: "image/jpeg", extension: "jpg" };
+    return fail("INVALID_IMAGE");
   }
   if (bytes.length >= 14 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6)) && bytes[bytes.length - 1] === 0x3b) {
     dimensions(bytes.readUInt16LE(6), bytes.readUInt16LE(8));
@@ -236,20 +278,37 @@ function verifyDigest(value: string | undefined, actual: string, length: number)
     || !timingSafeEqual(Buffer.from(value, "hex"), Buffer.from(actual, "hex")))) fail("HASH_MISMATCH");
 }
 
+function formatHint(bytes: Buffer): NonNullable<ILinkMediaErrorDetails["formatHint"]> {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpeg";
+  if (["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6))) return "gif";
+  if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "webp";
+  if (bytes.toString("ascii", 0, 2) === "BM") return "bmp";
+  if (bytes.toString("ascii", 4, 8) === "ftyp") {
+    const brand = bytes.toString("ascii", 8, 12);
+    if (["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand)) return "heic";
+    if (["avif", "avis"].includes(brand)) return "avif";
+  }
+  return "unknown";
+}
+
 /** Download only the original image. No bot token, signed URL or key is returned or logged. */
 export async function downloadIlinkImage(item: ILinkImageItem, options: ILinkImageOptions = {}): Promise<ILinkDecodedImage> {
-  if (item?.type !== 2 || !item.image_item?.media) return fail("NOT_IMAGE");
-  const image = item.image_item, media = image.media!;
-  const maxBytes = integer(options.maxBytes, ILINK_IMAGE_MAX_BYTES, 100 * 1024 * 1024);
-  const timeoutMs = integer(options.timeoutMs, 30_000, 120_000);
-  const key = ilinkImageAesKey(image);
-  const url = downloadUrl(media, options.cdnBaseUrl ?? ILINK_CDN_BASE_URL);
-  if (image.mid_size !== undefined && (!Number.isSafeInteger(image.mid_size) || image.mid_size < 0)) fail("SIZE_MISMATCH");
-  if (image.mid_size && image.mid_size > maxBytes + (key ? 16 : 0)) fail("TOO_LARGE");
-  if (options.expectedBytes !== undefined && (!Number.isSafeInteger(options.expectedBytes) || options.expectedBytes <= 0 || options.expectedBytes > maxBytes)) fail("SIZE_MISMATCH");
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const details: ILinkMediaErrorDetails = {stage: "reference"};
+  let key: Buffer | null = null, signal: AbortSignal | undefined;
   try {
+    if (item?.type !== 2 || !item.image_item?.media) return fail("NOT_IMAGE");
+    const image = item.image_item, media = image.media!;
+    details.declaredMidSize = image.mid_size; // Diagnostic only; not a receiving byte-count contract.
+    details.keySource = image.aeskey ? "top_hex" : media.aes_key ? "media_base64" : "none";
+    const maxBytes = integer(options.maxBytes, ILINK_IMAGE_MAX_BYTES, 100 * 1024 * 1024);
+    const timeoutMs = integer(options.timeoutMs, 30_000, 120_000);
+    key = ilinkImageAesKey(image);
+    const url = downloadUrl(media, options.cdnBaseUrl ?? ILINK_CDN_BASE_URL);
+    if (options.expectedBytes !== undefined && (!Number.isSafeInteger(options.expectedBytes) || options.expectedBytes <= 0 || options.expectedBytes > maxBytes)) fail("SIZE_MISMATCH");
+    const timeout = AbortSignal.timeout(timeoutMs);
+    signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    details.stage = "fetch";
     if (signal.aborted) throw abortError(signal);
     const response = await bounded((options.fetchImpl ?? fetch)(url.href, {
       method: "GET", redirect: "error", credentials: "omit", signal,
@@ -259,10 +318,12 @@ export async function downloadIlinkImage(item: ILinkImageItem, options: ILinkIma
       void response.body?.cancel().catch(() => {});
       throw new ILinkMediaError("ILINK_MEDIA_HTTP_ERROR", response.status);
     }
-    const wire = await readBounded(response, maxBytes + (key ? 16 : 0), signal);
-    if (image.mid_size && wire.length !== image.mid_size) fail("SIZE_MISMATCH");
+    details.httpStatus = response.status;
+    details.stage = "read"; details.wireBytes = 0;
+    const wire = await readBounded(response, maxBytes + (key ? 16 : 0), signal, details);
     let buffer = wire;
     if (key) {
+      details.stage = "decrypt";
       if (wire.length % 16 !== 0) fail("INVALID_CIPHERTEXT");
       try {
         // Node's default auto-padding validates and removes PKCS#7, including a full padding block.
@@ -270,9 +331,14 @@ export async function downloadIlinkImage(item: ILinkImageItem, options: ILinkIma
         buffer = Buffer.concat([decipher.update(wire), decipher.final()]);
       } catch { fail("DECRYPT_FAILED"); }
     }
+    details.plaintextBytes = buffer.length;
+    details.formatHint = formatHint(buffer);
+    details.stage = "validate";
     if (buffer.length > maxBytes) fail("TOO_LARGE");
     if (options.expectedBytes !== undefined && buffer.length !== options.expectedBytes) fail("SIZE_MISMATCH");
+    details.stage = "container";
     const format = imageFormat(buffer);
+    details.stage = "hash";
     const sha256 = createHash("sha256").update(buffer).digest("hex");
     const md5 = createHash("md5").update(buffer).digest("hex");
     verifyDigest(options.expectedSha256, sha256, 64);
@@ -280,8 +346,7 @@ export async function downloadIlinkImage(item: ILinkImageItem, options: ILinkIma
     return { buffer, mimeType: format.mimeType, filename: `weixin-image-${sha256}.${format.extension}`,
       bytes: buffer.length, sha256, md5, encrypted: key !== null };
   } catch (error) {
-    if (error instanceof ILinkMediaError) throw error;
-    if (signal.aborted) throw abortError(signal);
-    throw new ILinkMediaError("ILINK_MEDIA_DOWNLOAD_FAILED");
+    const safe = error instanceof ILinkMediaError ? error : signal?.aborted ? abortError(signal) : new ILinkMediaError("ILINK_MEDIA_DOWNLOAD_FAILED");
+    throw new ILinkMediaError(safe.code, safe.httpStatus, details);
   } finally { key?.fill(0); }
 }

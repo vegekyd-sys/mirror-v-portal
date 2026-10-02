@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { deflateSync } from "node:zlib";
 import { downloadIlinkImage, ilinkImageAesKey, ILinkMediaError, ILINK_CDN_BASE_URL, type ILinkImageItem } from "./ilink-media.js";
 
@@ -29,6 +30,9 @@ function png(aligned = false) {
   throw Error("fixture alignment");
 }
 const original = png();
+// Generated once with local ffmpeg color=red:s=16x16, no external model.
+const jpeg = Buffer.from("/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYxLjE5LjEwMQD/2wBDAAgEBAQEBAUFBQUFBQYGBgYGBgYGBgYGBgYHBwcICAgHBwcGBgcHCAgICAkJCQgICAgJCQoKCgwMCwsODg4RERT/xABMAAEBAAAAAAAAAAAAAAAAAAAABgEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAAQABADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCLAFF/f//Z", "base64");
+const hasFfmpeg = spawnSync("ffmpeg", ["-version"], {stdio: "ignore"}).status === 0;
 const key = Buffer.from("00112233445566778899aabbccddeeff", "hex");
 function encrypted(plain = original, pad = true) {
   const cipher = createCipheriv("aes-128-ecb", key, null); cipher.setAutoPadding(pad);
@@ -78,8 +82,6 @@ describe("iLink original image download/decryption", () => {
     expect(result.mimeType).toBe("image/png"); expect(result.encrypted).toBe(false);
   });
   it("accepts actual JPEG, GIF and WebP fixtures", async () => {
-    // JPEG generated once with local ffmpeg color=red:s=16x16, no external model.
-    const jpeg = Buffer.from("/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYxLjE5LjEwMQD/2wBDAAgEBAQEBAUFBQUFBQYGBgYGBgYGBgYGBgYHBwcICAgHBwcGBgcHCAgICAkJCQgICAgJCQoKCgwMCwsODg4RERT/xABMAAEBAAAAAAAAAAAAAAAAAAAABgEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAAQABADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCLAFF/f//Z", "base64");
     const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
     // Lossless 16x16 WebP generated once with the same local ffmpeg source.
     const webp = Buffer.from("UklGRhwAAABXRUJQVlA4TA8AAAAvD8ADAAcQ9Y/+ByKi/wEA", "base64");
@@ -99,10 +101,43 @@ describe("iLink original image download/decryption", () => {
       await expect(downloadIlinkImage(item(""), { fetchImpl: fetchBytes(bytes) })).rejects.toBeInstanceOf(ILinkMediaError);
     }
   });
-  it("checks ciphertext alignment and advertised ciphertext size separately from plaintext size", async () => {
+  it("checks ciphertext alignment but treats mid_size as non-authoritative inbound metadata", async () => {
     await expect(downloadIlinkImage(item(), { fetchImpl: fetchBytes(encrypted().subarray(1)) })).rejects.toMatchObject({ code: "ILINK_MEDIA_INVALID_CIPHERTEXT" });
+    for (const declared of [original.length, 0, -1, Number.MAX_SAFE_INTEGER, NaN, "untrusted-size"] as const) {
+      const incoming = item(); incoming.image_item!.mid_size = declared as number;
+      expect((await downloadIlinkImage(incoming, {fetchImpl: fetchBytes(encrypted()), maxBytes: original.length})).buffer.equals(original)).toBe(true);
+    }
+  });
+  it.skipIf(!hasFfmpeg)("retains JPEG trailing bytes after a complete EOI that strict ffmpeg decodes", async () => {
+    const withTrailer = Buffer.concat([jpeg, Buffer.from([0, 0])]);
+    for (const bytes of [jpeg, withTrailer]) {
+      const decode = spawnSync("ffmpeg", ["-v", "error", "-xerror", "-err_detect", "explode", "-f", "image2pipe", "-i", "pipe:0", "-frames:v", "1", "-f", "null", "-"], {input: bytes, timeout: 5_000});
+      expect(decode.status).toBe(0);
+      const result = await downloadIlinkImage(item(), {fetchImpl: fetchBytes(encrypted(bytes))});
+      expect(result.mimeType).toBe("image/jpeg"); expect(result.buffer.equals(bytes)).toBe(true);
+      expect(result.bytes).toBe(bytes.length);
+      expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    }
+  });
+  it("rejects fake JPEG magic, missing EOI and an EOI hidden in a header segment", async () => {
+    const falseEnd = Buffer.from(jpeg.subarray(0, jpeg.length - 2));
+    falseEnd[12] = 0xff; falseEnd[13] = 0xd9; // JFIF payload is not an ending marker.
+    for (const bytes of [Buffer.from([0xff, 0xd8, 0xff, 0xd9]), jpeg.subarray(0, jpeg.length - 2), falseEnd, Buffer.concat([Buffer.from("not-jpeg"), jpeg])]) {
+      await expect(downloadIlinkImage(item(""), {fetchImpl: fetchBytes(bytes)})).rejects.toBeInstanceOf(ILinkMediaError);
+    }
+  });
+  it("exposes only allowlisted scalar diagnostics, never untrusted metadata or secrets", async () => {
     const incoming = item(); incoming.image_item!.mid_size = original.length;
-    await expect(downloadIlinkImage(incoming, { fetchImpl: fetchBytes(encrypted()) })).rejects.toMatchObject({ code: "ILINK_MEDIA_SIZE_MISMATCH" });
+    incoming.image_item!.media!.encrypt_query_param = "private-query";
+    await expect(downloadIlinkImage(incoming, {fetchImpl: fetchBytes(encrypted()), expectedBytes: original.length + 1})).rejects.toMatchObject({
+      code: "ILINK_MEDIA_SIZE_MISMATCH", details: {stage: "validate", httpStatus: 200, declaredMidSize: original.length, wireBytes: encrypted().length, plaintextBytes: original.length, formatHint: "png", keySource: "media_base64"},
+    });
+    const corrupt = Buffer.from(original); corrupt[corrupt.length - 1] ^= 1;
+    await expect(downloadIlinkImage({...incoming, image_item: {...incoming.image_item, aeskey: key.toString("hex")}}, {fetchImpl: fetchBytes(encrypted(corrupt))})).rejects.toMatchObject({details: {stage: "container", formatHint: "png", keySource: "top_hex"}});
+    const error = new ILinkMediaError("ILINK_MEDIA_DOWNLOAD_FAILED", 403, {stage: "fetch", declaredMidSize: "private-query", formatHint: "private-key", keySource: "private-token", url: "private-url", wireBytes: 80} as never);
+    expect(error.details).toEqual({stage: "fetch", httpStatus: 403, wireBytes: 80});
+    expect(Object.isFrozen(error.details)).toBe(true);
+    expect(JSON.stringify(error)).not.toMatch(/private-query|private-key|private-token|private-url/);
   });
   it("rejects mismatched trusted hashes and plaintext sizes", async () => {
     for (const options of [{ expectedSha256: "f".repeat(64) }, { expectedMd5: "f".repeat(32) }, { expectedSha256: "malformed" }]) {
