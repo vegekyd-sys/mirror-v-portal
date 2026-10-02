@@ -112,6 +112,14 @@ This demonstrates vision and preservation of the source through project import,
 without generating another image. Natural idle released the sandbox, and its
 backup retained the same inbound file hash.
 
+SDK restore and runtime ensure preserved the source image, project record, import
+receipt and four session files byte-for-byte. The payload profile/archive pins
+also matched. The normal collector subsequently returned the acceptance sandbox
+to sleeping/stopped with no pending tasks; its idle setting and precise activity
+timestamp were unchanged. No additional model call or media generation was used
+for this lifecycle check. Media credits were zero for the import test; its five
+planner requests reported a separate provider charge of USD 0.702123.
+
 This controlled request uses the `web` channel and does not send a WeChat message.
 Phone-side image ingestion of the user's original photo still requires a resend;
 the previous text-only ingress discarded it. Do not report this technical test
