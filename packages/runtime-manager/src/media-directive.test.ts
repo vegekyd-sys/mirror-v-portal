@@ -1,5 +1,37 @@
 import { describe, it, expect } from "vitest";
-import { parseReply, resolveRef, mediaKind } from "./media-directive.js";
+import { FinalMediaCollector, parseReply, resolveRef, mediaKind } from "./media-directive.js";
+
+describe("OpenResponses final media side channel", () => {
+  it("accepts only the current response's final refs and deduplicates repeats", () => {
+    const collector = new FinalMediaCollector();
+    collector.accept({type:"response.created",response:{id:"resp-current"}});
+    for (const [runId,phase] of [["resp-other","final"],["resp-current","commentary"]])
+      expect(collector.accept({type:"nexus.media",runId,phase,mediaUrls:["old.jpg"]})).toBe(false);
+    expect(collector.accept({type:"nexus.media",runId:"resp-current",phase:"final",mediaUrls:["new.jpg","new.jpg"]})).toBe(true);
+    expect(collector.accept({type:"nexus.media",runId:"resp-current",phase:"final",mediaUrls:["new.jpg"]})).toBe(false);
+    expect(collector.media).toEqual([]);
+    collector.accept({type:"response.completed",response:{id:"resp-current",status:"completed"}});
+    expect(collector.media).toEqual([{ref:"new.jpg",remote:false}]);
+  });
+  it("does not deliver announced media after a failed or foreign completed event", () => {
+    for (const response of [{id:"resp-current",status:"failed"},{id:"resp-other",status:"completed"}]) {
+      const collector=new FinalMediaCollector();
+      collector.accept({type:"response.created",response:{id:"resp-current"}});
+      collector.accept({type:"nexus.media",runId:"resp-current",phase:"final",mediaUrls:["new.jpg"]});
+      collector.accept({type:"response.completed",response});
+      expect(collector.media).toEqual([]);
+    }
+  });
+  it("rejects unbound, malformed and oversized announcements", () => {
+    const collector = new FinalMediaCollector();
+    const event={type:"nexus.media",runId:"resp-current",phase:"final",mediaUrls:["new.jpg"]};
+    expect(collector.accept(event)).toBe(false);
+    collector.accept({type:"response.created",response:{id:"resp-current"}});
+    for (const mediaUrls of [["x\nMEDIA: secret.txt"],["x\0.jpg"],[null],Array(21).fill("x.jpg"),["x".repeat(8001)]])
+      expect(collector.accept({...event,mediaUrls})).toBe(false);
+    expect(collector.media).toEqual([]);
+  });
+});
 
 describe("media directives", () => {
   // The bug: the agent generated a file, emitted MEDIA:, and the user saw the

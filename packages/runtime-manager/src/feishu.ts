@@ -125,7 +125,7 @@ export class FeishuEdge implements ChannelEdge {
         await this.streams.get(run.id)?.discard();
         this.streams.delete(run.id);
       } else {
-        const text = run.output || "本次执行未能安全完成，请在 Mirror V Portal 试用页查看状态。为避免重复操作，系统没有自动重做。";
+        const text = run.output || (run.status === "succeeded" && manifest?.files.length ? "附件已准备好。" : "本次执行未能安全完成，请在 Mirror V Portal 试用页查看状态。为避免重复操作，系统没有自动重做。");
         if (!run.message_id) throw Error("FEISHU_DELIVERY_TARGET_MISSING");
         const stream = this.streams.get(run.id) || new StreamingReply(this.store,api,run.id,run.tenant_id,run.message_id);
         const streamed = await stream.finish(text);

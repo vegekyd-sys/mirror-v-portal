@@ -141,3 +141,12 @@ test("bot messages and unsupported inbound video are not mislabeled as text or i
   for(const [senderType,messageType] of [["app","image"],["user","media"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});
   expect(f.store.enqueue).not.toHaveBeenCalled();expect(f.api.im.messageResource.get).not.toHaveBeenCalled();
 });
+
+test('a successful attachment-only response gets a neutral caption instead of a failure claim',async()=>{
+ const f=await fixture();f.run.output='';
+ await f.edge.media(f.run,[{kind:'image',ref:'/workspace/final.png',buffer:png}]);
+ await f.edge.deliver(f.run,f.api);
+ const caption=f.api.im.message.reply.mock.calls.find((args:any[])=>args[0].data.msg_type==='text');
+ expect(JSON.parse(caption[0].data.content).text).toBe('附件已准备好。');
+ expect(f.api.im.message.reply.mock.calls.some((args:any[])=>args[0].data.msg_type==='image')).toBe(true);
+});

@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
-import { parseReply, resolveRef, mediaKind } from "./media-directive.js";
+import { FinalMediaCollector, parseReply, resolveRef, mediaKind, type MediaDirective } from "./media-directive.js";
 import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
 import type { Tenant } from "./store.js";
@@ -287,6 +287,7 @@ export class VercelProvider implements RuntimeProvider {
     let buffer = "";
     let output = "";
     let completed = false;
+    const finalMedia = new FinalMediaCollector();
     let chain = Promise.resolve();
     const sink = new Writable({
       write(chunk, _encoding, callback) {
@@ -307,6 +308,7 @@ export class VercelProvider implements RuntimeProvider {
             } catch {
               continue;
             }
+            if (finalMedia.accept(event)) await onEvent("media-announced", { count: event.mediaUrls.length, source: "openresponses-final" });
             if(event.type === "nexus.input_rejected") {
               const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE)[A-Z_]*$/.test(event.code || "") ? event.code : "INBOUND_MEDIA_INPUT_REJECTED";
               throw new InboundMediaError(code);
@@ -329,6 +331,7 @@ export class VercelProvider implements RuntimeProvider {
             } else if (event.type === "nexus.public_snapshot") {
               await onEvent("public-progress", { text: event.text });
             } else if (event.type === "response.completed") {
+              if (event.response?.status !== "completed") throw new Error("OPENCLAW_RESPONSE_FAILED");
               completed = true;
               await onEvent("runtime-completed", {
                 responseId: event.response?.id,
@@ -372,7 +375,7 @@ export class VercelProvider implements RuntimeProvider {
       at: Date.now(),
       invokeMs: Date.now() - invokeStart,
     });
-    if (result.exitCode || !completed || !output.trim())
+    if (result.exitCode || !completed || (!output.trim() && !finalMedia.media.length))
       throw new Error("OPENCLAW_INCOMPLETE_RESPONSE");
     // Persist session/files after EACH successful turn, before acknowledging success.
     // Snapshot on idle is additional protection, not the only durable boundary.
@@ -419,8 +422,11 @@ export class VercelProvider implements RuntimeProvider {
       }
     // The sandbox is about to go idle and its filesystem with it, so anything
     // the agent asked to deliver has to be read out now, while it still exists.
-    const media = await this.collectMedia(sbx, output, onEvent);
+    const media = await this.collectMedia(sbx, output, onEvent, finalMedia.media);
+    const localRefs = [...parseReply(output).media, ...finalMedia.media].filter(item => !item.remote);
+    if (localRefs.length && !media.length) throw new Error("OUTBOUND_MEDIA_UNAVAILABLE");
     if (media.length) await onEvent("media-ready", { count: media.length, refs: media.map((m) => m.ref) });
+    if (media.length && output.trim() === "No response from OpenClaw.") output = "";
     return { output, media };
   }
 
@@ -428,8 +434,9 @@ export class VercelProvider implements RuntimeProvider {
     sbx: RuntimeSandbox,
     output: string,
     onEvent: (kind: string, data: any) => Promise<void>,
+    announced: MediaDirective[] = [],
   ): Promise<MediaFile[]> {
-    const { media } = parseReply(output);
+    const media = [...new Map([...parseReply(output).media, ...announced].map(item => [item.ref,item])).values()];
     const files: MediaFile[] = [];
     for (const directive of media) {
       // A URL needs no upload: the channel can reference it directly.

@@ -56,7 +56,7 @@ describe('durable inbound user images',()=>{
   });
   it('materializes bytes before dispatch and keeps all image bytes out of invocation env/events',async()=>{
     const f=fixture();let payload:any;const files:any[]=[];const events:any[]=[];
-    const sandbox={writeFiles:async(items:any[])=>{files.push(...items);},runCommand:async(options:any)=>{if(options.env?.NEXUS_REQUEST_B64){payload=JSON.parse(Buffer.from(options.env.NEXUS_REQUEST_B64,'base64').toString());options.stdout.write('data: {"type":"response.output_text.delta","delta":"received"}\n\n');options.stdout.write('data: {"type":"response.completed","response":{"id":"free-test"}}\n\n');}return {exitCode:0};},readFileToBuffer:async({path:p}:any)=>p==='/tmp/nexus-state.tgz'?Buffer.from('test-backup'):null};
+    const sandbox={writeFiles:async(items:any[])=>{files.push(...items);},runCommand:async(options:any)=>{if(options.env?.NEXUS_REQUEST_B64){payload=JSON.parse(Buffer.from(options.env.NEXUS_REQUEST_B64,'base64').toString());options.stdout.write('data: {"type":"response.output_text.delta","delta":"received"}\n\n');options.stdout.write('data: {"type":"response.completed","response":{"id":"free-test","status":"completed"}}\n\n');}return {exitCode:0};},readFileToBuffer:async({path:p}:any)=>p==='/tmp/nexus-state.tgz'?Buffer.from('test-backup'):null};
     try {
       const p=new VercelProvider({dataDir:f.controller,encryptionKey:'0'.repeat(64)} as any);vi.spyOn(p,'get').mockResolvedValue(sandbox as any);
       await p.execute({id:'tenant-a',template_id:'makaron'} as any,'session','photo',async(kind,data)=>{events.push({kind,data});},{channel:'weixin',attachments:[attachment]});
