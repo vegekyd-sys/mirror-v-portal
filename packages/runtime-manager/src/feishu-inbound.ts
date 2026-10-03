@@ -7,6 +7,34 @@ import type * as lark from "@larksuiteoapi/node-sdk";
 import { imageMime } from "./feishu-media.js";
 import { IMAGE_EXTENSIONS, MAX_INBOUND_IMAGE_BYTES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
+/** Feishu rich-text posts contain native text/image elements, not HTML. Read one locale only. */
+export function parseFeishuContent(messageType: string, input: unknown): {text: string;imageKeys: string[]} {
+  let content: any;
+  try {content=typeof input === "string" ? JSON.parse(input) : input;} catch {content={};}
+  if (messageType === "text") return {text:typeof content?.text === "string" ? content.text : "",imageKeys:[]};
+  if (messageType === "image") return {text:"",imageKeys:typeof content?.image_key === "string" && content.image_key ? [content.image_key] : []};
+  if (messageType !== "post") return {text:"",imageKeys:[]};
+  let post = content;
+  if (!Array.isArray(post?.content)) {
+    const locale = ["zh_cn","en_us",...Object.keys(content || {}).filter(key=>/^[a-z]{2}_[a-z]{2}$/.test(key))]
+      .find(key=>Array.isArray(content?.[key]?.content));
+    post = locale ? content[locale] : {};
+  }
+  const imageKeys = new Set<string>(), lines: string[]=[];
+  if (typeof post?.title === "string" && post.title.trim()) lines.push(post.title);
+  for (const row of Array.isArray(post?.content) ? post.content : []) {
+    if (!Array.isArray(row)) continue;
+    const text: string[]=[];
+    for (const element of row) {
+      if (!element || typeof element !== "object") continue;
+      if (element.tag === "img" && typeof element.image_key === "string" && element.image_key) imageKeys.add(element.image_key);
+      else if (["text","a","at","code_block","md"].includes(element.tag) && typeof element.text === "string") text.push(element.text);
+    }
+    if (text.join("").trim()) lines.push(text.join(""));
+  }
+  return {text:lines.join("\n"),imageKeys:[...imageKeys]};
+}
+
 /** Read only the resource attached to this message; never fetch an arbitrary user URL. */
 export async function downloadFeishuImage(api: lark.Client, messageId: string, imageKey: string, timeoutMs = 30_000): Promise<Buffer> {
   if (!messageId || typeof imageKey !== "string" || !imageKey || imageKey.length > 1024) throw Error("FEISHU_IMAGE_RESOURCE_INVALID");

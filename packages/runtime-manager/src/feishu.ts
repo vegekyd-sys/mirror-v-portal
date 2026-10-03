@@ -8,8 +8,8 @@ import { StreamingReply } from "./streaming-reply.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { prepareFeishuMedia, uploadKey } from "./feishu-media.js";
 import { FeishuOutboundVault } from "./feishu-outbound.js";
-import { downloadFeishuImage, persistFeishuImage } from "./feishu-inbound.js";
-import type { InboundAttachment } from "./inbound-media.js";
+import { downloadFeishuImage, parseFeishuContent, persistFeishuImage } from "./feishu-inbound.js";
+import { MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 // Preserve the SDK's response-unwrapping and $return_headers interceptor; a fresh axios instance loses both.
 const feishuHttp: NonNullable<ConstructorParameters<typeof lark.Client>[0]["httpInstance"]> = {
@@ -198,33 +198,42 @@ export class FeishuEdge implements ChannelEdge {
   }
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
-    if (!m?.message_id || data.sender?.sender_type === "app" || !["text","image"].includes(m.message_type)) return;
+    if (!m?.message_id || data.sender?.sender_type === "app" || !["text","image","post"].includes(m.message_type)) return;
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
-    let content: any;
-    try {content=JSON.parse(m.content);} catch {content={};}
-    let text = typeof content?.text === "string" ? content.text : "";
+    const content = parseFeishuContent(m.message_type,m.content);
+    let text = content.text;
     if (m.message_type === "text" && !text.trim()) return;
+    if (m.message_type === "post" && !text.trim() && !content.imageKeys.length) return;
     // A replay reuses the durable run. Never redownload or rewrite an already committed image turn.
     const prior = await this.store.pool.query<Run>("SELECT * FROM elastic_runs WHERE tenant_id=$1 AND request_key=$2",[tenant.id,m.message_id]);
     if (prior.rows[0]) {if (prior.rows[0].delivery !== "sent") this.typing.start(prior.rows[0],api);return prior.rows[0];}
     let attachments: InboundAttachment[] = [], failedImage = false;
-    if (m.message_type === "image") {
-      let buffer: Buffer | undefined, failure = "FEISHU_IMAGE_RESOURCE_INVALID";
-      for (let attempt=0;attempt<3;attempt++) {
-        try {buffer=await downloadFeishuImage(api,m.message_id,content?.image_key);break;}
-        catch (error: any) {
-          failure = error.message;
-          if (["FEISHU_IMAGE_RESOURCE_INVALID","FEISHU_IMAGE_TOO_LARGE","FEISHU_IMAGE_EMPTY","FEISHU_IMAGE_FORMAT_UNSUPPORTED"].includes(failure)) break;
-          if (attempt < 2) await new Promise(resolve => setTimeout(resolve,250 * (attempt+1)));
+    if (m.message_type === "image" || content.imageKeys.length) {
+      let failure: string | undefined;
+      if (!content.imageKeys.length) failure="FEISHU_IMAGE_RESOURCE_INVALID";
+      if (content.imageKeys.length > MAX_INBOUND_IMAGES) failure="FEISHU_IMAGES_TOO_MANY";
+      for (const imageKey of failure ? [] : content.imageKeys) {
+        let buffer: Buffer | undefined;
+        for (let attempt=0;attempt<3;attempt++) {
+          try {buffer=await downloadFeishuImage(api,m.message_id,imageKey);break;}
+          catch (error: any) {
+            failure=error.message;
+            if (["FEISHU_IMAGE_RESOURCE_INVALID","FEISHU_IMAGE_TOO_LARGE","FEISHU_IMAGE_EMPTY","FEISHU_IMAGE_FORMAT_UNSUPPORTED"].includes(failure!)) break;
+            if (attempt < 2) await new Promise(resolve => setTimeout(resolve,250 * (attempt+1)));
+          }
         }
-      }
-      if (buffer) {
+        if (!buffer) break;
+        failure=undefined;
         // Filesystem failures escape before enqueue; they must not be acknowledged as an empty image.
-        attachments=[await persistFeishuImage(this.store.config.dataDir,tenant.id,m.message_id,buffer)];
-        text="本条消息只有用户图片，没有附带文字。请确认收到；若此前同会话已有明确且未完成的创作要求，请使用这份实际原图继续完成。否则仅确认收到，等待用户说明怎么处理，不要自行生成或编辑。";
+        attachments.push(await persistFeishuImage(this.store.config.dataDir,tenant.id,m.message_id,buffer));
+        try {normalizeInboundAttachments(attachments,tenant.id);} catch {failure="FEISHU_IMAGES_TOO_LARGE";break;}
+      }
+      if (!failure && attachments.length) {
+        if (!text.trim()) text="本条消息只有用户图片，没有附带文字。请确认收到；若此前同会话已有明确且未完成的创作要求，请使用这份实际原图继续完成。否则仅确认收到，等待用户说明怎么处理，不要自行生成或编辑。";
       } else {
         failedImage=true;
-        await this.store.event(tenant.id,"feishu-image-receive-failed",{code:failure});
+        attachments=[];
+        await this.store.event(tenant.id,"feishu-image-receive-failed",{code:failure ?? "FEISHU_IMAGE_RESOURCE_INVALID",messageType:m.message_type});
         text="这条飞书图片暂时未能接入系统，系统没有把实际原图交给你。请简洁说明当前接入失败；不要假装已经看过图片，不要使用以前的图片替代，不要生成或编辑。";
       }
     }

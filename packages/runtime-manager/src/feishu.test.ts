@@ -109,6 +109,33 @@ test("failed image ingress creates an explicit inheritance barrier and logs no i
   expect(JSON.stringify(f.events)).not.toContain("PRIVATE");
   expect(f.api.im.messageResource.get).toHaveBeenCalledTimes(1);
 });
+test("post image plus text is a real creative request with resources read by the same message ID",async()=>{
+  const f=await fixture();
+  f.api.im.messageResource.get.mockImplementation(async(params:any)=>({getReadableStream:()=>Readable.from([params.path.file_key==="key-1" ? png : Buffer.concat([png,Buffer.from("other-image")])])}));
+  const data={sender:{sender_type:"user"},message:{message_id:"post-message",chat_id:"chat",message_type:"post",content:JSON.stringify({title:"搞笑设计",content:[[{tag:"text",text:"用这两张图做一张海报"},{tag:"img",image_key:"key-1"}],[{tag:"img",image_key:"key-1"},{tag:"img",image_key:"key-2"}]]})}};
+  const run=await f.edge.receive(f.tenant,f.api,data);
+  expect(run?.text).toBe("搞笑设计\n用这两张图做一张海报");expect(run?.attachments).toHaveLength(2);
+  expect(f.api.im.messageResource.get.mock.calls.map((args:any[])=>args[0])).toEqual(["key-1","key-2"].map(key=>({path:{message_id:"post-message",file_key:key},params:{type:"image"}})));
+  for(const image of run!.attachments!)expect((await fs.readFile(path.join(f.directory,image.storagePath))).length).toBe(image.bytes);
+  await f.edge.receive(f.tenant,f.api,data);expect(f.store.enqueue).toHaveBeenCalledTimes(1);expect(f.api.im.messageResource.get).toHaveBeenCalledTimes(2);
+});
+test("image-only locale post keeps acknowledgement policy; text-only post retains the caption without downloading",async()=>{
+  const f=await fixture();
+  const base={sender:{sender_type:"user"},message:{chat_id:"chat",message_type:"post"}};
+  const image=await f.edge.receive(f.tenant,f.api,{...base,message:{...base.message,message_id:"post-image",content:JSON.stringify({zh_cn:{content:[[{tag:"img",image_key:"image-key"}]]}})}});
+  expect(image?.attachments).toHaveLength(1);expect(image?.text).toContain("不要自行生成或编辑");
+  const caption=await f.edge.receive(f.tenant,f.api,{...base,message:{...base.message,message_id:"post-caption",content:JSON.stringify({content:[[{tag:"text",text:"做成动画"}]]})}});
+  expect(caption?.text).toBe("做成动画");expect(caption?.attachments).toEqual([]);expect(caption?.inherit_attachments).toBe(true);
+  expect(f.api.im.messageResource.get).toHaveBeenCalledTimes(1);
+});
+test("one unusable rich-post image fails the whole source set rather than editing a different partial/previous image",async()=>{
+  const f=await fixture();
+  f.api.im.messageResource.get.mockImplementation(async(params:any)=>({getReadableStream:()=>Readable.from([params.path.file_key==="good" ? png : Buffer.from("broken")])}));
+  const data={sender:{sender_type:"user"},message:{message_id:"bad-post",chat_id:"chat",message_type:"post",content:JSON.stringify({content:[[{tag:"text",text:"编辑第二张"},{tag:"img",image_key:"good"},{tag:"img",image_key:"bad"}]]})}};
+  const run=await f.edge.receive(f.tenant,f.api,data);
+  expect(run?.attachments).toEqual([]);expect(run?.inherit_attachments).toBe(false);expect(run?.text).toContain("不要生成或编辑");
+  expect(f.events.some(event=>event[1]==="feishu-image-receive-failed" && event[2].messageType==="post")).toBe(true);
+});
 test("bot messages and unsupported inbound video are not mislabeled as text or images",async()=>{
   const f=await fixture();
   for(const [senderType,messageType] of [["app","image"],["user","media"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});

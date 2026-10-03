@@ -4,13 +4,28 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { afterEach, expect, test, vi } from "vitest";
-import { downloadFeishuImage, persistFeishuImage } from "./feishu-inbound.js";
+import { downloadFeishuImage, parseFeishuContent, persistFeishuImage } from "./feishu-inbound.js";
 import { MAX_INBOUND_IMAGE_BYTES, readInboundImage } from "./inbound-media.js";
 
 const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jJZkAAAAASUVORK5CYII=","base64");
 const directories: string[]=[];
 afterEach(async()=>{await Promise.all(directories.splice(0).map(directory=>fs.rm(directory,{recursive:true,force:true})));});
 function apiFor(stream: Readable) {return {im:{messageResource:{get:vi.fn(async()=>({getReadableStream:()=>stream}))}}} as any;}
+test("flat rich-text post retains plain title/rows and unique native image keys without rendering HTML",()=>{
+  const content={title:"创意海报",content:[[{tag:"text",text:"请把这张图"},{tag:"text",text:"做成搞笑海报"},{tag:"img",image_key:"image-1"}],[{tag:"text",text:"保留人物 <b>原样</b>"},{tag:"img",image_key:"image-1"},{tag:"img",image_key:"image-2"}]]};
+  expect(parseFeishuContent("post",JSON.stringify(content))).toEqual({text:"创意海报\n请把这张图做成搞笑海报\n保留人物 <b>原样</b>",imageKeys:["image-1","image-2"]});
+});
+test("locale rich-text post chooses one readable locale instead of duplicating translated images",()=>{
+  const content={zh_cn:{title:"中文",content:[[{tag:"text",text:"做成海报"},{tag:"img",image_key:"zh-image"}]]},en_us:{title:"English",content:[[{tag:"text",text:"make a poster"},{tag:"img",image_key:"en-image"}]]}};
+  expect(parseFeishuContent("post",content)).toEqual({text:"中文\n做成海报",imageKeys:["zh-image"]});
+  expect(parseFeishuContent("post",{ja_jp:{content:[[{tag:"text",text:"画像"},{tag:"img",image_key:"ja-image"}]]}})).toEqual({text:"画像",imageKeys:["ja-image"]});
+});
+test("plain text/image contracts remain distinct and malformed or unsupported post elements are harmless",()=>{
+  expect(parseFeishuContent("text",'{"text":"hi"}')).toEqual({text:"hi",imageKeys:[]});
+  expect(parseFeishuContent("image",'{"image_key":"key"}')).toEqual({text:"",imageKeys:["key"]});
+  expect(parseFeishuContent("post","invalid-json")).toEqual({text:"",imageKeys:[]});
+  expect(parseFeishuContent("post",{content:[null,[null,{tag:"media",file_key:"video"},{tag:"img",image_key:123}]]})).toEqual({text:"",imageKeys:[]});
+});
 test("SDK downloads the attached resource by message ID, bounds bytes, and preserves the image hash",async()=>{
   const api=apiFor(Readable.from([png.subarray(0,15),png.subarray(15)]));
   const buffer=await downloadFeishuImage(api,"message-id","image-key");
