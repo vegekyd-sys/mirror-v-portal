@@ -120,7 +120,8 @@ export class VercelProvider implements RuntimeProvider {
   protected modelForTenant(tenant: Tenant) {
     const template = this.config.templates?.[tenant.template_id || "dealclaw"];
     if (template?.model) {
-      if ((template.modelVersion || template.version) !== tenant.template_version) throw Error("TEMPLATE_MODEL_PROFILE_MISMATCH");
+      const versions = template.modelVersions ?? [template.modelVersion || template.version];
+      if (!Array.isArray(versions) || !versions.length || versions.some(version => typeof version !== "string" || (template.modelVersions !== undefined && !version.startsWith(`${tenant.template_id}.`))) || !versions.includes(tenant.template_version)) throw Error("TEMPLATE_MODEL_PROFILE_MISMATCH");
       if (!template.model.id || !template.model.baseUrl || !template.model.apiKey) throw Error("TEMPLATE_MODEL_NOT_CONFIGURED");
       return template.model;
     }

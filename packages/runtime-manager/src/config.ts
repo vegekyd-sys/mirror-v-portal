@@ -19,6 +19,8 @@ export interface TemplateRecord {
   model?: { id: string; baseUrl: string; apiKey: string };
   /** Explicit version pin for a private model profile; old tenants fail closed on mismatch. */
   modelVersion?: string;
+  /** Exact payload versions explicitly approved to share this private planner profile. */
+  modelVersions?: string[];
 }
 
 export interface Config {

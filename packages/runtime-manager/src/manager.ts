@@ -11,7 +11,7 @@ export class RuntimeManager {
     readonly provider: RuntimeProvider,
     readonly onDelta?: (run: Run, text: string) => void,
     readonly onProgress?: (run: Run, kind: string, data: any) => void,
-    readonly onMedia?: (run: Run, media: MediaFile[]) => void,
+    readonly onMedia?: (run: Run, media: MediaFile[]) => void | Promise<void>,
   ) {}
   async start() {
     await this.store.boss.work<{ runId: string }>(
@@ -71,8 +71,8 @@ export class RuntimeManager {
       }
       // Preserve arrival order across the parallel queue workers.
       const earlier = await db.query(
-        "SELECT 1 FROM elastic_runs WHERE tenant_id=$1 AND status='queued' AND (created_at,id)<($2,$3) LIMIT 1",
-        [tenant.id, current.created_at, runId],
+        "SELECT 1 FROM elastic_runs WHERE tenant_id=$1 AND status='queued' AND (created_at,id)<(SELECT created_at,id FROM elastic_runs WHERE id=$2) LIMIT 1",
+        [tenant.id, runId],
       );
       if (earlier.rowCount) throw new Error("EARLIER_TURN_PENDING");
       let submitted = false;
@@ -137,9 +137,9 @@ export class RuntimeManager {
           },
           { channel: current.channel, attachments, attachmentsFromPreviousTurn: !current.attachments?.length && attachments.length > 0 },
         );
-        // Hand files to the edge before the reply is marked deliverable, so the
-        // attachment and the text arrive together rather than in two turns.
-        if (media?.length) this.onMedia?.(current, media);
+        // Persist outbound files before queuing the reply. Channel delivery can
+        // then retry after a restart without repeating the creative turn.
+        if (media?.length) await this.onMedia?.(current, media);
         await db.query("BEGIN");
         try {
           await db.query(

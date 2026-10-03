@@ -151,7 +151,12 @@ export class Store {
     await this.boss.createQueue("feishu-reply", {
       retryLimit: 8,
       retryDelay: 10,
-      expireInSeconds: 90,
+      expireInSeconds: 300,
+    });
+    await this.boss.updateQueue("feishu-reply", {
+      retryLimit: 8,
+      retryDelay: 10,
+      expireInSeconds: 300,
     });
   }
   /** Credentials are sealed with the same key as tenant secrets; never stored plain. */

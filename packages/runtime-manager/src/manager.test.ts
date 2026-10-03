@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, expect, test } from "vitest";
+import { beforeAll, afterAll, expect, test, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { loadConfig } from "./config.js";
@@ -37,6 +37,34 @@ const provider = (
 async function tenant() {
   return s.createTenant(randomUUID(), "test");
 }
+test("awaits durable outbound staging before making a Feishu reply deliverable", async () => {
+  const t = await tenant();
+  const run = await s.enqueue(t.id, "media-staging", "chat", "make an image", "feishu", "wire-message");
+  let started!: () => void, release!: () => void;
+  const began = new Promise<void>((resolve) => { started = resolve; });
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  let staged = false;
+  const send = vi.spyOn(s.boss, "send");
+  const manager = new RuntimeManager(s, provider(async () => ({
+    output: "image ready", media: [{ ref: "artifacts/image.png", kind: "image", buffer: Buffer.from("image") }],
+  })), undefined, undefined, async () => { started(); await hold; staged = true; });
+  const processing = manager.process(run.id);
+  try {
+    await began;
+    expect((await s.run(run.id)).status).toBe("running");
+    expect((await s.run(run.id)).delivery).not.toBe("sent");
+    expect(send.mock.calls.filter(args => args[0] === "feishu-reply")).toHaveLength(0);
+    release();
+    await processing;
+    expect(staged).toBe(true);
+    expect((await s.run(run.id)).status).toBe("succeeded");
+    expect(send.mock.calls.filter(args => args[0] === "feishu-reply")).toHaveLength(1);
+  } finally {
+    release();
+    await processing;
+    send.mockRestore();
+  }
+});
 test("deduplicates concurrent inbound deliveries", async () => {
   const t = await tenant();
   const [a, b] = await Promise.all([
@@ -244,8 +272,12 @@ test("real queue drains concurrent messages in tenant order", async () => {
     }),
   );
   const runs = [];
-  for (let i = 0; i < 5; i++)
-    runs.push(await s.enqueue(t.id, "q" + i, "session", String(i)));
+  for (let i = 0; i < 5; i++) {
+    const run = await s.enqueue(t.id, "q" + i, "session", String(i));
+    // Distinct database microseconds in one millisecond must remain ordered.
+    await s.pool.query("UPDATE elastic_runs SET created_at=$2::timestamptz WHERE id=$1", [run.id, `2026-10-03 00:00:00.000${123 + i}+00`]);
+    runs.push(run);
+  }
   await m.start();
   try {
     // Waits on the whole batch reaching a terminal state, not just the last row:

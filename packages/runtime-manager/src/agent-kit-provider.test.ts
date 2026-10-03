@@ -18,6 +18,13 @@ function config(dataDir: string) {
 }
 
 describe("snapshot-pinned agent-kit runtime", () => {
+  it("preserves legacy single version model pins whose namespace differs from the template id", () => {
+    const cfg=config("/unused");
+    cfg.templates.dealclaw={version:"dealclaw-base.v2",model,modelVersion:"dealclaw-base.v2"};
+    const p=new VercelProvider(cfg);
+    expect((p as any).modelForTenant({...tenant,template_id:"dealclaw",template_version:"dealclaw-base.v2"})).toBe(model);
+    expect(()=> (p as any).modelForTenant({...tenant,template_id:"dealclaw",template_version:"dealclaw-base.v3"})).toThrow("TEMPLATE_MODEL_PROFILE_MISMATCH");
+  });
   it("never uses a global owner service key or allocates a sandbox before tenant binding", async () => {
     const provider = new VercelProvider(config("/unused"));
     const allocate = vi.spyOn(provider as any,"create");
@@ -34,6 +41,20 @@ describe("snapshot-pinned agent-kit runtime", () => {
     delete cfg.templates.makaron.model;
     await expect(p.ensure(tenant)).rejects.toThrow("TEMPLATE_MODEL_NOT_CONFIGURED");
     delete cfg.templates.makaron;await expect(p.ensure(tenant)).rejects.toThrow("TEMPLATE_MODEL_NOT_CONFIGURED");
+  });
+  it("allows an explicitly pinned patch alongside existing tenants without admitting unapproved versions", () => {
+    const cfg=config("/unused");
+    cfg.templates.makaron.version="makaron.v2.0.1";
+    const p=new VercelProvider(cfg);
+    expect((p as any).modelForTenant(tenant)).toEqual(model);
+    expect(()=> (p as any).modelForTenant({...tenant,template_version:"makaron.v2.0.1"})).toThrow("TEMPLATE_MODEL_PROFILE_MISMATCH");
+    cfg.templates.makaron.modelVersions=["makaron.v2.0.0","makaron.v2.0.1"];
+    expect((p as any).modelForTenant(tenant)).toEqual(model);
+    expect((p as any).modelForTenant({...tenant,template_version:"makaron.v2.0.1"})).toEqual(model);
+    for(const version of ["makaron.v1.0.0","makaron.v2.0.2","mirror-v.v2.0.1"])
+      expect(()=> (p as any).modelForTenant({...tenant,template_version:version})).toThrow("TEMPLATE_MODEL_PROFILE_MISMATCH");
+    cfg.templates.makaron.modelVersions=["mirror-v.v2.0.1"];
+    expect(()=> (p as any).modelForTenant({...tenant,template_version:"mirror-v.v2.0.1"})).toThrow("TEMPLATE_MODEL_PROFILE_MISMATCH");
   });
   it("boots the actual tenant with private env and refreshes helpers without copying keys into deployed files", async () => {
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),"kit-provider-"));
