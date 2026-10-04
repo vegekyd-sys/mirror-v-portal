@@ -6,6 +6,18 @@ fs.mkdirSync(rpc, { recursive: true });
 const nonce = randomUUID();
 fs.writeFileSync(rpc + "/current.json", JSON.stringify({ nonce }));
 const sent = new Set();
+function terminalFrame(frame) {
+  const raw = frame.split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart()).join("\n");
+  try {
+    const event = JSON.parse(raw);
+    if (event.type === "response.failed" || event.type === "error") return "failed";
+    if (event.type === "response.completed")
+      return event.response?.status === "completed" ? "completed" : "failed";
+  } catch {}
+  return undefined;
+}
 const timer = setInterval(() => {
   for (const name of fs.readdirSync(rpc)) {
     if (!name.endsWith(".request") || sent.has(name)) continue;
@@ -84,11 +96,24 @@ try {
   // Preserve frame boundaries when multiplexing schedule RPC with model SSE.
   const decoder = new TextDecoder();
   let pending = "";
-  for await (const chunk of response.body) {
+  responseFrames: for await (const chunk of response.body) {
     pending += decoder.decode(chunk, { stream: true });
     const frames = pending.split(/\r?\n\r?\n/);
     pending = frames.pop() || "";
-    for (const frame of frames) process.stdout.write(frame + "\n\n");
+    for (const frame of frames) {
+      // Forward the actual terminal event before cancelling its body. The
+      // gateway may report failure without closing HTTP; waiting for EOF then
+      // hides that failure until the sandbox command times out.
+      process.stdout.write(frame + "\n\n");
+      const terminal = terminalFrame(frame);
+      if (terminal) {
+        pending = "";
+        if (terminal === "failed") process.exitCode = 1;
+        // ReadableStream's async iterator cancels the body on early return.
+        // This ends only the already-terminal invocation, without a retry.
+        break responseFrames;
+      }
+    }
   }
   if (pending.trim()) process.stdout.write(pending + "\n\n");
 } finally {
