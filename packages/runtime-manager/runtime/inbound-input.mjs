@@ -40,10 +40,17 @@ export function prepareInboundInput(request,config,{workspace='/vercel/sandbox/a
     request.imagesFromPreviousTurn?'【同一会话此前提供的图片；用户说上一张/这张图片时使用这些实际源文件】':'【本条消息的用户图片】',
     ...read.map(({image},index)=>`图片${index+1}: ${image.path}`)].join('\n');
   const input=vision?[{type:'message',role:'user',content:[{type:'input_text',text:caption},...read.map(({image,buffer})=>({type:'input_image',source:{type:'base64',media_type:image.mimeType,data:buffer.toString('base64')}}))]}]:caption;
+  // boot derives this entry from the tenant's pinned agent-kit profile. Read the
+  // actual invocation config, rather than a global template pointer or env flag.
+  const mediaPlugin=config?.plugins?.entries?.['makaron-tools'];
+  const nativeFiles=config?.plugins?.enabled!==false&&mediaPlugin?.enabled!==false&&mediaPlugin?.config?.mode==='project'&&mediaPlugin.config.mediaContextMode==='native-files';
+  const makaronInstructions=nativeFiles
+    ? '只有用户要求创作或编辑时才执行。马卡龙媒体工具使用真实文件输入：用 source.path 明确指定用户选定的编辑基底文件，用 references 中每个条目的 path 和 role 明确指定额外参考文件及主体、背景或风格用途。使用消息中列出的实际沙箱路径，不能凭文件名猜内容、自动借用工程里的其他图片或用文字重画来替代用户源图；纯文字新创作省略 source 和 references。后续编辑显式使用此前返回的真实 artifact 路径或已确认 URL。若此前逻辑任务已结束，开始用户明确要求的新任务时先 makaron_project({action:"new_run"})；复用旧产物时不得重新生成。'
+    : '要用马卡龙创作或编辑源图时，先 makaron_project({action:"import",path:"inbound/<文件名>",kind:"image"}) 导入这份真实文件，再 makaron_project({action:"status"}) 读取最新 canonical context.media，按 import 返回的 snapshotId 匹配 media_index。不要猜 index=1、不要用描述重画来替代源图；使用源图进行编辑时把实际 media_index 传给 makaron_generate_image。';
   const instructions=[
     '用户图片已保存为消息中列出的真实沙箱文件。只在用户说明要处理时开始创作，图片单独到达时先确认收到；不要把图片输入当作生成授权。',
     vision?'本次 input_image 与列出的本地源文件是同一份实际图片。':'当前主模型没有声明直接看图能力。源文件真实存在，可用已有图片工具读取；无法查看时如实说明，不能凭文件名猜测内容。',
-    ...(agentId==='makaron'?['要用马卡龙创作或编辑源图时，先 makaron_project({action:"import",path:"inbound/<文件名>",kind:"image"}) 导入这份真实文件，再 makaron_project({action:"status"}) 读取最新 canonical context.media，按 import 返回的 snapshotId 匹配 media_index。不要猜 index=1、不要用描述重画来替代源图；使用源图进行编辑时把实际 media_index 传给 makaron_generate_image。']:[]),
+    ...(agentId==='makaron'?[makaronInstructions]:[]),
   ].join('\n');
   return {input,instructions};
 }
