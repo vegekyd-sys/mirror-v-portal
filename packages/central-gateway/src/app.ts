@@ -86,7 +86,15 @@ export function createApp() {
       },
     },
   }));
-  app.use('/onboard/assets', express.static(fileURLToPath(new URL('../public/onboard/', import.meta.url)), { maxAge: '1d', index: false }));
+  app.use('/onboard/assets', express.static(fileURLToPath(new URL('../public/onboard/', import.meta.url)), {
+    maxAge: '1d', index: false,
+    setHeaders(res, filename) {
+      // Feishu's creation page can display this public artwork from another
+      // origin. Keep Helmet's default policy for every other static resource.
+      if (/(?:^|[\\/])makaron-avatar-[a-f0-9]{12}\.png$/.test(filename))
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+  }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
 
