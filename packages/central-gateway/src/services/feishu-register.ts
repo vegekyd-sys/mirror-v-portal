@@ -37,17 +37,21 @@ export interface RegistrationSession {
 // without a redeploy. The default matches the seeded payload — a shipped name
 // that contradicts the payload is worse than either one alone — and the
 // description traces V's own Evolution Direction: Mirror, Match, Exceed.
-const APP_PRESET = {
-  // 1-6 publicly reachable image URLs; the first is pre-selected. Without this
-  // Feishu offers its own stock avatars and the agent has no face of its own.
-  ...(process.env.FEISHU_APP_AVATAR
-    ? { avatar: process.env.FEISHU_APP_AVATAR.split(',').map((u) => u.trim()).filter(Boolean) }
-    : {}),
-};
+export function registrationAvatarPreset(template: { avatarUrl?: string }, fallback = process.env.FEISHU_APP_AVATAR): { avatar?: string[] } {
+  // The template's own face is pre-selected. Preserve the legacy deployment
+  // fallback for templates that have not supplied an avatar.
+  if (template.avatarUrl !== undefined) {
+    const url = new URL(template.avatarUrl);
+    if (url.protocol !== 'https:' || url.username || url.password) throw Error('INVALID_TEMPLATE_AVATAR_URL');
+    return { avatar: [url.href] };
+  }
+  const avatar = fallback?.split(',').map((url) => url.trim()).filter(Boolean);
+  return avatar?.length ? { avatar } : {};
+}
 
 export async function startFeishuRegistration(
   onRegistered?: (session: RegistrationSession) => Promise<void>,
-  template: { id: string; version: string; name: string; appName?: string; description: string } = {
+  template: { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string } = {
     id: 'dealclaw', version: 'dealclaw-base.v2', name: 'DealClaw', description: '面向出海业务的 AI 顾问',
   },
 ): Promise<RegistrationSession> {
@@ -94,7 +98,7 @@ export async function startFeishuRegistration(
         appPreset: {
           name: template.appName || template.name,
           desc: template.description,
-          ...APP_PRESET,
+          ...registrationAvatarPreset(template),
         },
         addons: {
           preset: true,

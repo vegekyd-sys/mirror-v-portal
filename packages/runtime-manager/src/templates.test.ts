@@ -8,6 +8,17 @@ const config = {
 } as Config;
 
 describe("signup template catalog", () => {
+  it("exposes a template avatar without changing its version or snapshot", () => {
+    const withAvatar = { ...config, templates: { makaron: { version: "makaron.v2.1.2", snapshotId: "snap_makaron", listed: false, avatarUrl: "https://mirror-v-portal.vercel.app/onboard/assets/makaron-avatar.png" } } };
+    expect(requireTemplate(withAvatar, "makaron")).toMatchObject({ version: "makaron.v2.1.2", snapshotId: "snap_makaron", listed: false, avatarUrl: withAvatar.templates.makaron.avatarUrl });
+    expect(requireTemplate(config, "mirror-v")).not.toHaveProperty("avatarUrl");
+  });
+
+  it("rejects credential-bearing or non-HTTPS template avatars", () => {
+    for (const avatarUrl of ["data:image/png;base64,test", "javascript:alert(1)", "http://example.com/avatar.png", "https://user:password@example.com/avatar.png"]) {
+      expect(() => availableTemplates({ ...config, templates: { makaron: { version: "makaron.v2.1.2", snapshotId: "snap_makaron", avatarUrl } } })).toThrow("INVALID_TEMPLATE_AVATAR_URL");
+    }
+  });
   it("only offers configured snapshots and hides their ids", () => {
     expect(availableTemplates(config).map((template) => template.id)).toEqual(["dealclaw", "mirror-v"]);
     expect(requireTemplate(config, "mirror-v", "mirror-v.v1").snapshotId).toBe("snap_mirror");

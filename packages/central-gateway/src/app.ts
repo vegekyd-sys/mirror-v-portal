@@ -19,7 +19,7 @@ import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 
 // listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
-interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; listed?: boolean }
+interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean }
 async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promise<SignupTemplate[]> {
   const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/templates`, {
     headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},

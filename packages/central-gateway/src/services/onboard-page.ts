@@ -40,11 +40,12 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .template-picker::before { content:""; position:absolute; z-index:-1; inset:-12px -20px -6px; background:radial-gradient(ellipse at center,#030710cc 10%,#030710a8 58%,transparent 100%); pointer-events:none; }
   .template-picker h1 { margin:0 0 18px; font-size:23px; line-height:1.2; font-weight:500; letter-spacing:.01em; }
   .template-list { display:flex; justify-content:center; border-bottom:1px solid #ffffff66; }
-  .template-card { position:relative; flex:1; min-width:0; min-height:52px; padding:12px 8px 17px; border:0; background:transparent; color:#ffffffa8; text-align:center; cursor:pointer; font:inherit; transition:color .2s; }
+  .template-card { position:relative; flex:1; min-width:0; min-height:52px; padding:12px 8px 17px; border:0; background:transparent; color:#ffffffa8; text-align:center; cursor:pointer; font:inherit; transition:color .2s; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; }
   .template-card:hover,.template-card[aria-pressed="true"] { color:#fff; }
   .template-card[aria-pressed="true"]::after { content:""; position:absolute; left:15%; right:15%; bottom:-1px; height:2px; background:#fff; box-shadow:0 0 14px #fff9; }
   .template-card:focus-visible { outline:2px solid #fff; outline-offset:-5px; }
   .template-name { display:block; font-size:16px; line-height:1.3; font-weight:580; }
+  .template-avatar { display:block; width:48px; height:48px; margin:0 auto 10px; border-radius:50%; object-fit:cover; box-shadow:0 2px 14px #0005; }
   .template-description { min-height:20px; margin:14px 0 0; font-size:12px; line-height:1.5; color:#e3e8f1; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
   .gate { width:216px; height:216px; display:grid; place-items:center; transition:transform 1s, filter 1s; }
@@ -237,6 +238,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       data.templates.forEach(function (template) {
         var card = document.createElement('button');
         card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false');
+        if (template.avatarUrl) {
+          var avatar = document.createElement('img'); avatar.className = 'template-avatar'; avatar.alt = ''; avatar.width = 48; avatar.height = 48; avatar.decoding = 'async';
+          avatar.src = template.avatarUrl; avatar.addEventListener('error', function (event) { event.currentTarget.remove(); });
+          card.append(avatar);
+        }
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
         card.setAttribute('aria-label', template.name + '，' + template.description);
         card.append(name);
