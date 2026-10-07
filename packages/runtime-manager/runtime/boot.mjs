@@ -185,6 +185,7 @@ const cfg = vRelease ? createVReleaseConfig({
     },
   },
 };
+const configHash = createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {
   ensureCodexHome(state, agentId);
@@ -219,10 +220,14 @@ try {
     signal: AbortSignal.timeout(1000),
   });
   if (r.ok) {
-    if (
+    const changed =
       !fs.existsSync("/tmp/nexus-runtime-fingerprint") ||
-      fs.readFileSync("/tmp/nexus-runtime-fingerprint", "utf8") !== fingerprint
-    )
+      fs.readFileSync("/tmp/nexus-runtime-fingerprint", "utf8") !== fingerprint ||
+      (vRelease && (!fs.existsSync("/tmp/nexus-runtime-config-hash") || fs.readFileSync("/tmp/nexus-runtime-config-hash", "utf8") !== configHash));
+    // A v-release restarts its own Gateway (and with it the Worker pool) on a
+    // runtime or config change; reload is off, so nothing changed underneath it.
+    if (changed && vRelease) throw new Error("V_RELEASE_RESTART");
+    if (changed)
       throw new Error("RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED");
     console.log(
       JSON.stringify({
@@ -237,6 +242,15 @@ try {
 } catch (error) {
   if (error?.message === "RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED")
     throw error;
+  if (error?.message === "V_RELEASE_RESTART") {
+    for (const file of ["/tmp/nexus-memory-indexer.pid", "/tmp/nexus-gateway.pid"]) {
+      try { process.kill(Number(fs.readFileSync(file, "utf8")), "SIGTERM"); } catch {}
+    }
+    for (let i = 0; i < 120; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      try { await fetch("http://127.0.0.1:18790/healthz", { signal: AbortSignal.timeout(500) }); } catch { break; }
+    }
+  }
 }
 const log = fs.openSync("/tmp/nexus-gateway.log", "a");
 // V's runtime calls DeepSeek directly with V's own thinking settings.
@@ -250,6 +264,7 @@ if (!vRelease) {
   fs.writeFileSync("/tmp/nexus-model-proxy.pid", String(proxy.pid));
 }
 fs.writeFileSync("/tmp/nexus-runtime-fingerprint", fingerprint);
+fs.writeFileSync("/tmp/nexus-runtime-config-hash", configHash);
 const gatewayStart = Date.now();
 const startGateway = () => spawn(
   "node",

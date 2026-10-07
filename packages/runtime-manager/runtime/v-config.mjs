@@ -54,7 +54,9 @@ export function createVReleaseConfig(o) {
   const pluginIds = o.pluginIds ?? [];
   const embeddings = o.memoryEmbeddings !== false && has("GOOGLE_API_KEY");
   return {
-    gateway: { mode: "local", bind: "loopback", port: 18790, auth: { mode: "token", token: "${NEXUS_GATEWAY_TOKEN}" }, http: { endpoints: { responses: { enabled: true } } } },
+    // reload off: a config change must never hot-reload a Gateway that owns a Worker pool
+    // (V 2026-09-20: a hot reload closed the pool for good); boot restarts it instead.
+    gateway: { mode: "local", bind: "loopback", port: 18790, reload: { mode: "off" }, auth: { mode: "token", token: "${NEXUS_GATEWAY_TOKEN}" }, http: { endpoints: { responses: { enabled: true } } } },
     models: { mode: "merge", providers },
     agents: {
       defaults: {
