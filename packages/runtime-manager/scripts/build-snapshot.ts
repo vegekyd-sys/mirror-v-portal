@@ -116,6 +116,25 @@ try {
     });
     if (r.exitCode) throw new Error(`${label} failed with exit ${r.exitCode}`);
   };
+  // Long installs run detached and are polled: a single streamed command over
+  // several minutes can lose its log connection ("terminated", 2026-10-08).
+  const runLong = async (label: string, script: string, sudo = false) => {
+    console.log(JSON.stringify({ phase: label }));
+    const tag = `/tmp/nexus-build-${label}`;
+    const start = await sbx.runCommand({ cmd: "bash", args: ["-c", `rm -f ${tag}.done; nohup bash -c '(${script.replace(/'/g, "'\\''")}) > ${tag}.log 2>&1; echo $? > ${tag}.done' >/dev/null 2>&1 &`], sudo });
+    if (start.exitCode) throw new Error(`${label} failed to start`);
+    for (let i = 0; i < 180; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const probe = await sbx.runCommand({ cmd: "bash", args: ["-c", `cat ${tag}.done 2>/dev/null || true`], sudo });
+      const done = (await probe.stdout()).trim();
+      if (!done) continue;
+      const tail = await sbx.runCommand({ cmd: "bash", args: ["-c", `tail -5 ${tag}.log`], sudo });
+      console.log((await tail.stdout()).trim());
+      if (done !== "0") throw new Error(`${label} failed with exit ${done}`);
+      return;
+    }
+    throw new Error(`${label} timed out`);
+  };
   await run("directories", "mkdir", [
     "-p",
     "/vercel/sandbox/nexus/runtime",
@@ -151,7 +170,7 @@ try {
     }
     // V's memory, reflection and review scripts are Python.
     // ffmpeg: V's video Skills (auto-travel-vlog, Makaron video) cut and mux locally.
-    await run("v-release-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv ffmpeg"], true);
+    await runLong("v-release-python", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv ffmpeg && ffmpeg -version | head -1", true);
   }
   if (agentKit) {
     await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/agent-kit-runtime.json", content: Buffer.from(JSON.stringify(agentKit)) }]);
