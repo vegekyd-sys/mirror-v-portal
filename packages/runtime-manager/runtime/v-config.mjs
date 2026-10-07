@@ -91,12 +91,14 @@ export function createVReleaseConfig(o) {
     },
     plugins: {
       enabled: true,
-      allow: ["nexus-scheduler", "vlab-agent-worker-isolation", "memory-core", "deepseek", ...(has("XAI_API_KEY") ? ["xai"] : []), ...(o.codexCommand ? ["codex"] : []), "browser", "document-extract", "web-readability", "file-transfer", ...pluginIds],
+      // google serves the gemini memory embeddings; without it memory_search silently falls back to keywords.
+      allow: ["nexus-scheduler", "vlab-agent-worker-isolation", "memory-core", "deepseek", ...(embeddings ? ["google"] : []), ...(has("XAI_API_KEY") ? ["xai"] : []), ...(o.codexCommand ? ["codex"] : []), "browser", "document-extract", "web-readability", "file-transfer", ...pluginIds],
       load: { paths: [o.schedulerPath, o.workerPluginPath, ...(o.pluginPaths ?? [])] },
       entries: {
         "nexus-scheduler": { enabled: true },
         "memory-core": { enabled: true, config: { dreaming: { enabled: false } } },
         deepseek: { enabled: true },
+        ...(embeddings ? { google: { enabled: true } } : {}),
         ...(has("XAI_API_KEY") ? { xai: { enabled: true } } : {}),
         ...(o.codexCommand ? { codex: { enabled: true, config: { codexPlugins: { enabled: false }, codexDynamicToolsLoading: "searchable", appServer: { mode: "yolo", approvalPolicy: "never", sandbox: "danger-full-access", command: o.codexCommand } } } } : {}),
         ...Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),

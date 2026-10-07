@@ -62,6 +62,7 @@ test("backups skip reinstallable plugins and Codex logs but keep sessions and me
   expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/codex-home/config.toml")).toBe(false);
   expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/openclaw-agent.sqlite")).toBe(false);
   expect(isVReleaseBackupExcluded("workspace/memory/index.md")).toBe(false);
+  expect(isVReleaseBackupExcluded("state/cache/control-ui-assets/x/mermaid.js")).toBe(true);
 });
 
 test("codex home is written once with DeepSeek routing and no key value", () => {
@@ -88,6 +89,8 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(cfg.agents.defaults.models["deepseek/vds-deepseek-flash"].agentRuntime.id).toBe("codex");
   expect(cfg.plugins.entries["vlab-agent-worker-isolation"].config.workerConfigPath).toBe("/d/worker-openclaw.json");
   expect(cfg.memory.search.provider).toBe("gemini");
+  expect(cfg.plugins.allow).toContain("google");
+  expect(cfg.plugins.entries.google).toEqual({ enabled: true });
   expect(cfg.tools.deny).toEqual(["gateway", "cron"]);
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
   expect(bare.memory.search.provider).toBe("none");

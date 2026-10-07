@@ -61,7 +61,16 @@ if (!files.includes(manifest)) files.push(manifest);
 const list = root + "/nexus-backup-files",
   archive = process.env.NEXUS_BACKUP_ARCHIVE || "/tmp/nexus-state.tgz";
 fs.writeFileSync(list, files.join("\0") + "\0");
-execFileSync("tar", [
+// GNU tar exits 1 when a file changed while it was read (a Worker or the indexer
+// writing SQLite). That copy is still usable; the idle snapshot is the
+// consistent one. Any other failure stays fatal.
+const tar = (args) => {
+  try { execFileSync("tar", args, { stdio: ["ignore", "ignore", "pipe"] }); }
+  catch (error) {
+    if (!(vRelease && error.status === 1 && /file changed as we read it|changed as we read/.test(String(error.stderr)))) throw error;
+  }
+};
+tar([
   "-czf",
   archive,
   "--no-recursion",

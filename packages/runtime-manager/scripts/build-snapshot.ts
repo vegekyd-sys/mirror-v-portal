@@ -42,6 +42,8 @@ if (vReleaseArchive) {
   console.log(JSON.stringify({ phase: "v-release-selected", release: vReleaseCore.release, upstream: vReleaseCore.upstream }));
 }
 const openclawVersion = vReleaseCore?.upstream ?? TEMPLATE_OPENCLAW_VERSION;
+const convergeEnvKeys = [...new Set(["GOOGLE_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY", ...Object.keys(config.templates?.[templateId]?.runtimeEnv ?? {})])]
+  .filter((key) => /^[A-Z][A-Z0-9_]{0,63}$/.test(key) && !key.startsWith("NEXUS_") && !key.startsWith("OPENCLAW_"));
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
@@ -215,6 +217,9 @@ try {
       "set -euo pipefail",
       "cd /vercel/sandbox/nexus",
       "export NEXUS_GATEWAY_TOKEN=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') NEXUS_MODEL_KEY=converge NEXUS_MODEL_BASE_URL=https://api.deepseek.com NEXUS_MODEL_ID=deepseek-flash NEXUS_AGENT_ID=" + templateId + " NEXUS_OPTIMIZE=1",
+      // Same optional providers as real tenants (placeholder values), so the plugin
+      // inventory converges here and tenants do not repeat the install-and-restart.
+      ...convergeEnvKeys.map((key) => `export ${key}=converge`),
       "node boot.mjs",
       "node quiesce.mjs",
       "for f in /tmp/nexus-memory-indexer.pid /tmp/nexus-gateway.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",

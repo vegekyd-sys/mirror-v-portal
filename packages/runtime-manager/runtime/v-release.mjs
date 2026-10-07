@@ -22,6 +22,7 @@ export const V_RELEASE_BACKUP_EXCLUDES = Object.freeze([
   /^state\/npm(?:\/|$)/,
   /^state\/agents\/[^/]+\/agent\/codex-home\/(?:cache|log|logs_\d+\.sqlite[^/]*|models_cache\.json|shell_snapshots|tmp)(?:\/|$)/,
   /^state\/logs(?:\/|$)/,
+  /^state\/cache(?:\/|$)/,
 ]);
 
 export function readVRelease(file = V_RELEASE_MARKER) {
