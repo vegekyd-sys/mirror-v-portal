@@ -91,7 +91,7 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(cfg.memory.search.provider).toBe("gemini");
   expect(cfg.plugins.allow).toContain("google");
   expect(cfg.plugins.entries.google).toEqual({ enabled: true });
-  expect(cfg.tools.deny).toEqual(["gateway", "cron"]);
+  expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user"]);
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
   expect(bare.memory.search.provider).toBe("none");
   expect(bare.agents.defaults.models["deepseek/vds-deepseek-flash"]).toBeUndefined();

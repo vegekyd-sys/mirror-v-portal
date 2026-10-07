@@ -83,8 +83,9 @@ export function createVReleaseConfig(o) {
       profile: "full",
       alsoAllow: ["nexus_schedule"],
       // Config writes restart the Gateway and would kill the Worker pool; cron is
-      // replaced by nexus_schedule because a sleeping sandbox runs no timers.
-      deny: ["gateway", "cron"],
+      // replaced by nexus_schedule because a sleeping sandbox runs no timers;
+      // ask_user waits for a UI answer the channel edge cannot give (the turn hangs).
+      deny: ["gateway", "cron", "ask_user"],
       sessions: { visibility: "all" },
       web: { search: pluginIds.includes("parallel") ? { enabled: true, provider: "parallel-free" } : { enabled: true } },
       elevated: { enabled: false },
