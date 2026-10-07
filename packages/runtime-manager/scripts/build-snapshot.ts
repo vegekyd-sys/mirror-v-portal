@@ -169,8 +169,9 @@ try {
       await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);
     }
     // V's memory, reflection and review scripts are Python.
-    // ffmpeg: V's video Skills (auto-travel-vlog, Makaron video) cut and mux locally.
-    await runLong("v-release-python", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv ffmpeg && ffmpeg -version | head -1", true);
+    await runLong("v-release-python", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv", true);
+    // ffmpeg/ffprobe for V's video Skills: static npm builds (distro ffmpeg took >15 min to install).
+    await run("v-release-media-packages", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/runtime", "--omit=dev", "--no-audit", "--no-fund", ...MEDIA_BINARY_PACKAGES]);
   }
   if (agentKit) {
     await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/agent-kit-runtime.json", content: Buffer.from(JSON.stringify(agentKit)) }]);
@@ -229,6 +230,7 @@ try {
     "--version",
   ]);
   if (vReleaseArchive) {
+    await run("v-release-media-binaries", "node", ["/vercel/sandbox/nexus/media-binaries.mjs", "/vercel/sandbox/nexus/runtime"]);
     await run("v-release-install", "node", ["/vercel/sandbox/nexus/v-release-install.mjs", "/vercel/sandbox/nexus/runtime", V_RELEASE_CODEX_COMMAND]);
     // First start installs the external plugins 2026.9.1 needs (deepseek, codex) into
     // the state dir and fills the compile cache; tenants then boot without it.

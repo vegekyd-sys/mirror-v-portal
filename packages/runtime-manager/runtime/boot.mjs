@@ -81,7 +81,7 @@ const toolsBin = `${base}/tools/bin`;
 const env = {
   ...process.env,
   // Template CLIs installed by the snapshot builder (e.g. xingqing-cli).
-  PATH: [profile?.runtime.mediaBinaries ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"),
+  PATH: [profile?.runtime.mediaBinaries || vRelease ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"),
   // A customer who binds by chat logs in through xingqing-cli, which caches only
   // a session token. Keep it in agent-data so backups carry it across sleeps.
   ...(agentId === "xingqing" ? { XINGQING_CONFIG_DIR: `${data}/xingqing` } : {}),
