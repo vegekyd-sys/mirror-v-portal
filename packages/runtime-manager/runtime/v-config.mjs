@@ -40,7 +40,8 @@ export function createVReleaseConfig(o) {
     "deepseek/deepseek-flash": { alias: "deepseek", agentRuntime: { id: "vlab-worker" }, params: { thinking: "high" } },
     "deepseek/deepseek-v4-pro": { alias: "ds-pro", agentRuntime: { id: "vlab-worker" } },
     ...(o.codexCommand ? { "deepseek/vds-deepseek-flash": { alias: "vds", agentRuntime: { id: "codex" }, params: { thinking: "high", codexAppServerRuntimeModel: "deepseek-flash" } } } : {}),
-    ...(has("XAI_API_KEY") ? { "xai/grok-4.7": { alias: "Grok", agentRuntime: { id: "vlab-worker" } } } : {}),
+    // Grok is not offered as a chat model: through 2026.9.1's /v1/responses its
+    // reasoning text streams as visible output (seen 2026-10-08). xAI stays for images.
   };
   const providers = {
     deepseek: {
@@ -61,7 +62,7 @@ export function createVReleaseConfig(o) {
     agents: {
       defaults: {
         workspace: o.workspace,
-        model: { primary: "deepseek/deepseek-flash", ...(has("XAI_API_KEY") ? { fallbacks: ["xai/grok-4.7"] } : {}) },
+        model: { primary: "deepseek/deepseek-flash" },
         models: harnessModels,
         modelPolicy: { allow: Object.keys(harnessModels) },
         ...(has("XAI_API_KEY") ? { imageModel: { primary: "xai/grok-4.7" } } : {}),

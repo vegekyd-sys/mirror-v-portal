@@ -208,7 +208,8 @@ function indexMemory() {
 function startMemoryIndexer() {
   if (!vRelease || !fs.existsSync(`${V_RELEASE_ROOT}/v-memory-indexer.mjs`)) return;
   const indexer = spawn("node", [`${V_RELEASE_ROOT}/v-memory-indexer.mjs`, agentId], {
-    env: { ...env, OPENCLAW_DIST: `${base}/runtime/node_modules/openclaw/dist` },
+    // One owner, a small memory: index 5 s after the last write instead of V's 15 s.
+    env: { ...env, OPENCLAW_DIST: `${base}/runtime/node_modules/openclaw/dist`, QUIET_SECONDS: "5" },
     detached: true, stdio: ["ignore", fs.openSync("/tmp/nexus-memory-indexer.log", "a"), fs.openSync("/tmp/nexus-memory-indexer.log", "a")],
   });
   indexer.unref();

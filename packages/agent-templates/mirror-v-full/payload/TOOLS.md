@@ -13,7 +13,6 @@
 | 默认 / `/model deepseek` | DeepSeek V4 Flash（thinking high） | V 的 Worker 池（子进程执行，Gateway 不被卡住） |
 | `/model ds-pro` | DeepSeek V4 Pro | Worker 池 |
 | `/model vds` | DeepSeek Flash | Codex harness（编程任务更稳，逐字流式） |
-| `/model Grok` | xAI Grok 4.7（如果已配置） | Worker 池 |
 | `/model default` | 回到默认 | |
 
 注意：同一会话从 `vds`（Codex）切回别的模型是可以的；Codex 线程里带着 DeepSeek 的推理记录，不要在同一线程里切到 OpenAI 模型。
@@ -27,7 +26,7 @@
 ## 记忆检索
 
 - `memory_search`：语义 + 全文混合检索 `memory/` 下的所有页面。找不到时再用 `grep -rn --include='*.md'` 精确查。
-- 新写的记忆文件几秒内会被实时索引进程收录。
+- 新写的记忆文件大约 5–10 秒后被实时索引进程收录（它等写入停下来再同步）。刚写完马上要查，直接读文件，不要因为 memory_search 暂时搜不到就以为索引坏了。
 
 ## 创作（Makaron）
 

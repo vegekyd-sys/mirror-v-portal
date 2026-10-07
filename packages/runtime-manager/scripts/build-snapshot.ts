@@ -150,7 +150,8 @@ try {
       await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);
     }
     // V's memory, reflection and review scripts are Python.
-    await run("v-release-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv"], true);
+    // ffmpeg: V's video Skills (auto-travel-vlog, Makaron video) cut and mux locally.
+    await run("v-release-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv ffmpeg"], true);
   }
   if (agentKit) {
     await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/agent-kit-runtime.json", content: Buffer.from(JSON.stringify(agentKit)) }]);

@@ -1,6 +1,6 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v2",
+ "version": "mirror-v-full.v3",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
  "files": [
