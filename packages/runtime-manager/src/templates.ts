@@ -15,6 +15,7 @@ const LABELS: Record<string, { name: string; description: string }> = {
   "mirror-v": { name: "Mirror V", description: "与你一起思考、整理和行动的通用 Agent" },
   xingqing: { name: "星擎助手", description: "查询企业在星擎的账号、作品、播放与线索数据" },
   makaron: { name: "Makaron", description: "与你一起创作图片、视频、音乐和动态设计" },
+  "mirror-v-full": { name: "Mirror V", description: "全功能的 V：多 Worker、记忆与自我进化，从零开始认识你" },
 };
 
 /**

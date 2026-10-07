@@ -28,6 +28,8 @@ export interface TemplateRecord {
   runtimeEnv?: Record<string, string>;
   /** Sandbox size for this template's tenants; defaults to 2 vCPUs. */
   resources?: { vcpus: number };
+  /** Idle seconds before this template's new tenants sleep (15..1800); defaults to the global value. */
+  idleTimeoutSeconds?: number;
 }
 
 export interface Config {

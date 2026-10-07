@@ -58,6 +58,12 @@ export interface Run {
   created_at: Date;
   completed_at: Date | null;
 }
+/** A template may keep its VMs awake longer than the default (V's Worker pool is costly to cold-start). */
+export function templateIdleSeconds(config: Config, templateId: string): number {
+  const value = config.templates?.[templateId]?.idleTimeoutSeconds;
+  return Number.isInteger(value) && value! >= 15 && value! <= 1800 ? value! : config.idleTimeoutSeconds;
+}
+
 export class Store {
   readonly pool: pg.Pool;
   readonly boss: PgBoss;
@@ -331,7 +337,7 @@ export class Store {
         name,
         appId || null,
         appSecret ? this.seal(appSecret) : null,
-        this.config.idleTimeoutSeconds,
+        templateIdleSeconds(this.config, template.id),
         runtimeProvider,
         template.id,
         template.version,

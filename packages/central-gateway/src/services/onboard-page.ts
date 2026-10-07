@@ -225,7 +225,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   async function loadTemplates() {
     try {
       var requested = new URLSearchParams(location.search).get('template');
-      var response = await fetch('/onboard/templates');
+      var response = await fetch('/onboard/templates' + (requested ? '?template=' + encodeURIComponent(requested) : ''));
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
       if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');

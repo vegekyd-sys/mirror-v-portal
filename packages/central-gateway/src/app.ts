@@ -136,8 +136,10 @@ export function createApp() {
     res.json({ ok: true, service: 'central-gateway' });
   });
 
-  app.get('/onboard/templates', async (_req, res) => {
-    try { res.json({ templates: (await loadSignupTemplates(config)).filter((template) => template.listed !== false) }); }
+  app.get('/onboard/templates', async (req, res) => {
+    // An unlisted template stays out of the catalog but is offered to an explicit link (acceptance, invitations).
+    const requested = typeof req.query.template === 'string' ? req.query.template : undefined;
+    try { res.json({ templates: (await loadSignupTemplates(config)).filter((template) => template.listed !== false || template.id === requested) }); }
     catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
   });
 

@@ -81,5 +81,6 @@ export function templateRecord(
     // Private operator settings survive rebuilds: template keys and sandbox size.
     ...(previous?.runtimeEnv ? { runtimeEnv: previous.runtimeEnv } : {}),
     ...(previous?.resources ? { resources: previous.resources } : {}),
+    ...(previous?.idleTimeoutSeconds ? { idleTimeoutSeconds: previous.idleTimeoutSeconds } : {}),
   };
 }
