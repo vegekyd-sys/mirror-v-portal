@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { readAgentKitProfile, seedWorkspace, createOpenClawConfig, assertAgentKitNode, agentKitFingerprint } from "./agent-config.mjs";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
+import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
+import { createVReleaseConfig } from "./v-config.mjs";
 
 const bootStart = Date.now();
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
@@ -15,7 +17,11 @@ if (profile) {
   assertAgentKitNode();
   for (const key of profile.runtime.envKeys) if (!process.env[key]) throw Error(`RUNTIME_ENV_KEY_MISSING:${key}`);
 }
-const memoryAgent = ["mirror-v", "xingqing"].includes(agentId);
+// A v-release snapshot runs V's patched build (Worker pool, memory system, harnesses).
+const vRelease = readVRelease();
+if (vRelease && profile) throw Error("V_RELEASE_AGENT_KIT_UNSUPPORTED");
+if (vRelease && !/api\.deepseek\.com/.test(process.env.NEXUS_MODEL_BASE_URL ?? "")) throw Error("V_RELEASE_REQUIRES_DEEPSEEK_MODEL");
+const memoryAgent = !!vRelease || ["mirror-v", "xingqing"].includes(agentId);
 const fingerprint = createHash("sha256")
   .update(
     [
@@ -26,6 +32,7 @@ const fingerprint = createHash("sha256")
       // Preserve the existing DealClaw fingerprint for already-running VMs.
       ...(agentId === "dealclaw" ? [] : [agentId]),
       "runtime-v4-scheduler",
+      ...(vRelease ? [`v-release:${vRelease.release}`] : []),
       ...agentKitFingerprint(profile),
     ].join("\0"),
   )
@@ -56,6 +63,8 @@ const env = {
   OPENCLAW_CONFIG_PATH: `${data}/openclaw.json`,
   OPENCLAW_WORKSPACE_DIR: workspace,
   OPENCLAW_SKIP_CHANNELS: "1",
+  // The codex harness reads DeepSeek's key under its own name (codex-home config.toml).
+  ...(vRelease ? { DEEPSEEK_API_KEY: process.env.NEXUS_MODEL_KEY } : {}),
   ...(process.env.NEXUS_OPTIMIZE === "1"
     ? {
         NODE_COMPILE_CACHE: `${base}/compile-cache`,
@@ -79,7 +88,12 @@ fs.writeFileSync(
     configSchema: { type: "object", additionalProperties: false },
   }),
 );
-const cfg = profile ? createOpenClawConfig({
+const cfg = vRelease ? createVReleaseConfig({
+  agentId, workspace, dataDir: data, schedulerPath: pluginDir, env: process.env,
+  workerPluginPath: `${V_RELEASE_ROOT}/worker/dist`, workers: vRelease.workers,
+  pluginPaths: (vRelease.plugins ?? []).map((plugin) => `${base}/${plugin.path}`), pluginIds: (vRelease.plugins ?? []).map((plugin) => plugin.id),
+  codexCommand: vRelease.codexCommand ? `${base}/${vRelease.codexCommand}` : undefined,
+}) : profile ? createOpenClawConfig({
   runtime: profile.runtime, workspace, payloadRoot: `${base}/payload`, schedulerPath: pluginDir, modelId: process.env.NEXUS_MODEL_ID,
 }) : {
   gateway: {
@@ -146,6 +160,10 @@ const cfg = profile ? createOpenClawConfig({
   },
 };
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
+if (vRelease) {
+  ensureCodexHome(state, agentId);
+  applyCodexCapture(state);
+}
 function indexMemory() {
   if (!memoryAgent) return;
   try {
@@ -154,8 +172,20 @@ function indexMemory() {
       "memory", "index", "--agent", agentId,
     ], { env, timeout: 90_000, stdio: "pipe" });
   } catch {
+    // A v-release keeps indexing in its own daemon; a slow first embedding pass must not fail the turn.
+    if (vRelease) return;
     throw new Error(agentId === "mirror-v" ? "MIRROR_V_MEMORY_INDEX_FAILED" : "MEMORY_INDEX_FAILED");
   }
+}
+// V's real-time memory indexer: watches memory/ and syncs outside the Gateway event loop.
+function startMemoryIndexer() {
+  if (!vRelease || !fs.existsSync(`${V_RELEASE_ROOT}/v-memory-indexer.mjs`)) return;
+  const indexer = spawn("node", [`${V_RELEASE_ROOT}/v-memory-indexer.mjs`, agentId], {
+    env: { ...env, OPENCLAW_DIST: `${base}/runtime/node_modules/openclaw/dist` },
+    detached: true, stdio: ["ignore", fs.openSync("/tmp/nexus-memory-indexer.log", "a"), fs.openSync("/tmp/nexus-memory-indexer.log", "a")],
+  });
+  indexer.unref();
+  fs.writeFileSync("/tmp/nexus-memory-indexer.pid", String(indexer.pid));
 }
 // A repeated ensure call must reuse the healthy process within this VM boot.
 try {
@@ -183,16 +213,19 @@ try {
     throw error;
 }
 const log = fs.openSync("/tmp/nexus-gateway.log", "a");
-const proxy = spawn("node", [`${base}/model-proxy.mjs`], {
-  env,
-  detached: true,
-  stdio: ["ignore", log, log],
-});
-proxy.unref();
-fs.writeFileSync("/tmp/nexus-model-proxy.pid", String(proxy.pid));
+// V's runtime calls DeepSeek directly with V's own thinking settings.
+if (!vRelease) {
+  const proxy = spawn("node", [`${base}/model-proxy.mjs`], {
+    env,
+    detached: true,
+    stdio: ["ignore", log, log],
+  });
+  proxy.unref();
+  fs.writeFileSync("/tmp/nexus-model-proxy.pid", String(proxy.pid));
+}
 fs.writeFileSync("/tmp/nexus-runtime-fingerprint", fingerprint);
 const gatewayStart = Date.now();
-const child = spawn(
+const startGateway = () => spawn(
   "node",
   [
     ...(process.env.NEXUS_CPU_PROFILE === "1"
@@ -209,9 +242,24 @@ const child = spawn(
   ],
   { env, detached: true, stdio: ["ignore", log, log] },
 );
+let child = startGateway();
+let exited = false;
+child.on("exit", () => { exited = true; });
 child.unref();
 fs.writeFileSync("/tmp/nexus-gateway.pid", String(child.pid));
-for (let i = 0; i < 180; i++) {
+let convergeRestarts = 0;
+for (let i = 0; i < 360; i++) {
+  // 2026.9.1 installs missing external plugins (deepseek, codex) on first start,
+  // then exits asking for a restart so state migrations see the final inventory.
+  if (exited && vRelease && convergeRestarts < 2 && /Restart OpenClaw so state migrations run/.test(fs.readFileSync("/tmp/nexus-gateway.log", "utf8").slice(-20000))) {
+    convergeRestarts++;
+    applyCodexCapture(state);
+    exited = false;
+    child = startGateway();
+    child.on("exit", () => { exited = true; });
+    child.unref();
+    fs.writeFileSync("/tmp/nexus-gateway.pid", String(child.pid));
+  }
   await new Promise((r) => setTimeout(r, 500));
   try {
     const r = await fetch("http://127.0.0.1:18790/healthz", {
@@ -219,6 +267,7 @@ for (let i = 0; i < 180; i++) {
     });
     if (r.ok) {
       indexMemory();
+      startMemoryIndexer();
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(
         "/tmp/nexus-baseline-pids",
@@ -229,6 +278,7 @@ for (let i = 0; i < 180; i++) {
           marker: "NEXUS_RUNTIME_READY",
           processReused: false,
           openclawBootMs: Date.now() - gatewayStart,
+          ...(vRelease ? { vRelease: vRelease.release, convergeRestarts } : {}),
           bootScriptMs: Date.now() - bootStart,
         }),
       );

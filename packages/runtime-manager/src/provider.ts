@@ -1,3 +1,4 @@
+import type { TemplateRecord } from "./config.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHmac, createHash } from "node:crypto";
@@ -99,6 +100,23 @@ export interface RuntimeSandbox {
   stop(options?: { signal?: AbortSignal }): Promise<{ status: string; snapshot?: { id: string } }>;
 }
 
+/** 2 vCPUs unless the template asks for more (V's Worker pool wants 4). */
+export function templateVcpus(template?: TemplateRecord): number {
+  const vcpus = template?.resources?.vcpus;
+  return Number.isInteger(vcpus) && vcpus! >= 1 && vcpus! <= 8 ? vcpus! : 2;
+}
+
+/** Template-wide keys may never override NEXUS_* / OPENCLAW_* runtime variables. */
+export function templateRuntimeEnv(template?: TemplateRecord): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(template?.runtimeEnv ?? {})) {
+    if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(key) || key.startsWith("NEXUS_") || key.startsWith("OPENCLAW_")) throw Error("TEMPLATE_RUNTIME_ENV_INVALID");
+    if (typeof value !== "string" || !value || /[\r\n\0]/.test(value)) throw Error("TEMPLATE_RUNTIME_ENV_INVALID");
+    env[key] = value;
+  }
+  return env;
+}
+
 export class VercelProvider implements RuntimeProvider {
   protected handles = new Map<string, RuntimeSandbox>();
   constructor(readonly config: Config) {}
@@ -146,7 +164,7 @@ export class VercelProvider implements RuntimeProvider {
       source: { type: "snapshot", snapshotId },
       persistent: true, snapshotExpiration: 0,
       keepLastSnapshots: { count: 2, expiration: 0 },
-      resources: { vcpus: 2 }, timeout: 1_200_000,
+      resources: { vcpus: templateVcpus(this.config.templates?.[tenant.template_id]) }, timeout: 1_200_000,
       tags: { purpose: "nexus-trial", tenant: tenant.id },
     });
   }
@@ -181,6 +199,8 @@ export class VercelProvider implements RuntimeProvider {
         "progress-patch.mjs",
         "scheduler-plugin.mjs",
         "agent-config.mjs",
+        "v-release.mjs",
+        "v-config.mjs",
       ].map((file) => ({
         path: `/vercel/sandbox/nexus/${file}`,
         content: fs.readFileSync(
@@ -207,7 +227,8 @@ export class VercelProvider implements RuntimeProvider {
       cmd: "node",
       args: ["/vercel/sandbox/nexus/boot.mjs"],
       env: {
-        // Operator-bound tenant secrets first, so they can never shadow runtime variables.
+        // Template-wide service keys, then operator-bound tenant secrets; neither can shadow runtime variables.
+        ...templateRuntimeEnv(this.config.templates?.[tenant.template_id]),
         ...tenant.runtime_env,
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
         NEXUS_MODEL_KEY: model.apiKey,

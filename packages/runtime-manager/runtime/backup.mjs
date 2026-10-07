@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readAgentKitProfile, payloadWorkspace } from "./agent-config.mjs";
 import { execFileSync } from "node:child_process";
+import { readVRelease, isVReleaseBackupExcluded } from "./v-release.mjs";
 const root = process.env.NEXUS_BACKUP_ROOT || "/vercel/sandbox",
   data = root + "/agent-data",
   workspace = data + "/workspace";
@@ -20,8 +21,11 @@ function entries(dir, prefix = "") {
   }
   return out;
 }
+const vRelease = readVRelease(root + "/nexus/v-release.json");
 const files = [];
 for (const item of entries(data)) {
+  // Plugin installs come back with the snapshot; Codex logs and caches are disposable.
+  if (vRelease && isVReleaseBackupExcluded(item.rel)) continue;
   if (item.rel === "workspace" || item.rel.startsWith("workspace/")) {
     const rel = item.rel.slice("workspace/".length),
       original = path.join(base, rel);

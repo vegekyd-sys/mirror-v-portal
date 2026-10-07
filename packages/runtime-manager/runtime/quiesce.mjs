@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { readVRelease, isVReleaseDaemon } from "./v-release.mjs";
+const vRelease = readVRelease();
 
 // Reject unknown live processes before stopping a VM. Kernel and Vercel supervisor
 // processes present at boot are ignored; user-started background work pins the VM.
@@ -26,7 +28,9 @@ const extras = now.filter((line) => {
     !command.startsWith("ps ") &&
     !command.includes("[defunct]") &&
     !command.includes("sshd:") &&
-    !command.includes("envd")
+    !command.includes("envd") &&
+    // V's own daemons (Worker pool, memory indexer, Codex app-server) idle with the Gateway.
+    !(vRelease && isVReleaseDaemon(command))
   );
 });
 if (extras.length) {
@@ -38,6 +42,10 @@ if (extras.length) {
     }),
   );
   process.exit(2);
+}
+// Stop the indexer first so its last sync commits before the filesystem snapshot.
+if (vRelease && fs.existsSync("/tmp/nexus-memory-indexer.pid")) {
+  try { process.kill(Number(fs.readFileSync("/tmp/nexus-memory-indexer.pid", "utf8")), "SIGTERM"); } catch {}
 }
 const pid = Number(fs.readFileSync("/tmp/nexus-gateway.pid", "utf8"));
 try {

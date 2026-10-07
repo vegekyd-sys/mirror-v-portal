@@ -65,7 +65,7 @@ export function resolveTemplatePayload(root: string, templateId: string): Templa
  */
 export function templateRecord(
   previous: TemplateRecord | undefined,
-  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string>; agentKit?: TemplateRecord["agentKit"] },
+  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string>; agentKit?: TemplateRecord["agentKit"]; runtime?: Record<string, string> },
 ): TemplateRecord {
   return {
     ...(previous?.name ? { name: previous.name } : {}),
@@ -77,6 +77,9 @@ export function templateRecord(
     listed: previous ? previous.listed !== false : false,
     builtAt: build.builtAt.toISOString(),
     expiresAt: new Date(build.builtAt.getTime() + TEMPLATE_SNAPSHOT_TTL_MS).toISOString(),
-    runtime: { openclaw: TEMPLATE_OPENCLAW_VERSION, ...build.tools },
+    runtime: { ...(build.runtime ?? { openclaw: TEMPLATE_OPENCLAW_VERSION }), ...build.tools },
+    // Private operator settings survive rebuilds: template keys and sandbox size.
+    ...(previous?.runtimeEnv ? { runtimeEnv: previous.runtimeEnv } : {}),
+    ...(previous?.resources ? { resources: previous.resources } : {}),
   };
 }

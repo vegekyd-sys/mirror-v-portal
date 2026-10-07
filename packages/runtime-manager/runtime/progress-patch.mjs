@@ -126,11 +126,15 @@ const legacyBlock = `
         }`;
 const state = '\tlet finalUsage;\n\tlet finalizeStatus = null;';
 const final = '\t\tconst usage = finalUsage;\n\t\tclosed = true;';
+// 2026.9.1 computes the final text between reading usage and closing the stream.
+const final91 = '\t\t\tconst usage = finalUsage;\n\t\t\tconst finalText = accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;\n\t\t\tclosed = true;';
+const finalEmit = '\t\t// nexus-final-media-emit-v1\n\t\tnexusFinalMedia.emit(finalizeRequested.status);\n';
+export const SUPPORTED_PROGRESS_VERSIONS = Object.freeze(['2026.7.1', '2026.9.1']);
 const result = '\t\t\tconst resultAny = result;\n\t\t\tconst resultPayloadText = ';
 function once(source, anchor, code) {
   if (source.split(anchor).length !== 2) throw Error(code);
 }
-function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, recover) {
+function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, recover, finalAnchor = final) {
   const progress = `${guard}
         // nexus-public-progress-${progressVersion}
         nexusFinalMedia.observe(evt);
@@ -149,7 +153,9 @@ function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, rec
           if (text) writeSseEvent(res, { type: "nexus.public_snapshot", text });
         }`;
   const mediaState = `\tlet finalUsage;\n\t// nexus-final-media-state-${stateVersion}\n${bridgeSource}\n\tconst nexusFinalMedia = createFinalMediaBridge(responseId, event => writeSseEvent(res, event));\n\tlet finalizeStatus = null;`;
-  const mediaFinal = '\t\tconst usage = finalUsage;\n\t\t// nexus-final-media-emit-v1\n\t\tnexusFinalMedia.emit(finalizeRequested.status);\n\t\tclosed = true;';
+  const closeAt = finalAnchor.lastIndexOf('closed = true;');
+  const indent = finalAnchor.slice(finalAnchor.lastIndexOf('\n', closeAt) + 1, closeAt);
+  const mediaFinal = finalAnchor.slice(0, closeAt - indent.length) + finalEmit.replaceAll('\t\t', indent) + finalAnchor.slice(closeAt - indent.length);
   const resolution = recover ? `\t\t\tconst nexusRecovered = nexusFinalMedia.complete(resultAny.payloads, resultAny.meta);
 \t\t\tif (nexusRecovered && finalizeRequested?.status === "failed") {
 \t\t\t\tfinalizeStatus = "completed";
@@ -159,8 +165,9 @@ function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, rec
   return [progress,mediaState,mediaFinal,mediaResult];
 }
 export function patchProgress(source) {
-  const anchors = [guard,state,final,result];
-  const current = blocks(createFinalMediaBridge.toString(),'v3','v2','v2',true);
+  const finalAnchor = source.includes(final91) || source.includes(blocks(createFinalMediaBridge.toString(),'v3','v2','v2',true,final91)[2]) ? final91 : final;
+  const anchors = [guard,state,finalAnchor,result];
+  const current = blocks(createFinalMediaBridge.toString(),'v3','v2','v2',true,finalAnchor);
   if (source.includes('// nexus-public-progress-v3')) {
     for (const block of current) once(source,block,'UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
     return source;
@@ -181,7 +188,7 @@ export function patchProgress(source) {
 }
 export function installProgress(root) {
   const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-  if(pkg.version !== '2026.7.1') throw Error('UNSUPPORTED_OPENCLAW_PROGRESS_VERSION');
+  if(!SUPPORTED_PROGRESS_VERSIONS.includes(pkg.version)) throw Error('UNSUPPORTED_OPENCLAW_PROGRESS_VERSION');
   const files=fs.readdirSync(path.join(root,'dist')).filter(x=>/^openresponses-http-.*\.js$/.test(x));
   if(files.length!==1) throw Error('AMBIGUOUS_OPENRESPONSES_BUNDLE');
   const file=path.join(root,'dist',files[0]);

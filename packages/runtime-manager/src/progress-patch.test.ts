@@ -131,7 +131,7 @@ test('installer checks pinned version and upgrades its only bundle atomically; u
   fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'2026.7.1'}));fs.writeFileSync(file,fixture.replace(guard,guard+legacy));
   installProgress(root);const installed=fs.readFileSync(file,'utf8');expect(installed).toContain('nexus-public-progress-v3');installProgress(root);expect(fs.readFileSync(file,'utf8')).toBe(installed);
   fs.writeFileSync(file,'unsupported');expect(()=>installProgress(root)).toThrow();expect(fs.readFileSync(file,'utf8')).toBe('unsupported');
-  fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'2026.9.1'}));expect(()=>installProgress(root)).toThrow('UNSUPPORTED_OPENCLAW_PROGRESS_VERSION');
+  fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'2026.9.2'}));expect(()=>installProgress(root)).toThrow('UNSUPPORTED_OPENCLAW_PROGRESS_VERSION');
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
@@ -187,4 +187,19 @@ test('known deployed v2 upgrades to v3 exactly and malformed v2 remains fail-clo
  const old=deployedV2(fixture),patched=patchProgress(old);
  expect(patched).toBe(patchProgress(fixture));expect(patchProgress(patched)).toBe(patched);
  expect(()=>patchProgress(old.replace('failed = true; assistantRefs.clear();','failed = false; assistantRefs.clear();'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
+});
+
+test('2026.9.1 bundle: final text is computed between usage and close; patch is idempotent and emits media before closing', () => {
+  const source = [
+    '\tlet finalUsage;\n\tlet finalizeStatus = null;\n\tlet finalizeRequested = null;',
+    '\t\t\tconst usage = finalUsage;\n\t\t\tconst finalText = accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;\n\t\t\tclosed = true;',
+    '\tunsubscribe = onAgentEventForRun(responseId, (evt) => {\n\t\tif (evt.runId !== responseId) return;\n\t\tif (closed) return;\n\t});',
+    '\t\t\tconst resultAny = result;\n\t\t\tconst resultPayloadText = resolveResponsePayloadText(result);',
+  ].join('\n');
+  const patched = patchProgress(source);
+  expect(patched).toContain('// nexus-public-progress-v3');
+  expect(patchProgress(patched)).toBe(patched);
+  const emit = patched.indexOf('\t\t\tnexusFinalMedia.emit(finalizeRequested.status);');
+  expect(emit).toBeGreaterThan(patched.indexOf('const finalText = accumulatedText'));
+  expect(emit).toBeLessThan(patched.indexOf('\t\t\tclosed = true;'));
 });

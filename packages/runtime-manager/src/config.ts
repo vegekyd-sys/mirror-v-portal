@@ -21,6 +21,13 @@ export interface TemplateRecord {
   modelVersion?: string;
   /** Exact payload versions explicitly approved to share this private planner profile. */
   modelVersions?: string[];
+  /**
+   * Private template-wide service keys (e.g. GOOGLE_API_KEY for memory embeddings),
+   * injected into the boot environment only. Never copied into a payload or snapshot.
+   */
+  runtimeEnv?: Record<string, string>;
+  /** Sandbox size for this template's tenants; defaults to 2 vCPUs. */
+  resources?: { vcpus: number };
 }
 
 export interface Config {

@@ -21,6 +21,21 @@ const agentKit = profileFilename ? createAgentKitProfile(path.resolve(privatePay
 const template: TemplatePayload | undefined = templateId === "legacy" || agentKit ? undefined : resolveTemplatePayload(root, templateId);
 if (privatePayloadArchive && !agentKit && templateId !== "mirror-v") throw new Error("PRIVATE_PAYLOAD_TEMPLATE_UNSUPPORTED");
 if (payloadArchiveArg >= 0 && !privatePayloadArchive) throw new Error("PAYLOAD_ARCHIVE_REQUIRED");
+// V's own patched runtime (platform repo release capture + Worker plugin + codex drift),
+// packaged as a tgz with core/, worker/, codex/ and v-memory-indexer.mjs at its root.
+const vReleaseArg = process.argv.indexOf("--v-release");
+const vReleaseArchive = vReleaseArg >= 0 ? path.resolve(process.argv[vReleaseArg + 1] ?? "") : undefined;
+const V_RELEASE_CODEX_VERSION = "0.159.2";
+const V_RELEASE_CODEX_COMMAND = "codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex";
+let vReleaseCore: { release: string; upstream: string } | undefined;
+if (vReleaseArchive) {
+  if (!fs.existsSync(vReleaseArchive)) throw Error("V_RELEASE_ARCHIVE_MISSING");
+  if (!template || agentKit || privatePayloadArchive) throw Error("V_RELEASE_TEMPLATE_UNSUPPORTED");
+  vReleaseCore = JSON.parse(execFileSync("tar", ["-xzOf", vReleaseArchive, "./core/manifest.json"], { encoding: "utf8" }));
+  if (!vReleaseCore?.release || !/^\d{4}\.\d+\.\d+$/.test(vReleaseCore.upstream)) throw Error("V_RELEASE_ARCHIVE_INVALID");
+  console.log(JSON.stringify({ phase: "v-release-selected", release: vReleaseCore.release, upstream: vReleaseCore.upstream }));
+}
+const openclawVersion = vReleaseCore?.upstream ?? TEMPLATE_OPENCLAW_VERSION;
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
@@ -115,8 +130,15 @@ try {
     "--omit=dev",
     "--no-audit",
     "--no-fund",
-    `openclaw@${TEMPLATE_OPENCLAW_VERSION}`,
+    `openclaw@${openclawVersion}`,
   ]);
+  if (vReleaseArchive) {
+    await sbx.writeFiles([{ path: "/vercel/sandbox/v-release.tgz", content: fs.readFileSync(vReleaseArchive) }]);
+    await run("v-release-unpack", "bash", ["-c", "mkdir -p /vercel/sandbox/nexus/v && tar -xzf /vercel/sandbox/v-release.tgz -C /vercel/sandbox/nexus/v && rm /vercel/sandbox/v-release.tgz"]);
+    await run("v-release-codex", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/codex", "--omit=dev", "--no-audit", "--no-fund", `@openai/codex@${V_RELEASE_CODEX_VERSION}`]);
+    // V's memory, reflection and review scripts are Python.
+    await run("v-release-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv"], true);
+  }
   if (agentKit) {
     await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/agent-kit-runtime.json", content: Buffer.from(JSON.stringify(agentKit)) }]);
     await run("verify-node", "node", ["-e", 'const [a,b]=process.versions.node.split(".").map(Number); if (!(a>24 || a===24 && b>=19)) throw Error("AGENT_KIT_NODE_REQUIRES_24_19"); console.log(JSON.stringify({node:process.versions.node}));']);
@@ -156,6 +178,9 @@ try {
     "agent-config.mjs",
     "media-binaries.mjs",
     "verify-agent-kit.mjs",
+    "v-release.mjs",
+    "v-config.mjs",
+    "v-release-install.mjs",
   ]) {
     await sbx.writeFiles([
       {
@@ -170,6 +195,23 @@ try {
     "/vercel/sandbox/nexus/runtime/node_modules/openclaw/openclaw.mjs",
     "--version",
   ]);
+  if (vReleaseArchive) {
+    await run("v-release-install", "node", ["/vercel/sandbox/nexus/v-release-install.mjs", "/vercel/sandbox/nexus/runtime", V_RELEASE_CODEX_COMMAND]);
+    // First start installs the external plugins 2026.9.1 needs (deepseek, codex) into
+    // the state dir and fills the compile cache; tenants then boot without it.
+    // Tenant-specific files are removed again; plugin inventory and installs stay.
+    await run("v-release-converge", "bash", ["-c", [
+      "set -euo pipefail",
+      "cd /vercel/sandbox/nexus",
+      "export NEXUS_GATEWAY_TOKEN=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') NEXUS_MODEL_KEY=converge NEXUS_MODEL_BASE_URL=https://api.deepseek.com NEXUS_MODEL_ID=deepseek-flash NEXUS_AGENT_ID=" + templateId + " NEXUS_OPTIMIZE=1",
+      "node boot.mjs",
+      "node quiesce.mjs",
+      "for f in /tmp/nexus-memory-indexer.pid /tmp/nexus-gateway.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",
+      "sleep 2",
+      "ls -d /vercel/sandbox/agent-data/state/npm/projects/*",
+      "rm -rf /vercel/sandbox/agent-data/workspace /vercel/sandbox/agent-data/seeded /vercel/sandbox/agent-data/openclaw.json /vercel/sandbox/agent-data/worker-openclaw.json /vercel/sandbox/agent-data/state/logs /tmp/nexus-* /tmp/gw.log",
+    ].join("\n")]);
+  }
   if (agentKit) {
     if (agentKit.runtime.mediaBinaries) await run("media-binaries", "node", ["/vercel/sandbox/nexus/media-binaries.mjs", "/vercel/sandbox/nexus/runtime"]);
     await run("verify-agent-kit-native", "node", ["/vercel/sandbox/nexus/verify-agent-kit.mjs", "/vercel/sandbox/nexus", templateId]);
@@ -198,6 +240,7 @@ try {
       snapshotId: snapshot.snapshotId,
       builtAt,
       tools: privatePayloadArchive ? undefined : template!.manifest.tools?.versions,
+      ...(vReleaseCore ? { runtime: { openclaw: vReleaseCore.upstream, "v-release": vReleaseCore.release, codex: V_RELEASE_CODEX_VERSION } } : {}),
       ...(agentKit ? { agentKit: { archiveSha256: agentKit.archiveSha256, sourceCommit: agentKit.sourceCommit, requiredEnvKeys: agentKit.runtime.envKeys } } : {}),
     }),
   };
