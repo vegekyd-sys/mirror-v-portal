@@ -26,6 +26,12 @@ if (payloadArchiveArg >= 0 && !privatePayloadArchive) throw new Error("PAYLOAD_A
 const vReleaseArg = process.argv.indexOf("--v-release");
 const vReleaseArchive = vReleaseArg >= 0 ? path.resolve(process.argv[vReleaseArg + 1] ?? "") : undefined;
 const V_RELEASE_CODEX_VERSION = "0.159.2";
+// Same Makaron CLI as V (/opt/makaron-cli-0.15.2) for image, video, music and design.
+const V_RELEASE_MAKARON_CLI_VERSION = "0.15.2";
+// Optional private sample memory the owner may import during bootstrap (never in Git).
+const seedArg = process.argv.indexOf("--seed-archive");
+const seedArchive = seedArg >= 0 ? path.resolve(process.argv[seedArg + 1] ?? "") : undefined;
+if (seedArchive && (!fs.existsSync(seedArchive) || !process.argv.includes("--v-release"))) throw Error("SEED_ARCHIVE_INVALID");
 const V_RELEASE_CODEX_COMMAND = "codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex";
 let vReleaseCore: { release: string; upstream: string } | undefined;
 if (vReleaseArchive) {
@@ -136,6 +142,11 @@ try {
     await sbx.writeFiles([{ path: "/vercel/sandbox/v-release.tgz", content: fs.readFileSync(vReleaseArchive) }]);
     await run("v-release-unpack", "bash", ["-c", "mkdir -p /vercel/sandbox/nexus/v && tar -xzf /vercel/sandbox/v-release.tgz -C /vercel/sandbox/nexus/v && rm /vercel/sandbox/v-release.tgz"]);
     await run("v-release-codex", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/codex", "--omit=dev", "--no-audit", "--no-fund", `@openai/codex@${V_RELEASE_CODEX_VERSION}`]);
+    await run("v-release-makaron", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund makaron-cli@${V_RELEASE_MAKARON_CLI_VERSION} && mkdir -p /vercel/sandbox/nexus/tools/bin && ln -sf /vercel/sandbox/nexus/tools-node/node_modules/makaron-cli/bin/makaron.mjs /vercel/sandbox/nexus/tools/bin/makaron && /vercel/sandbox/nexus/tools/bin/makaron --version`]);
+    if (seedArchive) {
+      await run("v-release-seeds", "mkdir", ["-p", "/vercel/sandbox/nexus/seeds"]);
+      await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);
+    }
     // V's memory, reflection and review scripts are Python.
     await run("v-release-python", "bash", ["-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv"], true);
   }
@@ -240,7 +251,8 @@ try {
       snapshotId: snapshot.snapshotId,
       builtAt,
       tools: privatePayloadArchive ? undefined : template!.manifest.tools?.versions,
-      ...(vReleaseCore ? { runtime: { openclaw: vReleaseCore.upstream, "v-release": vReleaseCore.release, codex: V_RELEASE_CODEX_VERSION } } : {}),
+      ...(vReleaseCore ? { runtime: { openclaw: vReleaseCore.upstream, "v-release": vReleaseCore.release, codex: V_RELEASE_CODEX_VERSION, "makaron-cli": V_RELEASE_MAKARON_CLI_VERSION, ...(seedArchive ? { seeds: "v001" } : {}) } } : {}),
+      ...(template?.manifest.systemSchedules?.length ? { systemSchedules: template.manifest.systemSchedules } : {}),
       ...(agentKit ? { agentKit: { archiveSha256: agentKit.archiveSha256, sourceCommit: agentKit.sourceCommit, requiredEnvKeys: agentKit.runtime.envKeys } } : {}),
     }),
   };

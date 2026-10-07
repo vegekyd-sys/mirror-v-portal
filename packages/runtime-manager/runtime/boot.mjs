@@ -51,6 +51,32 @@ else if (!fs.existsSync(`${data}/seeded`)) {
   fs.cpSync(`${base}/payload`, workspace, { recursive: true });
   fs.writeFileSync(`${data}/seeded`, agentId);
 }
+// First boot of a v-release workspace: the Librarian's queues start today, the
+// archive lives outside the indexed tree, and the workspace is a git repo (the
+// Librarian commits every batch).
+function initVReleaseWorkspace() {
+  if (!vRelease || fs.existsSync(`${workspace}/.git`)) return;
+  const now = new Date();
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now);
+  const librarian = `${workspace}/memory/librarian`;
+  fs.mkdirSync(librarian, { recursive: true });
+  const seedJson = (file, value) => { if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify(value, null, 1) + "\n"); };
+  seedJson(`${librarian}/daily-queue.json`, { since: today, backfill_days: [], done: {} });
+  seedJson(`${librarian}/reflections-cursor.json`, { new_since: now.toISOString(), backlog: {}, done_ids: [] });
+  for (const dir of ["archive", "proposals"]) {
+    fs.mkdirSync(`${workspace}/memory-archive/${dir}`, { recursive: true });
+    fs.writeFileSync(`${workspace}/memory-archive/${dir}/.gitkeep`, "");
+    if (!fs.existsSync(`${workspace}/memory/${dir}`)) fs.symlinkSync(`../memory-archive/${dir}`, `${workspace}/memory/${dir}`);
+  }
+  const git = (...args) => execFileSync("git", ["-C", workspace, ...args], { stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Mirror V");
+  git("config", "user.email", "mirror-v@localhost");
+  git("config", "core.quotepath", "off");
+  git("add", "-A");
+  git("commit", "-qm", `seed: ${agentId} ${process.env.NEXUS_TEMPLATE_VERSION || "payload"} (${vRelease.release})`);
+}
+initVReleaseWorkspace();
 const toolsBin = `${base}/tools/bin`;
 const env = {
   ...process.env,
@@ -91,7 +117,7 @@ fs.writeFileSync(
 const cfg = vRelease ? createVReleaseConfig({
   agentId, workspace, dataDir: data, schedulerPath: pluginDir, env: process.env,
   workerPluginPath: `${V_RELEASE_ROOT}/worker/dist`, workers: vRelease.workers,
-  pluginPaths: (vRelease.plugins ?? []).map((plugin) => `${base}/${plugin.path}`), pluginIds: (vRelease.plugins ?? []).map((plugin) => plugin.id),
+  pluginPaths: (vRelease.plugins ?? []).filter((plugin) => plugin.path).map((plugin) => `${base}/${plugin.path}`), pluginIds: (vRelease.plugins ?? []).map((plugin) => plugin.id),
   codexCommand: vRelease.codexCommand ? `${base}/${vRelease.codexCommand}` : undefined,
 }) : profile ? createOpenClawConfig({
   runtime: profile.runtime, workspace, payloadRoot: `${base}/payload`, schedulerPath: pluginDir, modelId: process.env.NEXUS_MODEL_ID,

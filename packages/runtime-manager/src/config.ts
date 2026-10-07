@@ -30,6 +30,19 @@ export interface TemplateRecord {
   resources?: { vcpus: number };
   /** Idle seconds before this template's new tenants sleep (15..1800); defaults to the global value. */
   idleTimeoutSeconds?: number;
+  /**
+   * Background loops every tenant of this template gets (e.g. Mirror V's nightly
+   * Librarian). Registered once into the owner's chat after their first
+   * successful turn; a schedule the owner removes is never re-added.
+   */
+  systemSchedules?: SystemSchedule[];
+}
+
+export interface SystemSchedule {
+  name: string;
+  kind?: "cron" | "heartbeat";
+  schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "every"; everySeconds: number };
+  prompt: string;
 }
 
 export interface Config {

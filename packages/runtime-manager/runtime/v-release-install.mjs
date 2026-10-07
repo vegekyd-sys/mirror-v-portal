@@ -22,7 +22,8 @@ const marker = {
     ? JSON.parse(fs.readFileSync(path.join(V_RELEASE_ROOT, "codex", "manifest.json"), "utf8")).release : null,
   workers: { minWorkers: 1, maxWorkers: 3, sessionsPerWorker: 3 },
   ...(codexCommand ? { codexCommand } : {}),
-  plugins: [],
+  // Official external plugins OpenClaw installs on the converge start (no local path).
+  plugins: [{ id: "parallel" }],
 };
 fs.writeFileSync(V_RELEASE_MARKER, JSON.stringify(marker, null, 1));
 console.log(JSON.stringify({ phase: "v-release-installed", ...applied, worker: marker.worker, codexCapture: marker.codexCapture }));

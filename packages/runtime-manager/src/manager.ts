@@ -165,6 +165,12 @@ export class RuntimeManager {
           throw e;
         }
         await this.store.event(tenant.id, "completed", { output }, runId);
+        try {
+          const added = await new Scheduler(this.store).ensureSystemSchedules(current, this.store.config.templates?.[tenant.template_id]?.systemSchedules);
+          if (added.length) await this.store.event(tenant.id, "system-schedules", { added }, runId);
+        } catch (e) {
+          await this.store.event(tenant.id, "system-schedules-failed", { error: e instanceof Error ? e.message : "SYSTEM_SCHEDULE_ERROR" }, runId);
+        }
       } catch (e) {
         const message = e instanceof Error ? e.message : "RUNTIME_ERROR";
         const sent = submitted && !(e instanceof InboundMediaError);
