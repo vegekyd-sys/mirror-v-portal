@@ -51,10 +51,8 @@ export function featureConfig({ features, data, publicUrls = {} }) {
       enabled: true,
       noSandbox: true,
       ...(features.desktop ? { executablePath: "/usr/bin/google-chrome", headless: false } : {}),
-      remoteCdpTimeoutMs: 60000,
-      remoteCdpHandshakeTimeoutMs: 60000,
       ...(features.vbrowser ? { profiles: Object.fromEntries(Array.from({ length: VBROWSER.slots }, (_, i) => [
-        `vbrowser-${String(i + 1).padStart(2, "0")}`, { driver: "extension", color: "#7C5CFF", cdpPort: VBROWSER.firstCdpPort + i },
+        `vbrowser-${String(i + 1).padStart(2, "0")}`, { driver: "extension", cdpPort: VBROWSER.firstCdpPort + i },
       ])) } : {}),
     };
     out.plugins.allow.push("browser");
