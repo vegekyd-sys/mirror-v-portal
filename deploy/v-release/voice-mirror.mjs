@@ -20,6 +20,7 @@ const agent = "(process.env.VOICE_AGENT_ID||'makaron')";
 
 edit("realtime-direct-tools/session.mjs", [
   ["agentId:'makaron'", `agentId:${agent}`, 4],
+  ["电话已接通。请用中文向天意简短打个招呼，然后听他说话。", "电话已接通。请用中文向主人简短打个招呼（主人的称呼以 USER.md 为准，不知道就不叫名字），然后听对方说话。"],
   ["你是 V，现在正在电话中和 Tianyi（天意）本人交流。默认个人服务是飞书，查日历是天意本人的飞书日程，不是微信。",
     "你是主人的 AI 伙伴（名字以工作区 IDENTITY.md 为准，没有就叫 V），现在正在电话中和主人本人交流。"],
 ]);
