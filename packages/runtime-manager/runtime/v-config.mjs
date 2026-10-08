@@ -31,6 +31,8 @@ const deepseekModel = (id) => ({
  * @param {object} [o.workers]
  * @param {string} [o.codexCommand]    codex binary for the codex harness, when installed
  * @param {boolean} [o.memoryEmbeddings]
+ * @param {object} [o.extra]          featureConfig() output: desktop, browser, plugins, tools
+ * @param {string[]} [o.ownerIds]     commands.ownerAllowFrom; the plugins resolve the single owner from it
  */
 export function createVReleaseConfig(o) {
   const env = o.env ?? {};
@@ -54,7 +56,8 @@ export function createVReleaseConfig(o) {
   };
   const pluginIds = o.pluginIds ?? [];
   const embeddings = o.memoryEmbeddings !== false && has("GOOGLE_API_KEY");
-  return {
+  const extra = o.extra ?? { plugins: { allow: [], loadPaths: [], entries: {} }, tools: { alsoAllow: [] } };
+  const cfg = {
     // reload off: a config change must never hot-reload a Gateway that owns a Worker pool
     // (V 2026-09-20: a hot reload closed the pool for good); boot restarts it instead.
     gateway: { mode: "local", bind: "loopback", port: 18790, reload: { mode: "off" }, auth: { mode: "token", token: "${NEXUS_GATEWAY_TOKEN}" }, http: { endpoints: { responses: { enabled: true } } } },
@@ -123,4 +126,12 @@ export function createVReleaseConfig(o) {
       },
     },
   };
+  if (extra.browser) cfg.browser = extra.browser;
+  if (extra.desktop) cfg.desktop = extra.desktop;
+  cfg.plugins.allow.push(...extra.plugins.allow.filter((id) => !cfg.plugins.allow.includes(id)));
+  cfg.plugins.load.paths.push(...extra.plugins.loadPaths);
+  Object.assign(cfg.plugins.entries, extra.plugins.entries);
+  cfg.tools.alsoAllow.push(...extra.tools.alsoAllow);
+  if (o.ownerIds?.length) cfg.commands = { ownerAllowFrom: [...o.ownerIds] };
+  return cfg;
 }

@@ -1,7 +1,7 @@
 import type { TemplateRecord } from "./config.js";
 import fs from "node:fs";
 import path from "node:path";
-import { createHmac, createHash } from "node:crypto";
+import { createHmac, createHash, timingSafeEqual } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
@@ -18,6 +18,8 @@ export async function finishOutput(sink: Writable) {
 
 export interface RuntimeHandle {
   name: string;
+  /** Public https origins of the template's named ports, when it exposes any. */
+  publicUrls?: Record<string, string>;
   reused: boolean;
   wakeMs: number;
   timings?: Record<string, number | boolean>;
@@ -37,6 +39,10 @@ export interface RuntimeProvider {
   stop(
     tenant: Tenant,
   ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
+  /** Signed owner links to a public service of the sandbox (Vercel only). */
+  openSignatureValid?(tenant: Tenant, service: string, signature: string): boolean;
+  serviceUrl?(tenant: Tenant, service: string, publicUrls: Record<string, string>): string;
+  runningPublicUrls?(tenant: Tenant): Promise<Record<string, string> | null>;
 }
 
 /** Reply text plus whatever the agent asked to deliver alongside it. */
@@ -93,7 +99,8 @@ export const channelCaps = (channel?: string) =>
 export interface RuntimeSandbox {
   name: string;
   status: string;
-  update(options: { timeout: number }): Promise<unknown>;
+  update(options: { timeout: number; ports?: number[] }): Promise<unknown>;
+  domain?(port: number): string;
   readFileToBuffer(options: { path: string }): Promise<Buffer | null>;
   writeFiles(files: { path: string; content: Buffer }[]): Promise<unknown>;
   runCommand(options: { cmd: string; args?: string[]; env?: Record<string, string>; stdout?: Writable; signal?: AbortSignal }): Promise<{ exitCode: number; stdout(): Promise<string>; stderr(): Promise<string> }>;
@@ -104,6 +111,14 @@ export interface RuntimeSandbox {
 export function templateVcpus(template?: TemplateRecord): number {
   const vcpus = template?.resources?.vcpus;
   return Number.isInteger(vcpus) && vcpus! >= 1 && vcpus! <= 8 ? vcpus! : 2;
+}
+
+/** Named public ports of a template, validated; [] when it exposes none. */
+export function templatePublicPorts(template?: TemplateRecord): [string, number][] {
+  const entries = Object.entries(template?.publicPorts ?? {});
+  if (entries.length > 15 || entries.some(([name, port]) => !/^[a-z][a-z0-9-]{0,31}$/.test(name) || !Number.isInteger(port) || port < 1024 || port > 65535))
+    throw Error("TEMPLATE_PUBLIC_PORTS_INVALID");
+  return entries;
 }
 
 /** Template-wide keys may never override NEXUS_* / OPENCLAW_* runtime variables. */
@@ -120,6 +135,38 @@ export function templateRuntimeEnv(template?: TemplateRecord): Record<string, st
 export class VercelProvider implements RuntimeProvider {
   protected handles = new Map<string, RuntimeSandbox>();
   constructor(readonly config: Config) {}
+  /** Per-tenant secret for a purpose (voice access, wake-link signature); derived, never stored. */
+  tenantSecret(tenantId: string, purpose: string) {
+    return createHmac("sha256", this.config.encryptionKey).update(`${purpose}:${tenantId}`).digest("hex");
+  }
+  /** Stable owner links through the Portal: they wake the sandbox, then redirect. */
+  openLinks(tenant: Tenant): Record<string, string> {
+    const ports = templatePublicPorts(this.config.templates?.[tenant.template_id]).map(([name]) => name);
+    const base = (this.config.publicBaseUrl || "https://mirror-v-portal.vercel.app").replace(/\/$/, "");
+    return Object.fromEntries(ports.filter((name) => name === "voice").map((name) => [name,
+      `${base}/onboard/open/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, `open:${name}`).slice(0, 32)}/${name}`]));
+  }
+  openSignatureValid(tenant: Tenant, service: string, signature: string): boolean {
+    const expected = Buffer.from(this.tenantSecret(tenant.id, `open:${service}`).slice(0, 32));
+    const given = Buffer.from(String(signature));
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  }
+  /** Where a named service of a running sandbox is reachable now, with its access fragment. */
+  serviceUrl(tenant: Tenant, service: string, publicUrls: Record<string, string>): string {
+    const origin = publicUrls[service];
+    if (!origin) throw Error("SERVICE_NOT_EXPOSED");
+    if (service === "voice") return `${origin}/voice/#access=${this.tenantSecret(tenant.id, "voice-access")}`;
+    return origin;
+  }
+  /** Public origins of a sandbox that is already running (no wake). */
+  async runningPublicUrls(tenant: Tenant): Promise<Record<string, string> | null> {
+    if (!tenant.sandbox_name) return null;
+    const sbx = await this.get(tenant, false);
+    if (sbx.status !== "running") return null;
+    return Object.fromEntries(templatePublicPorts(this.config.templates?.[tenant.template_id]).flatMap(([name, port]) => {
+      try { return sbx.domain ? [[name, sbx.domain(port)]] : []; } catch { return []; }
+    }));
+  }
   token(tenantId: string) {
     return createHmac("sha256", this.config.encryptionKey)
       .update(`gateway:${tenantId}`)
@@ -165,6 +212,7 @@ export class VercelProvider implements RuntimeProvider {
       persistent: true, snapshotExpiration: 0,
       keepLastSnapshots: { count: 2, expiration: 0 },
       resources: { vcpus: templateVcpus(this.config.templates?.[tenant.template_id]) }, timeout: 1_200_000,
+      ...(templatePublicPorts(this.config.templates?.[tenant.template_id]).length ? { ports: templatePublicPorts(this.config.templates?.[tenant.template_id]).map(([, port]) => port) } : {}),
       tags: { purpose: "nexus-trial", tenant: tenant.id },
     });
   }
@@ -186,7 +234,12 @@ export class VercelProvider implements RuntimeProvider {
     const sandboxAcquireMs = Date.now() - start;
     await onProvision?.(name);
     const reused = tenant.state === "ready";
-    await sbx.update({ timeout: 1_200_000 });
+    const publicPorts = templatePublicPorts(this.config.templates?.[tenant.template_id]);
+    // The full port list each time: a template that added a port reaches existing tenants too.
+    await sbx.update({ timeout: 1_200_000, ...(publicPorts.length ? { ports: publicPorts.map(([, port]) => port) } : {}) });
+    const publicUrls = Object.fromEntries(publicPorts.flatMap(([name, port]) => {
+      try { return sbx.domain ? [[name, sbx.domain(port)]] : []; } catch { return []; }
+    }));
     const setupStart = Date.now();
     if (!this.handles.has(tenant.id)) {
       const files = [
@@ -201,6 +254,7 @@ export class VercelProvider implements RuntimeProvider {
         "agent-config.mjs",
         "v-release.mjs",
         "v-config.mjs",
+        "v-features.mjs",
       ].map((file) => ({
         path: `/vercel/sandbox/nexus/${file}`,
         content: fs.readFileSync(
@@ -239,6 +293,10 @@ export class VercelProvider implements RuntimeProvider {
         NEXUS_EXPECT_AGENT_KIT: this.config.templates?.[tenant.template_id]?.agentKit ? "1" : "0",
         NEXUS_OPTIMIZE: this.config.optimizeRuntime === false ? "0" : "1",
         NEXUS_CPU_PROFILE: process.env.NEXUS_CPU_PROFILE || "0",
+        NEXUS_PUBLIC_URLS: JSON.stringify(publicUrls),
+        NEXUS_OPEN_LINKS: JSON.stringify(this.openLinks(tenant)),
+        ...(publicPorts.some(([name]) => name === "voice") ? { NEXUS_VOICE_ACCESS_TOKEN: this.tenantSecret(tenant.id, "voice-access") } : {}),
+        NEXUS_PUBLIC_PORTS: JSON.stringify(Object.fromEntries(publicPorts)),
       },
       signal: AbortSignal.timeout(180000),
     });
@@ -260,6 +318,7 @@ export class VercelProvider implements RuntimeProvider {
     this.handles.set(tenant.id, sbx);
     return {
       name,
+      publicUrls,
       reused: !!boot.processReused,
       wakeMs: Date.now() - start,
       timings: {

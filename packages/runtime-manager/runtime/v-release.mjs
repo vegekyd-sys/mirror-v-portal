@@ -15,6 +15,14 @@ export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/worker\/dist\/worker\.mjs(?:\s|$)/,
   /\/v-memory-indexer\.mjs(?:\s|$)/,
   /\bcodex(?:-linux-x64)?\b.*\bapp-server\b/,
+  // Virtual desktop, takeover page, V Browser broker, voice entry, desktop node.
+  /\/start-desktop\.sh(?:\s|$)/,
+  /^\S*(?:Xtigervnc|dbus-daemon|dbus-launch|xfce4-session|xfwm4|xfdesktop|xfce4-panel|xfsettingsd|xfconfd|at-spi\S*|panel-\S+|Thunar|tumblerd)\b/,
+  /\/v\/desktop\/service\/server\.mjs(?:\s|$)/,
+  /\/v\/vbrowser\/broker\/main\.mjs(?:\s|$)/,
+  /\/v\/voice\/lab\/gpt-live-h5\/server\.mjs(?:\s|$)/,
+  /openclaw\.mjs node run\b/,
+  /\/opt\/google\/chrome\/|\bgoogle-chrome\b|chrome_crashpad_handler/,
 ]);
 
 /** Under agent-data/: rebuilt from the snapshot or disposable, so never in a per-turn backup. */
@@ -106,4 +114,71 @@ export function isVReleaseDaemon(command) {
 
 export function isVReleaseBackupExcluded(rel) {
   return V_RELEASE_BACKUP_EXCLUDES.some((pattern) => pattern.test(rel));
+}
+
+/** Local ports with an ESTABLISHED TCP connection, from /proc (no ss/netstat in the image). */
+export function establishedLocalPorts(read = (file) => fs.readFileSync(file, "utf8")) {
+  const ports = new Set();
+  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    let text = "";
+    try { text = read(file); } catch { continue; }
+    for (const line of text.split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 4 || cols[3] !== "01") continue;
+      ports.add(parseInt(cols[1].split(":").pop(), 16));
+    }
+  }
+  return ports;
+}
+
+/**
+ * Why a v-release VM must stay awake, or null. A person on a public page (takeover
+ * viewer, voice call) holds a connection; a component that knows it is busy writes
+ * /tmp/nexus-keepawake/<name> containing an epoch-ms deadline.
+ */
+export function vReleaseKeepAwake({ publicPorts = {}, idlePorts = [], now = Date.now(), dir = "/tmp/nexus-keepawake", established = establishedLocalPorts() } = {}) {
+  for (const [name, port] of Object.entries(publicPorts)) {
+    if (!idlePorts.includes(name) && established.has(port)) return `public-connection:${name}`;
+  }
+  let entries = [];
+  try { entries = fs.readdirSync(dir); } catch {}
+  for (const name of entries) {
+    const until = Number(fs.readFileSync(path.join(dir, name), "utf8").trim());
+    if (Number.isFinite(until) && until > now) return `keep-awake:${name}`;
+  }
+  return null;
+}
+
+/** Established TCP connections owned by a process, by remote port (from /proc). */
+export function processRemotePorts(pid) {
+  const inodes = new Set();
+  try {
+    for (const fd of fs.readdirSync(`/proc/${pid}/fd`)) {
+      try { const m = fs.readlinkSync(`/proc/${pid}/fd/${fd}`).match(/^socket:\[(\d+)\]$/); if (m) inodes.add(m[1]); } catch {}
+    }
+  } catch { return []; }
+  const ports = [];
+  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    let text = "";
+    try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length > 9 && cols[3] === "01" && inodes.has(cols[9])) ports.push(parseInt(cols[2].split(":").pop(), 16));
+    }
+  }
+  return ports;
+}
+
+/** A desktop handoff link is open or being used: keep the desktop (and its Chrome) alive. */
+export async function desktopHandoffBusy({ tokenFile, port = 23951, now = Date.now() } = {}) {
+  let token;
+  try { token = fs.readFileSync(tokenFile, "utf8").trim(); } catch { return null; }
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/state`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const state = await res.json();
+    if (state.controlActive || state.viewers > 0) return "desktop-handoff:viewer";
+    const live = (state.activeHandoffs ?? []).some((h) => h && !h.ended && now < (h.sessionExpiresAt ?? h.claimExpiresAt ?? 0));
+    return live ? "desktop-handoff:open-link" : null;
+  } catch { return null; }
 }

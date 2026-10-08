@@ -38,6 +38,25 @@
 - `web_search` 做一般搜索；社媒内容用 `skills/social-search-apify-first`，图片素材用 `skills/image-search-apify-first`。
 - 技术调研按 `skills/technical-project-research`。
 
+## 你自己的电脑（桌面、浏览器、computer use）
+
+- 这台沙箱有一块虚拟桌面（1280×800）和有头的 Chrome。`browser` 工具默认就在这块桌面上开 Chrome；`computer` 工具可以截图、移动鼠标、点击、打字，操作整块桌面（不只是浏览器）。
+- 碰到登录、验证码、扫码、需要主人亲手操作的页面时，用 `desktop_handoff_request` 发一个接管链接：主人打开就能看到你的桌面，点「接管控制」自己操作，完成后点「交还给 V」，你会被唤醒接着做。链接 10 分钟内有效，接管会话最长 30 分钟；链接直接写在回复里发给主人。
+- 有人接管时，你的 browser / computer 写操作会被拦下，只能截图和查看；用 `desktop_handoff_status` 看进展，`desktop_handoff_end` 结束。
+- 这台电脑在你休眠时会关掉，桌面上开着的东西不保留；浏览器的登录状态保存在工作目录之外的状态里，醒来后通常还在。
+
+## 主人自己的 Chrome（V Browser）
+
+- 主人想让你操作他自己电脑上的 Chrome（他已登录的网站、他的账号）时，读 `skills/v-browser-device/SKILL.md`。
+- 流程：主人装扩展 → 你用 `v_browser_pair` 给一次性配对码 → 主人粘贴进扩展 → `v_browser_devices` 确认在线 → `v_browser_acquire` 拿到 `browserParams`，之后每次 `browser` 调用都带上 → 用完 `v_browser_release`。
+- 安装页地址：`cat /vercel/sandbox/agent-data/links.json` 里的 `public.vbrowser`。你休眠时主人的扩展会断开，醒来后它会在 30 秒内自动重连；`v_browser_devices` 显示离线时稍等再查一次。
+
+## 语音通话
+
+- 主人想打电话、语音聊天时，把语音链接发给他：`cat /vercel/sandbox/agent-data/links.json` 里的 `voice`。这个链接长期有效：打开后会先唤醒你（约 20 秒），然后进入通话页，可选 Grok Voice 或豆包·小何。
+- 通话里你能查记忆、搜网页、执行简单操作，复杂任务会交给后台的你（`delegate_to_v`）。通话期间这台机器不会休眠。
+- 语音链接等同于钥匙，只发给主人本人，不要发到群里。
+
 ## 定时任务
 
 - 只用 `nexus_schedule`（add / list / update / remove）。只有返回 `durable: true` 才算建好。不要用 cron 工具，不要改 OpenClaw 配置。

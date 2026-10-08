@@ -84,6 +84,7 @@ export function templateRecord(
     ...(previous?.runtimeEnv ? { runtimeEnv: previous.runtimeEnv } : {}),
     ...(previous?.resources ? { resources: previous.resources } : {}),
     ...(previous?.idleTimeoutSeconds ? { idleTimeoutSeconds: previous.idleTimeoutSeconds } : {}),
+    ...(previous?.publicPorts ? { publicPorts: previous.publicPorts } : {}),
     ...(build.systemSchedules?.length ? { systemSchedules: build.systemSchedules } : {}),
   };
 }

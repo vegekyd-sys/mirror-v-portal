@@ -105,3 +105,19 @@ test("template sandbox size and keys are bounded", () => {
   expect(templateRuntimeEnv({ version: "v", snapshotId: "s", runtimeEnv: { GOOGLE_API_KEY: "k" } })).toEqual({ GOOGLE_API_KEY: "k" });
   expect(() => templateRuntimeEnv({ version: "v", snapshotId: "s", runtimeEnv: { NEXUS_MODEL_KEY: "k" } })).toThrow("TEMPLATE_RUNTIME_ENV_INVALID");
 });
+
+test("a person on a public page or a live keep-awake deadline keeps the VM up", async () => {
+  const { vReleaseKeepAwake, establishedLocalPorts } = await import("../runtime/v-release.mjs");
+  const tcp = "  sl  local_address rem_address   st\n   0: 00000000:4970 00000000:0000 0A\n   1: 0100007F:4970 0100007F:D431 01\n   2: 0100007F:4E20 0100007F:D432 01\n";
+  const ports = establishedLocalPorts((file: string) => file.endsWith("tcp") ? tcp : "");
+  expect([...ports].sort()).toEqual([18800, 20000]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keepawake-"));
+  try {
+    expect(vReleaseKeepAwake({ publicPorts: { desktop: 18800 }, established: ports, dir })).toBe("public-connection:desktop");
+    expect(vReleaseKeepAwake({ publicPorts: { browser: 18800 }, idlePorts: ["browser"], established: ports, dir })).toBeNull();
+    fs.writeFileSync(path.join(dir, "handoff"), String(Date.now() + 60000));
+    expect(vReleaseKeepAwake({ publicPorts: {}, established: ports, dir })).toBe("keep-awake:handoff");
+    fs.writeFileSync(path.join(dir, "handoff"), String(Date.now() - 1));
+    expect(vReleaseKeepAwake({ publicPorts: {}, established: ports, dir })).toBeNull();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

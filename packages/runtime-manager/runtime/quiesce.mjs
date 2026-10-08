@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { readVRelease, isVReleaseDaemon } from "./v-release.mjs";
+import { readVRelease, isVReleaseDaemon, vReleaseKeepAwake, desktopHandoffBusy, processRemotePorts } from "./v-release.mjs";
 const vRelease = readVRelease();
 
 // Reject unknown live processes before stopping a VM. Kernel and Vercel supervisor
@@ -33,6 +33,23 @@ const extras = now.filter((line) => {
     !(vRelease && isVReleaseDaemon(command))
   );
 });
+if (vRelease) {
+  let publicPorts = {};
+  try { publicPorts = JSON.parse(fs.readFileSync("/tmp/nexus-public-ports.json", "utf8")); } catch {}
+  // The V Browser extension and an idle voice page hold connections without
+  // anything happening, so those ports never pin the VM by themselves.
+  let reason = vReleaseKeepAwake({ publicPorts, idlePorts: ["vbrowser", "voice", ...(vRelease.idlePublicPorts ?? [])] })
+    ?? await desktopHandoffBusy({ tokenFile: "/vercel/sandbox/agent-data/desktop-handoff/admin-token" });
+  // A voice call is live while the voice server holds a provider WebSocket (TLS 443).
+  if (!reason && fs.existsSync("/tmp/nexus-voice.pid")) {
+    const voicePid = fs.readFileSync("/tmp/nexus-voice.pid", "utf8").trim();
+    if (processRemotePorts(voicePid).includes(443)) reason = "voice-call";
+  }
+  if (reason) {
+    console.log(JSON.stringify({ ok: false, reason }));
+    process.exit(2);
+  }
+}
 if (extras.length) {
   console.log(
     JSON.stringify({
@@ -44,8 +61,10 @@ if (extras.length) {
   process.exit(2);
 }
 // Stop the indexer first so its last sync commits before the filesystem snapshot.
-if (vRelease && fs.existsSync("/tmp/nexus-memory-indexer.pid")) {
-  try { process.kill(Number(fs.readFileSync("/tmp/nexus-memory-indexer.pid", "utf8")), "SIGTERM"); } catch {}
+if (vRelease) {
+  for (const name of ["memory-indexer", "voice", "vbrowser-broker", "cua-node", "desktop-handoff"]) {
+    try { process.kill(Number(fs.readFileSync(`/tmp/nexus-${name}.pid`, "utf8")), "SIGTERM"); } catch {}
+  }
 }
 const pid = Number(fs.readFileSync("/tmp/nexus-gateway.pid", "utf8"));
 try {

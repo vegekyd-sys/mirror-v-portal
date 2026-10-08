@@ -94,7 +94,7 @@ const sbx = await Sandbox.create({
   image: "vercel/sandbox/node:24",
   persistent: false,
   resources: { vcpus: 4 },
-  timeout: 1_200_000,
+  timeout: 2_700_000,
   tags: { purpose: "nexus-runtime-build" },
 });
 console.log(JSON.stringify({ phase: "builder-created", name: sbx.name }));
@@ -169,7 +169,10 @@ try {
       await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);
     }
     // V's memory, reflection and review scripts are Python.
-    await runLong("v-release-python", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv", true);
+    // --no-install-recommends keeps this to seconds (with recommends, ffmpeg alone took >15 min).
+    // Desktop: TigerVNC + a minimal XFCE session for the takeover page and the computer tool.
+    await runLong("v-release-apt", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv tigervnc-standalone-server tigervnc-tools xfce4-session xfwm4 xfdesktop4 dbus-x11 x11-utils x11-xserver-utils xdotool xinput wmctrl fonts-noto-cjk", true);
+    await runLong("v-release-chrome", "cd /tmp && node -e \"fetch('https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb').then(r=>{if(!r.ok)throw Error(r.status);return r.arrayBuffer()}).then(b=>require('fs').writeFileSync('chrome.deb',Buffer.from(b)))\" && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ./chrome.deb && rm -f chrome.deb && google-chrome --version", true);
     // ffmpeg/ffprobe for V's video Skills: static npm builds (distro ffmpeg took >15 min to install).
     await run("v-release-media-packages", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/runtime", "--omit=dev", "--no-audit", "--no-fund", ...MEDIA_BINARY_PACKAGES]);
   }
@@ -215,6 +218,7 @@ try {
     "v-release.mjs",
     "v-config.mjs",
     "v-release-install.mjs",
+    "v-features.mjs",
   ]) {
     await sbx.writeFiles([
       {
@@ -242,12 +246,14 @@ try {
       // Same optional providers as real tenants (placeholder values), so the plugin
       // inventory converges here and tenants do not repeat the install-and-restart.
       ...convergeEnvKeys.map((key) => `export ${key}=converge`),
-      "node boot.mjs",
+      "node boot.mjs | tail -1",
       "node quiesce.mjs",
+      "for f in /tmp/nexus-desktop.pid /tmp/nexus-desktop-handoff.pid /tmp/nexus-cua-node.pid /tmp/nexus-vbrowser-broker.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",
       "for f in /tmp/nexus-memory-indexer.pid /tmp/nexus-gateway.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",
       "sleep 2",
       "ls -d /vercel/sandbox/agent-data/state/npm/projects/*",
-      "rm -rf /vercel/sandbox/agent-data/workspace /vercel/sandbox/agent-data/seeded /vercel/sandbox/agent-data/openclaw.json /vercel/sandbox/agent-data/worker-openclaw.json /vercel/sandbox/agent-data/state/logs /tmp/nexus-* /tmp/gw.log",
+      // Per-tenant secrets and identities are created on each tenant's first boot, never shared via the snapshot.
+      "rm -rf /vercel/sandbox/agent-data/workspace /vercel/sandbox/agent-data/seeded /vercel/sandbox/agent-data/openclaw.json /vercel/sandbox/agent-data/worker-openclaw.json /vercel/sandbox/agent-data/state/logs /vercel/sandbox/agent-data/desktop /vercel/sandbox/agent-data/desktop-handoff /vercel/sandbox/agent-data/vbrowser /vercel/sandbox/agent-data/node-cua /vercel/sandbox/agent-data/state/credentials /tmp/nexus-* /tmp/gw.log /tmp/.v-desktop-99",
     ].join("\n")]);
   }
   if (agentKit) {

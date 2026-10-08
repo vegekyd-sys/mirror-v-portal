@@ -28,6 +28,11 @@ export interface TemplateRecord {
   runtimeEnv?: Record<string, string>;
   /** Sandbox size for this template's tenants; defaults to 2 vCPUs. */
   resources?: { vcpus: number };
+  /**
+   * Named public HTTPS ports of this template's sandboxes (desktop takeover page,
+   * browser relay, voice page). Each is served at its own https://*.vercel.run origin.
+   */
+  publicPorts?: Record<string, number>;
   /** Idle seconds before this template's new tenants sleep (15..1800); defaults to the global value. */
   idleTimeoutSeconds?: number;
   /**
@@ -61,6 +66,8 @@ export interface Config {
   payloadArchive?: string;
   model: { id: string; baseUrl: string; apiKey: string };
   vercel: { token: string; teamId: string; projectId: string };
+  /** Public origin of the Portal (wake links handed to owners); defaults to the Vercel edge. */
+  publicBaseUrl?: string;
   alibaba?: { apiKey: string; region: string; templateId: string; trialTenantId?: string; enabled?: boolean };
   dataDir: string;
 }

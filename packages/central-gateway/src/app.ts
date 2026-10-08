@@ -166,6 +166,34 @@ export function createApp() {
     return entry && Date.now() - entry.createdAt < 10 * 60_000 ? entry : undefined;
   }
 
+  // Stable owner links (e.g. the voice call page) for a sandbox that may be asleep:
+  // show a waiting page, wake it through the runtime manager, then redirect.
+  const OPEN_SERVICES = new Set(['voice']);
+  const openParams = (req: Request) => {
+    const { tenant, sig, service } = req.params as Record<string, string>;
+    return /^[A-Za-z0-9_.:-]{1,128}$/.test(tenant) && /^[a-f0-9]{32}$/.test(sig) && OPEN_SERVICES.has(service) ? { tenant, sig, service } : null;
+  };
+  app.get('/onboard/open/:tenant/:sig/:service', (req, res) => {
+    if (!openParams(req)) { res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>链接无效</title><p>链接无效。</p>'); return; }
+    res.set('cache-control', 'no-store').set('referrer-policy', 'no-referrer').type('html').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>正在接通</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#e8ecf4;font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{text-align:center;padding:24px}.dot{width:12px;height:12px;border-radius:50%;background:#8ab4ff;margin:0 auto 18px;animation:p 1.2s infinite}@keyframes p{50%{opacity:.25}}small{color:#8b93a7}</style>
+<main><div class="dot"></div><p id="s">正在唤醒你的 V，大约需要 20 秒…</p><small>页面会自动跳转</small></main>
+<script>fetch(location.pathname.replace(/\/$/,'')+'/go',{method:'POST'}).then(r=>r.json().then(b=>({ok:r.ok,b}))).then(({ok,b})=>{if(ok&&b.url)location.replace(b.url);else document.getElementById('s').textContent=b.error==='AGENT_BUSY'?'V 正在忙，请稍后再试。':'暂时无法接通，请稍后再试。'}).catch(()=>{document.getElementById('s').textContent='暂时无法接通，请稍后再试。'})</script></html>`);
+  });
+  app.post('/onboard/open/:tenant/:sig/:service/go', async (req, res) => {
+    const params = openParams(req);
+    if (!params) { res.status(404).json({ error: 'OPEN_LINK_INVALID' }); return; }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(params.tenant)}/open/${params.service}?sig=${params.sig}`, {
+        headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},
+        signal: AbortSignal.timeout(170000),
+      });
+      const body = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !body.url || !/^https:\/\/[a-z0-9-]+\.vercel\.run\//.test(body.url)) { res.status(response.ok ? 502 : response.status).json({ error: body.error ?? 'OPEN_FAILED' }); return; }
+      res.set('cache-control', 'no-store').json({ url: body.url });
+    } catch { res.status(503).json({ error: 'OPEN_FAILED' }); }
+  });
+
   app.get('/onboard/scan', (req, res) => {
     if (!portalEntry(String(req.query.entry || ''))) {
       res.status(410).type('html').send('<!doctype html><meta charset="utf-8"><title>入口码已过期</title><p>入口码已过期，请在电脑上重新生成。</p>');

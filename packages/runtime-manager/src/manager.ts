@@ -200,6 +200,41 @@ export class RuntimeManager {
     });
     if (!processed) throw new Error("AGENT_BUSY");
   }
+  /**
+   * An owner opened a signed link to a public service (the voice page): wake the
+   * sandbox if it sleeps, keep it from idling out right away, and return where
+   * the service is reachable now. A running turn already holds the sandbox up.
+   */
+  async open(tenantId: string, service: string, signature: string): Promise<string> {
+    const tenant = await this.store.tenant(tenantId);
+    if (!this.provider.openSignatureValid?.(tenant, service, signature)) throw Error("OPEN_LINK_INVALID");
+    if (tenant.state === "blocked") throw Error("AGENT_NEEDS_REVIEW");
+    const running = ["busy", "waking"].includes(tenant.state) ? await this.provider.runningPublicUrls?.(tenant) : null;
+    if (running) return this.provider.serviceUrl!(tenant, service, running);
+    const woken = await this.store.locked(tenant.id, async (db) => {
+      const current = await this.store.tenant(tenant.id, db);
+      if (current.state === "blocked") throw Error("AGENT_NEEDS_REVIEW");
+      const previous = current.state;
+      await db.query("UPDATE elastic_tenants SET state='waking',last_error=NULL WHERE id=$1", [current.id]);
+      try {
+        current.runtime_env = await this.store.tenantSecretEnv(current.id);
+        const handle = await this.provider.ensure(current, async (name) => {
+          await db.query("UPDATE elastic_tenants SET sandbox_name=$2 WHERE id=$1", [current.id, name]);
+        });
+        await db.query("UPDATE elastic_tenants SET state='ready',sandbox_name=$2,last_activity=now(),last_wake_ms=$3,wake_count=wake_count+1 WHERE id=$1", [current.id, handle.name, handle.wakeMs]);
+        await this.store.event(current.id, "opened", { service, wakeMs: handle.wakeMs, reused: handle.reused });
+        return this.provider.serviceUrl!(current, service, handle.publicUrls ?? {});
+      } catch (e) {
+        await db.query("UPDATE elastic_tenants SET state=$2,last_error=$3 WHERE id=$1", [current.id, previous === "sleeping" ? "sleeping" : "ready", e instanceof Error ? e.message : "OPEN_FAILED"]);
+        throw e;
+      }
+    });
+    if (woken) return woken;
+    // A turn holds the lock: the sandbox is up.
+    const urls = await this.provider.runningPublicUrls?.(tenant);
+    if (!urls) throw Error("AGENT_BUSY");
+    return this.provider.serviceUrl!(tenant, service, urls);
+  }
   async collect(tenantId?: string) {
     if (this.collecting) return;
     this.collecting = true;

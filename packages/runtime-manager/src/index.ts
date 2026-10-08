@@ -353,6 +353,15 @@ app.get("/api/state", async (_req, res, next) => {
     next(e);
   }
 });
+// Signed owner link (proxied from the public Portal): wake and return the service URL.
+app.get("/v1/tenants/:id/open/:service", async (req, res) => {
+  try {
+    res.json({ url: await manager.open(req.params.id, req.params.service, String(req.query.sig ?? "")) });
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "OPEN_FAILED";
+    res.status(code === "OPEN_LINK_INVALID" || code === "TENANT_NOT_FOUND" ? 404 : code === "AGENT_BUSY" ? 409 : 503).json({ error: /^[A-Z_]+$/.test(code) ? code : "OPEN_FAILED" });
+  }
+});
 app.post("/api/messages", async (req, res, next) => {
   try {
     const run = await store.enqueue(

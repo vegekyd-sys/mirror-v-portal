@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
+import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, approveDesktopNode } from "./v-features.mjs";
 
 const bootStart = Date.now();
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
@@ -98,6 +99,14 @@ const env = {
       }
     : {}),
 };
+// Desktop, V Browser and voice: present when the snapshot carries their packages.
+const features = vRelease ? availableFeatures() : { desktop: false, vbrowser: false, voice: false };
+let publicUrls = {};
+try { publicUrls = JSON.parse(process.env.NEXUS_PUBLIC_URLS || "{}"); } catch {}
+// Owner links the agent may hand out (the voice call page through the Portal).
+if (vRelease) fs.writeFileSync(`${data}/links.json`, JSON.stringify({ ...JSON.parse(process.env.NEXUS_OPEN_LINKS || "{}"), public: publicUrls }, null, 1) + "\n");
+if (features.desktop) Object.assign(env, desktopEnv(data));
+if (features.vbrowser) Object.assign(env, { OPENCLAW_EXTENSION_COMMAND_TIMEOUT_MS: "180000", OPENCLAW_PERSISTENT_CDP_CONNECT_TIMEOUT_MS: "60000" });
 // No credentials in the filesystem snapshot. Values resolve from process env.
 installProgress(`${base}/runtime/node_modules/openclaw`);
 const pluginDir = base + "/scheduler-plugin";
@@ -119,6 +128,8 @@ const cfg = vRelease ? createVReleaseConfig({
   workerPluginPath: `${V_RELEASE_ROOT}/worker/dist`, workers: vRelease.workers,
   pluginPaths: (vRelease.plugins ?? []).filter((plugin) => plugin.path).map((plugin) => `${base}/${plugin.path}`), pluginIds: (vRelease.plugins ?? []).map((plugin) => plugin.id),
   codexCommand: vRelease.codexCommand ? `${base}/${vRelease.codexCommand}` : undefined,
+  extra: featureConfig({ features, data, publicUrls }),
+  ownerIds: OWNER_CHANNELS.map((channel) => `${channel}:owner`),
 }) : profile ? createOpenClawConfig({
   runtime: profile.runtime, workspace, payloadRoot: `${base}/payload`, schedulerPath: pluginDir, modelId: process.env.NEXUS_MODEL_ID,
 }) : {
@@ -244,7 +255,7 @@ try {
   if (error?.message === "RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED")
     throw error;
   if (error?.message === "V_RELEASE_RESTART") {
-    for (const file of ["/tmp/nexus-memory-indexer.pid", "/tmp/nexus-gateway.pid"]) {
+    for (const file of ["/tmp/nexus-memory-indexer.pid", "/tmp/nexus-voice.pid", "/tmp/nexus-vbrowser-broker.pid", "/tmp/nexus-cua-node.pid", "/tmp/nexus-desktop-handoff.pid", "/tmp/nexus-gateway.pid"]) {
       try { process.kill(Number(fs.readFileSync(file, "utf8")), "SIGTERM"); } catch {}
     }
     for (let i = 0; i < 120; i++) {
@@ -265,7 +276,13 @@ if (!vRelease) {
   fs.writeFileSync("/tmp/nexus-model-proxy.pid", String(proxy.pid));
 }
 fs.writeFileSync("/tmp/nexus-runtime-fingerprint", fingerprint);
+fs.writeFileSync("/tmp/nexus-public-ports.json", process.env.NEXUS_PUBLIC_PORTS || "{}");
 fs.writeFileSync("/tmp/nexus-runtime-config-hash", configHash);
+const alive = (name) => { try { process.kill(Number(fs.readFileSync(`/tmp/nexus-${name}.pid`, "utf8")), 0); return true; } catch { return false; } };
+if (features.desktop) {
+  if (!alive("desktop")) await startDesktop({ data, env });
+  if (!alive("desktop-handoff")) startHandoff({ data, env, publicUrl: publicUrls.desktop });
+}
 const gatewayStart = Date.now();
 const startGateway = () => spawn(
   "node",
@@ -310,6 +327,15 @@ for (let i = 0; i < 360; i++) {
     if (r.ok) {
       indexMemory();
       startMemoryIndexer();
+      // Feature daemons that connect to the Gateway start once it is serving.
+      const featureState = {};
+      if (features.vbrowser && !alive("vbrowser-broker")) startBroker({ data, env, base, publicUrl: publicUrls.vbrowser });
+      if (features.voice && !alive("voice") && process.env.NEXUS_VOICE_ACCESS_TOKEN)
+        startVoice({ data, env, base, agentId, publicUrl: publicUrls.voice, accessToken: process.env.NEXUS_VOICE_ACCESS_TOKEN });
+      if (features.desktop) {
+        if (!alive("cua-node")) startCuaNode({ data, env, base });
+        featureState.desktopNode = await approveDesktopNode({ env, base });
+      }
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(
         "/tmp/nexus-baseline-pids",
@@ -320,7 +346,7 @@ for (let i = 0; i < 360; i++) {
           marker: "NEXUS_RUNTIME_READY",
           processReused: false,
           openclawBootMs: Date.now() - gatewayStart,
-          ...(vRelease ? { vRelease: vRelease.release, convergeRestarts } : {}),
+          ...(vRelease ? { vRelease: vRelease.release, convergeRestarts, features, ...featureState } : {}),
           bootScriptMs: Date.now() - bootStart,
         }),
       );
