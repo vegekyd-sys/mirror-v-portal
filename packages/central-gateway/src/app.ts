@@ -178,7 +178,7 @@ export function createApp() {
     res.set('cache-control', 'no-store').set('referrer-policy', 'no-referrer').type('html').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>正在接通</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#e8ecf4;font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{text-align:center;padding:24px}.dot{width:12px;height:12px;border-radius:50%;background:#8ab4ff;margin:0 auto 18px;animation:p 1.2s infinite}@keyframes p{50%{opacity:.25}}small{color:#8b93a7}</style>
 <main><div class="dot"></div><p id="s">正在唤醒你的 V，大约需要 20 秒…</p><small>页面会自动跳转</small></main>
-<script>fetch(location.pathname.replace(/\/$/,'')+'/go',{method:'POST'}).then(r=>r.json().then(b=>({ok:r.ok,b}))).then(({ok,b})=>{if(ok&&b.url)location.replace(b.url);else document.getElementById('s').textContent=b.error==='AGENT_BUSY'?'V 正在忙，请稍后再试。':'暂时无法接通，请稍后再试。'}).catch(()=>{document.getElementById('s').textContent='暂时无法接通，请稍后再试。'})</script></html>`);
+<script>fetch((location.pathname.endsWith('/')?location.pathname.slice(0,-1):location.pathname)+'/go',{method:'POST'}).then(r=>r.json().then(b=>({ok:r.ok,b}))).then(({ok,b})=>{if(ok&&b.url)location.replace(b.url);else document.getElementById('s').textContent=b.error==='AGENT_BUSY'?'V 正在忙，请稍后再试。':'暂时无法接通，请稍后再试。'}).catch(()=>{document.getElementById('s').textContent='暂时无法接通，请稍后再试。'})</script></html>`);
   });
   app.post('/onboard/open/:tenant/:sig/:service/go', async (req, res) => {
     const params = openParams(req);
@@ -192,6 +192,21 @@ export function createApp() {
       if (!response.ok || !body.url || !/^https:\/\/[a-z0-9-]+\.vercel\.run\//.test(body.url)) { res.status(response.ok ? 502 : response.status).json({ error: body.error ?? 'OPEN_FAILED' }); return; }
       res.set('cache-control', 'no-store').json({ url: body.url });
     } catch { res.status(503).json({ error: 'OPEN_FAILED' }); }
+  });
+
+  // A component inside a Mirror sandbox (the takeover page's 交还给 V) continues its conversation.
+  app.post('/onboard/wake/:tenant/:sig', async (req, res) => {
+    const { tenant, sig } = req.params as Record<string, string>;
+    if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(tenant) || !/^[a-f0-9]{32}$/.test(sig)) { res.status(404).json({ error: 'WAKE_LINK_INVALID' }); return; }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(tenant)}/wake?sig=${sig}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {}) },
+        body: JSON.stringify({ sessionKey: req.body?.sessionKey, text: req.body?.text, requestKey: req.body?.requestKey }),
+        signal: AbortSignal.timeout(20000),
+      });
+      res.status(response.status).json(await response.json());
+    } catch { res.status(503).json({ error: 'WAKE_FAILED' }); }
   });
 
   app.get('/onboard/scan', (req, res) => {

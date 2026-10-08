@@ -26,6 +26,7 @@ cp "$platform/scripts/v-memory-indexer.mjs" "$tmp/v-memory-indexer.mjs"
 mkdir -p "$tmp/desktop"
 cp -R "$platform/apps/v-desktop-handoff/desktop" "$platform/apps/v-desktop-handoff/service" "$platform/apps/v-desktop-handoff/plugin" "$tmp/desktop/"
 rm -rf "$tmp/desktop/service/tests" "$tmp/desktop/plugin/tests"
+node "$repo_root/deploy/v-release/desktop-mirror.mjs" "$tmp/desktop/plugin" >/dev/null
 desktop_commit="$(git -C "$platform" rev-parse HEAD)"
 # V Browser from a pinned v-browser commit, plugin switched to single-owner mode.
 vbrowser_repo="${VBROWSER_REPO:?VBROWSER_REPO is required}"

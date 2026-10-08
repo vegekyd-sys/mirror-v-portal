@@ -39,6 +39,8 @@ export interface RuntimeProvider {
   stop(
     tenant: Tenant,
   ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
+  /** A component inside the sandbox asks to continue a conversation (Vercel only). */
+  wakeSignatureValid?(tenant: Tenant, signature: string): boolean;
   /** Signed owner links to a public service of the sandbox (Vercel only). */
   openSignatureValid?(tenant: Tenant, service: string, signature: string): boolean;
   serviceUrl?(tenant: Tenant, service: string, publicUrls: Record<string, string>): string;
@@ -145,6 +147,11 @@ export class VercelProvider implements RuntimeProvider {
     const base = (this.config.publicBaseUrl || "https://mirror-v-portal.vercel.app").replace(/\/$/, "");
     return Object.fromEntries(ports.filter((name) => name === "voice").map((name) => [name,
       `${base}/onboard/open/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, `open:${name}`).slice(0, 32)}/${name}`]));
+  }
+  wakeSignatureValid(tenant: Tenant, signature: string): boolean {
+    const expected = Buffer.from(this.tenantSecret(tenant.id, "wake").slice(0, 32));
+    const given = Buffer.from(String(signature));
+    return given.length === expected.length && timingSafeEqual(given, expected);
   }
   openSignatureValid(tenant: Tenant, service: string, signature: string): boolean {
     const expected = Buffer.from(this.tenantSecret(tenant.id, `open:${service}`).slice(0, 32));
@@ -295,6 +302,7 @@ export class VercelProvider implements RuntimeProvider {
         NEXUS_CPU_PROFILE: process.env.NEXUS_CPU_PROFILE || "0",
         NEXUS_PUBLIC_URLS: JSON.stringify(publicUrls),
         NEXUS_OPEN_LINKS: JSON.stringify(this.openLinks(tenant)),
+        NEXUS_WAKE_URL: `${(this.config.publicBaseUrl || "https://mirror-v-portal.vercel.app").replace(/\/$/, "")}/onboard/wake/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, "wake").slice(0, 32)}`,
         ...(publicPorts.some(([name]) => name === "voice") ? { NEXUS_VOICE_ACCESS_TOKEN: this.tenantSecret(tenant.id, "voice-access") } : {}),
         NEXUS_PUBLIC_PORTS: JSON.stringify(Object.fromEntries(publicPorts)),
       },

@@ -1,5 +1,6 @@
 import { InboundMediaError } from "./inbound-media.js";
 import { Scheduler } from './scheduler.js';
+import { randomUUID } from "node:crypto";
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
 
@@ -234,6 +235,32 @@ export class RuntimeManager {
     const urls = await this.provider.runningPublicUrls?.(tenant);
     if (!urls) throw Error("AGENT_BUSY");
     return this.provider.serviceUrl!(tenant, service, urls);
+  }
+  /**
+   * Continue a conversation on behalf of a component inside the sandbox (the
+   * takeover page's 交还给 V): queue a normal turn in the original chat, so the
+   * reply leaves through the channel edge like any other.
+   */
+  async wakeSession(tenantId: string, signature: string, input: { sessionKey?: unknown; text?: unknown; requestKey?: unknown }) {
+    const tenant = await this.store.tenant(tenantId);
+    if (!this.provider.wakeSignatureValid?.(tenant, signature)) throw Error("WAKE_LINK_INVALID");
+    const prefix = `agent:${tenant.template_id || "dealclaw"}:`;
+    const internal = String(input.sessionKey ?? "");
+    const sessionKey = internal.startsWith(prefix) ? internal.slice(prefix.length) : "";
+    if (!sessionKey || sessionKey.length > 256 || /:scheduled:/.test(sessionKey)) throw Error("WAKE_SESSION_INVALID");
+    const text = String(input.text ?? "").slice(0, 2000);
+    const requestKey = `wake:${String(input.requestKey ?? "").slice(0, 200)}`;
+    if (!text.trim() || requestKey === "wake:") throw Error("WAKE_INPUT_INVALID");
+    const chat = sessionKey.startsWith(`${tenant.id}:oc_`) ? sessionKey.slice(tenant.id.length + 1) : null;
+    const id = randomUUID();
+    const inserted = await this.store.pool.query(
+      "INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,chat_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING id",
+      [id, tenant.id, requestKey, sessionKey, text, chat ? "feishu" : "browser-trial", chat],
+    );
+    if (!inserted.rowCount) return { queued: false, duplicate: true };
+    await this.store.boss.send("agent-turn", { runId: id }, { group: { id: tenant.id } });
+    await this.store.event(tenant.id, "session-woken", { requestKey }, id);
+    return { queued: true, runId: id };
   }
   async collect(tenantId?: string) {
     if (this.collecting) return;

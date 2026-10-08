@@ -353,6 +353,15 @@ app.get("/api/state", async (_req, res, next) => {
     next(e);
   }
 });
+// A component inside a sandbox (proxied from the public Portal) continues a conversation.
+app.post("/v1/tenants/:id/wake", async (req, res) => {
+  try {
+    res.json(await manager.wakeSession(req.params.id, String(req.query.sig ?? ""), req.body ?? {}));
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "WAKE_FAILED";
+    res.status(/INVALID|NOT_FOUND/.test(code) ? 404 : 503).json({ error: /^[A-Z_]+$/.test(code) ? code : "WAKE_FAILED" });
+  }
+});
 // Signed owner link (proxied from the public Portal): wake and return the service URL.
 app.get("/v1/tenants/:id/open/:service", async (req, res) => {
   try {
