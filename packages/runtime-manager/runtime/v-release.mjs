@@ -22,6 +22,7 @@ export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/vbrowser\/broker\/main\.mjs(?:\s|$)/,
   /\/v\/voice\/lab\/gpt-live-h5\/server\.mjs(?:\s|$)/,
   /openclaw\.mjs node run\b/,
+  /\/v-features\.mjs approve-node\b/,
   /\/opt\/google\/chrome\/|\bgoogle-chrome\b|chrome_crashpad_handler/,
 ]);
 
@@ -31,6 +32,9 @@ export const V_RELEASE_BACKUP_EXCLUDES = Object.freeze([
   /^state\/agents\/[^/]+\/agent\/codex-home\/(?:cache|log|logs_\d+\.sqlite[^/]*|models_cache\.json|shell_snapshots|tmp)(?:\/|$)/,
   /^state\/logs(?:\/|$)/,
   /^state\/cache(?:\/|$)/,
+  // Chrome's re-downloadable caches and on-device models (tens of MB); cookies and logins stay.
+  /^state\/browser\/[^/]+\/user-data\/(?:optimization_guide_model_store|component_crx_cache|Safe Browsing|segmentation_platform|GrShaderCache|ShaderCache|GraphiteDawnCache|extensions_crx_cache)(?:\/|$)/,
+  /^state\/browser\/[^/]+\/user-data\/[^/]+\/(?:Cache|Code Cache|GPUCache|DawnGraphiteCache|DawnWebGPUCache|Service Worker\/CacheStorage|Service Worker\/ScriptCache)(?:\/|$)/,
 ]);
 
 export function readVRelease(file = V_RELEASE_MARKER) {

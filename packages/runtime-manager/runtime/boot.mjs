@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
-import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, approveDesktopNode } from "./v-features.mjs";
+import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, startNodeApprover } from "./v-features.mjs";
 
 const bootStart = Date.now();
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
@@ -334,7 +334,7 @@ for (let i = 0; i < 360; i++) {
         startVoice({ data, env, base, agentId, publicUrl: publicUrls.voice, accessToken: process.env.NEXUS_VOICE_ACCESS_TOKEN });
       if (features.desktop) {
         if (!alive("cua-node")) startCuaNode({ data, env, base });
-        featureState.desktopNode = await approveDesktopNode({ env, base });
+        if (!alive("node-approver")) startNodeApprover({ env, base });
       }
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(

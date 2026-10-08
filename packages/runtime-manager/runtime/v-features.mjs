@@ -214,22 +214,36 @@ export function startCuaNode({ data, env, base, gatewayPort = 18790 }) {
   }));
 }
 
-/** The desktop node pairs once; its identity lives in agent-data, so later boots reconnect. */
-export async function approveDesktopNode({ env, base, attempts = 40 }) {
-  const cli = (...args) => execFileSync("node", [`${base}/runtime/node_modules/openclaw/openclaw.mjs`, ...args], { env, encoding: "utf8", timeout: 20000, stdio: ["ignore", "pipe", "pipe"] });
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const listed = JSON.parse(cli("nodes", "list", "--json"));
-      const nodes = Array.isArray(listed) ? listed : listed.nodes ?? [];
-      if (nodes.some((node) => /Mirror desktop/.test(node.displayName ?? node.name ?? "") && (node.connected ?? node.online ?? true))) return "paired";
-    } catch {}
+/**
+ * Approve the desktop node's pairing and capability requests. Runs detached from
+ * boot (each CLI call takes seconds) and stops once nothing is pending for a while.
+ */
+export async function approveDesktopNode({ env, base, deadlineMs = 120000 }) {
+  const cli = (...args) => execFileSync("node", [`${base}/runtime/node_modules/openclaw/openclaw.mjs`, ...args], { env, encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  const until = Date.now() + deadlineMs;
+  let approved = 0, quiet = 0;
+  while (Date.now() < until && quiet < 6) {
+    let requests = [];
     try {
       const pending = JSON.parse(cli("nodes", "pending", "--json"));
-      const requests = Array.isArray(pending) ? pending : pending.pending ?? pending.requests ?? [];
-      const mine = requests.find((request) => /Mirror desktop/.test(request.displayName ?? request.name ?? ""));
-      if (mine) { cli("nodes", "approve", String(mine.requestId ?? mine.id)); return "approved"; }
+      requests = (Array.isArray(pending) ? pending : pending.pending ?? pending.requests ?? [])
+        .filter((request) => /Mirror desktop/.test(JSON.stringify(request)));
     } catch {}
-    await new Promise((r) => setTimeout(r, 500));
+    for (const request of requests) {
+      try { cli("nodes", "approve", String(request.requestId ?? request.id)); approved++; } catch {}
+    }
+    quiet = requests.length ? 0 : quiet + 1;
+    await new Promise((r) => setTimeout(r, 2000));
   }
-  return "not-paired";
+  return { approved };
+}
+
+export function startNodeApprover({ env, base }) {
+  return started("node-approver", spawn("node", [new URL(import.meta.url).pathname, "approve-node"], {
+    env: { ...env, NEXUS_BASE: base }, detached: true, stdio: ["ignore", logFd("node-approver"), logFd("node-approver")],
+  }));
+}
+
+if (process.argv[1] === new URL(import.meta.url).pathname && process.argv[2] === "approve-node") {
+  console.log(JSON.stringify({ at: new Date().toISOString(), ...(await approveDesktopNode({ env: process.env, base: process.env.NEXUS_BASE })) }));
 }

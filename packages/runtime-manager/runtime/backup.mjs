@@ -71,6 +71,8 @@ const tar = (args) => {
   }
 };
 tar([
+  // Chrome and the Workers create and delete files while we read: a vanished file is not an error.
+  ...(vRelease ? ["--ignore-failed-read", "--warning=no-file-removed", "--warning=no-file-changed"] : []),
   "-czf",
   archive,
   "--no-recursion",
