@@ -56,6 +56,8 @@ if (extras.length) {
       ok: false,
       reason: "background-processes",
       count: extras.length,
+      // Executable names only (no arguments: they can carry user data).
+      commands: extras.slice(0, 5).map((line) => line.trim().split(/\s+/)[2]?.split("/").pop()?.slice(0, 40)),
     }),
   );
   process.exit(2);
