@@ -103,6 +103,9 @@ export interface RuntimeSandbox {
   status: string;
   update(options: { timeout: number; ports?: number[] }): Promise<unknown>;
   domain?(port: number): string;
+  /** When the running session will be stopped by Vercel, and how to push that back. */
+  expiresAt?: Date;
+  extendTimeout?(duration: number): Promise<void>;
   readFileToBuffer(options: { path: string }): Promise<Buffer | null>;
   writeFiles(files: { path: string; content: Buffer }[]): Promise<unknown>;
   runCommand(options: { cmd: string; args?: string[]; env?: Record<string, string>; stdout?: Writable; signal?: AbortSignal }): Promise<{ exitCode: number; stdout(): Promise<string>; stderr(): Promise<string> }>;
@@ -132,6 +135,20 @@ export function templateRuntimeEnv(template?: TemplateRecord): Record<string, st
     env[key] = value;
   }
   return env;
+}
+
+/**
+ * A Vercel session stops at a fixed deadline counted from its start; update({timeout})
+ * with the same value does not move it (2026-10-08: a takeover was cut at exactly
+ * 20 minutes after the sandbox started). Keep at least minRemainingMs ahead.
+ */
+export async function keepSessionAlive(sbx: RuntimeSandbox, minRemainingMs = 900_000, now = Date.now()) {
+  const expires = sbx.expiresAt instanceof Date ? sbx.expiresAt.getTime() : undefined;
+  if (!expires || typeof sbx.extendTimeout !== "function") return false;
+  const remaining = expires - now;
+  if (remaining >= minRemainingMs) return false;
+  await sbx.extendTimeout(minRemainingMs - remaining + 300_000).catch(() => undefined);
+  return true;
 }
 
 export class VercelProvider implements RuntimeProvider {
@@ -244,6 +261,7 @@ export class VercelProvider implements RuntimeProvider {
     const publicPorts = templatePublicPorts(this.config.templates?.[tenant.template_id]);
     // The full port list each time: a template that added a port reaches existing tenants too.
     await sbx.update({ timeout: 1_200_000, ...(publicPorts.length ? { ports: publicPorts.map(([, port]) => port) } : {}) });
+    await keepSessionAlive(sbx);
     const publicUrls = Object.fromEntries(publicPorts.flatMap(([name, port]) => {
       try { return sbx.domain ? [[name, sbx.domain(port)]] : []; } catch { return []; }
     }));
@@ -559,8 +577,11 @@ export class VercelProvider implements RuntimeProvider {
       args: ["/vercel/sandbox/nexus/quiesce.mjs"],
       signal: AbortSignal.timeout(30000),
     });
-    if (result.exitCode !== 0)
+    if (result.exitCode !== 0) {
+      // Someone is on the takeover page or in a call: do not let the session deadline end it.
+      await keepSessionAlive(sbx);
       return { stopped: false, reason: "ACTIVE_BACKGROUND_WORK" };
+    }
     this.handles.delete(tenant.id);
     const stopped = await sbx.stop({ signal: AbortSignal.timeout(120000) });
     if (stopped.status !== "stopped")

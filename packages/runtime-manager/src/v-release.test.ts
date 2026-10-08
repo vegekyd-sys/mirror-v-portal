@@ -121,3 +121,13 @@ test("a person on a public page or a live keep-awake deadline keeps the VM up", 
     expect(vReleaseKeepAwake({ publicPorts: {}, established: ports, dir })).toBeNull();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("the session deadline is pushed back only when it is near", async () => {
+  const { keepSessionAlive } = await import("./provider.js");
+  const calls: number[] = [];
+  const sbx = (expiresIn: number) => ({ expiresAt: new Date(1_000_000 + expiresIn), extendTimeout: async (ms: number) => { calls.push(ms); } }) as any;
+  expect(await keepSessionAlive(sbx(20 * 60_000), 900_000, 1_000_000)).toBe(false);
+  expect(await keepSessionAlive(sbx(60_000), 900_000, 1_000_000)).toBe(true);
+  expect(calls).toEqual([900_000 - 60_000 + 300_000]);
+  expect(await keepSessionAlive({ update: async () => {} } as any, 900_000)).toBe(false);
+});
