@@ -131,3 +131,18 @@ test("the session deadline is pushed back only when it is near", async () => {
   expect(calls).toEqual([900_000 - 60_000 + 300_000]);
   expect(await keepSessionAlive({ update: async () => {} } as any, 900_000)).toBe(false);
 });
+
+test("helpers of V's daemons are daemons; an agent's own background job is not", async () => {
+  const { daemonTree } = await import("../runtime/v-release.mjs");
+  const isDaemon = daemonTree([
+    { pid: "10", ppid: "1", command: "/opt/google/chrome/chrome --remote-debugging-port=18801" },
+    { pid: "11", ppid: "10", command: "cat" },
+    { pid: "20", ppid: "1", command: "openclaw" },
+    { pid: "21", ppid: "20", command: "openclaw-node" },
+    { pid: "30", ppid: "1", command: "openclaw-gateway" },
+    { pid: "31", ppid: "30", command: "/usr/local/bin/node /vercel/sandbox/nexus/v/worker/dist/worker.mjs" },
+    { pid: "32", ppid: "31", command: "bash -c sleep 600" },
+  ]);
+  expect(["10", "11", "20", "21", "31"].map(isDaemon)).toEqual([true, true, true, true, true]);
+  expect(isDaemon("32")).toBe(false);
+});

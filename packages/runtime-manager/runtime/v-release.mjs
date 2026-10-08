@@ -22,6 +22,8 @@ export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/vbrowser\/broker\/main\.mjs(?:\s|$)/,
   /\/v\/voice\/lab\/gpt-live-h5\/server\.mjs(?:\s|$)/,
   /openclaw\.mjs node run\b/,
+  // The desktop node renames its processes after start.
+  /^openclaw(?:-node)?(?:\s|$)/,
   /\/v-features\.mjs approve-node\b/,
   /openclaw\.mjs nodes (?:pending|approve|list)\b/,
   /\/opt\/google\/chrome\/|\bgoogle-chrome\b|chrome_crashpad_handler/,
@@ -115,6 +117,39 @@ export function ensureCodexHome(stateDir, agentId) {
 
 export function isVReleaseDaemon(command) {
   return V_RELEASE_DAEMONS.some((pattern) => pattern.test(command));
+}
+
+/**
+ * pid -> true when the process or one of its ancestors is a V daemon (Chrome's
+ * helper `cat` pipes, the desktop session's children). Work an agent started
+ * itself has a Worker or the Gateway as ancestor and still counts as busy.
+ */
+/** Daemons whose own helpers are part of them (Chrome's pipes, the desktop session, the node runner). */
+export const V_RELEASE_DAEMON_TREES = Object.freeze([
+  /\/opt\/google\/chrome\/|\bgoogle-chrome\b/,
+  /^\S*(?:Xtigervnc|xfce4-session|dbus-daemon)\b/,
+  /\/start-desktop\.sh(?:\s|$)/,
+  /^openclaw(?:-node)?(?:\s|$)/,
+  /openclaw\.mjs node run\b/,
+]);
+
+export function daemonTree(rows) {
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  const memo = new Map();
+  const visit = (pid, depth = 0) => {
+    if (memo.has(pid)) return memo.get(pid);
+    const row = byPid.get(pid);
+    const result = !!row && depth < 12 && (isVReleaseDaemon(row.command) || (row.ppid !== pid && treeRoot(row.ppid, depth + 1)));
+    memo.set(pid, result);
+    return result;
+  };
+  // An ancestor passes daemon status down only if it is one of the tree daemons.
+  const treeRoot = (pid, depth) => {
+    const row = byPid.get(pid);
+    if (!row || depth >= 12) return false;
+    return V_RELEASE_DAEMON_TREES.some((pattern) => pattern.test(row.command)) || (row.ppid !== pid && treeRoot(row.ppid, depth + 1));
+  };
+  return (pid) => visit(pid);
 }
 
 export function isVReleaseBackupExcluded(rel) {

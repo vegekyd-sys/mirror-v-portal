@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { readVRelease, isVReleaseDaemon, vReleaseKeepAwake, desktopHandoffBusy, processRemotePorts } from "./v-release.mjs";
+import { readVRelease, daemonTree, vReleaseKeepAwake, desktopHandoffBusy, processRemotePorts } from "./v-release.mjs";
 const vRelease = readVRelease();
 
 // Reject unknown live processes before stopping a VM. Kernel and Vercel supervisor
@@ -17,6 +17,10 @@ const now = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
   .split("\n")
   .filter(Boolean);
 const own = String(process.pid);
+const isDaemon = daemonTree(now.map((line) => {
+  const [pid, ppid, ...args] = line.trim().split(/\s+/);
+  return { pid, ppid, command: args.join(" ") };
+}));
 const extras = now.filter((line) => {
   const [pid, ppid, ...args] = line.trim().split(/\s+/);
   const command = args.join(" ");
@@ -30,7 +34,7 @@ const extras = now.filter((line) => {
     !command.includes("sshd:") &&
     !command.includes("envd") &&
     // V's own daemons (Worker pool, memory indexer, Codex app-server) idle with the Gateway.
-    !(vRelease && isVReleaseDaemon(command))
+    !(vRelease && isDaemon(pid))
   );
 });
 if (vRelease) {
