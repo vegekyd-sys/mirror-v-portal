@@ -11,8 +11,10 @@ export const V_RELEASE_PROVIDER_KEYS = Object.freeze({
   google: "GOOGLE_API_KEY",
 });
 
+// As on V: deepseek-flash (and its Codex alias) accept images, which also keeps
+// the computer tool (screenshots) in the agent's tool list; v4-pro is text only.
 const deepseekModel = (id) => ({
-  id, name: id, reasoning: true, input: ["text"],
+  id, name: id, reasoning: true, input: id === "deepseek-v4-pro" ? ["text"] : ["text", "image"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1000000, maxTokens: 384000, api: "openai-completions",
   compat: { supportsUsageInStreaming: true, supportsReasoningEffort: true, maxTokensField: "max_tokens", thinkingFormat: "deepseek" },
