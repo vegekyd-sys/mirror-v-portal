@@ -23,6 +23,7 @@ export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/voice\/lab\/gpt-live-h5\/server\.mjs(?:\s|$)/,
   /openclaw\.mjs node run\b/,
   /\/v-features\.mjs approve-node\b/,
+  /openclaw\.mjs nodes (?:pending|approve|list)\b/,
   /\/opt\/google\/chrome\/|\bgoogle-chrome\b|chrome_crashpad_handler/,
 ]);
 
