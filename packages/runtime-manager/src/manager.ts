@@ -4,6 +4,14 @@ import { randomUUID } from "node:crypto";
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
 
+/** Failures the runtime reported after ending the turn itself (e.g. a model timeout). */
+export const RUNTIME_REPORTED_FAILURES = new Set([
+  "OPENCLAW_RESPONSE_FAILED",
+  "OPENCLAW_INCOMPLETE_RESPONSE",
+  "STATE_BACKUP_FAILED",
+  "STATE_BACKUP_EMPTY",
+]);
+
 export class RuntimeManager {
   private timer?: NodeJS.Timeout;
   private collecting = false;
@@ -181,9 +189,12 @@ export class RuntimeManager {
           "UPDATE elastic_runs SET status=$2,error=$3,completed_at=now() WHERE id=$1",
           [runId, status, message],
         );
+        // The run stays uncertain (its tools may have acted), but when the runtime
+        // itself reported the turn finished, nothing is still in flight: the next
+        // message may run. Only a turn the controller lost track of blocks the agent.
         await db.query(
           "UPDATE elastic_tenants SET state=$2,last_error=$3,last_activity=now() WHERE id=$1",
-          [tenant.id, sent ? "blocked" : "ready", message],
+          [tenant.id, sent && !RUNTIME_REPORTED_FAILURES.has(message) ? "blocked" : "ready", message],
         );
         await this.store.event(tenant.id, status, { error: message }, runId);
         if (current.channel === "feishu") {
