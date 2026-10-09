@@ -117,3 +117,28 @@ test("tool progress opens a card before answer text and is removed on completion
   expect(f.contents.at(-1)).toBe('最终结果');
   expect(f.api.im.message.reply).toHaveBeenCalledTimes(1);
 });
+test("narration before tools stays above the answer and a preview gives way to real text", async () => {
+  const f = fixture(),
+    stream = new StreamingReply(f.store, f.api, "run", "tenant", "parent");
+  const settle = () => new Promise((r) => setTimeout(r, 400));
+  stream.showPreview("我先查一下入境政策");
+  await settle();
+  expect(f.contents.at(-1)).toBe("我先查一下入境政策");
+  // The preview was narration: it becomes a note, and a tool status follows it.
+  stream.commentary("我先查一下入境政策，再给你方案。");
+  stream.progress("⏳ 正在搜索资料…");
+  await settle();
+  expect(f.contents.at(-1)).toBe("我先查一下入境政策，再给你方案。\n\n⏳ 正在搜索资料…");
+  // A non-reasoning call streams narration into the text; retract removes it from the answer.
+  stream.progress("");
+  stream.push("查到了。");
+  stream.commentary("查到了。", "查到了。".length);
+  stream.showPreview("方案如下\nMEDIA: /tmp/a.png");
+  await settle();
+  expect(f.contents.at(-1)).toBe("我先查一下入境政策，再给你方案。\n\n查到了。\n\n方案如下");
+  stream.push("方案如下：第一天……");
+  await settle();
+  expect(f.contents.at(-1)).toBe("我先查一下入境政策，再给你方案。\n\n查到了。\n\n方案如下：第一天……");
+  expect(await stream.finish("方案如下：第一天……")).toBe(true);
+  expect(f.contents.at(-1)).toBe("我先查一下入境政策，再给你方案。\n\n查到了。\n\n方案如下：第一天……");
+});

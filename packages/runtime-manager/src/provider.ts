@@ -275,6 +275,7 @@ export class VercelProvider implements RuntimeProvider {
         "model-proxy.mjs",
         "backup.mjs",
         "progress-patch.mjs",
+        "stream-preview-patch.mjs",
         "scheduler-plugin.mjs",
         "agent-config.mjs",
         "v-release.mjs",
@@ -436,6 +437,16 @@ export class VercelProvider implements RuntimeProvider {
               await onEvent("tool-progress", { name: event.name, phase: event.phase, toolCallId: event.toolCallId });
             } else if (event.type === "nexus.public_snapshot") {
               await onEvent("public-progress", { text: event.text });
+            } else if (event.type === "nexus.preview") {
+              // Provisional text of the message being generated; output_text stays authoritative.
+              if (typeof event.text === "string") await onEvent("preview", { seq: event.seq, text: event.text });
+            } else if (event.type === "nexus.commentary") {
+              // Narration before a tool call. When it already streamed into output_text,
+              // `retract` is how many trailing UTF-16 units of the output it occupies.
+              const retract = Number.isInteger(event.retract) && event.retract > 0 ? Math.min(event.retract, output.length) : 0;
+              if (retract) output = output.slice(0, output.length - retract);
+              if (typeof event.text === "string" && event.text.trim())
+                await onEvent("commentary", { text: event.text.trim(), retract });
             } else if (event.type === "response.completed") {
               if (event.response?.status !== "completed") throw new Error("OPENCLAW_RESPONSE_FAILED");
               completed = true;

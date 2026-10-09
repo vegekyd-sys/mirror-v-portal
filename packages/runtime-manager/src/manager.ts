@@ -132,7 +132,8 @@ export class RuntimeManager {
               await this.store.event(tenant.id,"schedule-command",{action:data.args?.action,ok:!data.result.error},runId);
               return;
             }
-            await this.store.event(tenant.id, kind, data, runId);
+            // Previews are throttled snapshots of the same text: route them, never persist them.
+            if (kind !== "preview") await this.store.event(tenant.id, kind, data, runId);
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);
           },

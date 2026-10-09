@@ -1,4 +1,5 @@
 import { installProgress } from "./progress-patch.mjs";
+import { installStreamPreview } from "./stream-preview-patch.mjs";
 import fs from "node:fs";
 import { readAgentKitProfile, seedWorkspace, createOpenClawConfig, assertAgentKitNode, agentKitFingerprint } from "./agent-config.mjs";
 import { createHash } from "node:crypto";
@@ -109,6 +110,8 @@ if (features.desktop) Object.assign(env, desktopEnv(data));
 if (features.vbrowser) Object.assign(env, { OPENCLAW_EXTENSION_COMMAND_TIMEOUT_MS: "180000", OPENCLAW_PERSISTENT_CDP_CONNECT_TIMEOUT_MS: "60000" });
 // No credentials in the filesystem snapshot. Values resolve from process env.
 installProgress(`${base}/runtime/node_modules/openclaw`);
+// DeepSeek reasoning turns hold all visible text until the message ends; stream a provisional preview.
+if (vRelease) installStreamPreview({ openclawRoot: `${base}/runtime/node_modules/openclaw`, workerDist: `${V_RELEASE_ROOT}/worker/dist` });
 const pluginDir = base + "/scheduler-plugin";
 fs.mkdirSync(pluginDir, { recursive: true });
 fs.copyFileSync(base + "/scheduler-plugin.mjs", pluginDir + "/index.mjs");
@@ -196,7 +199,9 @@ const cfg = vRelease ? createVReleaseConfig({
     },
   },
 };
-const configHash = createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
+// Patch revisions count as configuration: a running Gateway restarts once to load new patch code.
+const RUNTIME_PATCHES = vRelease ? "progress-v4+reasoning-preview-v1" : "";
+const configHash = createHash("sha256").update(JSON.stringify(cfg) + RUNTIME_PATCHES).digest("hex");
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {
   ensureCodexHome(state, agentId);

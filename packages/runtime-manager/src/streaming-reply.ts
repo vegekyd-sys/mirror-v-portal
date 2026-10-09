@@ -6,11 +6,30 @@ export class StreamingReply {
   private sent = "";
   private status = "";
   private publicSnapshot = "";
-  private content() { return [this.text || this.publicSnapshot, this.status].filter(Boolean).join("\n\n"); }
+  /** Narration the agent wrote before its tool calls, in order. It stays above the answer. */
+  private notes: string[] = [];
+  /** Provisional text of the message being generated; real output text replaces it. */
+  private preview = "";
+  private body() { return this.text || this.preview || this.publicSnapshot; }
+  private content() { return [...this.notes, this.body(), this.status].filter(Boolean).join("\n\n"); }
   progress(status: string, snapshot?: string) {
     if (this.closed || this.failed) return;
     this.status = status;
     if (snapshot !== undefined) this.publicSnapshot = snapshot;
+    this.schedule();
+  }
+  showPreview(text: string) {
+    if (this.closed || this.failed) return;
+    // An attachment line is delivered as a file at the end, never shown as text.
+    this.preview = text.replace(/^[ \t]*MEDIA:.*$/gm, "").trim();
+    this.schedule();
+  }
+  /** The preview (or streamed text) turned out to be narration: keep it as a note above the answer. */
+  commentary(text: string, retract = 0) {
+    if (this.closed || this.failed) return;
+    if (retract > 0) this.text = this.text.slice(0, Math.max(0, this.text.length - retract));
+    if (this.notes[this.notes.length - 1] !== text) this.notes.push(text);
+    this.preview = "";
     this.schedule();
   }
   private sequence = 0;
@@ -46,7 +65,7 @@ export class StreamingReply {
           this.content() !== this.sent &&
           // Hold back while the text could still resolve to a silence marker;
           // once published it cannot be unsaid.
-          !(this.text && mayBecomeSilent(this.text) && !this.publicSnapshot && !this.status)
+          !((this.text || this.preview) && mayBecomeSilent(this.text || this.preview) && !this.publicSnapshot && !this.status && !this.notes.length)
         ) {
           const delay = Math.max(0, 150 - (Date.now() - this.lastFlushAt));
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
@@ -133,7 +152,7 @@ export class StreamingReply {
           at: Date.now(),
           messageId: this.messageId,
           characters: content.length,
-          contentKind: this.text || this.publicSnapshot ? "assistant" : "tool-status",
+          contentKind: this.text || this.publicSnapshot ? "assistant" : this.notes.length ? "commentary" : this.preview ? "preview" : "tool-status",
         },
         this.runId,
       );
@@ -174,10 +193,13 @@ export class StreamingReply {
     this.text = output;
     this.status = "";
     this.publicSnapshot = "";
+    this.preview = "";
+    // The narration stays in the final card, above the answer, as the user saw it stream.
+    const final = [...this.notes, output].filter(Boolean).join("\n\n");
     try {
       await this.load();
       if (!this.cardId) await this.flush();
-      if (!this.cardId || output.length > 28000)
+      if (!this.cardId || final.length > 28000)
         throw Error("FINAL_CARD_UNAVAILABLE");
       const sequence = ++this.sequence;
       await this.store.pool.query(
@@ -196,7 +218,7 @@ export class StreamingReply {
               config: { streaming_mode: false, update_multi: true },
               body: {
                 elements: [
-                  { tag: "markdown", element_id: "answer", content: output },
+                  { tag: "markdown", element_id: "answer", content: final },
                 ],
               },
             }),

@@ -156,6 +156,8 @@ export class FeishuEdge implements ChannelEdge {
       const label=labels[data.name] || "执行工具";
       this.stream(run)?.progress(data.phase === "result" ? `✓ ${label}工具已返回` : `⏳ 正在${label}…`);
     } else if(kind === "public-progress") this.stream(run)?.progress("",data.text);
+    else if(kind === "preview") this.stream(run)?.showPreview(data.text);
+    else if(kind === "commentary") this.stream(run)?.commentary(data.text, data.retract);
     else if(kind === "runtime-completed") this.streams.get(run.id)?.progress("");
   }
   async start() {
