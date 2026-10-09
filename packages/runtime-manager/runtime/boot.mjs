@@ -9,6 +9,14 @@ import { createVReleaseConfig } from "./v-config.mjs";
 import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, startNodeApprover } from "./v-features.mjs";
 
 const bootStart = Date.now();
+// /tmp survives sleep but processes do not. After a resume, PID files from the
+// previous life name PIDs the new boot reuses (boot order is deterministic), so a
+// daemon would look alive and never start, and quiesce would signal a stranger.
+const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+if ((fs.existsSync("/tmp/nexus-boot-id") ? fs.readFileSync("/tmp/nexus-boot-id", "utf8") : "") !== bootId) {
+  for (const name of fs.readdirSync("/tmp")) if (/^nexus-.+\.pid$/.test(name)) fs.rmSync(`/tmp/${name}`, { force: true });
+  fs.writeFileSync("/tmp/nexus-boot-id", bootId);
+}
 const agentId = process.env.NEXUS_AGENT_ID || "dealclaw";
 // Templates whose payload ships Markdown memory (MEMORY.md + memory/**) to index and search.
 const profile = readAgentKitProfile("/vercel/sandbox/nexus/agent-kit-runtime.json", agentId, process.env.NEXUS_TEMPLATE_VERSION);

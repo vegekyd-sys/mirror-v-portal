@@ -281,40 +281,7 @@ export class VercelProvider implements RuntimeProvider {
       try { return sbx.domain ? [[name, sbx.domain(port)]] : []; } catch { return []; }
     }));
     const setupStart = Date.now();
-    if (!this.handles.has(tenant.id)) {
-      const files = [
-        "boot.mjs",
-        "invoke.mjs",
-        "inbound-input.mjs",
-        "quiesce.mjs",
-        "model-proxy.mjs",
-        "backup.mjs",
-        "progress-patch.mjs",
-        "stream-preview-patch.mjs",
-        "scheduler-plugin.mjs",
-        "agent-config.mjs",
-        "v-release.mjs",
-        "v-config.mjs",
-        "v-features.mjs",
-      ].map((file) => ({
-        path: `/vercel/sandbox/nexus/${file}`,
-        content: fs.readFileSync(
-          new URL(`../runtime/${file}`, import.meta.url),
-        ),
-      }));
-      const revision = createHash("sha256")
-        .update(Buffer.concat(files.map((f) => f.content)))
-        .digest("hex");
-      const revisionPath = "/vercel/sandbox/nexus/runtime-revision.txt";
-      const installed = await sbx
-        .readFileToBuffer({ path: revisionPath })
-        .catch(() => null);
-      if (installed?.toString() !== revision)
-        await sbx.writeFiles([
-          ...files,
-          { path: revisionPath, content: Buffer.from(revision) },
-        ]);
-    }
+    if (!this.handles.has(tenant.id)) await this.syncRuntimeScripts(sbx);
     const scriptDeployMs = Date.now() - setupStart;
     const bootCommandStart = Date.now();
     const model = this.modelForTenant(tenant);
@@ -594,10 +561,48 @@ export class VercelProvider implements RuntimeProvider {
     }
     return files;
   }
+  /** Make the sandbox's runtime scripts match this release (written only when they differ). */
+  private async syncRuntimeScripts(sbx: RuntimeSandbox) {
+    const files = [
+      "boot.mjs",
+      "invoke.mjs",
+      "inbound-input.mjs",
+      "quiesce.mjs",
+      "model-proxy.mjs",
+      "backup.mjs",
+      "progress-patch.mjs",
+      "stream-preview-patch.mjs",
+      "scheduler-plugin.mjs",
+      "agent-config.mjs",
+      "v-release.mjs",
+      "v-config.mjs",
+      "v-features.mjs",
+    ].map((file) => ({
+      path: `/vercel/sandbox/nexus/${file}`,
+      content: fs.readFileSync(
+        new URL(`../runtime/${file}`, import.meta.url),
+      ),
+    }));
+    const revision = createHash("sha256")
+      .update(Buffer.concat(files.map((f) => f.content)))
+      .digest("hex");
+    const revisionPath = "/vercel/sandbox/nexus/runtime-revision.txt";
+    const installed = await sbx
+      .readFileToBuffer({ path: revisionPath })
+      .catch(() => null);
+    if (installed?.toString() !== revision)
+      await sbx.writeFiles([
+        ...files,
+        { path: revisionPath, content: Buffer.from(revision) },
+      ]);
+  }
   async stop(tenant: Tenant) {
     if (!tenant.sandbox_name) return { stopped: true };
     const sbx = await this.get(tenant, false);
     if (sbx.status === "stopped") return { stopped: true };
+    // An idle VM gets no turns, so without this it would keep judging sleep with
+    // the quiesce.mjs of whatever release last served it (a fixed bug kept one awake 19 h).
+    await this.syncRuntimeScripts(sbx);
     const result = await sbx.runCommand({
       cmd: "node",
       args: ["/vercel/sandbox/nexus/quiesce.mjs"],
