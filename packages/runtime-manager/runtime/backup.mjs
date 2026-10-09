@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readAgentKitProfile, payloadWorkspace } from "./agent-config.mjs";
 import { execFileSync } from "node:child_process";
-import { readVRelease, isVReleaseBackupExcluded } from "./v-release.mjs";
+import { readVRelease, isVReleaseBackupExcluded, compactAgentDb, AGENT_DB } from "./v-release.mjs";
 const root = process.env.NEXUS_BACKUP_ROOT || "/vercel/sandbox",
   data = root + "/agent-data",
   workspace = data + "/workspace";
@@ -23,9 +23,21 @@ function entries(dir, prefix = "") {
 }
 const vRelease = readVRelease(root + "/nexus/v-release.json");
 const files = [];
+// A v-release agent DB is saved as a consistent copy without its memory index
+// (derived from memory/*.md, hundreds of MB once an archive is imported); the
+// boot-time `memory index` rebuilds it after a restore.
+const stage = "/tmp/nexus-backup-stage", staged = [];
+if (vRelease) fs.rmSync(stage, { recursive: true, force: true });
 for (const item of entries(data)) {
   // Plugin installs come back with the snapshot; Codex logs and caches are disposable.
   if (vRelease && isVReleaseBackupExcluded(item.rel)) continue;
+  const db = vRelease && AGENT_DB.exec(item.rel);
+  if (db) {
+    if (db[1]) continue; // -wal/-shm: folded into the copy
+    const rel = "agent-data/" + item.rel;
+    fs.mkdirSync(path.dirname(path.join(stage, rel)), { recursive: true });
+    if (await compactAgentDb(item.file, path.join(stage, rel), root + "/nexus/runtime/node_modules/sqlite-vec-linux-x64/vec0.so")) { staged.push(rel); continue; }
+  }
   if (item.rel === "workspace" || item.rel.startsWith("workspace/")) {
     const rel = item.rel.slice("workspace/".length),
       original = path.join(base, rel);
@@ -73,8 +85,8 @@ const tar = (args) => {
 tar([
   // Chrome and the Workers create and delete files while we read: a vanished file is not an error.
   ...(vRelease ? ["--ignore-failed-read", "--warning=no-file-removed", "--warning=no-file-changed"] : []),
-  "-czf",
-  archive,
+  staged.length ? "-cf" : "-czf",
+  staged.length ? archive + ".tar" : archive,
   "--no-recursion",
   "-C",
   root,
@@ -82,10 +94,16 @@ tar([
   "-T",
   list,
 ]);
+if (staged.length) {
+  tar(["-rf", archive + ".tar", "-C", stage, ...staged]);
+  execFileSync("sh", ["-c", 'gzip -c "$1" > "$2" && rm -f "$1"', "gzip", archive + ".tar", archive]);
+  fs.rmSync(stage, { recursive: true, force: true });
+}
 console.log(
   JSON.stringify({
     bytes: fs.statSync(archive).size,
-    files: files.length,
+    files: files.length + staged.length,
+    compacted: staged.length,
     removed: removed.length,
   }),
 );

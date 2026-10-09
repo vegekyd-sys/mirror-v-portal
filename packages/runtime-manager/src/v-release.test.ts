@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { applyCapture, codexHomeConfig, ensureCodexHome, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
+import { createRequire } from "node:module";
+import { AGENT_DB, applyCapture, codexHomeConfig, compactAgentDb, ensureCodexHome, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
 import { createVReleaseConfig } from "../runtime/v-config.mjs";
 import { templateRuntimeEnv, templateVcpus } from "./provider.js";
 
@@ -145,4 +146,31 @@ test("helpers of V's daemons are daemons; an agent's own background job is not",
   ]);
   expect(["10", "11", "20", "21", "31"].map(isDaemon)).toEqual([true, true, true, true, true]);
   expect(isDaemon("32")).toBe(false);
+});
+
+test("agent DB backups drop the rebuildable memory index and keep everything else", async () => {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-db-"));
+  const src = path.join(dir, "openclaw-agent.sqlite");
+  const db = new DatabaseSync(src);
+  db.exec("PRAGMA journal_mode=WAL; CREATE TABLE transcript_events(id INTEGER PRIMARY KEY, body TEXT); CREATE TABLE memory_index_chunks(id TEXT, embedding TEXT); CREATE TABLE memory_index_meta(key TEXT, value TEXT); CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(text)");
+  db.exec("INSERT INTO transcript_events(body) VALUES ('hello'); INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', '{}')");
+  const insert = db.prepare("INSERT INTO memory_index_chunks VALUES (?, ?)");
+  for (let i = 0; i < 200; i++) insert.run(String(i), "x".repeat(4096));
+  db.exec("INSERT INTO memory_index_chunks_fts(text) VALUES ('chunk')");
+  const dst = path.join(dir, "copy.sqlite");
+  // The live connection stays open, as the Gateway's does.
+  expect(await compactAgentDb(src, dst, "/missing/vec0.so", 0)).toBe(true);
+  db.close();
+  const copy = new DatabaseSync(dst, { readOnly: true });
+  const count = (table: string) => (copy.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n;
+  expect([count("transcript_events"), count("memory_index_meta"), count("memory_index_chunks"), count("memory_index_chunks_fts")]).toEqual([1, 1, 0, 0]);
+  copy.close();
+  expect(fs.statSync(dst).size).toBeLessThan(fs.statSync(src).size / 4);
+  expect(fs.existsSync(dst + "-wal")).toBe(false);
+  // Small DBs and failures leave the raw file to the caller.
+  expect(await compactAgentDb(src, path.join(dir, "small.sqlite"))).toBe(false);
+  expect(await compactAgentDb(path.join(dir, "missing.sqlite"), path.join(dir, "x.sqlite"), "", 0)).toBe(false);
+  expect(fs.existsSync(path.join(dir, "x.sqlite"))).toBe(false);
+  expect(["state/agents/mirror-v-full/agent/openclaw-agent.sqlite", "state/agents/a/agent/openclaw-agent.sqlite-wal", "state/state/openclaw.sqlite"].map((rel) => AGENT_DB.exec(rel)?.[1] ?? (AGENT_DB.test(rel) ? "" : null))).toEqual(["", "-wal", null]);
 });

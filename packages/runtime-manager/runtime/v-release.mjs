@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 export const V_RELEASE_ROOT = "/vercel/sandbox/nexus/v";
 export const V_RELEASE_MARKER = "/vercel/sandbox/nexus/v-release.json";
@@ -39,6 +40,45 @@ export const V_RELEASE_BACKUP_EXCLUDES = Object.freeze([
   /^state\/browser\/[^/]+\/user-data\/(?:optimization_guide_model_store|component_crx_cache|Safe Browsing|segmentation_platform|GrShaderCache|ShaderCache|GraphiteDawnCache|extensions_crx_cache)(?:\/|$)/,
   /^state\/browser\/[^/]+\/user-data\/[^/]+\/(?:Cache|Code Cache|GPUCache|DawnGraphiteCache|DawnWebGPUCache|Service Worker\/CacheStorage|Service Worker\/ScriptCache)(?:\/|$)/,
 ]);
+
+/** An agent's state DB and its WAL/shm sidecars (group 1). */
+export const AGENT_DB = /^state\/agents\/[^/]+\/agent\/openclaw-agent\.sqlite(-wal|-shm)?$/;
+// The memory search index: rebuilt from the workspace by `openclaw memory index`.
+// meta/state rows stay so the rebuild keeps the same embedding provider settings.
+const MEMORY_INDEX_TABLES = [
+  "memory_index_chunks_vec", "memory_index_chunks_fts", "memory_index_paths_fts",
+  "memory_index_chunk_provenance", "memory_index_chunk_recall_metadata",
+  "memory_index_chunks", "memory_index_sources", "memory_embedding_cache",
+];
+
+/**
+ * Write a consistent copy of a live agent DB without its memory index. Small DBs
+ * and any failure return false, and the caller keeps the raw file instead.
+ */
+export async function compactAgentDb(src, dst, vec0, minBytes = 32 << 20) {
+  let db;
+  try {
+    if (fs.statSync(src).size < minBytes) return false;
+    // require, not import(): bundlers and test runners mangle the "node:sqlite" specifier.
+    const { DatabaseSync, backup } = createRequire(import.meta.url)("node:sqlite");
+    const live = new DatabaseSync(src, { readOnly: true });
+    try { await backup(live, dst); } finally { live.close(); }
+    db = new DatabaseSync(dst, { allowExtension: true });
+    db.exec("PRAGMA journal_mode=DELETE");
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
+    if (tables.has("memory_index_chunks_vec")) db.loadExtension(vec0);
+    db.exec("BEGIN");
+    for (const table of MEMORY_INDEX_TABLES) if (tables.has(table)) db.exec(`DELETE FROM "${table}"`);
+    db.exec("COMMIT");
+    db.exec("VACUUM");
+    db.close();
+    return true;
+  } catch {
+    try { db?.close(); } catch {}
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) fs.rmSync(dst + suffix, { force: true });
+    return false;
+  }
+}
 
 export function readVRelease(file = V_RELEASE_MARKER) {
   if (!fs.existsSync(file)) return null;
