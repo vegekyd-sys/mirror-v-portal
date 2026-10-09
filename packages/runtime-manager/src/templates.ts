@@ -4,6 +4,8 @@ export interface AgentTemplate {
   id: string;
   version: string;
   name: string;
+  /** Channel app name; omitted when it equals the signup label. */
+  appName?: string;
   description: string;
   snapshotId: string;
   /** Hidden templates can be requested by id but are not offered on the signup page. */
@@ -62,7 +64,8 @@ export function availableTemplates(config: Config): AgentTemplate[] {
     const label = LABELS[id];
     const name = value.name?.trim() || label?.name || id;
     const description = value.description?.trim() || label?.description || "独立 Agent 模板";
-    entries.push({ id, version: value.version, name, description, snapshotId: value.snapshotId, listed: value.listed !== false });
+    const appName = value.appName?.trim();
+    entries.push({ id, version: value.version, name, ...(appName && appName !== name ? { appName } : {}), description, snapshotId: value.snapshotId, listed: value.listed !== false });
   }
   return entries;
 }

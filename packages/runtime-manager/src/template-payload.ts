@@ -71,6 +71,7 @@ export function templateRecord(
 ): TemplateRecord {
   return {
     ...(previous?.name ? { name: previous.name } : {}),
+    ...(previous?.appName ? { appName: previous.appName } : {}),
     ...(previous?.description ? { description: previous.description } : {}),
     ...(previous?.model ? { model: previous.model, modelVersion: previous.modelVersion || previous.version } : {}),
     ...(build.agentKit ? { agentKit: build.agentKit } : {}),

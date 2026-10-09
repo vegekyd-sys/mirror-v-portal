@@ -7,6 +7,8 @@ export interface TemplateRecord {
   version: string;
   snapshotId: string;
   name?: string;
+  /** Name pre-filled for the channel app (Feishu bot) when it differs from the signup label. */
+  appName?: string;
   description?: string;
   /** false = selectable by explicit id (tests, migrations) but hidden from the signup catalog. */
   listed?: boolean;

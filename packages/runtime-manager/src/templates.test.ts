@@ -30,6 +30,12 @@ describe("signup template catalog", () => {
     expect(availableTemplates(expanded).find((template) => template.id === "xinqing")).toMatchObject({ name: "新晴", description: "陪伴与交流" });
   });
 
+  it("names the channel app separately from the signup label only when configured", () => {
+    const full = { ...config, templates: { ...config.templates, "mirror-v-full": { version: "mirror-v-full.v5", snapshotId: "snap_full", name: "Mirror V 全功能", appName: " Mirror V " } } };
+    expect(requireTemplate(full, "mirror-v-full")).toMatchObject({ name: "Mirror V 全功能", appName: "Mirror V" });
+    expect(requireTemplate(config, "mirror-v")).not.toHaveProperty("appName");
+  });
+
   it("keeps unlisted templates selectable by id but marks them hidden", () => {
     const hidden = { ...config, templates: { ...config.templates, xingqing: { version: "xingqing-starter.v1", snapshotId: "snap_xq", listed: false } } };
     expect(availableTemplates(hidden).find((template) => template.id === "xingqing")).toMatchObject({ name: "星擎助手", listed: false });
