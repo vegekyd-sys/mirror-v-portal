@@ -174,3 +174,10 @@ test("agent DB backups drop the rebuildable memory index and keep everything els
   expect(fs.existsSync(path.join(dir, "x.sqlite"))).toBe(false);
   expect(["state/agents/mirror-v-full/agent/openclaw-agent.sqlite", "state/agents/a/agent/openclaw-agent.sqlite-wal", "state/state/openclaw.sqlite"].map((rel) => AGENT_DB.exec(rel)?.[1] ?? (AGENT_DB.test(rel) ? "" : null))).toEqual(["", "-wal", null]);
 });
+
+test("a deferred sleep records what quiesce found, without process arguments", async () => {
+  const { quiesceDetail } = await import("./provider.js");
+  expect(quiesceDetail('noise\n{"ok":false,"reason":"background-processes","count":2,"commands":["python3","node"]}\n')).toEqual({ reason: "background-processes", count: 2, commands: ["python3", "node"] });
+  expect(quiesceDetail('{"ok":false,"reason":"desktop-handoff"}')).toEqual({ reason: "desktop-handoff" });
+  expect(quiesceDetail("garbage")).toBeUndefined();
+});

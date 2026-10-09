@@ -294,6 +294,7 @@ export class RuntimeManager {
               );
               await this.store.event(tenant.id, "idle-deferred", {
                 reason: result.reason,
+                ...(result.detail ? { detail: result.detail } : {}),
               });
               return;
             }

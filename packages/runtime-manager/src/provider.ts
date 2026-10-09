@@ -38,7 +38,7 @@ export interface RuntimeProvider {
   ): Promise<ExecuteResult>;
   stop(
     tenant: Tenant,
-  ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string }>;
+  ): Promise<{ stopped: boolean; snapshotId?: string; reason?: string; detail?: { reason: string; count?: number; commands?: string[] } }>;
   /** A component inside the sandbox asks to continue a conversation (Vercel only). */
   wakeSignatureValid?(tenant: Tenant, signature: string): boolean;
   /** Signed owner links to a public service of the sandbox (Vercel only). */
@@ -81,6 +81,21 @@ const OPENCLAW_CHANNEL: Record<string, string> = {
   dingtalk: "dingtalk",
   web: "webchat",
 };
+/** What quiesce.mjs said is still busy: its reason and process names only, never arguments. */
+export function quiesceDetail(stdout: string): { reason: string; count?: number; commands?: string[] } | undefined {
+  try {
+    const out = JSON.parse(stdout.trim().split("\n").at(-1) || "");
+    if (typeof out?.reason !== "string") return undefined;
+    return {
+      reason: out.reason.slice(0, 80),
+      ...(Number.isInteger(out.count) ? { count: out.count } : {}),
+      ...(Array.isArray(out.commands) ? { commands: out.commands.filter((c: unknown) => typeof c === "string").map((c: string) => c.slice(0, 40)).slice(0, 5) } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export const openclawChannel = (channel?: string) =>
   channel ? (OPENCLAW_CHANNEL[channel] ?? channel) : undefined;
 
@@ -591,7 +606,7 @@ export class VercelProvider implements RuntimeProvider {
     if (result.exitCode !== 0) {
       // Someone is on the takeover page or in a call: do not let the session deadline end it.
       await keepSessionAlive(sbx);
-      return { stopped: false, reason: "ACTIVE_BACKGROUND_WORK" };
+      return { stopped: false, reason: "ACTIVE_BACKGROUND_WORK", detail: quiesceDetail(await result.stdout().catch(() => "")) };
     }
     this.handles.delete(tenant.id);
     const stopped = await sbx.stop({ signal: AbortSignal.timeout(120000) });
