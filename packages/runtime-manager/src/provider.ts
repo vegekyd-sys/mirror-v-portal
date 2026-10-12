@@ -81,6 +81,18 @@ const OPENCLAW_CHANNEL: Record<string, string> = {
   dingtalk: "dingtalk",
   web: "webchat",
 };
+/** Scripts written to every sandbox; their hash is the runtime revision a VM must run. */
+export const RUNTIME_SCRIPTS = [
+  "boot.mjs", "invoke.mjs", "inbound-input.mjs", "quiesce.mjs", "model-proxy.mjs", "backup.mjs",
+  "progress-patch.mjs", "stream-preview-patch.mjs", "scheduler-plugin.mjs", "agent-config.mjs",
+  "v-release.mjs", "v-config.mjs", "v-features.mjs",
+];
+export function runtimeRevision() {
+  return createHash("sha256")
+    .update(Buffer.concat(RUNTIME_SCRIPTS.map((file) => fs.readFileSync(new URL(`../runtime/${file}`, import.meta.url)))))
+    .digest("hex");
+}
+
 /** What quiesce.mjs said is still busy: its reason and process names only, never arguments. */
 export function quiesceDetail(stdout: string): { reason: string; count?: number; commands?: string[] } | undefined {
   try {
@@ -563,29 +575,11 @@ export class VercelProvider implements RuntimeProvider {
   }
   /** Make the sandbox's runtime scripts match this release (written only when they differ). */
   private async syncRuntimeScripts(sbx: RuntimeSandbox) {
-    const files = [
-      "boot.mjs",
-      "invoke.mjs",
-      "inbound-input.mjs",
-      "quiesce.mjs",
-      "model-proxy.mjs",
-      "backup.mjs",
-      "progress-patch.mjs",
-      "stream-preview-patch.mjs",
-      "scheduler-plugin.mjs",
-      "agent-config.mjs",
-      "v-release.mjs",
-      "v-config.mjs",
-      "v-features.mjs",
-    ].map((file) => ({
+    const files = RUNTIME_SCRIPTS.map((file) => ({
       path: `/vercel/sandbox/nexus/${file}`,
-      content: fs.readFileSync(
-        new URL(`../runtime/${file}`, import.meta.url),
-      ),
+      content: fs.readFileSync(new URL(`../runtime/${file}`, import.meta.url)),
     }));
-    const revision = createHash("sha256")
-      .update(Buffer.concat(files.map((f) => f.content)))
-      .digest("hex");
+    const revision = runtimeRevision();
     const revisionPath = "/vercel/sandbox/nexus/runtime-revision.txt";
     const installed = await sbx
       .readFileToBuffer({ path: revisionPath })

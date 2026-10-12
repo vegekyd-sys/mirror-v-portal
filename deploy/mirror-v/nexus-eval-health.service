@@ -1,0 +1,11 @@
+[Unit]
+Description=Mirror V eval L0: production health checks (read-only)
+After=nexus-runtime-manager.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nexus/current
+Environment=NEXUS_CONFIG_PATH=/opt/nexus/data/config.json
+ExecStart=/root/.nvm/versions/node/v22.22.1/bin/node deploy/mirror-v/eval/eval.mjs health
+# Exit 2 = an alert was recorded in /opt/nexus/data/eval/health.jsonl; not a unit failure.
+SuccessExitStatus=2

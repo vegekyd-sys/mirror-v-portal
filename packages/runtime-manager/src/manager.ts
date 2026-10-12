@@ -129,6 +129,8 @@ export class RuntimeManager {
         );
         const attachments = current.attachments?.length ? current.attachments : current.inherit_attachments === false ? [] : await this.store.previousAttachments(current);
         submitted = true;
+        // Preview frames are not persisted; keep when the first one came and how many (eval A2/A3).
+        const preview = { frames: 0, firstAt: 0, lastAt: 0 };
         const { output, media } = await this.provider.execute(
           tenant,
           current.session_key,
@@ -141,12 +143,19 @@ export class RuntimeManager {
               return;
             }
             // Previews are throttled snapshots of the same text: route them, never persist them.
-            if (kind !== "preview") await this.store.event(tenant.id, kind, data, runId);
+            if (kind === "preview") {
+              preview.lastAt = Date.now();
+              if (!preview.frames++) {
+                preview.firstAt = preview.lastAt;
+                await this.store.event(tenant.id, "first-preview", { at: preview.firstAt }, runId);
+              }
+            } else await this.store.event(tenant.id, kind, data, runId);
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);
           },
           { channel: current.channel, attachments, attachmentsFromPreviousTurn: !current.attachments?.length && attachments.length > 0 },
         );
+        if (preview.frames) await this.store.event(tenant.id, "preview-stats", preview, runId);
         // Persist outbound files before queuing the reply. Channel delivery can
         // then retry after a restart without repeating the creative turn.
         if (media?.length) await this.onMedia?.(current, media);
@@ -318,10 +327,15 @@ export class RuntimeManager {
               computeReleased: true,
             });
           } catch (e) {
+            // No turn is in flight when an idle VM fails to stop: retry on the next
+            // pass rather than refusing every later message (one stop timeout once
+            // locked an owner out for three days).
+            const message = e instanceof Error ? e.message : "STOP_FAILED";
             await db.query(
-              "UPDATE elastic_tenants SET state='blocked',last_error=$2 WHERE id=$1",
-              [tenant.id, e instanceof Error ? e.message : "STOP_FAILED"],
+              "UPDATE elastic_tenants SET state='ready',last_activity=now(),last_error=$2 WHERE id=$1",
+              [tenant.id, message],
             );
+            await this.store.event(tenant.id, "idle-stop-failed", { error: message.slice(0, 200) });
           }
         });
     } finally {

@@ -376,7 +376,8 @@ app.post("/api/messages", async (req, res, next) => {
     const run = await store.enqueue(
       req.body.tenantId || config.trialTenantId,
       req.body.requestId || randomUUID(),
-      "browser-trial",
+      // Evals use their own sessions; anything else keeps the trial session.
+      typeof req.body.sessionKey === "string" && /^[\w:.-]{1,120}$/.test(req.body.sessionKey) ? req.body.sessionKey : "browser-trial",
       req.body.text,
     );
     res.status(202).json({ runId: run.id });
