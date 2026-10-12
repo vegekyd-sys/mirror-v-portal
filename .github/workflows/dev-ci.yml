@@ -35,6 +35,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # feishu-media tests encode and decode real MP4/WAV/PNG with ffmpeg and ffprobe.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pnpm --filter @dealclaw/central-gateway build
       - run: pnpm --filter @dealclaw/runtime-manager build
       - run: pnpm --filter @dealclaw/credits-ledger build
