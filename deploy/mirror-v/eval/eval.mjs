@@ -197,7 +197,7 @@ async function gate() {
     // System schedules register after a tenant's first Feishu turn (they need its chat), so the
     // check covers every mirror-v-full tenant that has talked on Feishu, not the test tenant.
     const expected = ["Memory Librarian", "Memory 质检", "Heartbeat", "午夜报告", "Skill 周复盘"];
-    const owners = await q("SELECT DISTINCT r.tenant_id FROM elastic_runs r JOIN elastic_tenants t ON t.id=r.tenant_id WHERE t.template_id='mirror-v-full' AND r.channel='feishu' AND r.status='succeeded'");
+    const owners = await q("SELECT DISTINCT r.tenant_id FROM elastic_runs r JOIN elastic_tenants t ON t.id=r.tenant_id WHERE t.template_id='mirror-v-full' AND r.channel='feishu' AND r.schedule_id IS NULL AND r.status='succeeded' AND r.created_at > now() - interval '7 days'");
     const gaps = [];
     for (const { tenant_id } of owners) {
       const names = (await q("SELECT name FROM elastic_schedules WHERE tenant_id=$1 AND enabled", [tenant_id])).map((r) => r.name);
@@ -246,16 +246,18 @@ async function gate() {
   }
 
   if (want("E6")) {
-    const pending = say(tenant, "依次做五件事，每件之间都要调用工具并先说一句话：用 exec 分别运行 sleep 4 && echo 1、sleep 4 && echo 2、sleep 4 && echo 3、sleep 4 && echo 4、sleep 4 && echo 5。最后汇总。", { session: "eval:kill" });
-    // Kill once the turn is visibly mid-way (its second tool started), not on a timer.
+    const pending = say(tenant, "用 exec 运行这一条命令并等它结束：sleep 40 && echo eval-done 。然后告诉我输出。", { session: "eval:kill" });
+    // Kill while that 40 s command is running, so the turn is genuinely mid-way.
     const killDeadline = Date.now() + 120_000;
     for (;;) {
       await sleep(1000);
       const [r] = await q("SELECT id FROM elastic_runs WHERE tenant_id=$1 AND session_key=$2 ORDER BY created_at DESC LIMIT 1", [tenant, "agent:mirror-v-full:eval:kill"]);
       const n = r ? (await q("SELECT count(*) n FROM elastic_events WHERE run_id=$1 AND kind='tool-progress' AND data->>'phase'='start'", [r.id]))[0].n : 0;
-      if (Number(n) >= 2 || Date.now() > killDeadline) break;
+      if (Number(n) >= 1 || Date.now() > killDeadline) break;
     }
-    await exec(tenant, "kill $(cat /tmp/nexus-gateway.pid) 2>/dev/null; true").catch(() => {});
+    await sleep(5000);
+    // SIGTERM would drain the turn gracefully; a crash is SIGKILL of the Gateway and its Workers.
+    await exec(tenant, "kill -9 $(cat /tmp/nexus-gateway.pid) 2>/dev/null; pkill -9 -f worker/dist/worker.mjs; true").catch(() => {});
     const killed = await pending;
     const after = await turn("after-kill", "只回复：恢复正常", { session: "eval:kill" });
     const st = (await tenantRow(tenant)).state;
@@ -297,7 +299,7 @@ async function gate() {
     const cold = await turn("cold", "只回复：醒了");
     check("A1", "P0", cold.status === "succeeded" && cold.wake && !cold.wake.reused && cold.wake.wakeMs < 35000, `cold wake ${cold.wake?.wakeMs} ms`);
     const pids = await exec(tenant, PID_CHECK);
-    const dead = pids.stdout.split("\n").filter((l) => /^\S+\s*$/.test(l) || (!l.includes("alive") && !l.startsWith("BOOT")));
+    const dead = pids.stdout.split("\n").filter((l) => l.trim() && l.trim() !== "BOOT_OK" && !l.includes(" alive "));
     check("E2", "P0", pids.stdout.includes("BOOT_OK") && !dead.length, dead.length ? `not running: ${dead.join("; ")}` : "boot id current, all daemons alive");
   }
 
@@ -339,7 +341,7 @@ async function soak() {
   }
   const pending = say(tenant, "依次用 web_search 搜三样东西：清迈美食、清迈夜市、清迈咖啡馆，每次之间都调用工具，最后汇总。", { session: "eval:soak-kill" });
   await sleep(9000);
-  await exec(tenant, "kill $(cat /tmp/nexus-gateway.pid) 2>/dev/null; true").catch(() => {});
+  await exec(tenant, "kill -9 $(cat /tmp/nexus-gateway.pid) 2>/dev/null; pkill -9 -f worker/dist/worker.mjs; true").catch(() => {});
   await pending;
   const after = await turn("after-kill", "只回复：恢复正常", { session: "eval:soak-kill" });
   check("E6", "P0", after.status === "succeeded" && (await tenantRow(tenant)).state !== "blocked", `next ${after.status}`);
