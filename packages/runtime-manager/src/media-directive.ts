@@ -27,6 +27,32 @@ export interface ParsedReply {
 
 const isRemote = (ref: string) => /^https?:\/\//i.test(ref);
 
+/** OpenResponses cleans MEDIA lines from text; accept its final, response-scoped side channel. */
+export class FinalMediaCollector {
+  private responseId?: string;
+  private refs = new Set<string>();
+  private confirmed = false;
+  accept(event: any) {
+    if (event?.type === "response.created") {
+      const id = event.response?.id;
+      if (!this.responseId && typeof id === "string" && id.length <= 200) this.responseId = id;
+      return false;
+    }
+    if (event?.type === "response.completed") {
+      this.confirmed = !!this.responseId && event.response?.id === this.responseId && event.response?.status === "completed";
+      if (!this.confirmed) this.refs.clear();
+      return false;
+    }
+    if (event?.type !== "nexus.media" || event.phase !== "final" || !this.responseId || event.runId !== this.responseId) return false;
+    const refs = event.mediaUrls;
+    if (!Array.isArray(refs) || refs.length > 20 || refs.some(ref => typeof ref !== "string" || !ref.trim() || ref.length > 8000 || /[\r\n\0]/.test(ref))) return false;
+    const previous = this.refs.size;
+    for (const ref of refs) if (this.refs.size < 20) this.refs.add(ref.trim());
+    return this.refs.size !== previous;
+  }
+  get media(): MediaDirective[] { return this.confirmed ? parseReply([...this.refs].map(ref => `MEDIA: ${ref}`).join("\n")).media : []; }
+}
+
 /** Bare filenames are resolved against the agent's workspace. */
 export function resolveRef(ref: string, workspace = "/vercel/sandbox/agent-data/workspace") {
   if (isRemote(ref) || ref.startsWith("/")) return ref;

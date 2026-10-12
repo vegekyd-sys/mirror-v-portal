@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+import { runInNewContext } from 'node:vm';
 import { createApp } from '../app.js';
+import { ONBOARD_HTML } from '../services/onboard-page.js';
 import { detectPlatform, routeOnboarding, getRedirectUrl } from '../services/channel.js';
 import {
   startFeishuRegistration,
@@ -222,6 +224,69 @@ describe('GET /onboard — Feishu registration', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain('DealClaw');
+  });
+});
+
+describe('Explicit onboarding template links', () => {
+  // Execute the page's actual selection function without starting a channel
+  // registration. The browser acceptance still verifies the complete page.
+  async function selectFromPage(search: string, templates: Array<{ id: string; name: string; description: string }>) {
+    const start = ONBOARD_HTML.indexOf('async function loadTemplates()');
+    const end = ONBOARD_HTML.indexOf('async function open()', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    function element() {
+      const handlers = new Map<string, () => void>();
+      return {
+        type: '', className: '', textContent: '',
+        setAttribute: vi.fn(), append: vi.fn(),
+        addEventListener(name: string, handler: () => void) { handlers.set(name, handler); },
+        click() { handlers.get('click')?.(); },
+      };
+    }
+    const cards: Array<ReturnType<typeof element>> = [];
+    const opened = vi.fn(), closed = vi.fn();
+    const context = {
+      URL, URLSearchParams,
+      location: { search, href: 'https://portal.example/onboard' + search },
+      history: { replaceState: vi.fn() },
+      document: { createElement: element },
+      templateList: {
+        replaceChildren() { cards.length = 0; },
+        appendChild(card: ReturnType<typeof element>) { cards.push(card); },
+        querySelectorAll() { return cards; },
+      },
+      templateDescription: { textContent: '' },
+      selectedTemplate: null as { id: string } | null,
+      fetch: vi.fn(async () => ({ ok: true, json: async () => ({ templates }) })),
+      open: opened, closeGate: closed,
+    };
+    await runInNewContext(ONBOARD_HTML.slice(start, end) + '\nloadTemplates()', context);
+    return { context, opened, closed };
+  }
+  const mirror = { id: 'mirror-v', name: 'Mirror V', description: '通用 Agent' };
+  const makaron = { id: 'makaron', name: 'Makaron', description: '图片与视频创作' };
+
+  it('opens Makaron when the explicit template is available', async () => {
+    const result = await selectFromPage('?template=makaron', [mirror, makaron]);
+    expect(result.context.selectedTemplate?.id).toBe('makaron');
+    expect(result.opened).toHaveBeenCalledTimes(1);
+    expect(result.closed).not.toHaveBeenCalled();
+  });
+  it('never falls back or starts authorization for an absent or unlisted requested template', async () => {
+    for (const search of ['?template=makaron', '?template=unknown', '?template=']) {
+      const result = await selectFromPage(search, [mirror]);
+      expect(result.context.selectedTemplate).toBeNull();
+      expect(result.opened).not.toHaveBeenCalled();
+      expect(result.closed).toHaveBeenCalledWith('所选 Agent 暂未开放，请稍后重试');
+      expect(result.context.fetch).toHaveBeenCalledTimes(1);
+    }
+  });
+  it('retains the ordinary portal default without an explicit template', async () => {
+    const result = await selectFromPage('', [makaron, mirror]);
+    expect(result.context.selectedTemplate?.id).toBe('mirror-v');
+    expect(result.opened).toHaveBeenCalledTimes(1);
+    expect(result.closed).not.toHaveBeenCalled();
   });
 });
 

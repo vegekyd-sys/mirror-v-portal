@@ -2,18 +2,48 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Sandbox } from "@vercel/sandbox";
+import { createAgentKitProfile } from "../runtime/agent-config.mjs";
+import { MEDIA_BINARY_PACKAGES } from "../runtime/media-binaries.mjs";
 import { loadConfig } from "../src/config.js";
 import { resolveTemplatePayload, templateRecord, TEMPLATE_OPENCLAW_VERSION, TEMPLATE_SNAPSHOT_TTL_MS, type TemplatePayload } from "../src/template-payload.js";
 
 const config = loadConfig();
 const root = path.resolve("../..");
 const templateId = process.argv[2] === "--template" ? process.argv[3] : "legacy";
-// Any in-repo template with a payload manifest can be built; see src/template-payload.ts.
-const template: TemplatePayload | undefined = templateId === "legacy" ? undefined : resolveTemplatePayload(root, templateId);
 const payloadArchiveArg = process.argv.indexOf("--payload-archive");
 const privatePayloadArchive = payloadArchiveArg >= 0 ? process.argv[payloadArchiveArg + 1] : undefined;
-if (privatePayloadArchive && templateId !== "mirror-v") throw new Error("PRIVATE_PAYLOAD_TEMPLATE_UNSUPPORTED");
+const profileArg = process.argv.indexOf("--agent-kit-runtime");
+const profileFilename = profileArg >= 0 ? process.argv[profileArg + 1] : undefined;
+if (profileArg >= 0 && (!profileFilename || !privatePayloadArchive || templateId === "legacy")) throw Error("AGENT_KIT_RUNTIME_REQUIRED");
+const agentKit = profileFilename ? createAgentKitProfile(path.resolve(privatePayloadArchive!),
+  JSON.parse(fs.readFileSync(path.resolve(profileFilename), "utf8")).runtime ?? JSON.parse(fs.readFileSync(path.resolve(profileFilename), "utf8")), templateId) : undefined;
+// Verify the full archive/profile before allocating a billed cloud builder.
+const template: TemplatePayload | undefined = templateId === "legacy" || agentKit ? undefined : resolveTemplatePayload(root, templateId);
+if (privatePayloadArchive && !agentKit && templateId !== "mirror-v") throw new Error("PRIVATE_PAYLOAD_TEMPLATE_UNSUPPORTED");
 if (payloadArchiveArg >= 0 && !privatePayloadArchive) throw new Error("PAYLOAD_ARCHIVE_REQUIRED");
+// V's own patched runtime (platform repo release capture + Worker plugin + codex drift),
+// packaged as a tgz with core/, worker/, codex/ and v-memory-indexer.mjs at its root.
+const vReleaseArg = process.argv.indexOf("--v-release");
+const vReleaseArchive = vReleaseArg >= 0 ? path.resolve(process.argv[vReleaseArg + 1] ?? "") : undefined;
+const V_RELEASE_CODEX_VERSION = "0.159.2";
+// Same Makaron CLI as V (/opt/makaron-cli-0.15.2) for image, video, music and design.
+const V_RELEASE_MAKARON_CLI_VERSION = "0.15.2";
+// Optional private sample memory the owner may import during bootstrap (never in Git).
+const seedArg = process.argv.indexOf("--seed-archive");
+const seedArchive = seedArg >= 0 ? path.resolve(process.argv[seedArg + 1] ?? "") : undefined;
+if (seedArchive && (!fs.existsSync(seedArchive) || !process.argv.includes("--v-release"))) throw Error("SEED_ARCHIVE_INVALID");
+const V_RELEASE_CODEX_COMMAND = "codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex";
+let vReleaseCore: { release: string; upstream: string } | undefined;
+if (vReleaseArchive) {
+  if (!fs.existsSync(vReleaseArchive)) throw Error("V_RELEASE_ARCHIVE_MISSING");
+  if (!template || agentKit || privatePayloadArchive) throw Error("V_RELEASE_TEMPLATE_UNSUPPORTED");
+  vReleaseCore = JSON.parse(execFileSync("tar", ["-xzOf", vReleaseArchive, "./core/manifest.json"], { encoding: "utf8" }));
+  if (!vReleaseCore?.release || !/^\d{4}\.\d+\.\d+$/.test(vReleaseCore.upstream)) throw Error("V_RELEASE_ARCHIVE_INVALID");
+  console.log(JSON.stringify({ phase: "v-release-selected", release: vReleaseCore.release, upstream: vReleaseCore.upstream }));
+}
+const openclawVersion = vReleaseCore?.upstream ?? TEMPLATE_OPENCLAW_VERSION;
+const convergeEnvKeys = [...new Set(["GOOGLE_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY", ...Object.keys(config.templates?.[templateId]?.runtimeEnv ?? {})])]
+  .filter((key) => /^[A-Z][A-Z0-9_]{0,63}$/.test(key) && !key.startsWith("NEXUS_") && !key.startsWith("OPENCLAW_"));
 // A payload can come from two places, and they nest differently:
 //   - the in-repo payload, produced by git archive at packages/dealclaw-agent/payload/
 //   - an external archive (config.payloadArchive) already rooted at the workspace,
@@ -28,6 +58,11 @@ if (external) {
   if (!fs.existsSync(archive)) throw new Error(`PAYLOAD_ARCHIVE_MISSING: ${archive}`);
   stripComponents = 1; // entries are ./AGENTS.md, ./memory/...
   console.log(JSON.stringify({ phase: "payload-external", archive, bytes: fs.statSync(archive).size }));
+} else if (agentKit) {
+  archive = path.resolve(privatePayloadArchive!);
+  payloadVersion = agentKit.version;
+  stripComponents = 0;
+  console.log(JSON.stringify({ phase: "payload-agent-kit", bytes: fs.statSync(archive).size, version: payloadVersion, archiveSha256: agentKit.archiveSha256, sourceCommit: agentKit.sourceCommit }));
 } else if (privatePayloadArchive) {
   archive = path.resolve(privatePayloadArchive);
   if (!fs.existsSync(archive)) throw new Error("PAYLOAD_ARCHIVE_MISSING");
@@ -59,7 +94,7 @@ const sbx = await Sandbox.create({
   image: "vercel/sandbox/node:24",
   persistent: false,
   resources: { vcpus: 4 },
-  timeout: 1_200_000,
+  timeout: 2_700_000,
   tags: { purpose: "nexus-runtime-build" },
 });
 console.log(JSON.stringify({ phase: "builder-created", name: sbx.name }));
@@ -80,6 +115,25 @@ try {
       stderr: process.stderr,
     });
     if (r.exitCode) throw new Error(`${label} failed with exit ${r.exitCode}`);
+  };
+  // Long installs run detached and are polled: a single streamed command over
+  // several minutes can lose its log connection ("terminated", 2026-10-08).
+  const runLong = async (label: string, script: string, sudo = false) => {
+    console.log(JSON.stringify({ phase: label }));
+    const tag = `/tmp/nexus-build-${label}`;
+    const start = await sbx.runCommand({ cmd: "bash", args: ["-c", `rm -f ${tag}.done; nohup bash -c '(${script.replace(/'/g, "'\\''")}) > ${tag}.log 2>&1; echo $? > ${tag}.done' >/dev/null 2>&1 &`], sudo });
+    if (start.exitCode) throw new Error(`${label} failed to start`);
+    for (let i = 0; i < 180; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const probe = await sbx.runCommand({ cmd: "bash", args: ["-c", `cat ${tag}.done 2>/dev/null || true`], sudo });
+      const done = (await probe.stdout()).trim();
+      if (!done) continue;
+      const tail = await sbx.runCommand({ cmd: "bash", args: ["-c", `tail -5 ${tag}.log`], sudo });
+      console.log((await tail.stdout()).trim());
+      if (done !== "0") throw new Error(`${label} failed with exit ${done}`);
+      return;
+    }
+    throw new Error(`${label} timed out`);
   };
   await run("directories", "mkdir", [
     "-p",
@@ -103,8 +157,30 @@ try {
     "--omit=dev",
     "--no-audit",
     "--no-fund",
-    `openclaw@${TEMPLATE_OPENCLAW_VERSION}`,
+    `openclaw@${openclawVersion}`,
   ]);
+  if (vReleaseArchive) {
+    await sbx.writeFiles([{ path: "/vercel/sandbox/v-release.tgz", content: fs.readFileSync(vReleaseArchive) }]);
+    await run("v-release-unpack", "bash", ["-c", "mkdir -p /vercel/sandbox/nexus/v && tar -xzf /vercel/sandbox/v-release.tgz -C /vercel/sandbox/nexus/v && rm /vercel/sandbox/v-release.tgz"]);
+    await run("v-release-codex", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/codex", "--omit=dev", "--no-audit", "--no-fund", `@openai/codex@${V_RELEASE_CODEX_VERSION}`]);
+    await run("v-release-makaron", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund makaron-cli@${V_RELEASE_MAKARON_CLI_VERSION} && mkdir -p /vercel/sandbox/nexus/tools/bin && ln -sf /vercel/sandbox/nexus/tools-node/node_modules/makaron-cli/bin/makaron.mjs /vercel/sandbox/nexus/tools/bin/makaron && /vercel/sandbox/nexus/tools/bin/makaron --version`]);
+    if (seedArchive) {
+      await run("v-release-seeds", "mkdir", ["-p", "/vercel/sandbox/nexus/seeds"]);
+      await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);
+    }
+    // V's memory, reflection and review scripts are Python.
+    // --no-install-recommends keeps this to seconds (with recommends, ffmpeg alone took >15 min).
+    // Desktop: TigerVNC + a minimal XFCE session for the takeover page and the computer tool.
+    await runLong("v-release-apt", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv tigervnc-standalone-server tigervnc-tools xfce4-session xfwm4 xfdesktop4 dbus-x11 x11-utils x11-xserver-utils xdotool xinput wmctrl fonts-noto-cjk", true);
+    await runLong("v-release-chrome", "cd /tmp && node -e \"fetch('https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb').then(r=>{if(!r.ok)throw Error(r.status);return r.arrayBuffer()}).then(b=>require('fs').writeFileSync('chrome.deb',Buffer.from(b)))\" && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ./chrome.deb && rm -f chrome.deb && google-chrome --version", true);
+    // ffmpeg/ffprobe for V's video Skills: static npm builds (distro ffmpeg took >15 min to install).
+    await run("v-release-media-packages", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/runtime", "--omit=dev", "--no-audit", "--no-fund", ...MEDIA_BINARY_PACKAGES]);
+  }
+  if (agentKit) {
+    await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/agent-kit-runtime.json", content: Buffer.from(JSON.stringify(agentKit)) }]);
+    await run("verify-node", "node", ["-e", 'const [a,b]=process.versions.node.split(".").map(Number); if (!(a>24 || a===24 && b>=19)) throw Error("AGENT_KIT_NODE_REQUIRES_24_19"); console.log(JSON.stringify({node:process.versions.node}));']);
+    if (agentKit.runtime.mediaBinaries) await run("media-packages", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/runtime", "--omit=dev", "--no-audit", "--no-fund", ...MEDIA_BINARY_PACKAGES]);
+  }
   // Template CLIs go into a private venv; boot.mjs puts tools/bin on PATH.
   // Only the private V001 archive path carries no manifest tools.
   if (template?.wheels.length && !privatePayloadArchive) {
@@ -130,9 +206,19 @@ try {
   for (const filename of [
     "boot.mjs",
     "invoke.mjs",
+    "inbound-input.mjs",
     "quiesce.mjs",
     "model-proxy.mjs",
     "backup.mjs",
+    "progress-patch.mjs",
+    "scheduler-plugin.mjs",
+    "agent-config.mjs",
+    "media-binaries.mjs",
+    "verify-agent-kit.mjs",
+    "v-release.mjs",
+    "v-config.mjs",
+    "v-release-install.mjs",
+    "v-features.mjs",
   ]) {
     await sbx.writeFiles([
       {
@@ -147,6 +233,36 @@ try {
     "/vercel/sandbox/nexus/runtime/node_modules/openclaw/openclaw.mjs",
     "--version",
   ]);
+  if (vReleaseArchive) {
+    await run("v-release-media-binaries", "node", ["/vercel/sandbox/nexus/media-binaries.mjs", "/vercel/sandbox/nexus/runtime"]);
+    await run("v-release-install", "node", ["/vercel/sandbox/nexus/v-release-install.mjs", "/vercel/sandbox/nexus/runtime", V_RELEASE_CODEX_COMMAND]);
+    // First start installs the external plugins 2026.9.1 needs (deepseek, codex) into
+    // the state dir and fills the compile cache; tenants then boot without it.
+    // Tenant-specific files are removed again; plugin inventory and installs stay.
+    await run("v-release-converge", "bash", ["-c", [
+      "set -euo pipefail",
+      "cd /vercel/sandbox/nexus",
+      "export NEXUS_GATEWAY_TOKEN=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') NEXUS_MODEL_KEY=converge NEXUS_MODEL_BASE_URL=https://api.deepseek.com NEXUS_MODEL_ID=deepseek-flash NEXUS_AGENT_ID=" + templateId + " NEXUS_OPTIMIZE=1",
+      // Same optional providers as real tenants (placeholder values), so the plugin
+      // inventory converges here and tenants do not repeat the install-and-restart.
+      ...convergeEnvKeys.map((key) => `export ${key}=converge`),
+      "node boot.mjs | tail -1",
+      "node quiesce.mjs",
+      "for f in /tmp/nexus-desktop.pid /tmp/nexus-desktop-handoff.pid /tmp/nexus-cua-node.pid /tmp/nexus-vbrowser-broker.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",
+      "for f in /tmp/nexus-memory-indexer.pid /tmp/nexus-gateway.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null || true; done",
+      "sleep 2",
+      "ls -d /vercel/sandbox/agent-data/state/npm/projects/*",
+      // Per-tenant secrets and identities are created on each tenant's first boot, never shared via the snapshot.
+      "rm -rf /vercel/sandbox/agent-data/workspace /vercel/sandbox/agent-data/seeded /vercel/sandbox/agent-data/openclaw.json /vercel/sandbox/agent-data/worker-openclaw.json /vercel/sandbox/agent-data/state/logs /vercel/sandbox/agent-data/desktop /vercel/sandbox/agent-data/desktop-handoff /vercel/sandbox/agent-data/vbrowser /vercel/sandbox/agent-data/node-cua /vercel/sandbox/agent-data/state/credentials /tmp/nexus-* /tmp/gw.log /tmp/.v-desktop-99",
+    ].join("\n")]);
+  }
+  if (agentKit) {
+    if (agentKit.runtime.mediaBinaries) await run("media-binaries", "node", ["/vercel/sandbox/nexus/media-binaries.mjs", "/vercel/sandbox/nexus/runtime"]);
+    await run("verify-agent-kit-native", "node", ["/vercel/sandbox/nexus/verify-agent-kit.mjs", "/vercel/sandbox/nexus", templateId]);
+    const proof = await sbx.readFileToBuffer({ path: "/vercel/sandbox/nexus/agent-kit-native-evidence.json" });
+    if (!proof) throw Error("AGENT_KIT_NATIVE_EVIDENCE_MISSING");
+    fs.writeFileSync(path.join(config.dataDir, `${templateId}-native-evidence.json`), proof, { mode: 0o600 });
+  }
   await run("remove-build-archive", "rm", [
     "-f",
     "/vercel/sandbox/payload.tar",
@@ -168,6 +284,9 @@ try {
       snapshotId: snapshot.snapshotId,
       builtAt,
       tools: privatePayloadArchive ? undefined : template!.manifest.tools?.versions,
+      ...(vReleaseCore ? { runtime: { openclaw: vReleaseCore.upstream, "v-release": vReleaseCore.release, codex: V_RELEASE_CODEX_VERSION, "makaron-cli": V_RELEASE_MAKARON_CLI_VERSION, ...(seedArchive ? { seeds: "v001" } : {}) } } : {}),
+      ...(template?.manifest.systemSchedules?.length ? { systemSchedules: template.manifest.systemSchedules } : {}),
+      ...(agentKit ? { agentKit: { archiveSha256: agentKit.archiveSha256, sourceCommit: agentKit.sourceCommit, requiredEnvKeys: agentKit.runtime.envKeys } } : {}),
     }),
   };
   fs.writeFileSync(file, JSON.stringify(saved, null, 2), { mode: 0o600 });

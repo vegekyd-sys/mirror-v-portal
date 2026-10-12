@@ -2,11 +2,14 @@
 // Keep deletions explicit so restoring cannot resurrect user-deleted payload files.
 import fs from "node:fs";
 import path from "node:path";
+import { readAgentKitProfile, payloadWorkspace } from "./agent-config.mjs";
 import { execFileSync } from "node:child_process";
+import { readVRelease, isVReleaseBackupExcluded, compactAgentDb, AGENT_DB } from "./v-release.mjs";
 const root = process.env.NEXUS_BACKUP_ROOT || "/vercel/sandbox",
   data = root + "/agent-data",
-  workspace = data + "/workspace",
-  base = root + "/nexus/payload";
+  workspace = data + "/workspace";
+const profile = readAgentKitProfile(root + "/nexus/agent-kit-runtime.json", process.env.NEXUS_AGENT_ID || "dealclaw");
+const base = profile ? payloadWorkspace(root + "/nexus/payload", profile.runtime) : root + "/nexus/payload";
 function entries(dir, prefix = "") {
   const out = [];
   for (const name of fs.readdirSync(dir)) {
@@ -18,8 +21,23 @@ function entries(dir, prefix = "") {
   }
   return out;
 }
+const vRelease = readVRelease(root + "/nexus/v-release.json");
 const files = [];
+// A v-release agent DB is saved as a consistent copy without its memory index
+// (derived from memory/*.md, hundreds of MB once an archive is imported); the
+// boot-time `memory index` rebuilds it after a restore.
+const stage = "/tmp/nexus-backup-stage", staged = [];
+if (vRelease) fs.rmSync(stage, { recursive: true, force: true });
 for (const item of entries(data)) {
+  // Plugin installs come back with the snapshot; Codex logs and caches are disposable.
+  if (vRelease && isVReleaseBackupExcluded(item.rel)) continue;
+  const db = vRelease && AGENT_DB.exec(item.rel);
+  if (db) {
+    if (db[1]) continue; // -wal/-shm: folded into the copy
+    const rel = "agent-data/" + item.rel;
+    fs.mkdirSync(path.dirname(path.join(stage, rel)), { recursive: true });
+    if (await compactAgentDb(item.file, path.join(stage, rel), root + "/nexus/runtime/node_modules/sqlite-vec-linux-x64/vec0.so")) { staged.push(rel); continue; }
+  }
   if (item.rel === "workspace" || item.rel.startsWith("workspace/")) {
     const rel = item.rel.slice("workspace/".length),
       original = path.join(base, rel);
@@ -49,15 +67,26 @@ const removed = entries(base)
 const manifest = "agent-data/.nexus-backup.json";
 fs.writeFileSync(
   root + "/" + manifest,
-  JSON.stringify({ version: 2, basePayload: "dealclaw-2026-09-14", removed }),
+  JSON.stringify({ version: 2, basePayload: profile?.version || "dealclaw-2026-09-14", ...(profile ? { agentId: profile.templateId, payloadLayout: profile.runtime.payloadLayout, archiveSha256: profile.archiveSha256 } : {}), removed }),
 );
 if (!files.includes(manifest)) files.push(manifest);
 const list = root + "/nexus-backup-files",
   archive = process.env.NEXUS_BACKUP_ARCHIVE || "/tmp/nexus-state.tgz";
 fs.writeFileSync(list, files.join("\0") + "\0");
-execFileSync("tar", [
-  "-czf",
-  archive,
+// GNU tar exits 1 when a file changed while it was read (a Worker or the indexer
+// writing SQLite). That copy is still usable; the idle snapshot is the
+// consistent one. Any other failure stays fatal.
+const tar = (args) => {
+  try { execFileSync("tar", args, { stdio: ["ignore", "ignore", "pipe"] }); }
+  catch (error) {
+    if (!(vRelease && error.status === 1 && /file changed as we read it|changed as we read/.test(String(error.stderr)))) throw error;
+  }
+};
+tar([
+  // Chrome and the Workers create and delete files while we read: a vanished file is not an error.
+  ...(vRelease ? ["--ignore-failed-read", "--warning=no-file-removed", "--warning=no-file-changed"] : []),
+  staged.length ? "-cf" : "-czf",
+  staged.length ? archive + ".tar" : archive,
   "--no-recursion",
   "-C",
   root,
@@ -65,10 +94,16 @@ execFileSync("tar", [
   "-T",
   list,
 ]);
+if (staged.length) {
+  tar(["-rf", archive + ".tar", "-C", stage, ...staged]);
+  execFileSync("sh", ["-c", 'gzip -c "$1" > "$2" && rm -f "$1"', "gzip", archive + ".tar", archive]);
+  fs.rmSync(stage, { recursive: true, force: true });
+}
 console.log(
   JSON.stringify({
     bytes: fs.statSync(archive).size,
-    files: files.length,
+    files: files.length + staged.length,
+    compacted: staged.length,
     removed: removed.length,
   }),
 );

@@ -1,10 +1,23 @@
 import fs from "node:fs";
+import { prepareInboundInput } from "./inbound-input.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
 const nonce = randomUUID();
 fs.writeFileSync(rpc + "/current.json", JSON.stringify({ nonce }));
 const sent = new Set();
+function terminalFrame(frame) {
+  const raw = frame.split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart()).join("\n");
+  try {
+    const event = JSON.parse(raw);
+    if (event.type === "response.failed" || event.type === "error") return "failed";
+    if (event.type === "response.completed")
+      return event.response?.status === "completed" ? "completed" : "failed";
+  } catch {}
+  return undefined;
+}
 const timer = setInterval(() => {
   for (const name of fs.readdirSync(rpc)) {
     if (!name.endsWith(".request") || sent.has(name)) continue;
@@ -28,6 +41,15 @@ try {
   const request = JSON.parse(
     Buffer.from(process.env.NEXUS_REQUEST_B64, "base64").toString(),
   );
+  let inbound;
+  try {
+    const config = request.images?.length ? JSON.parse(fs.readFileSync("/vercel/sandbox/agent-data/openclaw.json", "utf8")) : undefined;
+    inbound = prepareInboundInput(request,config,{agentId:process.env.NEXUS_AGENT_ID || "dealclaw"});
+  } catch (error) {
+    const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE)[A-Z_]*$/.test(error?.message || "") ? error.message : "INBOUND_MEDIA_INPUT_REJECTED";
+    process.stdout.write("data: " + JSON.stringify({type:"nexus.input_rejected",code}) + "\n\n");
+    throw Error("INBOUND_MEDIA_INPUT_REJECTED");
+  }
   const response = await fetch("http://127.0.0.1:18790/v1/responses", {
     method: "POST",
     headers: {
@@ -43,8 +65,9 @@ try {
     },
     body: JSON.stringify({
       model: `openclaw/${process.env.NEXUS_AGENT_ID || "dealclaw"}`,
-      input: request.text,
+      input: inbound.input,
       instructions: [
+        ...(inbound.instructions ? [inbound.instructions] : []),
         "定时任务和心跳必须用 nexus_schedule 工具登记到 Nexus，不能改 OpenClaw 配置或本地 cron。对于需要调用工具或多步骤处理的任务，在开始前和关键步骤之间用简短中文向用户说明正在做什么；这些是公开的执行进展，不要输出内部推理。完成后给出结果。",
         // Knowing the channel accepts files is not the same as knowing how to
         // hand one over: the agent announced it was sending an image and then
@@ -73,11 +96,24 @@ try {
   // Preserve frame boundaries when multiplexing schedule RPC with model SSE.
   const decoder = new TextDecoder();
   let pending = "";
-  for await (const chunk of response.body) {
+  responseFrames: for await (const chunk of response.body) {
     pending += decoder.decode(chunk, { stream: true });
     const frames = pending.split(/\r?\n\r?\n/);
     pending = frames.pop() || "";
-    for (const frame of frames) process.stdout.write(frame + "\n\n");
+    for (const frame of frames) {
+      // Forward the actual terminal event before cancelling its body. The
+      // gateway may report failure without closing HTTP; waiting for EOF then
+      // hides that failure until the sandbox command times out.
+      process.stdout.write(frame + "\n\n");
+      const terminal = terminalFrame(frame);
+      if (terminal) {
+        pending = "";
+        if (terminal === "failed") process.exitCode = 1;
+        // ReadableStream's async iterator cancels the body on early return.
+        // This ends only the already-terminal invocation, without a retry.
+        break responseFrames;
+      }
+    }
   }
   if (pending.trim()) process.stdout.write(pending + "\n\n");
 } finally {

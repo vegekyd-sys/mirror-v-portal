@@ -4,6 +4,8 @@ export interface AgentTemplate {
   id: string;
   version: string;
   name: string;
+  /** Channel app name; omitted when it equals the signup label. */
+  appName?: string;
   description: string;
   snapshotId: string;
   /** Hidden templates can be requested by id but are not offered on the signup page. */
@@ -14,6 +16,8 @@ const LABELS: Record<string, { name: string; description: string }> = {
   dealclaw: { name: "DealClaw", description: "面向出海业务的 AI 顾问" },
   "mirror-v": { name: "Mirror V", description: "与你一起思考、整理和行动的通用 Agent" },
   xingqing: { name: "星擎助手", description: "查询企业在星擎的账号、作品、播放与线索数据" },
+  makaron: { name: "Makaron", description: "与你一起创作图片、视频、音乐和动态设计" },
+  "mirror-v-full": { name: "Mirror V", description: "全功能的 V：多 Worker、记忆与自我进化，从零开始认识你" },
 };
 
 /**
@@ -24,6 +28,7 @@ const LABELS: Record<string, { name: string; description: string }> = {
  */
 const TEMPLATE_SECRETS: Record<string, readonly string[]> = {
   xingqing: ["XINGQING_USERNAME", "XINGQING_PASSWORD"],
+  makaron: ["MAKARON_API_KEY"],
 };
 
 export function templateSecretNames(templateId: string): readonly string[] {
@@ -59,7 +64,8 @@ export function availableTemplates(config: Config): AgentTemplate[] {
     const label = LABELS[id];
     const name = value.name?.trim() || label?.name || id;
     const description = value.description?.trim() || label?.description || "独立 Agent 模板";
-    entries.push({ id, version: value.version, name, description, snapshotId: value.snapshotId, listed: value.listed !== false });
+    const appName = value.appName?.trim();
+    entries.push({ id, version: value.version, name, ...(appName && appName !== name ? { appName } : {}), description, snapshotId: value.snapshotId, listed: value.listed !== false });
   }
   return entries;
 }

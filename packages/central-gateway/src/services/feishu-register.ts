@@ -47,7 +47,7 @@ const APP_PRESET = {
 
 export async function startFeishuRegistration(
   onRegistered?: (session: RegistrationSession) => Promise<void>,
-  template: { id: string; version: string; name: string; description: string } = {
+  template: { id: string; version: string; name: string; appName?: string; description: string } = {
     id: 'dealclaw', version: 'dealclaw-base.v2', name: 'DealClaw', description: '面向出海业务的 AI 顾问',
   },
 ): Promise<RegistrationSession> {
@@ -56,7 +56,8 @@ export async function startFeishuRegistration(
   const session: RegistrationSession = {
     templateId: template.id,
     templateVersion: template.version,
-    templateName: template.name,
+    // The bot's identity in Feishu: the welcome message and app name use it.
+    templateName: template.appName || template.name,
     deviceCode: '',
     qrUrl: '',
     expireIn: 600,
@@ -91,7 +92,7 @@ export async function startFeishuRegistration(
           console.log('[registerApp] status change:', info.status);
         },
         appPreset: {
-          name: template.name,
+          name: template.appName || template.name,
           desc: template.description,
           ...APP_PRESET,
         },

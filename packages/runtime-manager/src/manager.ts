@@ -1,6 +1,16 @@
+import { InboundMediaError } from "./inbound-media.js";
 import { Scheduler } from './scheduler.js';
+import { randomUUID } from "node:crypto";
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
+
+/** Failures the runtime reported after ending the turn itself (e.g. a model timeout). */
+export const RUNTIME_REPORTED_FAILURES = new Set([
+  "OPENCLAW_RESPONSE_FAILED",
+  "OPENCLAW_INCOMPLETE_RESPONSE",
+  "STATE_BACKUP_FAILED",
+  "STATE_BACKUP_EMPTY",
+]);
 
 export class RuntimeManager {
   private timer?: NodeJS.Timeout;
@@ -10,7 +20,7 @@ export class RuntimeManager {
     readonly provider: RuntimeProvider,
     readonly onDelta?: (run: Run, text: string) => void,
     readonly onProgress?: (run: Run, kind: string, data: any) => void,
-    readonly onMedia?: (run: Run, media: MediaFile[]) => void,
+    readonly onMedia?: (run: Run, media: MediaFile[]) => void | Promise<void>,
   ) {}
   async start() {
     await this.store.boss.work<{ runId: string }>(
@@ -70,8 +80,8 @@ export class RuntimeManager {
       }
       // Preserve arrival order across the parallel queue workers.
       const earlier = await db.query(
-        "SELECT 1 FROM elastic_runs WHERE tenant_id=$1 AND status='queued' AND (created_at,id)<($2,$3) LIMIT 1",
-        [tenant.id, current.created_at, runId],
+        "SELECT 1 FROM elastic_runs WHERE tenant_id=$1 AND status='queued' AND (created_at,id)<(SELECT created_at,id FROM elastic_runs WHERE id=$2) LIMIT 1",
+        [tenant.id, runId],
       );
       if (earlier.rowCount) throw new Error("EARLIER_TURN_PENDING");
       let submitted = false;
@@ -117,7 +127,10 @@ export class RuntimeManager {
           },
           runId,
         );
+        const attachments = current.attachments?.length ? current.attachments : current.inherit_attachments === false ? [] : await this.store.previousAttachments(current);
         submitted = true;
+        // Preview frames are not persisted; keep when the first one came and how many (eval A2/A3).
+        const preview = { frames: 0, firstAt: 0, lastAt: 0 };
         const { output, media } = await this.provider.execute(
           tenant,
           current.session_key,
@@ -129,15 +142,23 @@ export class RuntimeManager {
               await this.store.event(tenant.id,"schedule-command",{action:data.args?.action,ok:!data.result.error},runId);
               return;
             }
-            await this.store.event(tenant.id, kind, data, runId);
+            // Previews are throttled snapshots of the same text: route them, never persist them.
+            if (kind === "preview") {
+              preview.lastAt = Date.now();
+              if (!preview.frames++) {
+                preview.firstAt = preview.lastAt;
+                await this.store.event(tenant.id, "first-preview", { at: preview.firstAt }, runId);
+              }
+            } else await this.store.event(tenant.id, kind, data, runId);
             if (kind === "delta") this.onDelta?.(current, data.text);
             else this.onProgress?.(current, kind, data);
           },
-          { channel: current.channel },
+          { channel: current.channel, attachments, attachmentsFromPreviousTurn: !current.attachments?.length && attachments.length > 0 },
         );
-        // Hand files to the edge before the reply is marked deliverable, so the
-        // attachment and the text arrive together rather than in two turns.
-        if (media?.length) this.onMedia?.(current, media);
+        if (preview.frames) await this.store.event(tenant.id, "preview-stats", preview, runId);
+        // Persist outbound files before queuing the reply. Channel delivery can
+        // then retry after a restart without repeating the creative turn.
+        if (media?.length) await this.onMedia?.(current, media);
         await db.query("BEGIN");
         try {
           await db.query(
@@ -163,16 +184,26 @@ export class RuntimeManager {
           throw e;
         }
         await this.store.event(tenant.id, "completed", { output }, runId);
+        try {
+          const added = await new Scheduler(this.store).ensureSystemSchedules(current, this.store.config.templates?.[tenant.template_id]?.systemSchedules);
+          if (added.length) await this.store.event(tenant.id, "system-schedules", { added }, runId);
+        } catch (e) {
+          await this.store.event(tenant.id, "system-schedules-failed", { error: e instanceof Error ? e.message : "SYSTEM_SCHEDULE_ERROR" }, runId);
+        }
       } catch (e) {
         const message = e instanceof Error ? e.message : "RUNTIME_ERROR";
-        const status = submitted ? "uncertain" : "failed";
+        const sent = submitted && !(e instanceof InboundMediaError);
+        const status = sent ? "uncertain" : "failed";
         await db.query(
           "UPDATE elastic_runs SET status=$2,error=$3,completed_at=now() WHERE id=$1",
           [runId, status, message],
         );
+        // The run stays uncertain (its tools may have acted), but when the runtime
+        // itself reported the turn finished, nothing is still in flight: the next
+        // message may run. Only a turn the controller lost track of blocks the agent.
         await db.query(
           "UPDATE elastic_tenants SET state=$2,last_error=$3,last_activity=now() WHERE id=$1",
-          [tenant.id, submitted ? "blocked" : "ready", message],
+          [tenant.id, sent && !RUNTIME_REPORTED_FAILURES.has(message) ? "blocked" : "ready", message],
         );
         await this.store.event(tenant.id, status, { error: message }, runId);
         if (current.channel === "feishu") {
@@ -190,6 +221,67 @@ export class RuntimeManager {
       return true;
     });
     if (!processed) throw new Error("AGENT_BUSY");
+  }
+  /**
+   * An owner opened a signed link to a public service (the voice page): wake the
+   * sandbox if it sleeps, keep it from idling out right away, and return where
+   * the service is reachable now. A running turn already holds the sandbox up.
+   */
+  async open(tenantId: string, service: string, signature: string): Promise<string> {
+    const tenant = await this.store.tenant(tenantId);
+    if (!this.provider.openSignatureValid?.(tenant, service, signature)) throw Error("OPEN_LINK_INVALID");
+    if (tenant.state === "blocked") throw Error("AGENT_NEEDS_REVIEW");
+    const running = ["busy", "waking"].includes(tenant.state) ? await this.provider.runningPublicUrls?.(tenant) : null;
+    if (running) return this.provider.serviceUrl!(tenant, service, running);
+    const woken = await this.store.locked(tenant.id, async (db) => {
+      const current = await this.store.tenant(tenant.id, db);
+      if (current.state === "blocked") throw Error("AGENT_NEEDS_REVIEW");
+      const previous = current.state;
+      await db.query("UPDATE elastic_tenants SET state='waking',last_error=NULL WHERE id=$1", [current.id]);
+      try {
+        current.runtime_env = await this.store.tenantSecretEnv(current.id);
+        const handle = await this.provider.ensure(current, async (name) => {
+          await db.query("UPDATE elastic_tenants SET sandbox_name=$2 WHERE id=$1", [current.id, name]);
+        });
+        await db.query("UPDATE elastic_tenants SET state='ready',sandbox_name=$2,last_activity=now(),last_wake_ms=$3,wake_count=wake_count+1 WHERE id=$1", [current.id, handle.name, handle.wakeMs]);
+        await this.store.event(current.id, "opened", { service, wakeMs: handle.wakeMs, reused: handle.reused });
+        return this.provider.serviceUrl!(current, service, handle.publicUrls ?? {});
+      } catch (e) {
+        await db.query("UPDATE elastic_tenants SET state=$2,last_error=$3 WHERE id=$1", [current.id, previous === "sleeping" ? "sleeping" : "ready", e instanceof Error ? e.message : "OPEN_FAILED"]);
+        throw e;
+      }
+    });
+    if (woken) return woken;
+    // A turn holds the lock: the sandbox is up.
+    const urls = await this.provider.runningPublicUrls?.(tenant);
+    if (!urls) throw Error("AGENT_BUSY");
+    return this.provider.serviceUrl!(tenant, service, urls);
+  }
+  /**
+   * Continue a conversation on behalf of a component inside the sandbox (the
+   * takeover page's 交还给 V): queue a normal turn in the original chat, so the
+   * reply leaves through the channel edge like any other.
+   */
+  async wakeSession(tenantId: string, signature: string, input: { sessionKey?: unknown; text?: unknown; requestKey?: unknown }) {
+    const tenant = await this.store.tenant(tenantId);
+    if (!this.provider.wakeSignatureValid?.(tenant, signature)) throw Error("WAKE_LINK_INVALID");
+    const prefix = `agent:${tenant.template_id || "dealclaw"}:`;
+    const internal = String(input.sessionKey ?? "");
+    const sessionKey = internal.startsWith(prefix) ? internal.slice(prefix.length) : "";
+    if (!sessionKey || sessionKey.length > 256 || /:scheduled:/.test(sessionKey)) throw Error("WAKE_SESSION_INVALID");
+    const text = String(input.text ?? "").slice(0, 2000);
+    const requestKey = `wake:${String(input.requestKey ?? "").slice(0, 200)}`;
+    if (!text.trim() || requestKey === "wake:") throw Error("WAKE_INPUT_INVALID");
+    const chat = sessionKey.startsWith(`${tenant.id}:oc_`) ? sessionKey.slice(tenant.id.length + 1) : null;
+    const id = randomUUID();
+    const inserted = await this.store.pool.query(
+      "INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,chat_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING id",
+      [id, tenant.id, requestKey, sessionKey, text, chat ? "feishu" : "browser-trial", chat],
+    );
+    if (!inserted.rowCount) return { queued: false, duplicate: true };
+    await this.store.boss.send("agent-turn", { runId: id }, { group: { id: tenant.id } });
+    await this.store.event(tenant.id, "session-woken", { requestKey }, id);
+    return { queued: true, runId: id };
   }
   async collect(tenantId?: string) {
     if (this.collecting) return;
@@ -222,6 +314,7 @@ export class RuntimeManager {
               );
               await this.store.event(tenant.id, "idle-deferred", {
                 reason: result.reason,
+                ...(result.detail ? { detail: result.detail } : {}),
               });
               return;
             }
@@ -234,10 +327,15 @@ export class RuntimeManager {
               computeReleased: true,
             });
           } catch (e) {
+            // No turn is in flight when an idle VM fails to stop: retry on the next
+            // pass rather than refusing every later message (one stop timeout once
+            // locked an owner out for three days).
+            const message = e instanceof Error ? e.message : "STOP_FAILED";
             await db.query(
-              "UPDATE elastic_tenants SET state='blocked',last_error=$2 WHERE id=$1",
-              [tenant.id, e instanceof Error ? e.message : "STOP_FAILED"],
+              "UPDATE elastic_tenants SET state='ready',last_activity=now(),last_error=$2 WHERE id=$1",
+              [tenant.id, message],
             );
+            await this.store.event(tenant.id, "idle-stop-failed", { error: message.slice(0, 200) });
           }
         });
     } finally {

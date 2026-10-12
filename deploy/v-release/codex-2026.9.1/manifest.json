@@ -1,0 +1,31 @@
+{
+ "release": "v-codex-plugin-2026.9.1-drift-20261008",
+ "upstream": "2026.9.1",
+ "package": "@openclaw/codex",
+ "capturedFrom": {
+  "host": "v",
+  "runtimeDir": "~/.openclaw/npm/projects/openclaw-codex-*/node_modules/@openclaw/codex/dist"
+ },
+ "note": "Hand-applied on V, not in the platform repo captures. Captured 2026-10-08 for Mirror V.",
+ "removedFromBase": [],
+ "files": [
+  {
+   "path": "./harness-DXVZ5II5.js",
+   "sha256": "2903634b801db3ed43e4374a6be6c2770d9745229ef705ef87729a3e83bdcfb2",
+   "kind": "modified",
+   "baseSha256": "9eff1736dbb884d409e034ff4387134fa01c38d8f25ef5fa40eaa51af69a5fba"
+  },
+  {
+   "path": "./run-attempt-D1hJO4fX.js",
+   "sha256": "564374a6f55b533773a4d0c7875ea66e58215c999789ba93edc5ad0e6383ec83",
+   "kind": "modified",
+   "baseSha256": "1f6ab7d5d37190b25a4c672b46d94ed90b5db5372e310468f9ce478ade15d7cc"
+  },
+  {
+   "path": "./thread-lifecycle-DAcEJ_Om.js",
+   "sha256": "e7c2208f8c9c99bbf06bc73800cdac2f013078199214d27b0ccbdec2470a1890",
+   "kind": "modified",
+   "baseSha256": "739b39f7558ad8701d60ea605c579ec257144fcbfe6d82b33b379026d8729b10"
+  }
+ ]
+}

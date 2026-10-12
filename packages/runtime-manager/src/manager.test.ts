@@ -1,10 +1,11 @@
-import { beforeAll, afterAll, expect, test } from "vitest";
+import { beforeAll, afterAll, expect, test, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
 import { RuntimeManager } from "./manager.js";
 import type { RuntimeProvider } from "./provider.js";
+import type { InboundAttachment } from "./inbound-media.js";
 let s: Store, admin: pg.Pool;
 const database = `nexus_test_${Date.now()}`;
 beforeAll(async () => {
@@ -36,6 +37,34 @@ const provider = (
 async function tenant() {
   return s.createTenant(randomUUID(), "test");
 }
+test("awaits durable outbound staging before making a Feishu reply deliverable", async () => {
+  const t = await tenant();
+  const run = await s.enqueue(t.id, "media-staging", "chat", "make an image", "feishu", "wire-message");
+  let started!: () => void, release!: () => void;
+  const began = new Promise<void>((resolve) => { started = resolve; });
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  let staged = false;
+  const send = vi.spyOn(s.boss, "send");
+  const manager = new RuntimeManager(s, provider(async () => ({
+    output: "image ready", media: [{ ref: "artifacts/image.png", kind: "image", buffer: Buffer.from("image") }],
+  })), undefined, undefined, async () => { started(); await hold; staged = true; });
+  const processing = manager.process(run.id);
+  try {
+    await began;
+    expect((await s.run(run.id)).status).toBe("running");
+    expect((await s.run(run.id)).delivery).not.toBe("sent");
+    expect(send.mock.calls.filter(args => args[0] === "feishu-reply")).toHaveLength(0);
+    release();
+    await processing;
+    expect(staged).toBe(true);
+    expect((await s.run(run.id)).status).toBe("succeeded");
+    expect(send.mock.calls.filter(args => args[0] === "feishu-reply")).toHaveLength(1);
+  } finally {
+    release();
+    await processing;
+    send.mockRestore();
+  }
+});
 test("deduplicates concurrent inbound deliveries", async () => {
   const t = await tenant();
   const [a, b] = await Promise.all([
@@ -43,6 +72,72 @@ test("deduplicates concurrent inbound deliveries", async () => {
     s.enqueue(t.id, "same", "session", "hi"),
   ]);
   expect(a.id).toBe(b.id);
+});
+const imageReceipt = (tenantId: string, marker = "a"): InboundAttachment => ({
+  kind: "image", mimeType: "image/jpeg", bytes: 123,
+  sha256: marker.repeat(64),
+  storagePath: `inbound/${tenantId}/${"b".repeat(64)}/${marker.repeat(64)}.jpg`,
+});
+test("persists image-only receipts and never rewrites or replays duplicate completed messages", async () => {
+  const t = await tenant(), image = imageReceipt(t.id);
+  const [a,b] = await Promise.all([
+    s.enqueue(t.id,"photo-wire-id","chat","","weixin","wire-id",[image]),
+    s.enqueue(t.id,"photo-wire-id","chat","","weixin","wire-id",[image]),
+  ]);
+  expect(a.id).toBe(b.id);
+  expect((await s.run(a.id)).attachments).toEqual([image]);
+  let executions = 0;
+  const m = new RuntimeManager(s,provider(async (_t,_session,_text,_emit,context) => {
+    executions++; expect(context?.attachments).toEqual([image]);
+    return {output:"received",media:[]};
+  }));
+  await m.process(a.id);
+  const duplicate = await s.enqueue(t.id,"photo-wire-id","chat","changed","weixin","wire-id",[imageReceipt(t.id,"c")],{inheritAttachments:false});
+  expect(duplicate.status).toBe("succeeded");
+  expect(duplicate.text).toBe("");
+  expect(duplicate.attachments).toEqual([image]);
+  expect(duplicate.inherit_attachments).toBe(true);
+  await m.process(duplicate.id);
+  expect(executions).toBe(1);
+});
+test("inherits images only within the exact tenant, session and channel using PostgreSQL timestamp precision", async () => {
+  const t = await tenant(), other = await tenant(), image = imageReceipt(t.id);
+  const received = await s.enqueue(t.id,"image","chat","","weixin",undefined,[image]);
+  await s.pool.query("UPDATE elastic_runs SET status='succeeded',created_at='2026-10-03 00:00:00.000123+00' WHERE id=$1",[received.id]);
+  const followup = await s.enqueue(t.id,"caption","chat","用上一张照片","weixin");
+  await s.pool.query("UPDATE elastic_runs SET created_at='2026-10-03 00:00:00.000789+00' WHERE id=$1",[followup.id]);
+  expect(await s.previousAttachments(await s.run(followup.id))).toEqual([image]);
+  for (const [owner,session,channel,key] of [
+    [other.id,"chat","weixin","other-tenant"],
+    [t.id,"different-chat","weixin","other-session"],
+    [t.id,"chat","web","other-channel"],
+  ]) {
+    const isolated = await s.enqueue(owner,key,session,"text",channel);
+    expect(await s.previousAttachments(isolated)).toEqual([]);
+  }
+});
+test("failed new-image reception blocks the old image on that turn and later captions", async () => {
+  const t = await tenant(), image = imageReceipt(t.id);
+  const contexts: unknown[] = [];
+  const m = new RuntimeManager(s,provider(async (_t,_session,_text,_emit,context) => {
+    contexts.push(context);return {output:"ok",media:[]};
+  }));
+  const received = await s.enqueue(t.id,"photo-a","chat","","weixin",undefined,[image]);
+  await m.process(received.id);
+  const firstCaption = await s.enqueue(t.id,"caption-a","chat","处理上一张","weixin");
+  await m.process(firstCaption.id);
+  expect(contexts[1]).toMatchObject({attachments:[image],attachmentsFromPreviousTurn:true});
+  const failed = await s.enqueue(t.id,"photo-b-failed","chat","图片接收失败，请重发","weixin",undefined,[],{inheritAttachments:false});
+  await m.process(failed.id);
+  expect(contexts[2]).toMatchObject({attachments:[],attachmentsFromPreviousTurn:false});
+  const laterCaption = await s.enqueue(t.id,"caption-b","chat","把这张图改成贴纸","weixin");
+  expect(await s.previousAttachments(laterCaption)).toEqual([]);
+  await m.process(laterCaption.id);
+  expect(contexts[3]).toMatchObject({attachments:[],attachmentsFromPreviousTurn:false});
+  const newPhoto = await s.enqueue(t.id,"photo-c","chat","","weixin",undefined,[imageReceipt(t.id,"c")]);
+  await m.process(newPhoto.id);
+  const newCaption = await s.enqueue(t.id,"caption-c","chat","处理新的图","weixin");
+  expect(await s.previousAttachments(newCaption)).toEqual([imageReceipt(t.id,"c")]);
 });
 test("serializes turns and does not release while tools run", async () => {
   const t = await tenant();
@@ -177,8 +272,12 @@ test("real queue drains concurrent messages in tenant order", async () => {
     }),
   );
   const runs = [];
-  for (let i = 0; i < 5; i++)
-    runs.push(await s.enqueue(t.id, "q" + i, "session", String(i)));
+  for (let i = 0; i < 5; i++) {
+    const run = await s.enqueue(t.id, "q" + i, "session", String(i));
+    // Distinct database microseconds in one millisecond must remain ordered.
+    await s.pool.query("UPDATE elastic_runs SET created_at=$2::timestamptz WHERE id=$1", [run.id, `2026-10-03 00:00:00.000${123 + i}+00`]);
+    runs.push(run);
+  }
   await m.start();
   try {
     // Waits on the whole batch reaching a terminal state, not just the last row:

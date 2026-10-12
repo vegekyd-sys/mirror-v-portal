@@ -1,0 +1,24 @@
+{
+  "workspace": "/vercel/sandbox/agent-data/workspace",
+  "ai_name": "Mirror V",
+  "user_name": "owner",
+  "timezone": "Asia/Shanghai",
+  "storage": {
+    "backend": "local",
+    "local": {
+      "reflections_dir": "memory/reflections",
+      "logs_dir": "memory/logs",
+      "memory_file": "MEMORY.md"
+    }
+  },
+  "notifications": { "backend": "none" },
+  "heartbeat": {
+    "enabled": true,
+    "interval_hours": 12,
+    "tasks": ["reflection_analysis", "memory_scan", "log_compress", "wiki_maintenance", "project_queue"],
+    "dispatch": { "max_per_cycle": 2, "exclude_projects": [] },
+    "dispatch_report": { "enabled": false },
+    "daily_review_feishu_replies": { "enabled": false }
+  },
+  "reflection": { "min_pattern_count": 2, "auto_write": false, "auto_capture_stale_hours": 24 }
+}

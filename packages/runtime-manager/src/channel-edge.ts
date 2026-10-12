@@ -25,7 +25,7 @@ export interface ChannelEdge {
    * Deliver files the agent attached to this turn, already read out of the
    * sandbox. Optional: a surface that cannot carry attachments simply omits it.
    */
-  media?(run: Run, files: MediaFile[]): void;
+  media?(run: Run, files: MediaFile[]): void | Promise<void>;
   /** Release connections; the process is shutting down. */
   close(): void;
 }
@@ -66,7 +66,7 @@ export class EdgeRouter {
     this.byChannel.get(run.channel)?.progress(run, kind, data);
   }
   media(run: Run, files: MediaFile[]) {
-    this.byChannel.get(run.channel)?.media?.(run, files);
+    return this.byChannel.get(run.channel)?.media?.(run, files);
   }
   close() {
     for (const edge of this.byChannel.values()) edge.close();

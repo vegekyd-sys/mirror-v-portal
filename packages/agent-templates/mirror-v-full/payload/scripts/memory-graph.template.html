@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>V · Memory Librarian</title>
+<style>
+  :root { --bg:#15151c; --panel:#1e1e28; --card:#252532; --line:#2e2e3d; --fg:#e8e8f0; --mute:#8d8da3; --accent:#a78bfa; --green:#34d399; --amber:#f59e0b; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; }
+  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:18px; padding:14px 22px; background:rgba(21,21,28,.92); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; white-space:nowrap; }
+  header h1 span { color:var(--mute); font-weight:400; font-size:12px; margin-left:8px; }
+  nav { display:flex; gap:4px; background:var(--panel); padding:4px; border-radius:10px; }
+  nav button { background:none; border:0; color:var(--mute); font:inherit; padding:6px 14px; border-radius:7px; cursor:pointer; }
+  nav button.on { background:var(--card); color:var(--fg); }
+  .view { display:none; } .view.on { display:block; }
+  .wrap { max-width:1080px; margin:0 auto; padding:24px 22px 60px; }
+  .days { display:flex; gap:8px; overflow-x:auto; margin-bottom:18px; scrollbar-width:none; overscroll-behavior-x:contain; }
+  .days::-webkit-scrollbar { display:none; }
+  .days.fade-r { -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent); mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent); }
+  .days.fade-l { -webkit-mask-image:linear-gradient(to right,transparent,#000 56px); mask-image:linear-gradient(to right,transparent,#000 56px); }
+  .days.fade-l.fade-r { -webkit-mask-image:linear-gradient(to right,transparent,#000 56px,#000 calc(100% - 56px),transparent); mask-image:linear-gradient(to right,transparent,#000 56px,#000 calc(100% - 56px),transparent); }
+  .day { flex:none; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 14px; cursor:pointer; text-align:center; min-width:92px; }
+  .day b { display:block; font-size:15px; } .day small { color:var(--mute); font-size:11px; }
+  .day.on { border-color:var(--accent); background:#2a2540; }
+  .chips { display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 22px; }
+  .kpi { background:var(--panel); border-radius:12px; padding:12px 16px; min-width:120px; }
+  .kpi b { display:block; font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.2; }
+  .kpi span { color:var(--mute); font-size:12px; }
+  .run { margin-bottom:34px; }
+  .runhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .runhead h2 { font-size:17px; margin:0; }
+  .tag { font-size:11px; padding:2px 9px; border-radius:999px; background:var(--card); color:var(--mute); }
+  .tag.backlog { background:#3b2f14; color:#fbbf24; } .tag.daily { background:#123326; color:#34d399; } .tag.lint { background:#172a45; color:#60a5fa; } .tag.reflection { background:#2e1f3d; color:#c084fc; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+  .card h3 { font-size:15px; margin:0 0 2px; display:flex; gap:8px; align-items:center; }
+  .card .path { color:var(--mute); font-size:11px; word-break:break-all; margin-bottom:8px; }
+  .card ul { margin:0; padding-left:18px; } .card li { margin:3px 0; }
+  .badge { font-size:10px; padding:1px 7px; border-radius:6px; font-weight:500; }
+  .badge.create { background:#123326; color:var(--green); } .badge.update { background:#2a2540; color:var(--accent); }
+  details { margin-top:14px; background:var(--panel); border-radius:12px; padding:10px 14px; }
+  summary { cursor:pointer; color:var(--mute); }
+  .src { font-size:12px; padding:5px 0; border-bottom:1px solid var(--line); display:grid; grid-template-columns:70px 1fr; gap:8px; }
+  .src:last-child { border:0; } .src code { color:#c4c4d4; word-break:break-all; font-size:11.5px; } .src em { color:var(--mute); font-style:normal; display:block; }
+  .chg { display:grid; grid-template-columns:52px 1fr; gap:10px; background:var(--panel); border-radius:10px; padding:10px 12px; margin-top:6px; font-size:13px; }
+  .chg b { font-weight:500; } .chg em { display:block; color:var(--mute); font-style:normal; font-size:12px; margin-top:2px; }
+  .bef { color:#9a9aae; text-decoration:line-through; margin-top:3px; } .aft { color:#d8d8e4; margin-top:2px; }
+  .ck { font-size:11px; padding:2px 0; border-radius:6px; text-align:center; height:fit-content; }
+  .ck.rewrite { background:#2a2540; color:var(--accent); } .ck.strike { background:#3b2f14; color:#fbbf24; } .ck.delete { background:#3a1717; color:#f87171; } .ck.move { background:#172a45; color:#60a5fa; }
+  .issue { background:#2d2412; color:#fcd34d; border-radius:10px; padding:8px 12px; margin-top:8px; font-size:13px; }
+  .empty { color:var(--mute); padding:40px 0; text-align:center; }
+  .bar { height:14px; background:var(--card); border-radius:999px; overflow:hidden; margin:10px 0 6px; }
+  .bar i { display:block; height:100%; background:linear-gradient(90deg,#34d399,#a78bfa); border-radius:999px; }
+  .big { font-size:40px; font-weight:600; font-variant-numeric:tabular-nums; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  td,th { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; } th { color:var(--mute); font-weight:400; }
+  .st { font-size:11px; padding:2px 8px; border-radius:6px; } .st.done { background:#123326; color:var(--green); } .st.pending { background:var(--card); color:var(--mute); } .st.running { background:#3b2f14; color:#fbbf24; }
+  svg.trend { width:100%; height:120px; display:block; background:var(--panel); border-radius:12px; margin-top:8px; }
+  .sec { color:var(--mute); font-size:12px; letter-spacing:.6px; margin:26px 0 6px; }
+  /* graph */
+  #gview { position:fixed; top:var(--hh,61px); left:0; right:0; bottom:0; }
+  #graph { position:absolute; inset:0; }
+  .panel { position:absolute; background:rgba(30,30,40,.93); backdrop-filter:blur(8px); border:1px solid var(--line); border-radius:14px; padding:14px; font-size:13px; }
+  #gleft { top:14px; left:14px; width:270px; max-height:calc(100% - 28px); overflow:auto; }
+  #gright { top:14px; right:14px; width:320px; max-height:calc(100% - 28px); overflow:auto; display:none; }
+  .legend label { display:flex; align-items:center; gap:8px; padding:2px 0; cursor:pointer; user-select:none; }
+  .legend i, .lnk i { width:9px; height:9px; border-radius:50%; display:inline-block; flex:none; margin-right:6px; }
+  .legend em { margin-left:auto; color:var(--mute); font-style:normal; }
+  input[type=search] { width:100%; background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:6px 10px; outline:none; font:inherit; }
+  #results div, .lnk { padding:3px 6px; border-radius:6px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #results div:hover, .lnk:hover { background:var(--card); }
+  #close { position:absolute; top:8px; right:12px; cursor:pointer; color:var(--mute); }
+  .note { color:var(--mute); font-size:11.5px; margin-top:10px; }
+  .srow { display:flex; gap:8px; } #ftoggle { display:none; }
+  .gbtn { background:var(--card); border:1px solid var(--line); color:var(--fg); font:inherit; border-radius:8px; padding:6px 12px; cursor:pointer; white-space:nowrap; }
+  .gbtn.on { border-color:var(--accent); color:var(--accent); }
+  #fit { position:absolute; right:14px; bottom:14px; width:40px; height:40px; padding:0; font-size:18px; border-radius:12px; }
+  /* "聚合最多" ranking: a compact list on desktop, a single scrolling chip row on phones */
+  #rank { margin-top:12px; }
+  .rhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .rhead .sec { margin:0; }
+  .seg { display:flex; flex:none; gap:2px; padding:2px; background:var(--card); border-radius:7px; }
+  .seg button { background:none; border:0; color:var(--mute); font:inherit; font-size:11.5px; line-height:1.6; padding:1px 9px; border-radius:5px; cursor:pointer; }
+  .seg button.on { background:#36364a; color:var(--fg); }
+  .ri { position:relative; display:flex; align-items:center; padding:2px 6px 6px; line-height:1.5; border-radius:6px; cursor:pointer; }
+  .ri::after { content:''; position:absolute; left:21px; right:6px; bottom:3px; height:2px; border-radius:1px; background:rgba(255,255,255,.045); }
+  .ri:hover, .ri.on { background:var(--card); }
+  .ri i { width:8px; height:8px; border-radius:50%; flex:none; margin-right:7px; }
+  .ri span { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ri b { font-weight:400; font-size:11.5px; color:var(--mute); font-variant-numeric:tabular-nums; margin-left:8px; }
+  .ri s { position:absolute; z-index:1; left:21px; bottom:3px; height:2px; border-radius:1px; opacity:.55; text-decoration:none; }
+  @media (max-width:700px) {
+    header { flex-wrap:wrap; gap:8px; padding:10px 12px; } header h1 { font-size:15px; }
+    nav { width:100%; } nav button { flex:1; padding:7px 0; }
+    body.g header h1 { display:none; }
+    .wrap { padding:16px 12px 50px; } .grid { grid-template-columns:1fr; }
+    .kpi { flex:1 1 calc(25% - 5px); min-width:0; padding:8px 8px; border-radius:10px; } .kpi b { font-size:18px; } .kpi span { font-size:10.5px; line-height:1.35; display:block; }
+    .chips { gap:6px; } .runhead h2 { font-size:15px; } .big { font-size:32px; }
+    #progBody table { display:block; overflow-x:auto; white-space:nowrap; }
+    /* graph: filters collapse into a search bar, details become a bottom sheet */
+    .panel { padding:8px; border-radius:12px; }
+    #gleft { top:8px; left:8px; right:8px; width:auto; max-height:calc(100% - 16px); }
+    #ftoggle { display:block; }
+    #fbody { display:none; padding:0 4px 4px; } #gleft.open #fbody { display:block; }
+    input[type=search] { font-size:16px; padding:8px 10px; }
+    #results div, .lnk { padding:8px 6px; }
+    .legend label { padding:6px 0; }
+    #gright { top:auto; left:0; right:0; bottom:0; width:auto; max-height:46%; border-radius:16px 16px 0 0; border-bottom:0; padding:18px 14px calc(14px + env(safe-area-inset-bottom)); }
+    #gright::before { content:''; position:absolute; top:7px; left:50%; width:36px; height:4px; margin-left:-18px; border-radius:2px; background:var(--line); }
+    #close { top:6px; right:6px; padding:6px 10px; font-size:16px; }
+    #fit { right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); }
+    body.sheet #fit { display:none; }
+    #rank { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    #gleft.searching #rank { display:none; }
+    .rhead { margin:0; } .rhead .sec { display:none; }
+    .seg button { padding:3px 8px; font-size:12px; }
+    #rlist { flex:1; min-width:0; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; overscroll-behavior-x:contain;
+      -webkit-mask-image:linear-gradient(90deg,#000 86%,transparent); mask-image:linear-gradient(90deg,#000 86%,transparent); }
+    #rlist.scrolled { -webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 86%,transparent); mask-image:linear-gradient(90deg,transparent,#000 8%,#000 86%,transparent); }
+    #rlist::-webkit-scrollbar { display:none; }
+    .ri { flex:none; max-width:168px; padding:3px 10px; font-size:12.5px; background:var(--card); border:1px solid var(--line); border-radius:999px; }
+    .ri:last-child { margin-right:24px; }
+    .ri.on { border-color:var(--accent); }
+    .ri i { width:7px; height:7px; margin-right:5px; }
+    .ri b { margin-left:5px; font-size:11px; }
+    .ri s, .ri::after { display:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>V · Memory Librarian<span id="gen"></span></h1>
+  <nav><button data-v="daily" class="on">每日整理</button><button data-v="progress">清理进度</button><button data-v="graph">图谱</button></nav>
+</header>
+
+<section id="v-daily" class="view on"><div class="wrap">
+  <div class="days" id="days"></div>
+  <div id="dayBody"></div>
+</div></section>
+
+<section id="v-progress" class="view"><div class="wrap" id="progBody"></div></section>
+
+<section id="v-graph" class="view"><div id="gview">
+  <div id="graph"></div>
+  <div id="gleft" class="panel">
+    <div class="srow"><input type="search" id="q" placeholder="搜索标题或路径…"><button class="gbtn" id="ftoggle">筛选</button></div><div id="results"></div>
+    <div id="rank"><div class="rhead"><div class="sec">聚合最多</div><div class="seg" id="rmode"><button data-m="page" class="on">页面</button><button data-m="cluster">项目</button></div></div><div id="rlist"></div></div>
+    <div id="fbody">
+    <div class="sec" style="margin-top:12px">图层</div><div class="legend" id="legend"></div>
+    <div class="sec">显示</div>
+    <label class="legend"><input type="checkbox" id="hideIndex" checked> 隐藏 index.md 的连线</label>
+    <label class="legend"><input type="checkbox" id="orphansOnly"> 只看孤儿页</label>
+    <div class="note">图上的大字是页面最多的项目簇（数字为页数），点一下聚焦到这一簇。点越大表示被引用越多。灰点是还没编译的碎片，Librarian 的目标是让灰点消失、彩色的网越来越密。</div>
+    </div>
+  </div>
+  <button class="gbtn" id="fit" title="全图">⤢</button>
+  <div id="gright" class="panel"><span id="close">✕</span><div id="detail"></div></div>
+</div></section>
+
+<script>/*__LIB__*/</script>
+<script>
+const DATA = /*__DATA__*/null;
+const S = DATA.stats;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const THEME = { 'night-shift':'夜班 Night Shift', makaron:'Makaron / 出片', scene:'Scene', xingqing:'星擎 / 天策', dealclaw:'DealClaw / 小元 / Nexus',
+  'mio-aochuang-csm':'米奥 / 奥创 / CSM / 美的', 'feishu-wecom-channel':'飞书 / 企微渠道', 'openclaw-infra':'OpenClaw 基础设施',
+  'memory-self-evolution':'Memory / 自进化', 'versa-business':'Versa 业务', misc:'其他', 'family-personal':'家庭 / 个人', 'companion-private':'私密（只统计）' };
+document.getElementById('gen').textContent = `更新于 ${S.generated}`;
+
+// ---------- tabs ----------
+let graphReady = false, graphResize = null;
+const isMobile = () => matchMedia('(max-width:700px)').matches;
+function layout() {
+  document.documentElement.style.setProperty('--hh', document.querySelector('header').offsetHeight + 'px');
+  if (graphResize) graphResize();
+}
+addEventListener('resize', layout);
+layout();
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + b.dataset.v));
+  document.body.classList.toggle('g', b.dataset.v === 'graph');
+  layout();
+  if (b.dataset.v === 'graph' && !graphReady) { graphReady = true; initGraph(); }
+  history.replaceState(null, '', '#' + b.dataset.v);
+});
+
+// ---------- daily ----------
+const days = DATA.runs || [];
+function dayTotals(d) {
+  const t = { merged:0, archived:0, pages:0, points:0, rewrite:0, strike:0, move:0, delete:0 };
+  d.runs.forEach(r => { (r.sources||[]).forEach(s => s.action === 'merged' ? t.merged++ : s.action === 'archived' && t.archived++);
+    (r.changes||[]).forEach(c => { if (c.kind in t) t[c.kind]++; });
+    (r.outputs||[]).forEach(o => { t.pages++; t.points += (o.points||[]).length; }); });
+  return t;
+}
+// Day strip: no visible scrollbar; edge fades show there is more, wheel scrolls sideways.
+let dayStripReady = false;
+function dayFades() {
+  const el = document.getElementById('days');
+  el.classList.toggle('fade-l', el.scrollLeft > 2);
+  el.classList.toggle('fade-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+}
+function initDayStrip() {
+  const el = document.getElementById('days');
+  if (!dayStripReady) {
+    dayStripReady = true;
+    el.addEventListener('scroll', dayFades, { passive: true });
+    window.addEventListener('resize', dayFades);
+    el.addEventListener('wheel', e => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      el.scrollLeft += e.deltaY; e.preventDefault();
+    }, { passive: false });
+  }
+  const on = el.querySelector('.day.on');
+  if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  dayFades();
+}
+function renderDays(sel) {
+  document.getElementById('days').innerHTML = days.map((d,i) => { const t = dayTotals(d);
+    return `<div class="day ${i===sel?'on':''}" data-i="${i}"><b>${d.date.slice(5)}</b><small>${t.points} 条记忆 · ${t.merged + t.archived} 碎片</small></div>`; }).join('');
+  document.querySelectorAll('.day').forEach(el => el.onclick = () => renderDays(+el.dataset.i));
+  initDayStrip();
+  const body = document.getElementById('dayBody');
+  if (!days.length) { body.innerHTML = '<div class="empty">还没有运行记录</div>'; return; }
+  const d = days[sel], t = dayTotals(d);
+  body.innerHTML = `<div class="chips">
+      <div class="kpi"><b style="color:var(--green)">${t.points}</b><span>条整理出的记忆</span></div>
+      <div class="kpi"><b>${t.pages}</b><span>个页面被新建或更新</span></div>
+      <div class="kpi"><b>${t.merged}</b><span>个碎片合并进主题页</span></div>
+      <div class="kpi"><b>${t.archived}</b><span>个碎片直接归档</span></div>
+      <div class="kpi"><b style="color:var(--accent)">${t.rewrite}</b><span>处改写</span></div>
+      <div class="kpi"><b style="color:var(--amber)">${t.strike}</b><span>处划掉</span></div>
+      <div class="kpi"><b style="color:#60a5fa">${t.move}</b><span>处挪进历史</span></div>
+      <div class="kpi"><b style="color:#f87171">${t.delete}</b><span>处删除（仅重复）</span></div></div>` +
+    d.runs.map(r => `<div class="run">
+      <div class="runhead"><h2>${esc(r.label)}</h2><span class="tag ${r.kind}">${({daily:'当日新记忆',backlog:'历史碎片清理',reflection:'Reflection 编译',lint:'Lint'})[r.kind]||r.kind}</span>
+        <span class="tag">${esc(r.time||'')}</span>${r.commit?`<span class="tag">commit ${esc(r.commit)}</span>`:''}</div>
+      <div class="grid">${(r.outputs||[]).map(o => `<div class="card"><h3>${esc(o.title)}<span class="badge ${o.action}">${o.action==='create'?'新建':'更新'}</span></h3>
+        <div class="path">${esc(o.target)}</div><ul>${(o.points||[]).map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`).join('') || '<div class="empty">这一轮没有产出新记忆</div>'}</div>
+      ${(r.changes||[]).length ? `<details class="changes"><summary>改写 / 划掉 / 挪进历史 / 删除 ${r.changes.length} 处（改写 ${r.changes.filter(c=>c.kind==='rewrite').length} · 划掉 ${r.changes.filter(c=>c.kind==='strike').length} · 挪进历史 ${r.changes.filter(c=>c.kind==='move').length} · 删除 ${r.changes.filter(c=>c.kind==='delete').length}）</summary>
+        ${r.changes.map(c => `<div class="chg"><span class="ck ${esc(c.kind)}">${({rewrite:'改写',strike:'划掉',move:'挪进历史',delete:'删除'})[c.kind]||esc(c.kind)}</span><div><b>${esc(c.title||String(c.target||c.path||'').split('/').pop())}</b>
+          ${c.before?`<div class="bef">${esc(c.before)}</div>`:''}${c.after?`<div class="aft">→ ${esc(c.after)}</div>`:''}<em>${esc(c.reason||'')}</em></div></div>`).join('')}</details>` : ''}
+      ${(r.issues||[]).map(x => `<div class="issue">⚠ ${esc(x)}</div>`).join('')}
+      ${(r.sources||[]).length ? `<details><summary>来源碎片 ${r.sources.length} 个（合并 ${r.sources.filter(s=>s.action==='merged').length} · 归档 ${r.sources.filter(s=>s.action==='archived').length}）</summary>
+        ${r.sources.map(s => `<div class="src"><span class="st ${s.action==='merged'?'done':'pending'}">${s.action==='merged'?'合并':s.action==='archived'?'归档':'跳过'}</span><div><code>${esc(s.source.split('/').pop())}</code><em>→ ${esc(s.note)}</em></div></div>`).join('')}</details>` : ''}
+    </div>`).join('');
+}
+renderDays(0);
+
+// ---------- progress ----------
+(function renderProgress() {
+  const plan = DATA.plan || [], pend = plan.filter(b => b.status !== 'done').reduce((a,b) => a + b.n, 0);
+  const cleared = S.archived, total = cleared + pend, pct = total ? Math.round(cleared / total * 1000) / 10 : 0;
+  const nights = Math.ceil(pend / 240);
+  const h = DATA.history || [];
+  let trend = '<div class="note">每天记一个点，积累两天后出现趋势线。</div>';
+  if (h.length >= 2) {
+    const W = 1000, H = 120, P = 14, vals = h.map(r => r.fragment), mx = Math.max(...vals), mn = Math.min(...vals, 0);
+    const xy = h.map((r,i) => [P + i/(h.length-1)*(W-2*P), H-P-(r.fragment-mn)/((mx-mn)||1)*(H-2*P)]);
+    trend = `<svg class="trend" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${xy.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="3" vector-effect="non-scaling-stroke"/></svg>
+      <div class="note">${h[0].ts.slice(0,10)}：${h[0].fragment} → ${h[h.length-1].ts.slice(0,10)}：${h[h.length-1].fragment}</div>`;
+  }
+  document.getElementById('progBody').innerHTML = `
+    <div class="sec" style="margin-top:0">历史碎片清理</div>
+    <div class="big">${cleared} <span style="font-size:18px;color:var(--mute)">/ ${total} 已清理</span></div>
+    <div class="bar"><i style="width:${Math.max(pct,1)}%"></i></div>
+    <div class="note">${pct}% · 剩 ${pend} 个碎片、${plan.filter(b=>b.status!=='done').length} 批 · 按每晚约 240 个估算还需 ${nights} 晚</div>
+    <div class="chips" style="margin-top:18px">
+      <div class="kpi"><b style="color:var(--green)">${S.pages - (S.counts.fragment||0) - (S.counts.hub||0)}</b><span>已编译 wiki 页</span></div>
+      <div class="kpi"><b style="color:var(--amber)">${S.counts.fragment||0}</b><span>未编译碎片</span></div>
+      <div class="kpi"><b>${S.orphans}</b><span>孤儿页</span></div>
+      <div class="kpi"><b>${S.index_lines}</b><span>index.md 行数（目标 ≤300）</span></div>
+      <div class="kpi"><b>${S.index_broken}</b><span>index 死链</span></div></div>
+    <div class="sec">未编译碎片趋势</div>${trend}
+    <div class="sec">分批计划（按主题）</div>
+    <table><tr><th>批次</th><th>主题</th><th>碎片数</th><th>状态</th></tr>
+    ${plan.map(b => `<tr><td>${esc(b.id)}</td><td>${esc(THEME[b.theme]||b.theme)}</td><td>${b.n}</td><td><span class="st ${b.status}">${({done:'已完成',pending:'待处理',running:'进行中'})[b.status]||b.status}${b.done_at?' · '+esc(b.done_at):''}</span></td></tr>`).join('')}</table>`;
+})();
+
+// ---------- graph ----------
+function initGraph() {
+  const KINDS = { hub:{c:'#f4f4f5',n:'枢纽'}, project:{c:'#a78bfa',n:'项目主页'}, 'project-sub':{c:'#7c6fd0',n:'项目子页'}, concept:{c:'#34d399',n:'概念 / 规则'},
+    decision:{c:'#fbbf24',n:'决策'}, research:{c:'#60a5fa',n:'调研'}, person:{c:'#f472b6',n:'人物'}, other:{c:'#94a3b8',n:'其他'}, fragment:{c:'#4b5563',n:'未编译碎片'} };
+  const byId = new Map(DATA.nodes.map(n => [n.id, n])), out = new Map(), inn = new Map(), deg = new Map();
+  DATA.links.forEach(l => { (out.get(l.source)||out.set(l.source,[]).get(l.source)).push(l.target); (inn.get(l.target)||inn.set(l.target,[]).get(l.target)).push(l.source);
+    if (l.source !== 'memory/index.md' && l.target !== 'memory/index.md') { deg.set(l.source, (deg.get(l.source)||0) + 1); deg.set(l.target, (deg.get(l.target)||0) + 1); } });
+  const hexA = (h, a) => `rgba(${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)},${a})`;
+  const clean = t => String(t).replace(/<!--[\s\S]*$/, '').trim();
+  const cw = ch => ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
+  const clip = (s, max) => { if ([...s].reduce((a,ch) => a + cw(ch), 0) <= max) return s; let o = '', w = 0; for (const ch of s) { if ((w += cw(ch)) > max - 1) break; o += ch; } return o.trim() + '…'; };
+  const short = t => clip(clean(t).split(/\s+[—–\/-]\s+|\s*[·|｜]\s*|（|\(|：|:\s/)[0].trim(), 22);
+  // ---- clusters: one per project folder, plus all people pages ----
+  const groups = new Map();
+  DATA.nodes.forEach(n => { const key = n.p || (n.k === 'person' ? '@people' : ''); if (key) (groups.get(key) || groups.set(key, []).get(key)).push(n); });
+  const CL = [...groups].map(([key, ns]) => {
+    const people = key === '@people', set = new Set(ns.map(n => n.id));
+    const main = people ? byId.get('memory/people/index.md') : (byId.get(`memory/projects/${key}/main.md`) || byId.get(`memory/projects/${key}/README.md`));
+    return { key, ns, set, main, name: people ? '人物' : short(main ? main.t : key), path: people ? 'memory/people/' : `memory/projects/${key}/`,
+      c: people ? KINDS.person.c : KINDS.project.c, inner: 0, x: 0, y: 0, r: 0, vis: false,
+      top: new Set([...ns].sort((a,b) => (deg.get(b.id)||0) - (deg.get(a.id)||0)).slice(0, 8).map(n => n.id)) };
+  }).sort((a,b) => b.ns.length - a.ns.length || a.name.localeCompare(b.name));
+  const ofCl = new Map(); CL.forEach(c => c.ns.forEach(n => ofCl.set(n.id, c)));
+  DATA.links.forEach(l => { const c = ofCl.get(l.source); if (c && c === ofCl.get(l.target)) c.inner++; });
+  const hidden = new Set(); let hideIndex = true, orphansOnly = false, hoverNode = null, selNode = null, hl = new Set();
+  let hoverC = null, hoverItem = null, selCluster = null, focusId = null, hlC = null, kRef = 0, placed = [];
+  const legend = document.getElementById('legend');
+  Object.entries(KINDS).forEach(([k,v]) => { const cnt = S.counts[k]||0; if (!cnt) return; const lab = document.createElement('label');
+    lab.innerHTML = `<i style="background:${v.c}"></i>${v.n}<em>${cnt}</em>`;
+    lab.onclick = () => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); lab.style.opacity = hidden.has(k) ? .35 : 1; refresh(); }; legend.appendChild(lab); });
+  const sid = x => typeof x === 'object' ? x.id : x;
+  const nodeVisible = n => !hidden.has(n.k) && (!orphansOnly || (n.in === 0 && n.k !== 'hub'));
+  const linkVisible = l => { const s = byId.get(sid(l.source)), t = byId.get(sid(l.target)); return (!hideIndex || s.id !== 'memory/index.md') && nodeVisible(s) && nodeVisible(t); };
+  const size = n => n.k === 'hub' ? 10 : n.k === 'fragment' ? 0.6 : 1 + Math.sqrt(n.in2) * 1.8 + (n.k === 'project' ? 2 : 0);
+  const box = document.getElementById('graph'), mob = isMobile(), TOP = CL.slice(0, mob ? 8 : 10);
+  // cluster labels are an overview device: full strength around the fitted zoom, gone once you are zoomed in
+  const lblA = k => kRef ? Math.max(0, Math.min(1, (kRef * 2.1 - k) / (kRef * .8))) : 0;
+  const target = () => hoverC || hoverNode || hoverItem || selNode || selCluster;
+  const inHL = (s, t) => focusId ? (s === focusId || t === focusId) : !!hlC && hlC.set.has(s) && hlC.set.has(t);
+  const G = ForceGraph()(box).width(box.clientWidth).height(box.clientHeight).backgroundColor('#15151c')
+    .graphData({ nodes: DATA.nodes, links: DATA.links }).nodeId('id').nodeVal(size).nodeRelSize(mob ? 5 : 4).nodeLabel(n => mob || hoverC ? '' : esc(clean(n.t)))
+    .nodeColor(n => { const c = KINDS[n.k].c; return (hl.size && !hl.has(n.id)) ? c + '33' : c; })
+    .linkColor(l => { if (!hl.size) return '#ffffff18'; const s = sid(l.source), t = sid(l.target);
+      return inHL(s, t) ? (focusId ? '#a78bfacc' : hexA(hlC.c, .5)) : '#ffffff08'; })
+    .linkWidth(l => inHL(sid(l.source), sid(l.target)) ? (focusId ? 1.4 : 1) : .5)
+    .nodeVisibility(nodeVisible).linkVisibility(linkVisible).nodeCanvasObjectMode(() => 'after')
+    .nodeCanvasObject((n, ctx, sc) => {
+      const big = n.k === 'hub' || (n.k === 'project' && n.in2 >= 3) || n.in2 >= 8;
+      // big-node labels cross-fade with the cluster labels instead of piling on top of them
+      const a = Math.max(big && sc > .6 ? 1 - lblA(sc) : 0, (sc > 2.2 && n.k !== 'fragment') || (hl.size && hl.has(n.id) && sc > .8 && (!hlC || hlC.top.has(n.id))) ? 1 : 0);
+      if (a < .05) return;
+      ctx.globalAlpha = a; ctx.font = `${Math.max(10/sc,1.5)}px -apple-system,"PingFang SC",sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillStyle = hl.size && !hl.has(n.id) ? '#8d8da333' : '#d4d4dccc';
+      const t = clean(n.t); ctx.fillText(t.length > 22 ? t.slice(0,21)+'…' : t, n.x, n.y + Math.sqrt(size(n))*4 + 1); ctx.globalAlpha = 1; })
+    .onRenderFramePre((ctx, k) => {
+      const a = lblA(k), t = target();
+      TOP.forEach(c => { if (!c.vis) return; const on = t === c || (t && !t.set && ofCl.get(t.id) === c);
+        const s = on && t === c ? Math.max(a, .45) * 1.7 : a * (t ? (on ? 1 : .3) : 1); if (s < .03) return;
+        const R = c.r * 1.3, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R);
+        g.addColorStop(0, hexA(c.c, .085 * s)); g.addColorStop(.6, hexA(c.c, .04 * s)); g.addColorStop(1, hexA(c.c, 0));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, R, 0, 2 * Math.PI); ctx.fill(); }); })
+    .onRenderFramePost((ctx, k) => {
+      placed = []; const a = lblA(k); if (a < .03) return;
+      const W = box.clientWidth, H = box.clientHeight, dpr = ctx.canvas.width / W, t = target();
+      const mx = TOP[0].ns.length, mn = TOP[TOP.length - 1].ns.length, FF = '-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif';
+      ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      TOP.forEach(c => { if (!c.vis) return;
+        const p = G.graph2ScreenCoords(c.x, c.y); if (p.x < -60 || p.x > W + 60 || p.y < -20 || p.y > H + 20) return;
+        const f = (mob ? 11 : 11.5) + (mob ? 3 : 4.5) * Math.sqrt((c.ns.length - mn) / ((mx - mn) || 1)), num = String(c.ns.length);
+        const nf = `600 ${f.toFixed(1)}px ${FF}`, cf = `500 ${(f * .78).toFixed(1)}px ${FF}`;
+        ctx.font = nf; const w1 = ctx.measureText(c.name).width; ctx.font = cf; const w2 = ctx.measureText(num).width;
+        const gap = f * .38, w = w1 + gap + w2, h = f * 1.35;
+        let y = null;   // greedy placement, biggest first: nudge up/down, otherwise skip
+        const lx = Math.max(6, Math.min(W - w - 6, p.x - w/2));
+        for (const dy of [0, -h, h, -2 * h, 2 * h]) { const r = { x0: lx - 3, x1: lx + w + 3, y0: p.y + dy - h/2, y1: p.y + dy + h/2 };
+          if (!placed.some(q => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0)) { y = p.y + dy; placed.push(Object.assign(r, { c, a })); break; } }
+        if (y === null) return;
+        const on = t === c || (t && !t.set && ofCl.get(t.id) === c), x0 = lx;
+        ctx.globalAlpha = a * (t && !on ? .3 : 1);
+        ctx.strokeStyle = 'rgba(21,21,28,.82)'; ctx.lineWidth = 3.5;
+        ctx.font = nf; ctx.strokeText(c.name, x0, y); ctx.fillStyle = on ? '#ffffff' : 'rgba(234,234,242,.88)'; ctx.fillText(c.name, x0, y);
+        ctx.font = cf; ctx.strokeText(num, x0 + w1 + gap, y + .5); ctx.fillStyle = hexA(c.c, .95); ctx.fillText(num, x0 + w1 + gap, y + .5); });
+      ctx.restore(); })
+    .onNodeHover(n => { hoverNode = n; refreshHL(); })
+    .onNodeClick((n, e) => { const c = hitC(e); c ? focusCluster(c) : select(n); })
+    .onBackgroundClick(e => { const c = hitC(e); if (c) return focusCluster(c); select(null); closeFilters(); })
+    .onLinkClick((l, e) => { const c = hitC(e); if (c) return focusCluster(c); select(null); closeFilters(); })   // labels often sit on top of links
+    .onNodeDragEnd(() => placeClusters())
+    .cooldownTicks(260).warmupTicks(40);
+  G.d3Force('charge').strength(-26).distanceMax(420);
+  G.d3Force('link').distance(l => sid(l.source) === 'memory/index.md' ? 120 : 34);
+  // cluster centre = mean of its core (nearest 70%), so a few far-flung pages don't drag the label into empty space
+  function placeClusters() {
+    TOP.forEach(c => { const ps = c.ns.filter(n => n.x !== undefined && nodeVisible(n)); c.vis = ps.length >= 3; if (!c.vis) return;
+      let mx = 0, my = 0; ps.forEach(n => { mx += n.x; my += n.y; }); mx /= ps.length; my /= ps.length;
+      const d = ps.map(n => [Math.hypot(n.x - mx, n.y - my), n]).sort((a,b) => a[0] - b[0]), core = d.slice(0, Math.max(3, Math.ceil(d.length * .7)));
+      c.x = core.reduce((s,[,n]) => s + n.x, 0) / core.length; c.y = core.reduce((s,[,n]) => s + n.y, 0) / core.length;
+      c.r = Math.max(20, d[Math.floor((d.length - 1) * .8)][0]); }); }
+  let ticks = 0; G.onEngineTick(() => { if (++ticks % 6 === 0) placeClusters(); }).onEngineStop(placeClusters);
+  placeClusters();
+  // fit to the connected graph only, so a few isolated dots don't shrink everything
+  const linked = new Set(); DATA.links.forEach(l => { if (sid(l.source) !== 'memory/index.md') { linked.add(sid(l.source)); linked.add(sid(l.target)); } });
+  const pad = mob ? 12 : 50;
+  function fitScale() { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    DATA.nodes.forEach(n => { if (!linked.has(n.id) || n.x === undefined) return; x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); });
+    return x1 > x0 ? Math.min((box.clientWidth - 2 * pad) / (x1 - x0), (box.clientHeight - 2 * pad) / (y1 - y0)) : 0; }
+  const fit = () => { placeClusters(); kRef = fitScale(); G.zoomToFit(600, pad, n => linked.has(n.id)); };
+  setTimeout(fit, 2400);
+  graphResize = () => { G.width(box.clientWidth).height(box.clientHeight); if (kRef) kRef = fitScale(); };
+  document.getElementById('fit').onclick = fit;
+  // cluster labels are canvas text, so hit-test them against the rectangles placed in the last frame
+  const hitC = e => { if (!e || e.clientX === undefined) return null; const b = box.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top, m = mob ? 8 : 3;
+    const q = placed.find(r => r.a > .3 && x > r.x0 - m && x < r.x1 + m && y > r.y0 - m && y < r.y1 + m); return q ? q.c : null; };
+  box.addEventListener('pointermove', e => { const c = e.pointerType === 'mouse' ? hitC(e) : null; const cv = box.querySelector('canvas');
+    if (cv) cv.style.cursor = c ? 'pointer' : ''; if (c !== hoverC) { hoverC = c; refreshHL(); } });
+  box.addEventListener('pointerleave', () => { if (hoverC) { hoverC = null; refreshHL(); } });
+  const gleft = document.getElementById('gleft'), ft = document.getElementById('ftoggle');
+  ft.onclick = () => { ft.classList.toggle('on', gleft.classList.toggle('open')); };
+  const closeFilters = () => { if (isMobile()) { gleft.classList.remove('open'); ft.classList.remove('on'); } };
+  function refreshHL() { const t = target(); hl = new Set(); focusId = null; hlC = null;
+    if (t && t.set) { hlC = t; t.set.forEach(id => hl.add(id)); }
+    else if (t) { focusId = t.id; hl.add(t.id); (out.get(t.id)||[]).forEach(x => hl.add(x)); (inn.get(t.id)||[]).forEach(x => hl.add(x)); }
+    G.nodeColor(G.nodeColor()); }
+  function refresh() { G.nodeVisibility(nodeVisible).linkVisibility(linkVisible); placeClusters(); }
+  const item = id => { const n = byId.get(id); return `<div class="lnk" data-id="${esc(id)}"><i style="background:${KINDS[n.k].c}"></i>${esc(clean(n.t))}</div>`; };
+  const R = document.getElementById('gright'), D = document.getElementById('detail');
+  function sheet(html) { closeFilters(); D.innerHTML = html; R.style.display = 'block'; R.scrollTop = 0; document.body.classList.add('sheet');
+    R.querySelectorAll('.lnk').forEach(el => el.onclick = () => focus(byId.get(el.dataset.id))); }
+  function select(n) { selNode = n; selCluster = null; refreshHL(); markRank();
+    if (!n) { R.style.display = 'none'; document.body.classList.remove('sheet'); return; }
+    const ins = (inn.get(n.id)||[]).filter(x => x !== 'memory/index.md'), outs = out.get(n.id)||[];
+    sheet(`<h3 style="margin:0 0 4px;font-size:15px">${esc(clean(n.t))}</h3><div class="note" style="margin:0 0 8px;word-break:break-all">${esc(n.id)}</div>
+      <span class="tag" style="color:${KINDS[n.k].c}">${KINDS[n.k].n}</span> <span class="tag">${n.idx?'已入 index':'未入 index'}</span>
+      <div class="sec">被引用 ${ins.length}</div>${ins.slice(0,60).map(item).join('')||'<div class="note">没有页面引用它</div>'}
+      <div class="sec">引用了 ${outs.length}</div>${outs.slice(0,60).map(item).join('')||'<div class="note">没有出链</div>'}`); }
+  function focusCluster(c) { selCluster = c; selNode = null; refreshHL(); markRank();
+    const pages = [...c.ns].sort((a,b) => (deg.get(b.id)||0) - (deg.get(a.id)||0) || a.t.localeCompare(b.t));
+    sheet(`<h3 style="margin:0 0 4px;font-size:15px">${esc(c.name)}</h3><div class="note" style="margin:0 0 8px;word-break:break-all">${esc(c.path)}</div>
+      <span class="tag" style="color:${c.c}">${c.key === '@people' ? '人物簇' : '项目簇'}</span> <span class="tag">${c.ns.length} 页</span> <span class="tag">簇内连接 ${c.inner}</span>
+      ${c.main ? `<div class="sec">主页</div>${item(c.main.id)}` : ''}
+      <div class="sec">页面 · 按连接数</div>${pages.filter(n => n !== c.main).slice(0,60).map(n => item(n.id)).join('')}`);
+    const vs = c.ns.filter(n => n.x !== undefined && nodeVisible(n)), cx = vs.reduce((s,n) => s + n.x, 0) / (vs.length || 1), cy = vs.reduce((s,n) => s + n.y, 0) / (vs.length || 1);
+    const ps = vs.sort((a,b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy));
+    const core = ps.slice(0, Math.max(3, Math.ceil(ps.length * .9))); if (c.main && ps.includes(c.main) && !core.includes(c.main)) core.push(c.main);
+    fitTo(core, isMobile() ? 1.6 : 2); }
+  // zoom to a set of nodes inside the part of the canvas that panels don't cover
+  function fitTo(ns, kMax) { if (!ns.length) return; let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    ns.forEach(n => { x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); });
+    const W = box.clientWidth, H = box.clientHeight, m = isMobile(), bb = box.getBoundingClientRect(), gl = gleft.getBoundingClientRect();
+    const L = m ? 20 : gl.right - bb.left + 30, Rr = m ? 20 : 320 + 14 + 30, T = m ? gl.bottom - bb.top + 20 : 40, B = m ? H * .46 + 20 : 40;
+    const k = Math.max(.2, Math.min(kMax || 3, (W - L - Rr) / Math.max(x1 - x0, 1), (H - T - B) / Math.max(y1 - y0, 1)));
+    G.centerAt((x0 + x1) / 2 - (L + (W - L - Rr) / 2 - W / 2) / k, (y0 + y1) / 2 - (T + (H - T - B) / 2 - H / 2) / k, 600); G.zoom(k, 600); }
+  // on phones the detail sheet covers the bottom ~46%, so aim the node into the upper part of the screen
+  function focus(n) { if (!n) return; select(n); document.getElementById('q').blur(); document.getElementById('results').innerHTML = ''; gleft.classList.remove('searching');
+    const z = isMobile() ? 1.8 : 3; G.centerAt(n.x, n.y + (isMobile() ? box.clientHeight * 0.23 / z : 0), 600); G.zoom(z, 600); }
+  // ---- "聚合最多": pages by links in+out (index.md not counted), or clusters by page count ----
+  const rlist = document.getElementById('rlist'); let rmode = 'page', rrows = [];
+  function renderRank() {
+    rrows = rmode === 'page'
+      ? [...deg].filter(([id]) => byId.get(id).k !== 'hub').sort((a,b) => b[1] - a[1]).slice(0, 10)
+          .map(([id, v]) => { const n = byId.get(id); return { o: n, label: clean(n.t).split(/\s+[—–]\s+/)[0], v, c: KINDS[n.k].c, tip: `${v} 条连接（入链 + 出链，不计 index.md）` }; })
+      : CL.slice(0, 10).map(c => ({ o: c, label: c.name, v: c.ns.length, c: c.c, tip: `${c.ns.length} 页 · 簇内连接 ${c.inner}` }));
+    const mx = rrows[0] ? rrows[0].v : 1;
+    rlist.innerHTML = rrows.map((r, i) => `<div class="ri" data-i="${i}" title="${esc(r.label)} · ${esc(r.tip)}"><i style="background:${r.c}"></i><span>${esc(r.label)}</span><b>${r.v}</b><s style="width:calc((100% - 27px) * ${(r.v / mx).toFixed(3)});background:${r.c}"></s></div>`).join('');
+    rlist.querySelectorAll('.ri').forEach(el => { const r = rrows[+el.dataset.i];
+      el.onclick = () => { hoverItem = null; r.o.set ? focusCluster(r.o) : focus(r.o); };
+      el.onmouseenter = () => { if (!isMobile()) { hoverItem = r.o; refreshHL(); } };
+      el.onmouseleave = () => { if (hoverItem) { hoverItem = null; refreshHL(); } }; });
+    rlist.scrollLeft = 0; markRank(); }
+  function markRank() { rlist.querySelectorAll('.ri').forEach(el => { const o = rrows[+el.dataset.i].o, on = o === selNode || o === selCluster; el.classList.toggle('on', on);
+    if (on && isMobile()) rlist.scrollTo({ left: Math.max(0, el.offsetLeft - rlist.offsetLeft - 40), behavior: 'smooth' }); }); }
+  rlist.addEventListener('scroll', () => rlist.classList.toggle('scrolled', rlist.scrollLeft > 4), { passive: true });
+  document.querySelectorAll('#rmode button').forEach(b => b.onclick = () => { rmode = b.dataset.m;
+    document.querySelectorAll('#rmode button').forEach(x => x.classList.toggle('on', x === b)); renderRank(); });
+  renderRank();
+  document.getElementById('close').onclick = () => select(null);
+  document.getElementById('hideIndex').onchange = e => { hideIndex = e.target.checked; refresh(); };
+  document.getElementById('orphansOnly').onchange = e => { orphansOnly = e.target.checked; refresh(); };
+  document.getElementById('q').oninput = e => { const q = e.target.value.trim().toLowerCase(), box = document.getElementById('results');
+    gleft.classList.toggle('searching', !!q);
+    if (!q) { box.innerHTML = ''; return; }
+    box.innerHTML = DATA.nodes.filter(n => n.t.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).slice(0,10).map(n => item(n.id)).join('');
+    box.querySelectorAll('.lnk').forEach(el => el.onclick = () => focus(byId.get(el.dataset.id))); };
+}
+const start = location.hash.slice(1);
+if (start) document.querySelector(`nav button[data-v="${start}"]`)?.click();
+</script>
+</body>
+</html>

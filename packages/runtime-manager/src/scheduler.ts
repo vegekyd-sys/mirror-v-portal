@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import type { Store, Run } from "./store.js";
+import type { SystemSchedule } from "./config.js";
 export function nextDue(spec: any, from = new Date()): Date {
   if (spec.kind === "at") {
     const d = new Date(spec.at);
@@ -183,6 +184,28 @@ export class Scheduler {
     } finally {
       db.release();
     }
+  }
+  /**
+   * Register a template's background loops into the chat of a successful user
+   * turn. Idempotent by name, including disabled rows, so an owner's removal sticks.
+   */
+  async ensureSystemSchedules(run: Run, schedules: SystemSchedule[] | undefined): Promise<string[]> {
+    if (!schedules?.length || run.schedule_id) return [];
+    const chat = run.session_key.startsWith(run.tenant_id + ":oc_") ? run.session_key.slice(run.tenant_id.length + 1) : run.chat_id;
+    if (!chat) return [];
+    const added: string[] = [];
+    for (const item of schedules) {
+      const name = String(item.name).slice(0, 120);
+      if (!name || typeof item.prompt !== "string" || !item.prompt.trim() || item.prompt.length > 16000) throw Error("INVALID_SYSTEM_SCHEDULE");
+      const next = nextDue(item.schedule);
+      const inserted = await this.store.pool.query(
+        `INSERT INTO elastic_schedules(id,tenant_id,session_key,name,kind,spec,prompt,next_at,chat_id)
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE NOT EXISTS (SELECT 1 FROM elastic_schedules WHERE tenant_id=$2 AND name=$4)`,
+        [randomUUID(), run.tenant_id, run.session_key, name, item.kind === "heartbeat" ? "heartbeat" : "cron", item.schedule, item.prompt, next, chat],
+      );
+      if (inserted.rowCount) added.push(name);
+    }
+    return added;
   }
   async tick() {
     const db = await this.store.pool.connect();

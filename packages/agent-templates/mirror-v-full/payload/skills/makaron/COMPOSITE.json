@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "layout": "official-plus-feishu-parts",
+  "releaseId": "v1.28.9-composite-continuation-20261002-r3",
+  "effectiveName": "makaron",
+  "officialName": "makaron",
+  "feishuPartName": "makaron-feishu",
+  "officialHash": "f76c7b6807f4e06d47d769e303aecd9de5c346ee29438b8e52352883b0542df2",
+  "feishuHash": "8145b00f7d6375c12cd69e841e28898d9e57861313256317e91a5273edec0ee4"
+}

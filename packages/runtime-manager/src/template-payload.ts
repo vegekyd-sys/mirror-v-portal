@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { TemplateRecord } from "./config.js";
+import type { SystemSchedule, TemplateRecord } from "./config.js";
 
 /** OpenClaw version baked into every template snapshot. Upgrades need a new snapshot and a controlled migration. */
 export const TEMPLATE_OPENCLAW_VERSION = "2026.7.1";
@@ -15,6 +15,8 @@ export interface TemplateManifest {
   description?: string;
   files?: string[];
   tools?: { pythonWheels?: string[]; commands?: string[]; versions?: Record<string, string> };
+  /** Background loops registered for each tenant after its first successful turn. */
+  systemSchedules?: SystemSchedule[];
 }
 
 export interface TemplatePayload {
@@ -65,16 +67,25 @@ export function resolveTemplatePayload(root: string, templateId: string): Templa
  */
 export function templateRecord(
   previous: TemplateRecord | undefined,
-  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string> },
+  build: { version: string; snapshotId: string; builtAt: Date; tools?: Record<string, string>; agentKit?: TemplateRecord["agentKit"]; runtime?: Record<string, string>; systemSchedules?: SystemSchedule[] },
 ): TemplateRecord {
   return {
     ...(previous?.name ? { name: previous.name } : {}),
+    ...(previous?.appName ? { appName: previous.appName } : {}),
     ...(previous?.description ? { description: previous.description } : {}),
+    ...(previous?.model ? { model: previous.model, modelVersion: previous.modelVersion || previous.version } : {}),
+    ...(build.agentKit ? { agentKit: build.agentKit } : {}),
     version: build.version,
     snapshotId: build.snapshotId,
     listed: previous ? previous.listed !== false : false,
     builtAt: build.builtAt.toISOString(),
     expiresAt: new Date(build.builtAt.getTime() + TEMPLATE_SNAPSHOT_TTL_MS).toISOString(),
-    runtime: { openclaw: TEMPLATE_OPENCLAW_VERSION, ...build.tools },
+    runtime: { ...(build.runtime ?? { openclaw: TEMPLATE_OPENCLAW_VERSION }), ...build.tools },
+    // Private operator settings survive rebuilds: template keys and sandbox size.
+    ...(previous?.runtimeEnv ? { runtimeEnv: previous.runtimeEnv } : {}),
+    ...(previous?.resources ? { resources: previous.resources } : {}),
+    ...(previous?.idleTimeoutSeconds ? { idleTimeoutSeconds: previous.idleTimeoutSeconds } : {}),
+    ...(previous?.publicPorts ? { publicPorts: previous.publicPorts } : {}),
+    ...(build.systemSchedules?.length ? { systemSchedules: build.systemSchedules } : {}),
   };
 }
