@@ -93,7 +93,10 @@ export function createVReleaseConfig(o) {
       // Config writes restart the Gateway and would kill the Worker pool; cron is
       // replaced by nexus_schedule because a sleeping sandbox runs no timers;
       // ask_user waits for a UI answer the channel edge cannot give (the turn hangs).
-      deny: ["gateway", "cron", "ask_user"],
+      // sessions_yield ends the turn and lets the Gateway wake the session later; that
+      // wake has no channel to answer on behind the Portal, so subagent results would be
+      // lost. Without it the agent waits for its subagents inside the same turn.
+      deny: ["gateway", "cron", "ask_user", "sessions_yield"],
       sessions: { visibility: "all" },
       web: { search: pluginIds.includes("parallel") ? { enabled: true, provider: "parallel-free" } : { enabled: true } },
       elevated: { enabled: false },

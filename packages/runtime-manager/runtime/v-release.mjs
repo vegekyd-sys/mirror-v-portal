@@ -35,9 +35,11 @@ export const V_RELEASE_BACKUP_EXCLUDES = Object.freeze([
   /^state\/npm(?:\/|$)/,
   /^state\/agents\/[^/]+\/agent\/codex-home\/(?:cache|log|logs_\d+\.sqlite[^/]*|models_cache\.json|shell_snapshots|tmp)(?:\/|$)/,
   /^state\/logs(?:\/|$)/,
+  // Codex clones its plugin marketplace (a 25 MB git pack) into CODEX_HOME/.tmp on first use.
+  /^state\/agents\/[^/]+\/agent\/codex-home\/\.tmp(?:\/|$)/,
   /^state\/cache(?:\/|$)/,
   // Chrome's re-downloadable caches and on-device models (tens of MB); cookies and logins stay.
-  /^state\/browser\/[^/]+\/user-data\/(?:optimization_guide_model_store|component_crx_cache|Safe Browsing|segmentation_platform|GrShaderCache|ShaderCache|GraphiteDawnCache|extensions_crx_cache)(?:\/|$)/,
+  /^state\/browser\/[^/]+\/user-data\/(?:optimization_guide_model_store|component_crx_cache|Safe Browsing|segmentation_platform|GrShaderCache|ShaderCache|GraphiteDawnCache|extensions_crx_cache|BrowserMetrics)(?:\/|$)/,
   /^state\/browser\/[^/]+\/user-data\/[^/]+\/(?:Cache|Code Cache|GPUCache|DawnGraphiteCache|DawnWebGPUCache|Service Worker\/CacheStorage|Service Worker\/ScriptCache)(?:\/|$)/,
 ]);
 

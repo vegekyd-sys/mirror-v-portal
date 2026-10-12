@@ -61,6 +61,8 @@ test("backups skip reinstallable plugins and Codex logs but keep sessions and me
   expect(isVReleaseBackupExcluded("state/npm/projects/openclaw-codex-1/node_modules/x.js")).toBe(true);
   expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/codex-home/logs_2.sqlite-wal")).toBe(true);
   expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/codex-home/config.toml")).toBe(false);
+  expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/codex-home/.tmp/plugins/.git/objects/pack/p.pack")).toBe(true);
+  expect(isVReleaseBackupExcluded("state/browser/openclaw/user-data/BrowserMetrics/BrowserMetrics-1.pma")).toBe(true);
   expect(isVReleaseBackupExcluded("state/agents/mirror-v-full/agent/openclaw-agent.sqlite")).toBe(false);
   expect(isVReleaseBackupExcluded("workspace/memory/index.md")).toBe(false);
   expect(isVReleaseBackupExcluded("state/cache/control-ui-assets/x/mermaid.js")).toBe(true);
@@ -92,7 +94,7 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(cfg.memory.search.provider).toBe("gemini");
   expect(cfg.plugins.allow).toContain("google");
   expect(cfg.plugins.entries.google).toEqual({ enabled: true });
-  expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user"]);
+  expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user", "sessions_yield"]);
   expect(cfg.gateway.reload).toEqual({ mode: "off" });
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
   expect(bare.memory.search.provider).toBe("none");
