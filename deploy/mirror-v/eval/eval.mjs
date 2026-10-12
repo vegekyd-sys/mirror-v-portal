@@ -110,6 +110,26 @@ async function health() {
     alert("H4", s.tenant_id, `schedule overdue: ${s.name} since ${s.next_at.toISOString()}`);
   for (const r of await q("SELECT r.tenant_id,r.status,r.error,s.name FROM elastic_runs r JOIN elastic_schedules s ON s.id=r.schedule_id WHERE r.created_at > now() - interval '24 hours' AND r.status IN ('failed','uncertain')"))
     alert("H4", r.tenant_id, `scheduled run failed: ${r.name} ${r.error}`);
+  // H10: every official schedule of a tenant that talks on Feishu ran and succeeded recently.
+  const OFFICIAL = [["Memory Librarian", 26], ["Memory 质检", 26], ["Heartbeat", 13], ["午夜报告", 26], ["Skill 周复盘", 8 * 24 + 2]];
+  for (const s of await q(`SELECT s.id,s.tenant_id,s.name,s.created_at,
+      (SELECT r.status FROM elastic_runs r WHERE r.schedule_id=s.id ORDER BY r.created_at DESC LIMIT 1) last_status,
+      (SELECT max(r.created_at) FROM elastic_runs r WHERE r.schedule_id=s.id AND r.status='succeeded') last_ok
+      FROM elastic_schedules s JOIN elastic_tenants t ON t.id=s.tenant_id WHERE s.enabled AND t.template_id='mirror-v-full'`)) {
+    const rule = OFFICIAL.find(([name]) => s.name.includes(name));
+    if (!rule) continue;
+    const windowMs = rule[1] * 3600_000;
+    if (Date.now() - s.created_at.getTime() < windowMs) continue;
+    if (!s.last_ok || Date.now() - s.last_ok.getTime() > windowMs)
+      alert("H10", s.tenant_id, `${s.name}: no successful run in ${rule[1]} h (last ${s.last_status ?? "never"} ${s.last_ok?.toISOString() ?? ""})`);
+  }
+  // H11: the last Librarian run actually worked (read, wrote, committed), not a quick "nothing to do" or an excuse.
+  for (const r of await q(`SELECT DISTINCT ON (r.tenant_id) r.id,r.tenant_id,r.status,r.output,
+      (SELECT count(*) FROM elastic_events e WHERE e.run_id=r.id AND e.kind='tool-progress' AND e.data->>'phase'='start') tools
+      FROM elastic_runs r JOIN elastic_schedules s ON s.id=r.schedule_id WHERE s.name LIKE 'Memory Librarian%' ORDER BY r.tenant_id, r.created_at DESC`)) {
+    if (r.status === "succeeded" && (Number(r.tools) < 3 || (r.output || "").trim().length < 20))
+      alert("H11", r.tenant_id, `Librarian ran but did little: ${r.tools} tools, ${(r.output || "").trim().length} chars`);
+  }
   for (const e of await q("SELECT tenant_id,(data->>'backupMs')::int ms FROM elastic_events WHERE kind='state-saved' AND created_at > now() - interval '24 hours' AND (data->>'backupMs')::int > 15000"))
     alert("H5", e.tenant_id, `slow backup ${e.ms} ms`);
   const backups = path.join(config.dataDir, "backups");
@@ -205,6 +225,39 @@ async function gate() {
       if (missing.length) gaps.push(`${tenant_id.slice(0, 8)}: ${missing.join(",")}`);
     }
     check("D3", "P0", owners.length && !gaps.length, gaps.length ? `missing ${gaps.join("; ")}` : `${owners.length} Feishu tenants have all ${expected.length}`);
+  }
+
+  // D4–D7: the official schedules, triggered exactly as the Portal scheduler does, and their artifacts.
+  const schedules = JSON.parse(fs.readFileSync(`${RELEASE}/packages/agent-templates/mirror-v-full/system-schedules.json`, "utf8"));
+  const official = (name) => schedules.find((s) => s.name.includes(name));
+  const trigger = (s) => `${s.kind === "heartbeat" ? "[Nexus heartbeat] 无需创建新的定时任务。没有需提醒事项时只回复 HEARTBEAT_OK。" : "[Nexus 定时任务触发] 执行下面的任务，不要再次创建定时任务。"}\n${s.prompt}`;
+  const shanghaiDate = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  if (want("D4")) {
+    const before = Number((await exec(tenant, "cd /vercel/sandbox/agent-data/workspace && git rev-list --count HEAD")).stdout);
+    const r = await turn("librarian", trigger(official("Memory Librarian")), { session: `eval:sched-librarian`, timeoutMs: 900_000 });
+    const ws = await exec(tenant, `cd /vercel/sandbox/agent-data/workspace && git rev-list --count HEAD; test -f memory/librarian/runs/${shanghaiDate}.json && echo RUN_FILE; grep -c "${shanghaiDate}" memory/log.md || true; git status --porcelain -- memory | wc -l`);
+    const [after, ...rest] = ws.stdout.split("\n");
+    const runFile = rest.includes("RUN_FILE"), logLines = Number(rest.find((l) => /^\d+$/.test(l)) ?? 0);
+    check("D4", "P0", r.status === "succeeded" && Number(after) > before && runFile && logLines > 0 && r.tools.length >= 3,
+      `${r.status} in ${Math.round(r.totalMs / 1000)} s; commits +${Number(after) - before}; runs/${shanghaiDate}.json ${runFile ? "written" : "missing"}; log.md entries today ${logLines}; ${r.tools.length} tools`);
+  }
+  if (want("D5")) {
+    const r = await turn("librarian-qc", trigger(official("Memory 质检")), { session: `eval:sched-qc`, timeoutMs: 900_000 });
+    check("D5", "P1", r.status === "succeeded" && r.output.trim().length > 40 && /21:00|Librarian|librarian/.test(r.output), `${r.status}; ${r.output.trim().length} chars; mentions tonight's Librarian: ${/21:00|Librarian|librarian/.test(r.output)}`);
+  }
+  if (want("D6")) {
+    const r = await turn("heartbeat", trigger(official("Heartbeat")), { session: `eval:sched-heartbeat`, timeoutMs: 900_000 });
+    check("D6", "P1", r.status === "succeeded" && r.tools.includes("exec"), `${r.status}; tools ${r.tools.join(",")}`);
+  }
+  if (want("D7")) {
+    const r = await turn("midnight-report", trigger(official("午夜报告")), { session: `eval:sched-report`, timeoutMs: 900_000 });
+    check("D7", "P1", r.status === "succeeded" && /总结/.test(r.output) && cjkRatio(r.output) >= 0.3, `${r.status}; ${r.output.trim().length} chars`);
+  }
+  // Scheduled runs narrate too: they must speak Chinese like every other turn.
+  const schedTurns = turns.filter((x) => ["librarian", "librarian-qc", "heartbeat", "midnight-report"].includes(x.label));
+  if (schedTurns.length) {
+    const text = schedTurns.flatMap((x) => [x.output, ...x.commentary.map((c) => c.text)]).join("\n");
+    check("D8", "P1", cjkRatio(text) >= 0.3, `scheduled runs CJK ratio ${cjkRatio(text).toFixed(2)}`);
   }
 
   if (want("E9")) {
