@@ -6,7 +6,7 @@ Portal 的隔离边界是每个租户自己的云端 VM。Agent 在这个 VM 内
 
 旧的每轮附件说明禁止尝试 `lark-cli`。Agent 把“当前聊天由外部网关投递”和“没有预装 CLI”误判为不能安装，还错误声称安装会在休眠后丢失。`turn-instructions.mjs` 现在分别说明沙盒执行能力、CLI 安装、外部账号授权和当前聊天的 `MEDIA:` 投递方式，并纠正旧笔记或历史回复中的限制。
 
-npm 12 还会默认跳过未获允许的安装脚本，可能出现安装成功但 CLI 缺少二进制的情况。专属 VM 的启动环境明确允许生命周期脚本，不需要逐包批准。[npm 配置文档](https://docs.npmjs.com/cli/using-npm/config/)
+当前镜像的 npm 11.17.0 还会默认跳过未获允许的安装脚本，可能出现安装成功但 CLI 缺少二进制的情况。专属 VM 的启动环境明确允许生命周期脚本，不需要逐包批准。[npm 配置文档](https://docs.npmjs.com/cli/using-npm/config/)
 
 ## 运行合同
 

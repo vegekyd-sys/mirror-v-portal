@@ -14,7 +14,7 @@ export function sandboxExecEnv(dataDir, inheritedPath = "") {
   fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
   return {
     NPM_CONFIG_PREFIX: prefix,
-    // npm 12 otherwise skips unapproved install scripts, leaving native CLIs
+    // Recent npm versions skip unapproved install scripts, leaving native CLIs
     // installed but unusable. Execution authority belongs to this tenant VM.
     NPM_CONFIG_DANGEROUSLY_ALLOW_ALL_SCRIPTS: "true",
     NPM_CONFIG_IGNORE_SCRIPTS: "false",
