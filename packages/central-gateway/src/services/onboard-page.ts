@@ -138,7 +138,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   html { scrollbar-color:#667990 #111c2c; }
   .masthead,.edge { max-width:1080px; }
   .brand-wordmark { font-size:23px; font-weight:550; letter-spacing:-.04em; line-height:1.1; white-space:nowrap; }
-  .portal-layout { gap:56px; }
+  .portal-layout { column-gap:56px; row-gap:0; grid-template-areas:"hero hero" "picker gateway"; align-content:start; }
+  .hero { grid-area:hero; }
+  .template-picker { grid-area:picker; }
+  .gateway { grid-area:gateway; }
   .template-picker,.gateway { position:relative; isolation:isolate; border:1px solid #ffffff42; border-radius:24px; background:linear-gradient(135deg,#e3f0ff0c,transparent 46%,#f3f8ff06),rgba(15,27,45,.15); -webkit-backdrop-filter:blur(3px) saturate(115%); backdrop-filter:blur(3px) saturate(115%); box-shadow:inset 0 1px 0 #ffffff40,inset 0 -1px 0 #06112230,0 12px 36px #02091720; text-shadow:0 1px 3px #020914c0,0 0 12px #07122280; }
   .template-picker::before,.gateway::before { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none; z-index:-1; background:linear-gradient(115deg,#ffffff05,transparent 38%,#ffffff02 70%,transparent); }
   .template-picker { padding:22px; }
@@ -177,6 +180,37 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   @media(max-width:350px) { .brand-wordmark { font-size:19px; } .header-actions { gap:9px; } .gateway { padding:20px; } }
   @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { .template-picker,.gateway { background:#1b2b40f2; } }
   @media(prefers-reduced-transparency:reduce) { .template-picker,.gateway { background:#1b2b40f5; backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
+  /* Keep the connection panel in the first viewport on laptop-height screens.
+     Content remains in normal flow so account/error states can grow and scroll. */
+  @media(min-width:761px) and (max-height:1100px) {
+    .masthead { padding:22px 0; }
+    .portal-layout { grid-template-areas:"hero gateway" "picker gateway"; grid-template-rows:auto auto; row-gap:24px; padding-bottom:24px; }
+    .hero { padding:0; }
+    .intro h1 { font-size:48px; }
+    .intro p { margin-top:14px; }
+    .gateway { padding:24px; }
+    .gateway-heading { margin-bottom:18px; }
+    .channel-picker { margin-bottom:18px; }
+    .connection-note { margin-top:16px; padding-top:16px; }
+    .edge { padding:14px 0 16px; }
+  }
+  @media(min-width:761px) and (max-height:760px) {
+    .masthead { padding:14px 0; }
+    .portal-layout { row-gap:18px; padding-bottom:16px; }
+    .intro h1 { font-size:42px; }
+    .intro p { margin-top:10px; font-size:13px; }
+    .template-picker { padding:16px; }
+    .template-list { gap:2px; }
+    .template-card { padding:10px 12px; min-height:72px; column-gap:12px; }
+    .template-summary { font-size:12px; }
+    .gateway { padding:20px; }
+    .gateway-heading { margin-bottom:16px; }
+    .gateway-heading .template-description { font-size:12px; line-height:1.5; }
+    .channel-picker { margin-bottom:16px; }
+    .connection-note { margin-top:12px; padding-top:12px; }
+    .edge { padding:10px 0 12px; font-size:11px; }
+  }
 
   .mobile-agent-switch { display:none; }
   .agent-sheet { position:fixed; inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); margin:0; width:calc(100% - 24px); max-width:450px; max-height:min(85svh,650px); padding:18px 12px 12px; border:1px solid #ffffff45; border-radius:28px; color:#f6f9ff; background:linear-gradient(135deg,#dceaff16,transparent 60%),rgba(13,25,42,.92); box-shadow:inset 0 1px 0 #ffffff35,0 24px 70px #01071165; overflow:auto; -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); }
@@ -219,11 +253,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     </a>
     <div class="header-actions"><button class="motion-toggle" id="motionToggle" type="button" data-paused="false" aria-label="暂停背景视频"><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1l8 5-8 5z"/></svg></button><a class="manage-link" id="manageLink" href="/admin/agents">管理 Agent</a></div>
   </header>
+  <div class="portal-layout">
   <section class="hero" aria-labelledby="heroLine1">
       <div class="intro"><h1><span id="heroLine1">找到你的</span><span id="heroLine2">下一位伙伴。</span></h1><p id="heroDescription">思考、创作与行动，从一段对话开始。</p></div>
 
   </section>
-  <div class="portal-layout">
     <section class="template-picker" aria-label="选择 Agent 模板">
       <h2 class="picker-label" id="pickerLabel">选择一位 Agent</h2>
       <select class="mobile-picker" id="templateSelect" aria-labelledby="pickerLabel"></select>
