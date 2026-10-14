@@ -177,6 +177,32 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   @media(max-width:350px) { .brand-wordmark { font-size:19px; } .header-actions { gap:9px; } .gateway { padding:20px; } }
   @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { .template-picker,.gateway { background:#1b2b40f2; } }
   @media(prefers-reduced-transparency:reduce) { .template-picker,.gateway { background:#1b2b40f5; backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
+  .mobile-agent-switch { display:none; }
+  .agent-sheet { position:fixed; inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); margin:0; width:calc(100% - 24px); max-width:450px; max-height:min(85svh,650px); padding:18px 12px 12px; border:1px solid #ffffff45; border-radius:28px; color:#f6f9ff; background:linear-gradient(135deg,#dceaff16,transparent 60%),rgba(13,25,42,.92); box-shadow:inset 0 1px 0 #ffffff35,0 24px 70px #01071165; overflow:auto; -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); }
+  .agent-sheet::backdrop { background:#06122580; -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px); }
+  .agent-sheet-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 6px 14px 12px; }
+  .agent-sheet-header h2 { margin:0; font-size:18px; font-weight:550; letter-spacing:-.025em; }
+  .agent-sheet-close { width:44px; height:44px; display:grid; place-items:center; border:1px solid #ffffff20; background:#ffffff09; border-radius:50%; color:#e5eefb; }
+  .agent-sheet-close svg { width:16px; height:16px; }
+  .sheet-agent-list { display:flex; flex-direction:column; gap:5px; }
+  .sheet-agent-card { min-height:80px; padding:13px 12px; grid-template-columns:48px minmax(0,1fr) 16px; column-gap:14px; }
+  .sheet-agent-card .template-avatar,.sheet-agent-card .template-symbol { width:48px; height:48px; border-radius:14px; }
+  .sheet-agent-card .template-name { font-size:15px; }
+  .sheet-agent-card .template-summary { font-size:12px; line-height:1.5; color:#d1def0; }
+  html.agent-sheet-open,html.agent-sheet-open body { overflow:hidden; }
+  @media(max-width:760px) {
+    .template-picker { display:none; }
+    .gateway { margin-top:0; }
+    .gateway-heading { grid-template-columns:54px minmax(0,1fr) 48px; align-items:center; padding-bottom:22px; border-bottom:1px solid #ffffff24; margin-bottom:22px; }
+    .gateway-heading h2 { font-size:21px; }
+    .gateway-heading .template-description { font-size:12px; margin-top:4px; }
+    .mobile-agent-switch { grid-column:3; grid-row:1 / 3; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; width:48px; height:52px; padding:0; border:0; border-radius:13px; color:#e6effc; background:#ffffff08; }
+    .mobile-agent-switch:hover { background:#ffffff16; }
+    .mobile-agent-switch span { font-size:11px; line-height:1.1; }
+    .mobile-agent-switch svg { width:12px; height:12px; }
+    .mobile-agent-switch:disabled { opacity:.4; cursor:default; }
+  }
 </style>
 </head>
 <body>
@@ -208,6 +234,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         <img class="selected-avatar" id="selectedAgentAvatar" alt="" hidden>
         <span class="selected-symbol" id="selectedAgentSymbol" aria-hidden="true">V</span>
         <h2 id="selectedAgentName">开始一段对话</h2><p class="template-description" id="templateDescription"></p>
+        <button type="button" class="mobile-agent-switch" id="mobileAgentSwitch" aria-haspopup="dialog" aria-controls="agentSheet" aria-expanded="false" disabled><span id="mobileSwitchLabel">切换</span><svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <div class="channel-picker" role="group" aria-label="选择扫码 App"><button type="button" id="channelFeishu" aria-pressed="true">飞书</button><button type="button" id="channelWeixin" aria-pressed="false">微信</button></div>
       <form class="account-connect" id="makaronAccount" hidden>
@@ -229,6 +256,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   </div>
   <footer class="edge"><span>© 2026 Mirror V</span><span id="footerNote">你的 Agent，你的对话与工作空间。</span></footer>
 </main>
+<dialog class="agent-sheet" id="agentSheet" aria-labelledby="agentSheetTitle">
+  <header class="agent-sheet-header"><h2 id="agentSheetTitle">选择一位 Agent</h2><button type="button" class="agent-sheet-close" id="agentSheetClose"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></header>
+  <div class="sheet-agent-list" id="mobileAgentList"></div>
+</dialog>
 <script>
 (function () {
   var copies = {
@@ -241,6 +272,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var lang = copies[locale] ? locale : /^zh-(TW|HK|Hant)/i.test(locale) ? 'zh-Hant' : /^ja/i.test(locale) ? 'ja' : /^zh/i.test(locale) ? 'zh' : 'en';
   var text = copies[lang];
   ['heroLine1','heroLine2','heroDescription','pickerLabel','manageLink','connectionNote','footerNote'].forEach(function(id,index){document.getElementById(id).textContent=text[index];});
+  document.getElementById('agentSheetTitle').textContent=text[3];
+  var mobileWords={zh:['切换','关闭'], 'zh-Hant':['切換','關閉'], ja:['変更','閉じる'], en:['Change','Close']}[lang];
+  document.getElementById('mobileSwitchLabel').textContent=mobileWords[0];
+  document.getElementById('mobileAgentSwitch').setAttribute('aria-label',text[3]);
+  document.getElementById('agentSheetClose').setAttribute('aria-label',mobileWords[1]);
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
   document.title = {zh:'Mirror V Portal · 选择你的 Agent','zh-Hant':'Mirror V Portal · 選擇你的 Agent',ja:'Mirror V Portal · Agent を選ぶ',en:'Mirror V Portal · Choose your Agent'}[lang];
 })();
@@ -332,6 +368,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
   var templateSelect = document.getElementById('templateSelect');
+  var mobileAgentList = document.getElementById('mobileAgentList'), agentSheet = document.getElementById('agentSheet'), mobileSwitch = document.getElementById('mobileAgentSwitch');
   var templateDescription = document.getElementById('templateDescription');
   var channelFeishu = document.getElementById('channelFeishu');
   var channelWeixin = document.getElementById('channelWeixin');
@@ -371,6 +408,26 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     metaEl.textContent = left <= 60 ? left + ' 秒后过期' : '';
     if (left <= 0) closeGate('入口码已过期，请重新生成');
   }
+  function resetMobilePicker() { mobileAgentList.replaceChildren(); mobileSwitch.disabled=true; }
+  function appendMobileAgent(card) {
+    var choice=card.cloneNode(true);
+    choice.classList.add('sheet-agent-card');
+    choice.addEventListener('click',function(){card.click();agentSheet.close();});
+    mobileAgentList.appendChild(choice);
+    mobileSwitch.disabled=false;
+  }
+  function updateMobileSelection() {
+    mobileAgentList.querySelectorAll('button').forEach(function(button){button.setAttribute('aria-pressed',String(button.getAttribute('data-agent')===selectedTemplate.id));});
+  }
+  mobileSwitch.addEventListener('click',function(){
+    if(!selectedTemplate)return;
+    agentSheet.showModal();mobileSwitch.setAttribute('aria-expanded','true');document.documentElement.classList.add('agent-sheet-open');
+    var choice=mobileAgentList.querySelector('[aria-pressed="true"]');if(choice)choice.focus({preventScroll:true});
+  });
+  document.getElementById('agentSheetClose').addEventListener('click',function(){agentSheet.close();});
+  agentSheet.addEventListener('close',function(){document.documentElement.classList.remove('agent-sheet-open');mobileSwitch.setAttribute('aria-expanded','false');mobileSwitch.focus({preventScroll:true});});
+  agentSheet.addEventListener('click',function(event){var rect=agentSheet.getBoundingClientRect();if(event.target===agentSheet&&(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom))agentSheet.close();});
+  matchMedia('(max-width:760px)').addEventListener('change',function(event){if(!event.matches&&agentSheet.open)agentSheet.close();});
   async function loadTemplates() {
     try {
       var requested = new URLSearchParams(location.search).get('template');
@@ -382,7 +439,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       if (requested !== null && !data.templates.some(function (template) { return template.id === requested; })) throw new Error('所选 Agent 暂未开放，请稍后重试');
       var preferred = requested !== null ? requested : 'mirror-v';
       var initialCard = null;
-      templateList.replaceChildren(); templateSelect.replaceChildren();
+      templateList.replaceChildren(); templateSelect.replaceChildren(); resetMobilePicker();
       var portraits = {"dealclaw":"agent-dealclaw-portrait-b651b1783968.png","mirror-v":"agent-mirror-v-full-portrait-ed4e1c0cbd1d.png","xingqing":"agent-xingqing-portrait-a376b49895b1.png","makaron":"agent-makaron-portrait-154a2a9faba7.png","mirror-v-full":"agent-mirror-v-portrait-1260c99c184d.png"};
       data.templates.forEach(function (template) {
         if (portraits[template.id]) template.avatarUrl = '/onboard/assets/' + portraits[template.id];
@@ -405,11 +462,12 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           if (selectedTemplate && selectedTemplate.id === template.id) return;
           selectedTemplate = template; templateSelect.value = template.id;
           templateList.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button === card)); });
+          updateMobileSelection();
           templateDescription.textContent = template.description;
           var url = new URL(location.href); url.searchParams.set('template', template.id); history.replaceState(null, '', url);
           open();
         });
-        templateList.appendChild(card);
+        templateList.appendChild(card); appendMobileAgent(card);
         if (preferred === template.id || (!initialCard && template === data.templates[0])) initialCard = card;
       });
       initialCard.click();

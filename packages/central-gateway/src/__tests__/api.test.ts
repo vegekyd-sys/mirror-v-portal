@@ -261,6 +261,7 @@ describe('Explicit onboarding template links', () => {
       selectedTemplate: null as { id: string } | null,
       fetch: vi.fn(async () => ({ ok: true, json: async () => ({ templates }) })),
       open: opened, closeGate: closed,
+      resetMobilePicker: vi.fn(), appendMobileAgent: vi.fn(), updateMobileSelection: vi.fn(),
     };
     await runInNewContext(ONBOARD_HTML.slice(start, end) + '\nloadTemplates()', context);
     return { context, opened, closed };
