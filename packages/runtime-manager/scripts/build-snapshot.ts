@@ -211,6 +211,7 @@ try {
     "model-proxy.mjs",
     "backup.mjs",
     "progress-patch.mjs",
+    "stream-preview-patch.mjs",
     "scheduler-plugin.mjs",
     "agent-config.mjs",
     "media-binaries.mjs",
@@ -219,6 +220,8 @@ try {
     "v-config.mjs",
     "v-release-install.mjs",
     "v-features.mjs",
+    "sandbox-exec.mjs",
+    "turn-instructions.mjs",
   ]) {
     await sbx.writeFiles([
       {

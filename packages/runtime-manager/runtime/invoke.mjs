@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { prepareInboundInput } from "./inbound-input.mjs";
+import { turnInstructions } from "./turn-instructions.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
@@ -66,24 +67,7 @@ try {
     body: JSON.stringify({
       model: `openclaw/${process.env.NEXUS_AGENT_ID || "dealclaw"}`,
       input: inbound.input,
-      instructions: [
-        ...(inbound.instructions ? [inbound.instructions] : []),
-        "定时任务和心跳必须用 nexus_schedule 工具登记到 Nexus，不能改 OpenClaw 配置或本地 cron。对于需要调用工具或多步骤处理的任务，在开始前和关键步骤之间用简短中文向用户说明正在做什么；这些是公开的执行进展，不要输出内部推理。完成后给出结果。",
-        // Knowing the channel accepts files is not the same as knowing how to
-        // hand one over: the agent announced it was sending an image and then
-        // emitted no directive at all. State the mechanism explicitly.
-        request.caps?.includes("media") || request.caps?.includes("images")
-          ? [
-              "【附件投递 — 本运行环境的唯一方式】",
-              "你运行在 Nexus 托管的沙箱里：这里没有配置任何 OpenClaw 消息通道，也没有 lark-cli、makaron-card-runner 或其他发送工具。`openclaw message send`、`lark-cli` 一律不可用，不要尝试、不要为此排查环境，也不要请用户去绑定它们。",
-              "消息由沙箱之外的 Nexus 网关代你收发。要发送图片或文件，唯一的方式是：把 `MEDIA: <文件绝对路径>` 作为回复正文中单独的一行输出（前后不要加反引号或代码块）。",
-              "例：",
-              "这是刚生成的海报：",
-              "MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg",
-              "Nexus 会读取该文件并作为真正的附件发给用户。只描述图片而不输出这一行，用户什么都收不到。输出前先确认文件确实存在于沙箱文件系统中。",
-            ].join("\n")
-          : "本渠道只能发送纯文本，不支持图片或文件附件。不要声称已发送附件；需要交付文件时，改为给出可访问的链接。",
-      ].join("\n\n"),
+      instructions: turnInstructions(request, inbound.instructions),
       user: request.sessionKey,
       stream: true,
     }),
