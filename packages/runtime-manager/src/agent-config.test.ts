@@ -34,7 +34,7 @@ describe("versioned OpenClaw agent profile", () => {
     const cfg = createOpenClawConfig({ workspace: "/private/workspace", payloadRoot: "/immutable/payload", schedulerPath: "/scheduler", modelId: "deepseek-flash" });
     expect(cfg.agents.list).toEqual([{ id: "dealclaw", default: true, workspace: "/private/workspace" }]);
     expect(cfg.plugins.allow).toEqual(["nexus-scheduler"]);
-    expect(cfg.tools).toEqual({ profile: "coding", alsoAllow: ["nexus_schedule"], deny: ["cron", "gateway", "sessions_spawn", "sessions_send"], elevated: { enabled: false } });
+    expect(cfg.tools).toEqual({ profile: "coding", alsoAllow: ["nexus_schedule"], deny: ["cron", "gateway", "sessions_spawn", "sessions_send"], exec: { host: "gateway", security: "full", ask: "off", pathPrepend: ["/private/npm/bin"] }, elevated: { enabled: false } });
     expect(cfg.gateway.auth.token).toBe("${NEXUS_GATEWAY_TOKEN}");
     expect(cfg.models.providers.nexus.models[0].input).toEqual(["text"]);
     expect(cfg.agents.defaults.skipBootstrap).toBeUndefined();
@@ -47,7 +47,7 @@ describe("versioned OpenClaw agent profile", () => {
     expect(cfg.plugins.entries["makaron-tools"].config.apiKeyEnv).toBe("MAKARON_API_KEY");
     expect(cfg.tools.alsoAllow).toContain("makaron-tools");
     expect(cfg.tools.alsoAllow).toContain("image");
-    expect(cfg.tools.exec).toEqual({ security: "full", ask: "off" });
+    expect(cfg.tools.exec).toEqual({ host: "gateway", security: "full", ask: "off", pathPrepend: ["/tenant/npm/bin"] });
     expect(cfg.models.providers.nexus.models[0].input).toEqual(["text", "image"]);
     expect(cfg.agents.defaults.skipBootstrap).toBe(true);
     expect(cfg.tools.deny).not.toContain("sessions_spawn");

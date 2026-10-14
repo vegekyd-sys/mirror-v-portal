@@ -95,6 +95,7 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(cfg.plugins.allow).toContain("google");
   expect(cfg.plugins.entries.google).toEqual({ enabled: true });
   expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user", "sessions_yield"]);
+  expect(cfg.tools.exec).toEqual({ host: "gateway", security: "full", ask: "off", pathPrepend: ["/d/npm/bin"] });
   expect(cfg.gateway.reload).toEqual({ mode: "off" });
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
   expect(bare.memory.search.provider).toBe("none");

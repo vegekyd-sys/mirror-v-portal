@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { sandboxExecPolicy } from "./sandbox-exec.mjs";
 
 const idPattern = /^[a-z][a-z0-9-]{0,63}$/;
 const defaultDeny = ["cron", "gateway", "sessions_spawn", "sessions_send"];
@@ -148,7 +149,7 @@ export function createOpenClawConfig({ runtime: input, workspace, payloadRoot, s
     gateway: { mode: "local", bind: "loopback", port: gatewayPort, auth: { mode: "token", token: "${NEXUS_GATEWAY_TOKEN}" }, http: { endpoints: { responses: { enabled: true } } } },
     models: { mode: "merge", providers: { nexus: { baseUrl: `http://127.0.0.1:${modelProxyPort}/v1`, api: "openai-completions", apiKey: "${NEXUS_MODEL_KEY}", models: [{ id: modelId, name: runtime.displayName, input: runtime.modelInput, contextWindow: 200000, maxTokens: 8192 }] } } },
     agents: { defaults: { workspace, ...(runtime.payloadLayout === "agent-kit-v1" ? { skipBootstrap: true } : {}), thinkingDefault: "off", model: { primary: `nexus/${modelId}` }, timeoutSeconds: 600, maxConcurrent: 1, heartbeat: { every: "0m" }, memorySearch: { enabled: false }, compaction: { mode: "safeguard" } }, list: [{ id: runtime.agentId, default: true, workspace, ...(runtime.skills !== undefined ? { skills: runtime.skills } : {}), ...(runtime.skillsLimits !== undefined ? { skillsLimits: runtime.skillsLimits } : {}) }] },
-    tools: { ...runtime.tools, elevated: { enabled: false } },
+    tools: { ...runtime.tools, exec: sandboxExecPolicy(path.dirname(workspace)), elevated: { enabled: false } },
     plugins: { enabled: true, allow: ["nexus-scheduler", ...runtime.plugins.map(plugin => plugin.id)], load: { paths: [schedulerPath, ...runtime.plugins.map(plugin => path.join(payloadRoot, plugin.path))] }, entries: { "nexus-scheduler": { enabled: true }, ...Object.fromEntries(runtime.plugins.map(plugin => [plugin.id, { enabled: true, config: plugin.config }])) } },
   };
 }

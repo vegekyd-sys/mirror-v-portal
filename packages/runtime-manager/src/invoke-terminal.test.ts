@@ -31,8 +31,12 @@ async function startInvoke(respond: (response: ServerResponse) => void) {
   const closed = new Promise<void>(resolve => { httpClosed = resolve; });
   let arrived!: () => void;
   const requestArrived = new Promise<void>(resolve => { arrived = resolve; });
+  let bodyReceived!: (body: any) => void;
+  const requestBody = new Promise<any>(resolve => { bodyReceived = resolve; });
   const server: Server = createServer((request, response) => {
-    request.resume();
+    const body: Buffer[] = [];
+    request.on("data", chunk => body.push(chunk));
+    request.on("end", () => bodyReceived(JSON.parse(Buffer.concat(body).toString())));
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.flushHeaders();
     response.on("close", httpClosed);
@@ -54,7 +58,7 @@ async function startInvoke(respond: (response: ServerResponse) => void) {
   ].join("\n"));
   const child: ChildProcess = spawn(process.execPath, ["--import", preload, invoke], {
     env: {
-      NEXUS_REQUEST_B64: Buffer.from(JSON.stringify({ text: "本地终态流验证", sessionKey: "isolated-terminal-fixture" })).toString("base64"),
+      NEXUS_REQUEST_B64: Buffer.from(JSON.stringify({ text: "本地终态流验证", sessionKey: "isolated-terminal-fixture", caps: "media,images,files" })).toString("base64"),
       NEXUS_GATEWAY_TOKEN: "fixture-nonsecret",
       NEXUS_AGENT_ID: "makaron",
     },
@@ -74,12 +78,22 @@ async function startInvoke(respond: (response: ServerResponse) => void) {
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(directory, { recursive: true, force: true });
   });
-  return { exit, closed, requestArrived, hasExited: () => exited };
+  return { exit, closed, requestArrived, requestBody, hasExited: () => exited };
 }
 
 const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
 
 describe("actual invoke terminal SSE handling", () => {
+  it("sends current sandbox install facts and Nexus attachment delivery instructions to the agent", async () => {
+    const run = await startInvoke(response => response.write(sse({ type: "response.completed", response: { status: "completed" } })));
+    const body = await bounded(run.requestBody);
+    expect(body.instructions).toContain("npm install -g");
+    expect(body.instructions).toContain("不需要人工审核");
+    expect(body.instructions).toContain("MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg");
+    expect(body.instructions).not.toContain("一律不可用，不要尝试");
+    expect((await bounded(run.exit)).code).toBe(0);
+  });
+
   it("forwards a chunk-split multiline failure then cancels HTTP that never ends", async () => {
     const event = { type: "response.failed", response: { status: "failed", error: { code: "billing_error", message: "fixture failure" } } };
     const frame = `event: response.failed\r\n${JSON.stringify(event, null, 2).split("\n").map(line => `data: ${line}`).join("\r\n")}\r\n\r\n`;

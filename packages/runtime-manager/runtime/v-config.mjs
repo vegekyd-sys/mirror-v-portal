@@ -3,6 +3,7 @@
 // credentials. Channels stay at the Nexus edge; every secret is an env reference
 // resolved from the process environment at boot, never written to a file.
 import path from "node:path";
+import { sandboxExecPolicy } from "./sandbox-exec.mjs";
 
 export const V_RELEASE_PROVIDER_KEYS = Object.freeze({
   deepseek: "NEXUS_MODEL_KEY",
@@ -98,6 +99,7 @@ export function createVReleaseConfig(o) {
       // lost. Without it the agent waits for its subagents inside the same turn.
       deny: ["gateway", "cron", "ask_user", "sessions_yield"],
       sessions: { visibility: "all" },
+      exec: sandboxExecPolicy(o.dataDir),
       web: { search: pluginIds.includes("parallel") ? { enabled: true, provider: "parallel-free" } : { enabled: true } },
       elevated: { enabled: false },
     },

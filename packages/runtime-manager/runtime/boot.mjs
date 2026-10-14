@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
+import { sandboxExecPolicy, sandboxExecEnv, ensureSandboxExecApprovals } from "./sandbox-exec.mjs";
 import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, startNodeApprover } from "./v-features.mjs";
 
 const bootStart = Date.now();
@@ -88,10 +89,11 @@ function initVReleaseWorkspace() {
 }
 initVReleaseWorkspace();
 const toolsBin = `${base}/tools/bin`;
+const execEnv = sandboxExecEnv(data, [profile?.runtime.mediaBinaries || vRelease ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"));
 const env = {
   ...process.env,
   // Template CLIs installed by the snapshot builder (e.g. xingqing-cli).
-  PATH: [profile?.runtime.mediaBinaries || vRelease ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"),
+  ...execEnv,
   // A customer who binds by chat logs in through xingqing-cli, which caches only
   // a session token. Keep it in agent-data so backups carry it across sleeps.
   ...(agentId === "xingqing" ? { XINGQING_CONFIG_DIR: `${data}/xingqing` } : {}),
@@ -195,6 +197,7 @@ const cfg = vRelease ? createVReleaseConfig({
     alsoAllow: ["nexus_schedule"],
     deny: ["cron", "gateway", "sessions_spawn", "sessions_send"],
     elevated: { enabled: false },
+    exec: sandboxExecPolicy(data),
   },
   plugins: {
     enabled: true,
@@ -209,7 +212,7 @@ const cfg = vRelease ? createVReleaseConfig({
 };
 // Patch revisions count as configuration: a running Gateway restarts once to load new patch code.
 const RUNTIME_PATCHES = vRelease ? "progress-v4+reasoning-preview-v1" : "";
-const configHash = createHash("sha256").update(JSON.stringify(cfg) + RUNTIME_PATCHES).digest("hex");
+const configHash = createHash("sha256").update(JSON.stringify(cfg) + JSON.stringify(execEnv) + RUNTIME_PATCHES).digest("hex");
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {
   ensureCodexHome(state, agentId);
@@ -248,12 +251,10 @@ try {
     const changed =
       !fs.existsSync("/tmp/nexus-runtime-fingerprint") ||
       fs.readFileSync("/tmp/nexus-runtime-fingerprint", "utf8") !== fingerprint ||
-      (vRelease && (!fs.existsSync("/tmp/nexus-runtime-config-hash") || fs.readFileSync("/tmp/nexus-runtime-config-hash", "utf8") !== configHash));
-    // A v-release restarts its own Gateway (and with it the Worker pool) on a
-    // runtime or config change; reload is off, so nothing changed underneath it.
-    if (changed && vRelease) throw new Error("V_RELEASE_RESTART");
-    if (changed)
-      throw new Error("RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED");
+      !fs.existsSync("/tmp/nexus-runtime-config-hash") || fs.readFileSync("/tmp/nexus-runtime-config-hash", "utf8") !== configHash;
+    // ensure runs at a turn boundary. Reloading config alone would leave the
+    // Gateway/Worker process env pointing at the old npm prefix and policy.
+    if (changed) throw new Error("RUNTIME_RESTART");
     console.log(
       JSON.stringify({
         marker: "NEXUS_RUNTIME_READY",
@@ -265,10 +266,8 @@ try {
     process.exit(0);
   }
 } catch (error) {
-  if (error?.message === "RUNTIME_CONFIGURATION_CHANGED_RESTART_REQUIRED")
-    throw error;
-  if (error?.message === "V_RELEASE_RESTART") {
-    for (const file of ["/tmp/nexus-memory-indexer.pid", "/tmp/nexus-voice.pid", "/tmp/nexus-vbrowser-broker.pid", "/tmp/nexus-cua-node.pid", "/tmp/nexus-desktop-handoff.pid", "/tmp/nexus-gateway.pid"]) {
+  if (error?.message === "RUNTIME_RESTART") {
+    for (const file of ["/tmp/nexus-memory-indexer.pid", "/tmp/nexus-voice.pid", "/tmp/nexus-vbrowser-broker.pid", "/tmp/nexus-cua-node.pid", "/tmp/nexus-desktop-handoff.pid", "/tmp/nexus-gateway.pid", "/tmp/nexus-model-proxy.pid"]) {
       try { process.kill(Number(fs.readFileSync(file, "utf8")), "SIGTERM"); } catch {}
     }
     for (let i = 0; i < 120; i++) {
@@ -277,6 +276,7 @@ try {
     }
   }
 }
+ensureSandboxExecApprovals(`${base}/runtime/node_modules/openclaw/openclaw.mjs`, env);
 const log = fs.openSync("/tmp/nexus-gateway.log", "a");
 // V's runtime calls DeepSeek directly with V's own thinking settings.
 if (!vRelease) {
