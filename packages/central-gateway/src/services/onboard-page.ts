@@ -1,199 +1,158 @@
 /**
- * Mirror V Portal onboarding — the gate.
- *
- * Choose an Agent template, then scan a QR code to create its own instance.
- *
- * Feishu and WeChat both display their native QR on desktop. A Feishu webview
- * cannot open the app-creation launcher page; only the Feishu scanner can.
+ * Mirror V Portal onboarding.
+ * Choose a personal Agent, then connect it through a native channel QR.
+ * The frontend preserves the existing registration, account and polling contracts.
  */
 export const ONBOARD_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <title>Mirror V Portal · 选择你的 Agent</title>
-<link rel="preload" as="image" href="/onboard/assets/nexus-world-v2.webp" media="(min-width: 601px)">
-<link rel="preload" as="image" href="/onboard/assets/nexus-world-mobile-v2.webp" media="(max-width: 600px)">
 <style>
   * { box-sizing:border-box; }
   [hidden] { display:none!important; }
-  :root { color-scheme:dark; font-family:"Helvetica Neue","PingFang SC",sans-serif; color:#fff; background:#000; }
+  :root { color-scheme:light; font-family:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif; color:#243244; background:#f7f9fb; --ink:#243244; --muted:#687789; --line:#dde4eb; --accent:#3b556f; }
   body { margin:0; min-width:280px; -webkit-font-smoothing:antialiased; }
-  .experience { height:max(700px,100svh); position:relative; overflow:hidden; isolation:isolate; background:#000; }
-  .world { position:absolute; inset:0; z-index:-3; }
-  .world img { width:100%; height:100%; object-fit:cover; object-position:50% 50%; animation:arrival 1.8s cubic-bezier(.2,.7,.2,1) both; }
-  .world-video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:-1; opacity:0; transition:opacity 1.6s; pointer-events:none; }
-  .world-video.ready { opacity:1; }
-  .motion-control { position:absolute; right:32px; bottom:18px; z-index:3; width:44px; height:44px; border:1px solid #ffffff44; border-radius:50%; background:#0005; color:#fff; cursor:pointer; font-size:13px; }
-  .motion-control:focus-visible { outline:2px solid #fff; outline-offset:4px; }
-  .motion-control[hidden] { display:none; }
-  .world::after { content:""; position:absolute; inset:0; background:linear-gradient(#0007,transparent 22%,transparent 74%,#000b); }
-  @keyframes arrival { from { opacity:0; } to { opacity:1; } }
-  .masthead { position:absolute; top:0; left:0; right:0; padding:32px 40px; display:flex; justify-content:space-between; align-items:center; }
-  .brand { display:inline-flex; flex-direction:column; gap:2px; color:#fff; text-decoration:none; text-shadow:0 1px 18px #0009; }
-  .brand strong { font-size:23px; line-height:1; font-weight:650; letter-spacing:-.055em; }
-  .brand small { font-size:10px; font-weight:550; letter-spacing:.28em; text-transform:uppercase; }
-  .signature { font-size:12px; color:#c4c5cf; letter-spacing:.02em; }
-  .gateway { position:absolute; top:56%; left:50%; transform:translate(-50%,-50%); width:250px; display:flex; flex-direction:column; align-items:center; }
-  .template-picker { position:absolute; z-index:4; top:13%; left:50%; transform:translateX(-50%); width:min(650px,calc(100% - 40px)); text-align:center; color:#fff; text-shadow:0 2px 12px #000; }
-  .template-picker::before { content:""; position:absolute; z-index:-1; inset:-12px -20px -6px; background:radial-gradient(ellipse at center,#030710cc 10%,#030710a8 58%,transparent 100%); pointer-events:none; }
-  .template-picker h1 { margin:0 0 18px; font-size:23px; line-height:1.2; font-weight:500; letter-spacing:.01em; }
-  .template-list { display:flex; justify-content:center; border-bottom:1px solid #ffffff66; }
-  .template-card { position:relative; flex:1; min-width:0; min-height:52px; padding:12px 8px 17px; border:0; background:transparent; color:#ffffffa8; text-align:center; cursor:pointer; font:inherit; transition:color .2s; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; }
-  .template-card:hover,.template-card[aria-pressed="true"] { color:#fff; }
-  .template-card[aria-pressed="true"]::after { content:""; position:absolute; left:15%; right:15%; bottom:-1px; height:2px; background:#fff; box-shadow:0 0 14px #fff9; }
-  .template-card:focus-visible { outline:2px solid #fff; outline-offset:-5px; }
-  .template-name { display:block; font-size:16px; line-height:1.3; font-weight:580; }
-  .template-avatar { display:block; width:48px; height:48px; margin:0 auto 10px; border-radius:50%; object-fit:cover; box-shadow:0 2px 14px #0005; }
-  .account-connect { width:270px; padding:18px; border-radius:12px; background:#f4f8ffed; color:#26344b; font-size:13px; text-align:center; }
-  .account-connect[hidden] { display:none; }
-  .account-connect label,.account-connect small { display:block; margin-bottom:10px; line-height:1.5; }
-  .account-connect input { box-sizing:border-box; width:100%; padding:12px; border:1px solid #718096; border-radius:6px; background:#fff; }
-  .account-connect button { width:100%; min-height:44px; margin-top:10px; border:0; border-radius:6px; background:#5532aa; color:white; cursor:pointer; }
-  .account-connect a { color:#5532aa; }
-  .template-description { min-height:20px; margin:14px 0 0; font-size:12px; line-height:1.5; color:#e3e8f1; }
-  .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
-  .gate { width:216px; height:216px; display:grid; place-items:center; transition:transform 1s, filter 1s; }
-  .portal { position:relative; width:100%; height:100%; display:grid; place-items:center; padding:6px; background:transparent; }
-  #code { display:none; width:204px; height:204px; object-fit:contain; mix-blend-mode:multiply; opacity:.88; }
-  .core { width:28px; height:28px; border:1.5px solid #14151b22; border-top-color:#14151b; border-radius:50%; animation:spin 1s linear infinite; }
+  button,input,select { font:inherit; }
+  button,a,input,select { -webkit-tap-highlight-color:transparent; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:2px solid #3b658b; outline-offset:4px; }
+  button { cursor:pointer; }
+  .experience { min-height:100svh; display:flex; flex-direction:column; padding:0 48px; }
+  .masthead { width:100%; max-width:1120px; margin:0 auto; padding:34px 0; display:flex; justify-content:space-between; align-items:center; }
+  .brand { display:flex; align-items:center; gap:12px; color:var(--ink); text-decoration:none; }
+  .brand-mark { width:36px; height:36px; color:#7890a5; }
+  .brand-mark svg { display:block; width:100%; height:100%; }
+  .brand-wordmark { display:flex; align-items:baseline; gap:10px; }
+  .brand strong { font-size:24px; line-height:1; font-weight:600; letter-spacing:-.065em; }
+  .brand small { font-size:12px; color:var(--muted); }
+  .manage-link { color:#617084; text-decoration:none; font-size:13px; padding:10px 0 10px 12px; }
+  .manage-link:hover { color:var(--ink); }
+  .portal-layout { flex:1; width:100%; max-width:1080px; margin:0 auto; padding:38px 0 62px; display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:100px; align-items:center; }
+  .intro h1 { font-family:"Iowan Old Style","Songti SC","Noto Serif CJK SC",serif; font-size:56px; font-weight:500; line-height:1.18; letter-spacing:-.04em; margin:0; }
+  .intro h1 span { display:block; }
+  .intro p { margin:23px 0 36px; font-size:14px; line-height:1.8; color:var(--muted); }
+  .picker-label { margin:0 0 12px; font-size:13px; font-weight:500; color:var(--muted); }
+  .template-list { display:flex; flex-direction:column; gap:4px; }
+  .template-card { display:grid; grid-template-columns:42px minmax(0,1fr) 16px; grid-template-rows:auto auto; column-gap:16px; width:100%; padding:14px 16px; min-height:75px; border:1px solid transparent; border-radius:12px; text-align:left; color:var(--ink); background:transparent; transition:background .15s,border-color .15s; position:relative; }
+  .template-card:hover { background:#edf1f5; }
+  .template-card[aria-pressed="true"] { background:#fff; border-color:var(--line); }
+  .template-card[aria-pressed="true"]::after { content:"✓"; grid-column:3; grid-row:1 / 3; align-self:center; color:var(--accent); font-size:15px; }
+  .template-name { grid-column:2; grid-row:1; font-size:15px; font-weight:600; line-height:1.5; }
+  .template-summary { grid-column:2; grid-row:2; font-size:13px; line-height:1.6; color:var(--muted); margin-top:2px; }
+  .template-avatar,.template-symbol { grid-column:1; grid-row:1 / 3; align-self:center; width:42px; height:42px; border-radius:12px; }
+  .template-avatar { display:block; object-fit:cover; }
+  .template-symbol { display:grid; place-items:center; background:#e9eef3; color:#526b83; font-size:14px; font-weight:550; letter-spacing:-.05em; }
+  .template-card[data-agent="mirror-v-full"] .template-symbol { background:#e5ebf2; color:#354e67; }
+  .mobile-picker { display:none; }
+  .gateway { background:#fff; border:1px solid var(--line); border-radius:20px; padding:30px; box-shadow:0 8px 32px #263b5005; min-width:0; }
+  .gateway-heading { display:grid; grid-template-columns:44px minmax(0,1fr); column-gap:14px; align-items:start; margin-bottom:24px; }
+  .selected-avatar,.selected-symbol { width:44px; height:44px; border-radius:12px; grid-column:1; grid-row:1 / 3; object-fit:cover; }
+  .selected-symbol { display:grid; place-items:center; background:#edf1f5; color:#526b83; font-size:18px; font-weight:500; }
+  .gateway-heading h2 { grid-column:2; margin:0; font-size:22px; font-weight:550; line-height:1.4; letter-spacing:-.035em; }
+  .template-description { grid-column:2; margin:5px 0 0; font-size:13px; line-height:1.65; color:var(--muted); }
+  .channel-picker { display:flex; padding:4px; gap:4px; border-radius:9px; background:#f0f3f6; margin-bottom:25px; }
+  .channel-picker button { flex:1; min-height:40px; padding:8px 16px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:13px; font-weight:500; }
+  .channel-picker button[aria-pressed="true"] { color:var(--ink); background:#fff; box-shadow:0 1px 4px #1c334412; }
+  .account-connect { width:100%; text-align:left; }
+  .account-connect label { display:block; font-size:14px; font-weight:550; margin-bottom:9px; }
+  .account-connect small { display:block; margin-bottom:20px; color:var(--muted); font-size:12px; line-height:1.8; }
+  .account-connect input { width:100%; height:46px; padding:0 13px; border:1px solid #c9d3de; border-radius:8px; color:var(--ink); background:#fff; font-size:12px; }
+  .account-connect input::placeholder { color:#8591a0; }
+  .account-connect button { width:100%; min-height:46px; margin-top:12px; border:0; border-radius:8px; color:#fff; background:var(--accent); font-size:13px; }
+  .account-connect button:hover { background:#2b455f; }
+  .account-connect p { margin:16px 0 0; text-align:center; font-size:12px; }
+  .account-connect a { color:#526b83; text-underline-offset:3px; }
+  .gate { width:232px; height:232px; margin:0 auto; display:grid; place-items:center; }
+  .portal { width:100%; height:100%; display:grid; place-items:center; background:#fff; position:relative; }
+  #code { display:none; width:224px; height:224px; object-fit:contain; }
+  .core { width:26px; height:26px; border:2px solid #e2e8ef; border-top-color:#526b83; border-radius:50%; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .arrived { display:none; width:56px; height:56px; color:#151c2c; }
+  .arrived { display:none; width:58px; height:58px; color:#547968; }
   .arrived svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
-  .gate.opening { transform:scale(.92); }
-  .gate.through { transform:scale(.88); }
   .gate.through .arrived { display:block; }
-  .gate.through #code,.gate.through .core { display:none!important; }
+  .gate.through #code,.gate.through .core,.gate.lost .core { display:none!important; }
   .gate.lost #code { visibility:hidden; }
-  .gate.lost .core { display:none!important; }
-  .gate.lost .portal::after { content:"↻"; position:absolute; color:#545767; font-size:40px; }
-  .beam-track { width:80px; height:1px; margin-top:9px; opacity:0; background:#27344c22; }
+  .beam-track { width:100%; height:2px; margin-top:13px; background:#edf1f5; opacity:0; }
   .beam-track.on { opacity:1; }
-  .beam-fill { width:0; height:100%; background:#27344c; transition:width .7s; }
-  .readout { margin-top:13px; text-align:center; padding:0 8px; }
-  .status { font-size:12px; line-height:1.6; letter-spacing:.08em; color:#26344b; }
-  .status.warn { color:#773b21; }
-  .meta { color:#55647b; font-size:10px; font-variant-numeric:tabular-nums; margin-top:4px; }
+  .beam-fill { width:0; height:100%; background:#68839c; transition:width .5s; }
+  .readout { margin-top:17px; text-align:center; }
+  .status { color:#526276; font-size:12px; line-height:1.7; }
+  .status.warn { color:#984635; }
+  .meta { margin-top:5px; color:#718092; font-size:11px; font-variant-numeric:tabular-nums; }
   .meta:empty { display:none; }
-  .retry { visibility:hidden; position:absolute; top:calc(100% + 12px); border:1px solid #26344b88; background:#f4f8ffcc; color:#26344b; border-radius:4px; font:inherit; font-size:13px; padding:12px 20px; min-height:44px; cursor:pointer; }
-  .retry.on { visibility:visible; }
-  .retry:hover { background:#dbe4f2; color:#000; }
-  .retry:focus-visible { outline:3px solid #fff; outline-offset:5px; }
-  .channel-picker { display:flex; justify-content:center; gap:30px; width:216px; margin-top:16px; border-top:1px solid #27344c66; }
-  .channel-picker button { position:relative; min-width:58px; min-height:44px; padding:9px 4px 4px; border:0; background:transparent; color:#42526b; font:inherit; font-size:13px; font-weight:550; cursor:pointer; }
-  .channel-picker button:hover,.channel-picker button[aria-pressed="true"] { color:#162b49; }
-  .channel-picker button[aria-pressed="true"]::after { content:""; position:absolute; left:4px; right:4px; bottom:2px; height:2px; background:#243a59; }
-  .channel-picker button:focus-visible,.verify button:focus-visible,.verify input:focus-visible { outline:2px solid #243a59; outline-offset:2px; }
-  .verify { width:216px; margin-top:12px; display:flex; gap:6px; }
-  .verify input { min-width:0; flex:1; height:38px; padding:0 10px; border:1px solid #435774; border-radius:5px; background:#eef4fc; color:#172944; font:inherit; font-size:12px; }
-  .verify button { height:38px; padding:0 12px; border:0; border-radius:5px; background:#243a59; color:#fff; font:inherit; font-size:12px; cursor:pointer; }
-  .edge { position:absolute; bottom:30px; left:40px; right:40px; display:flex; justify-content:space-between; align-items:center; pointer-events:none; }
-  .edge span { font-size:11px; color:#c4c5cf; }
-  .edge-line { height:1px; width:44px; background:#ffffff55; }
-  @media(min-aspect-ratio:19/10) { .world img { object-fit:contain; } }
-  @media(max-width:600px) { .experience { height:max(620px,100svh); } .masthead { padding:24px; } .brand strong { font-size:19px; } .brand small { font-size:9px; } .signature { font-size:11px; } .world img { object-fit:cover; } .template-picker { top:14%; width:calc(100% - 32px); } .template-picker h1 { font-size:20px; margin-bottom:12px; } .template-card { min-height:47px; padding:10px 4px 14px; } .template-name { font-size:14px; } .template-description { max-width:270px; margin:10px auto 0; font-size:11px; } .gateway { top:57%; } .gate { width:200px; height:200px; } #code { width:188px; height:188px; } .edge { left:24px; right:24px; bottom:24px; } }
+  .retry { display:none; width:100%; margin-top:16px; border:1px solid #c9d3de; background:#fff; color:var(--ink); border-radius:8px; min-height:44px; font-size:12px; }
+  .retry.on { display:block; }
+  .account-connect:not([hidden]) ~ .retry { display:none; }
+  .retry:hover { background:#f3f6f9; }
+  .verify { width:100%; margin-top:16px; display:flex; gap:8px; }
+  .verify input { min-width:0; flex:1; min-height:44px; padding:0 12px; border:1px solid #c9d3de; border-radius:8px; color:var(--ink); background:#fff; font-size:12px; }
+  .verify button { border:0; border-radius:8px; background:var(--accent); color:#fff; padding:0 16px; font-size:12px; }
+  .connection-note { padding-top:23px; margin:23px 0 0; border-top:1px solid #edf0f4; color:#687789; text-align:center; font-size:12px; line-height:1.7; }
+  .edge { width:100%; max-width:1120px; margin:0 auto; padding:22px 0 26px; border-top:1px solid #e4e9ef; display:flex; justify-content:space-between; gap:20px; color:#687789; font-size:12px; line-height:1.6; }
+  @media(max-width:1000px) { .portal-layout { gap:48px; grid-template-columns:minmax(0,1fr) 360px; } .intro h1 { font-size:49px; } .experience { padding:0 32px; } .template-card { column-gap:12px; padding:12px; } .gateway { padding:26px; } }
+  @media(max-width:760px) { .experience { padding:0 24px; } .masthead { padding:24px 0; } .brand strong { font-size:22px; } .brand-mark { width:30px; height:30px; } .brand small { font-size:11px; } .manage-link { font-size:12px; } .portal-layout { display:block; max-width:450px; padding:20px 0 38px; } .intro h1 { font-size:42px; line-height:1.18; } .intro p { margin:16px 0 26px; font-size:12px; } .template-list { display:none; } .picker-label { margin-bottom:10px; } .mobile-picker { display:block; width:100%; min-height:48px; padding:0 14px; border:1px solid #c9d3de; border-radius:9px; background:#fff; color:var(--ink); font-size:16px; } .account-connect input,.verify input { font-size:16px; } .account-connect input::placeholder { font-size:12px; } .gateway { margin-top:24px; padding:25px; border-radius:16px; } .gateway-heading { margin-bottom:20px; } .channel-picker { margin-bottom:22px; } .connection-note { margin-top:20px; padding-top:20px; } .edge { padding:19px 0 22px; font-size:11px; flex-wrap:wrap; gap:6px; } }
+  @media(max-width:350px) { .experience { padding:0 18px; } .intro h1 { font-size:37px; } .brand-wordmark { gap:7px; } .gateway { padding:20px; } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>
 </head>
 <body>
 <main class="experience" aria-label="Mirror V Portal，选择 Agent">
-  <picture class="world" aria-hidden="true"><source media="(max-width: 600px)" srcset="/onboard/assets/nexus-world-mobile-v2.webp"><img src="/onboard/assets/nexus-world-v2.webp" alt="" fetchpriority="high"></picture>
-  <video class="world-video" id="worldVideo" muted playsinline preload="none" aria-hidden="true"></video>
-  <video class="world-video" id="worldVideoNext" muted playsinline preload="none" aria-hidden="true"></video>
-  <button class="motion-control" id="motionControl" type="button" aria-label="暂停背景动画" hidden>Ⅱ</button>
-  <header class="masthead"><span class="brand"><strong>Mirror V</strong><small>Portal</small></span><span class="signature">your agent, your world</span></header>
-  <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><p class="template-description" id="templateDescription"></p></section>
-  <section class="gateway" aria-label="扫码创建 Agent">
-    <form class="account-connect" id="makaronAccount" hidden>
-      <label id="accountLabel" for="makaronApiKey"></label><small id="accountDescription"></small>
-      <input id="makaronApiKey" type="password" autocomplete="off" spellcheck="false" maxlength="220">
-      <button id="accountSubmit" type="submit"></button><p><a id="accountLogin" href="https://www.makaron.app" target="_blank" rel="noopener noreferrer"></a></p>
-    </form>
-    <div class="gate" id="gate"><div class="portal">
-      <div class="core" id="core" aria-hidden="true"></div>
-      <img id="code" alt="扫码创建 Agent">
-      <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
-    </div></div>
-    <div class="beam-track" id="beamTrack"><div class="beam-fill" id="beamFill"></div></div>
-    <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div></div>
-    <div class="channel-picker" role="group" aria-label="选择扫码 App"><button type="button" id="channelFeishu" aria-pressed="true">飞书</button><button type="button" id="channelWeixin" aria-pressed="false">微信</button></div>
-    <form class="verify" id="verify" hidden><input id="verifyCode" inputmode="numeric" autocomplete="one-time-code" placeholder="微信验证码" aria-label="微信验证码"><button type="submit">确认</button></form>
-    <button class="retry" id="retry" type="button">重新生成二维码</button>
-  </section>
-  <div class="edge" aria-hidden="true"><span class="edge-line"></span><span>另一种可能</span><span class="edge-line"></span></div>
+  <header class="masthead">
+    <a class="brand" href="/onboard" aria-label="Mirror V Portal">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M8 9l12 23L32 9" stroke="currentColor" stroke-width="1.5"/><path d="M4 9l12 23M36 9L24 32" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5"/></svg></span>
+      <span class="brand-wordmark"><strong>Mirror V</strong><small>Portal</small></span>
+    </a>
+    <a class="manage-link" id="manageLink" href="/admin/agents">管理 Agent</a>
+  </header>
+  <div class="portal-layout">
+    <section class="template-picker" aria-label="选择 Agent 模板">
+      <div class="intro"><h1><span id="heroLine1">找到你的</span><span id="heroLine2">下一位伙伴。</span></h1><p id="heroDescription">思考、创作与行动，从一段对话开始。</p></div>
+      <h2 class="picker-label" id="pickerLabel">选择一位 Agent</h2>
+      <select class="mobile-picker" id="templateSelect" aria-labelledby="pickerLabel"></select>
+      <div class="template-list" id="templateList"></div>
+    </section>
+    <section class="gateway" aria-label="扫码创建 Agent">
+      <div class="gateway-heading">
+        <img class="selected-avatar" id="selectedAgentAvatar" alt="" hidden>
+        <span class="selected-symbol" id="selectedAgentSymbol" aria-hidden="true">V</span>
+        <h2 id="selectedAgentName">开始一段对话</h2><p class="template-description" id="templateDescription"></p>
+      </div>
+      <div class="channel-picker" role="group" aria-label="选择扫码 App"><button type="button" id="channelFeishu" aria-pressed="true">飞书</button><button type="button" id="channelWeixin" aria-pressed="false">微信</button></div>
+      <form class="account-connect" id="makaronAccount" hidden>
+        <label id="accountLabel" for="makaronApiKey"></label><small id="accountDescription"></small>
+        <input id="makaronApiKey" type="password" autocomplete="off" spellcheck="false" maxlength="220" required>
+        <button id="accountSubmit" type="submit"></button><p><a id="accountLogin" href="https://www.makaron.app" target="_blank" rel="noopener noreferrer"></a></p>
+      </form>
+      <div class="gate" id="gate"><div class="portal">
+        <div class="core" id="core" aria-hidden="true"></div>
+        <img id="code" alt="扫码创建 Agent">
+        <div class="arrived" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><path d="M20 33l9 9 16-19"/></svg></div>
+      </div></div>
+      <div class="beam-track" id="beamTrack"><div class="beam-fill" id="beamFill"></div></div>
+      <div class="readout"><div class="status" id="status" role="status" aria-live="polite">正在加载 Agent 模板…</div><div class="meta" id="meta"></div></div>
+      <form class="verify" id="verify" hidden><input id="verifyCode" inputmode="numeric" autocomplete="one-time-code" placeholder="微信验证码" aria-label="微信验证码"><button type="submit">确认</button></form>
+      <button class="retry" id="retry" type="button">重新生成二维码</button>
+      <p class="connection-note" id="connectionNote">扫码确认后，回到聊天 App 开始对话。</p>
+    </section>
+  </div>
+  <footer class="edge"><span>© 2026 Mirror V</span><span id="footerNote">你的 Agent，你的对话与工作空间。</span></footer>
 </main>
-
 <script>
 (function () {
-  var videos = [document.getElementById('worldVideo'), document.getElementById('worldVideoNext')];
-  var button = document.getElementById('motionControl');
-  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-  var pausedByUser = false, current = 0, switching = false, transitionTimer = null;
-  var source = '/onboard/assets/nexus-world-v5.mp4?v=6';
-  function canPlay() { return !reduced.matches && !document.hidden && !pausedByUser; }
-  function label() {
-    button.textContent = pausedByUser ? '▷' : 'Ⅱ';
-    button.setAttribute('aria-label', pausedByUser ? '播放背景动画' : '暂停背景动画');
-  }
-  function syncMotion() {
-    if (reduced.matches) {
-      videos.forEach(function (v) { v.pause(); v.classList.remove('ready'); });
-      button.hidden = true;
-      return;
-    }
-    button.hidden = false;
-    if (!canPlay()) { videos.forEach(function (v) { v.pause(); }); return; }
-    var active = videos[current];
-    if (!active.getAttribute('src')) active.src = source;
-    active.muted = true;
-    active.play().then(function () {
-      if (!canPlay()) { active.pause(); return; }
-      active.style.zIndex = '-1';
-      active.classList.add('ready');
-      var standby = videos[1-current];
-      if (!standby.getAttribute('src')) { standby.preload = 'auto'; standby.src = source; standby.load(); }
-      label();
-    }).catch(function () { pausedByUser = true; label(); });
-    if (switching) videos[1-current].play().catch(function () {});
-  }
-  function switchVideo() {
-    if (switching || !canPlay()) return;
-    switching = true;
-    var outgoing = videos[current], nextIndex = 1-current, incoming = videos[nextIndex];
-    incoming.classList.remove('ready');
-    if (!incoming.getAttribute('src')) incoming.src = source;
-    incoming.currentTime = 0;
-    incoming.muted = true;
-    incoming.play().then(function () {
-      if (!canPlay()) { incoming.pause(); switching = false; return; }
-      outgoing.style.zIndex = '-2';
-      incoming.style.zIndex = '-1';
-      incoming.classList.add('ready');
-      current = nextIndex;
-      transitionTimer = setTimeout(function () {
-        outgoing.pause();
-        outgoing.classList.remove('ready');
-        outgoing.currentTime = 0;
-        switching = false;
-        transitionTimer = null;
-      }, 1650);
-    }).catch(function () { switching = false; });
-  }
-  videos.forEach(function (v, index) {
-    v.addEventListener('timeupdate', function () {
-      if (index === current && v.duration && v.duration-v.currentTime < 1.8) switchVideo();
-    });
-    v.addEventListener('ended', function () { if (index === current) switchVideo(); });
-    v.addEventListener('error', function () {
-      v.classList.remove('ready');
-      if (index === current) button.hidden = true;
-    });
-  });
-  button.addEventListener('click', function () { pausedByUser = !pausedByUser; label(); syncMotion(); });
-  reduced.addEventListener('change', syncMotion);
-  document.addEventListener('visibilitychange', syncMotion);
-  syncMotion();
+  var copies = {
+    zh: ['找到你的','下一位伙伴。','思考、创作与行动，从一段对话开始。','选择一位 Agent','管理 Agent','扫码确认后，回到聊天 App 开始对话。','你的 Agent，你的对话与工作空间。'],
+    'zh-Hant': ['找到你的','下一位夥伴。','思考、創作與行動，從一段對話開始。','選擇一位 Agent','管理 Agent','掃碼確認後，回到聊天 App 開始對話。','你的 Agent，你的對話與工作空間。'],
+    ja: ['あなたの次の','パートナーを。','考える、創る、行動する。会話から始めましょう。','Agent を選ぶ','Agent の管理','QR コードを確認した後、チャットアプリで会話を始めましょう。','あなたの Agent、あなたの会話とワークスペース。'],
+    en: ['Meet your','next partner.','Think, create, and take action. Start with a conversation.','Choose an Agent','Manage Agents','After confirming the QR code, return to your chat app to start talking.','Your Agent, your conversations and workspace.']
+  };
+  var locale = new URLSearchParams(location.search).get('lang') || navigator.language || 'zh';
+  var lang = copies[locale] ? locale : /^zh-(TW|HK|Hant)/i.test(locale) ? 'zh-Hant' : /^ja/i.test(locale) ? 'ja' : /^zh/i.test(locale) ? 'zh' : 'en';
+  var text = copies[lang];
+  ['heroLine1','heroLine2','heroDescription','pickerLabel','manageLink','connectionNote','footerNote'].forEach(function(id,index){document.getElementById(id).textContent=text[index];});
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
+  document.title = {zh:'Mirror V Portal · 选择你的 Agent','zh-Hant':'Mirror V Portal · 選擇你的 Agent',ja:'Mirror V Portal · Agent を選ぶ',en:'Mirror V Portal · Choose your Agent'}[lang];
 })();
 (function () {
   var feishuCode = null, weixinCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
@@ -208,6 +167,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var beamFill = document.getElementById('beamFill');
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
+  var templateSelect = document.getElementById('templateSelect');
   var templateDescription = document.getElementById('templateDescription');
   var channelFeishu = document.getElementById('channelFeishu');
   var channelWeixin = document.getElementById('channelWeixin');
@@ -258,21 +218,26 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       if (requested !== null && !data.templates.some(function (template) { return template.id === requested; })) throw new Error('所选 Agent 暂未开放，请稍后重试');
       var preferred = requested !== null ? requested : 'mirror-v';
       var initialCard = null;
-      templateList.replaceChildren();
+      templateList.replaceChildren(); templateSelect.replaceChildren();
       data.templates.forEach(function (template) {
         var card = document.createElement('button');
-        card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false');
+        card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false'); card.setAttribute('data-agent', template.id);
+        var option = document.createElement('option'); option.value = template.id; option.textContent = template.name; templateSelect.appendChild(option);
         if (template.avatarUrl) {
           var avatar = document.createElement('img'); avatar.className = 'template-avatar'; avatar.alt = ''; avatar.width = 48; avatar.height = 48; avatar.decoding = 'async';
           avatar.src = template.avatarUrl; avatar.addEventListener('error', function (event) { event.currentTarget.remove(); });
           card.append(avatar);
+        } else {
+          var symbol = document.createElement('span'); symbol.className = 'template-symbol'; symbol.setAttribute('aria-hidden','true');
+          symbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V'; card.append(symbol);
         }
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
         card.setAttribute('aria-label', template.name + '，' + template.description);
         card.append(name);
+        var summary = document.createElement('span'); summary.className = 'template-summary'; summary.textContent = template.description; card.append(summary);
         card.addEventListener('click', function () {
           if (selectedTemplate && selectedTemplate.id === template.id) return;
-          selectedTemplate = template;
+          selectedTemplate = template; templateSelect.value = template.id;
           templateList.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button === card)); });
           templateDescription.textContent = template.description;
           var url = new URL(location.href); url.searchParams.set('template', template.id); history.replaceState(null, '', url);
@@ -288,6 +253,12 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (!selectedTemplate) { loadTemplates(); return; }
     var currentGeneration = ++generation;
     var template = selectedTemplate;
+    document.getElementById('selectedAgentName').textContent = template.name;
+    var selectedAvatar = document.getElementById('selectedAgentAvatar');
+    var selectedSymbol = document.getElementById('selectedAgentSymbol');
+    selectedAvatar.hidden = !template.avatarUrl; selectedSymbol.hidden = !!template.avatarUrl;
+    if (template.avatarUrl) selectedAvatar.src = template.avatarUrl;
+    selectedSymbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V';
     var channel = selectedChannel;
     var previousFeishu = feishuCode, previousWeixin = weixinCode;
     stopTimers(); active = false; feishuCode = null; weixinCode = null; expireAt = null;
@@ -384,6 +355,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (!active) return;
     if (document.hidden) { clearInterval(pollTimer); pollTimer = null; }
     else if (!pollTimer) { poll(); pollTimer = setInterval(poll, POLL_MS); }
+  });
+  templateSelect.addEventListener('change', function () {
+    templateList.querySelectorAll('button').forEach(function(card){ if(card.getAttribute('data-agent') === templateSelect.value) card.click(); });
   });
   loadTemplates();
 })();
