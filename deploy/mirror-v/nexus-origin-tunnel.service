@@ -1,0 +1,18 @@
+[Unit]
+Description=Mirror V Portal HTTPS origin tunnel
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /opt/nexus/current/deploy/mirror-v/cloudflared-origin.yml tunnel run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

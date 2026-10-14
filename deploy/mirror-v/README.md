@@ -17,15 +17,15 @@ Lighthouse instance.
 - PostgreSQL 16 is local. Private config and database are outside releases at
   `/opt/nexus/data`; this legacy path stays in place during the brand rename.
   No credential or private payload is committed to GitHub.
-- The Vercel Portal edge reaches `https://mirror-v-portal.tail06783a.ts.net`
-  through the host's existing Tailscale Funnel identity and HTTPS permission.
-  TLS terminates on the Portal node; the Funnel relay cannot read requests.
-  A loopback-only Nginx listener at `127.0.0.1:18083` exposes the Portal
-  locations, excluding the old OpenClaw `/feishu/events` route and manager API.
-  Funnel runs in background mode and survives Tailscale restarts. Verify with
-  `tailscale funnel status` and an HTTPS request from outside the tailnet.
+- The Vercel Portal edge reaches `https://mirror-v-origin.tianyi.live`
+  through a dedicated named Cloudflare Tunnel on this host. Both public and
+  tunnel transport use TLS; only the final loopback hop uses local HTTP.
+  A Nginx listener at `127.0.0.1:18083` exposes the existing Portal locations,
+  excluding the old OpenClaw `/feishu/events` route and runtime-manager API.
+  The connector is managed by `nexus-origin-tunnel.service` and holds only
+  this tunnel's credential, not the Cloudflare account management certificate.
 - Nginx also retains its Let's Encrypt IP certificate on 443. Tencent Cloud's
-  public 443 ingress is not required by the Funnel route. Certbot checks
+  public 443 ingress is not required by the tunnel route. Certbot checks
   renewal four times daily and reloads Nginx after renewal.
 - `/opt/nexus/current` points at a committed release. The deploy script keeps
   `/opt/nexus/previous` for a one-step rollback.
@@ -137,24 +137,32 @@ deployed server and also exposes `/admin/login` locally without public HTTP.
 Production SSH uses the existing dedicated deploy key named in
 `scripts/deploy-mirror-v.sh`; Vercel uses the linked project in
 `deploy/vercel-edge/.vercel/project.json`. A Tencent Cloud console session
-is not needed for the normal release or the current HTTPS transport.
+is not needed for normal release or the current HTTPS transport.
 
-On this existing Portal host, install `nginx-funnel.conf` into
-`/etc/nginx/sites-enabled/nexus-funnel.conf`, validate `nginx -t`, and reload
-Nginx. Then run:
+The named tunnel is `mirror-v-portal-origin-20261014`. Its CNAME was created
+using the existing infrastructure account; it does not replace any prior DNS
+record or tunnel. Only its credential is installed at
+`/opt/nexus/data/portal-origin/credentials.json` (0600). The account management
+certificate remains on its original host and is not distributed.
+
+Install `nginx-origin.conf` as
+`/etc/nginx/sites-enabled/nexus-portal-origin.conf`, validate and reload Nginx.
+Install the pinned official `cloudflared` 2026.10.0 binary (release SHA-256
+`d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db`).
+Install and enable `nexus-origin-tunnel.service` from this release. Verify:
 
 ```sh
-tailscale funnel --bg --https=443 --yes http://127.0.0.1:18083
-tailscale funnel status
+systemctl is-active nexus-origin-tunnel
+curl -fsS https://mirror-v-origin.tianyi.live/healthz
 ```
 
-This requires the existing node's `funnel`/`https` capabilities; do not change
-tailnet ACLs or expose a manager port. The loopback HTTP hop stays on the
-same machine after TLS decryption. Deploy the linked Vercel edge project
-only after an HTTPS preview verifies templates, assets, and onboarding
-responses. Existing tenant payload and snapshot pins do not change.
+Before production edge promotion, verify an HTTPS preview's templates,
+assets, and onboarding responses. Existing tenant payload/snapshot pins
+remain intact. The tunnel metrics listener is loopback-only on 18084.
 
-Before disabling Funnel, restore the prior working Vercel deployment and
-hide Makaron signup if that prior edge uses HTTP. To remove this origin,
-run `tailscale funnel --https=443 off`, remove the dedicated Nginx listener,
-validate and reload Nginx. Leave the other Portal and OpenClaw routes intact.
+Before disabling the origin tunnel, restore a working edge deployment and
+hide Makaron signup if the old edge uses HTTP. Stop only
+`nexus-origin-tunnel.service`, remove its dedicated Nginx listener, validate
+and reload Nginx. Do not stop or change other infrastructure tunnels.
+The previous production edge is
+`mirror-v-portal-j2q6h3ypr-vegekyd-sys-projects.vercel.app`.
