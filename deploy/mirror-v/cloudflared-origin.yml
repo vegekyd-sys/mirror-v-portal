@@ -1,0 +1,7 @@
+tunnel: 65f25c2f-8cff-4aac-a509-625721005867
+credentials-file: /opt/nexus/data/portal-origin/credentials.json
+metrics: 127.0.0.1:18084
+ingress:
+  - hostname: mirror-v-origin.tianyi.live
+    service: http://127.0.0.1:18083
+  - service: http_status:404

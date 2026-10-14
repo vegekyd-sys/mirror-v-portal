@@ -10,15 +10,15 @@
   "rewrites": [
     {
       "source": "/admin",
-      "destination": "https://mirror-v-portal.tail06783a.ts.net/admin/index.html"
+      "destination": "https://mirror-v-origin.tianyi.live/admin/index.html"
     },
     {
       "source": "/admin/",
-      "destination": "https://mirror-v-portal.tail06783a.ts.net/admin/index.html"
+      "destination": "https://mirror-v-origin.tianyi.live/admin/index.html"
     },
     {
       "source": "/:path*",
-      "destination": "https://mirror-v-portal.tail06783a.ts.net/:path*"
+      "destination": "https://mirror-v-origin.tianyi.live/:path*"
     }
   ]
 }

@@ -58,6 +58,9 @@ if [[ -f "$release/deploy/mirror-v/nexus-cert-renew.service" ]]; then
   install -m 644 "$release/deploy/mirror-v/nexus-cert-renew.service" /etc/systemd/system/nexus-cert-renew.service
   install -m 644 "$release/deploy/mirror-v/nexus-cert-renew.timer" /etc/systemd/system/nexus-cert-renew.timer
 fi
+if [[ -f /etc/systemd/system/nexus-origin-tunnel.service && -f "$release/deploy/mirror-v/nexus-origin-tunnel.service" ]]; then
+  install -m 644 "$release/deploy/mirror-v/nexus-origin-tunnel.service" /etc/systemd/system/nexus-origin-tunnel.service
+fi
 systemctl daemon-reload
 old="$(readlink -f /opt/nexus/current || true)"
 if [[ -n "$old" ]]; then ln -sfn "$old" /opt/nexus/previous; fi
@@ -73,10 +76,10 @@ for attempt in {1..15}; do
     if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
       install -m 644 "$release/deploy/mirror-v/nginx-tls.conf" /etc/nginx/sites-enabled/nexus-tls.conf
     fi
-    # Preserve an already-enabled Funnel origin on later control-plane releases.
-    # Initial Funnel enablement is a separate, explicit host operation.
-    if [[ -f /etc/nginx/sites-enabled/nexus-funnel.conf && -f "$release/deploy/mirror-v/nginx-funnel.conf" ]]; then
-      install -m 644 "$release/deploy/mirror-v/nginx-funnel.conf" /etc/nginx/sites-enabled/nexus-funnel.conf
+    # Preserve an already-enabled HTTPS origin on later control-plane releases.
+    # Initial tunnel enablement is a separate, explicit host operation.
+    if [[ -f /etc/nginx/sites-enabled/nexus-portal-origin.conf && -f "$release/deploy/mirror-v/nginx-origin.conf" ]]; then
+      install -m 644 "$release/deploy/mirror-v/nginx-origin.conf" /etc/nginx/sites-enabled/nexus-portal-origin.conf
     fi
     if ! nginx -t >/dev/null 2>&1; then
       cp /opt/nexus/data/nginx-portal.previous.conf /etc/nginx/nexus-portal.locations.conf
@@ -84,6 +87,7 @@ for attempt in {1..15}; do
       break
     fi
     systemctl reload nginx
+    systemctl try-restart nexus-origin-tunnel.service 2>/dev/null || true
     if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
       systemctl enable --now nexus-cert-renew.timer
       if ! curl --noproxy '*' -fsS --resolve 43.134.135.143:443:127.0.0.1 https://43.134.135.143/healthz >/dev/null 2>&1; then
