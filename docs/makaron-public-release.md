@@ -14,6 +14,8 @@ Portal 选择 Makaron → 注册或登录 Makaron，获取自己的 API Key →
 租户中加密保存。绑定失败不会发送就绪欢迎消息。Key 不进入 URL、返回值、
 payload、共享模板或对话。创建流程不产生媒体费用；创作使用用户自己的额度。
 隐藏模板不能从公开账号连接接口创建。公开开放前必须验证 HTTPS 回源。
+当前回源使用主机已有 Tailscale Funnel 权限，由 Vercel 经可信 HTTPS
+连接 Portal 节点，最后一段仅在本机 loopback 上转发。
 
 ## 不可变产物
 
