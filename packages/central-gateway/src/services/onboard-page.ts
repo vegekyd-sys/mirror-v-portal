@@ -186,6 +186,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   @media(min-width:761px) and (max-height:1100px) {
     .masthead { padding:22px 0; }
     .portal-layout { grid-template-areas:"hero gateway" "picker gateway"; grid-template-rows:auto auto; row-gap:24px; padding-bottom:24px; }
+    .template-picker,.gateway { margin-top:clamp(0px,calc((100svh - 650px) * .3),36px); }
     .hero { padding:0; }
     .intro h1 { font-size:48px; }
     .intro p { margin-top:14px; }
