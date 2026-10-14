@@ -73,6 +73,11 @@ for attempt in {1..15}; do
     if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
       install -m 644 "$release/deploy/mirror-v/nginx-tls.conf" /etc/nginx/sites-enabled/nexus-tls.conf
     fi
+    # Preserve an already-enabled Funnel origin on later control-plane releases.
+    # Initial Funnel enablement is a separate, explicit host operation.
+    if [[ -f /etc/nginx/sites-enabled/nexus-funnel.conf && -f "$release/deploy/mirror-v/nginx-funnel.conf" ]]; then
+      install -m 644 "$release/deploy/mirror-v/nginx-funnel.conf" /etc/nginx/sites-enabled/nexus-funnel.conf
+    fi
     if ! nginx -t >/dev/null 2>&1; then
       cp /opt/nexus/data/nginx-portal.previous.conf /etc/nginx/nexus-portal.locations.conf
       echo 'Nginx config failed validation' >&2

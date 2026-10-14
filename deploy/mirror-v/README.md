@@ -17,8 +17,16 @@ Lighthouse instance.
 - PostgreSQL 16 is local. Private config and database are outside releases at
   `/opt/nexus/data`; this legacy path stays in place during the brand rename.
   No credential or private payload is committed to GitHub.
-- Nginx serves the origin through a Let's Encrypt IP certificate on 443.
-  Certbot checks renewal four times daily and reloads Nginx after renewal.
+- The Vercel Portal edge reaches `https://mirror-v-portal.tail06783a.ts.net`
+  through the host's existing Tailscale Funnel identity and HTTPS permission.
+  TLS terminates on the Portal node; the Funnel relay cannot read requests.
+  A loopback-only Nginx listener at `127.0.0.1:18083` exposes the Portal
+  locations, excluding the old OpenClaw `/feishu/events` route and manager API.
+  Funnel runs in background mode and survives Tailscale restarts. Verify with
+  `tailscale funnel status` and an HTTPS request from outside the tailnet.
+- Nginx also retains its Let's Encrypt IP certificate on 443. Tencent Cloud's
+  public 443 ingress is not required by the Funnel route. Certbot checks
+  renewal four times daily and reloads Nginx after renewal.
 - `/opt/nexus/current` points at a committed release. The deploy script keeps
   `/opt/nexus/previous` for a one-step rollback.
 
@@ -123,3 +131,30 @@ update, replace only `memory/base/` in their workspace.
 For local acceptance on a trusted Mac, run `scripts/mirror-v-local-tunnel.sh`
 and open `http://127.0.0.1:18080/onboard`. The tunnel points to this same
 deployed server and also exposes `/admin/login` locally without public HTTP.
+
+## HTTPS origin enablement and rollback
+
+Production SSH uses the existing dedicated deploy key named in
+`scripts/deploy-mirror-v.sh`; Vercel uses the linked project in
+`deploy/vercel-edge/.vercel/project.json`. A Tencent Cloud console session
+is not needed for the normal release or the current HTTPS transport.
+
+On this existing Portal host, install `nginx-funnel.conf` into
+`/etc/nginx/sites-enabled/nexus-funnel.conf`, validate `nginx -t`, and reload
+Nginx. Then run:
+
+```sh
+tailscale funnel --bg --https=443 --yes http://127.0.0.1:18083
+tailscale funnel status
+```
+
+This requires the existing node's `funnel`/`https` capabilities; do not change
+tailnet ACLs or expose a manager port. The loopback HTTP hop stays on the
+same machine after TLS decryption. Deploy the linked Vercel edge project
+only after an HTTPS preview verifies templates, assets, and onboarding
+responses. Existing tenant payload and snapshot pins do not change.
+
+Before disabling Funnel, restore the prior working Vercel deployment and
+hide Makaron signup if that prior edge uses HTTP. To remove this origin,
+run `tailscale funnel --https=443 off`, remove the dedicated Nginx listener,
+validate and reload Nginx. Leave the other Portal and OpenClaw routes intact.

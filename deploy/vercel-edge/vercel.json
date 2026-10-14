@@ -10,15 +10,15 @@
   "rewrites": [
     {
       "source": "/admin",
-      "destination": "http://43.134.135.143/admin/index.html"
+      "destination": "https://mirror-v-portal.tail06783a.ts.net/admin/index.html"
     },
     {
       "source": "/admin/",
-      "destination": "http://43.134.135.143/admin/index.html"
+      "destination": "https://mirror-v-portal.tail06783a.ts.net/admin/index.html"
     },
     {
       "source": "/:path*",
-      "destination": "http://43.134.135.143/:path*"
+      "destination": "https://mirror-v-portal.tail06783a.ts.net/:path*"
     }
   ]
 }
