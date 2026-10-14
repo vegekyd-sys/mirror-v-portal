@@ -257,6 +257,7 @@ describe('Explicit onboarding template links', () => {
         querySelectorAll() { return cards; },
       },
       templateDescription: { textContent: '' },
+      templateSelect: { value: '', replaceChildren: vi.fn(), appendChild: vi.fn() },
       selectedTemplate: null as { id: string } | null,
       fetch: vi.fn(async () => ({ ok: true, json: async () => ({ templates }) })),
       open: opened, closeGate: closed,
