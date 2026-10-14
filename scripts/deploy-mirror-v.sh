@@ -36,6 +36,7 @@ stage() {
     cp -R "$repo_root/packages/$pkg/dist" "$tmp/release/packages/$pkg/dist"
   done
   cp -R "$repo_root/packages/admin-web/dist" "$tmp/release/packages/admin-web/dist"
+  cp "$repo_root/packages/central-gateway/public/onboard/index.html" "$tmp/release/packages/central-gateway/public/onboard/index.html"
   tar -czf "$tmp/release.tgz" -C "$tmp/release" .
   ssh "${ssh_args[@]}" "$target" "install -d -m 755 /opt/nexus/releases"
   scp "${ssh_args[@]}" "$tmp/release.tgz" "$target:/opt/nexus/releases/$sha.tgz"

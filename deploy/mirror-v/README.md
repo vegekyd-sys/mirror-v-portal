@@ -166,3 +166,19 @@ hide Makaron signup if the old edge uses HTTP. Stop only
 and reload Nginx. Do not stop or change other infrastructure tunnels.
 The previous production edge is
 `mirror-v-portal-j2q6h3ypr-vegekyd-sys-projects.vercel.app`.
+
+## Homepage-only updates
+
+The gateway build emits `public/onboard/index.html`, and staging copies it
+into the committed release. Nginx serves the homepage directly while all
+account, QR, polling and channel APIs stay on the gateway. Feishu's native
+JSON entry (except the Makaron account page), DingTalk and WeCom still use
+their existing gateway handlers. Static HTML retains the gateway security
+headers and is revalidated on reload.
+
+For a homepage-only release, compare unchanged runtime/ledger code, template
+pins and origin configuration, switch the release pointer and gracefully
+reload the Nginx locations. Do not restart the gateway merely to update the
+homepage: doing so drops its in-memory pending scan sessions. Preserve the
+old release pointer and Nginx include for rollback. Normal backend releases
+continue through the standard activation script.
