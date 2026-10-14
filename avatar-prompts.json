@@ -1,0 +1,26 @@
+{
+  "generator": "built-in image_gen",
+  "prompts": [
+    [
+      "dealclaw",
+      "Reuse the exact user-selected image exec-b7aba050-d7e1-48bd-ba72-b3c04535be73.png without editing or regeneration."
+    ],
+    [
+      "xingqing",
+      "Use case: stylized-concept. Asset: square app avatar for Xingqing (星擎), an AI partner for content performance and business lead analytics. A DISTINCT charming star-shaped intelligence robot, polished friendly high-end 3D animation rendering matching the reference's gentle lighting and expressive personality ONLY. NOT the V girl. Close-up face fills 85% square: softly rounded five-point star-shaped pearl-white and mist-blue head shell, deep blue glass oval face panel, two luminous warm cyan friendly expressive eyes, small curious smile, small central gold star energy core glowing at forehead. Rounded navy-blue and ivory shoulder collar at bottom; one subtle small cyan rising-trend line on the collar hints content analytics without text. The silhouette unmistakably connects star + engine/intelligence, lively slight head tilt, clean pale blue backdrop, soft studio light, warm approachable clever partner, minimal uncluttered design clear at 48px. No silver-haired human, no bucket hat, no lobster, no full body, no text letters numbers, no watermark."
+    ],
+    [
+      "mirror-v",
+      "Use case: stylized-concept. Asset type: square app Agent avatar, one single portrait fills frame, legible at 48px. Reference image is the actual V character identity: silver-lavender straight hair, short bangs, large dark expressive eyes, friendly 3D animation-film face, black textured bucket hat with tiny red lobster pin. Preserve recognizable character design and rendering quality but create a NEW close-up head-and-shoulders portrait, no full body, no city, no cube, no writing, no letters, no watermark. Face and hat occupy 85% of square; clean soft studio lighting, sophisticated quiet pastel backdrop, simple iconic silhouette. Mirror V full capability variant: spirited confident smile, slight three-quarter head turn left toward camera, dark plum collar, pale blush-lilac backdrop, tiny iridescent lavender hat band and recognizable red lobster pin. No crown, no text."
+    ],
+    [
+      "mirror-v-full",
+      "Use case: stylized-concept. Asset type: square app Agent avatar, one single portrait fills frame, legible at 48px. Reference image is the actual V character identity: silver-lavender straight hair, short bangs, large dark expressive eyes, friendly 3D animation-film face, black textured bucket hat with tiny red lobster pin. Preserve recognizable character design and rendering quality but create a NEW close-up head-and-shoulders portrait, no full body, no city, no cube, no writing, no letters, no watermark. Face and hat occupy 85% of square; clean soft studio lighting, sophisticated quiet pastel backdrop, simple iconic silhouette. Mirror V general companion variant: direct warm curious gaze and small welcoming smile, soft lavender collar, mist lavender-gray backdrop, recognizable tiny red lobster pin, elegant relaxed expression."
+    ],
+    [
+      "makaron",
+      "Use case: stylized-concept. Asset type: square Makaron app Agent avatar, single lively CLOSE-UP portrait. Reference sheet: use Pixel Wizard identity, soft purple bubble-ghost creature, pixel-square eyes and pixel smile, oversized floppy dark purple wizard hat with pixel edges, magenta/cyan highlights. Create a NEW close-up peeking mascot portrait, cropped at upper chest, head and hat fill 90% of frame, NO full body or feet. Cheeky curious expression, lively asymmetric tilt, one tiny hand grips a curved magenta-cyan Spark ribbon at lower edge as if peeking through the creative portal. Hat tip curls playfully, bright large pixel eyes and impish smile clear at 48 pixels, restrained soft glowing purple background rather than black, polished squishy 3D with pixel edge detail. Preserve official ghost mascot, no human face, no wand, no letters, no text, no collage."
+    ]
+  ],
+  "selected_dealclaw_source": "/Users/tianyicai/.codex/generated_images/01a128ed-5fed-7c23-93eb-05180c788718/exec-b7aba050-d7e1-48bd-ba72-b3c04535be73.png"
+}

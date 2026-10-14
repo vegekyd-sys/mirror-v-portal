@@ -8,12 +8,14 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#111c2c">
+<link rel="icon" type="image/svg+xml" href="/onboard/assets/mirror-aperture-v3.svg">
 <title>Mirror V Portal · 选择你的 Agent</title>
 <style>
   * { box-sizing:border-box; }
   [hidden] { display:none!important; }
-  :root { color-scheme:light; font-family:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif; color:#243244; background:#f7f9fb; --ink:#243244; --muted:#687789; --line:#dde4eb; --accent:#3b556f; }
+  :root { color-scheme:light; font-family:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif; color:#243244; background:#f7f9fb; --ink:#243244; --muted:#586879; --line:#dde4eb; --accent:#3b556f; }
   body { margin:0; min-width:280px; -webkit-font-smoothing:antialiased; }
   button,input,select { font:inherit; }
   button,a,input,select { -webkit-tap-highlight-color:transparent; }
@@ -29,26 +31,34 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .brand small { font-size:12px; color:var(--muted); }
   .manage-link { color:#617084; text-decoration:none; font-size:13px; padding:10px 0 10px 12px; }
   .manage-link:hover { color:var(--ink); }
-  .portal-layout { flex:1; width:100%; max-width:1080px; margin:0 auto; padding:38px 0 62px; display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:100px; align-items:center; }
+  .portal-layout { flex:1; width:100%; max-width:1080px; margin:0 auto; padding:0 0 48px; display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:80px; align-items:start; }
+  .hero { width:100%; max-width:1080px; margin:0 auto; padding:24px 0 34px; display:grid; grid-template-columns:minmax(0,1fr) 470px; gap:80px; align-items:center; }
+  .mirror-window { position:relative; margin:0; aspect-ratio:2.12; border-radius:100px 100px 28px 28px; overflow:hidden; background:#171a22; box-shadow:0 12px 32px #25344812; isolation:isolate; }
+  .mirror-window video,.mirror-window picture,.mirror-window picture img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .mirror-window video { opacity:0; transition:opacity 1.65s ease-in-out; }
+  .mirror-window video.visible { opacity:1; }
+  .motion-toggle { position:absolute; bottom:14px; right:16px; z-index:3; display:grid; place-items:center; width:34px; height:34px; border:1px solid #ffffff45; border-radius:50%; color:#fff; background:#15203180; backdrop-filter:blur(10px); }
+  .motion-toggle svg { width:12px; height:12px; fill:currentColor; }
+  .motion-toggle[data-paused="true"] .pause-icon,.motion-toggle[data-paused="false"] .play-icon { display:none; }
   .intro h1 { font-family:"Iowan Old Style","Songti SC","Noto Serif CJK SC",serif; font-size:56px; font-weight:500; line-height:1.18; letter-spacing:-.04em; margin:0; }
   .intro h1 span { display:block; }
-  .intro p { margin:23px 0 36px; font-size:14px; line-height:1.8; color:var(--muted); }
+  .intro p { margin:20px 0 0; font-size:14px; line-height:1.8; color:var(--muted); }
   .picker-label { margin:0 0 12px; font-size:13px; font-weight:500; color:var(--muted); }
   .template-list { display:flex; flex-direction:column; gap:4px; }
-  .template-card { display:grid; grid-template-columns:42px minmax(0,1fr) 16px; grid-template-rows:auto auto; column-gap:16px; width:100%; padding:14px 16px; min-height:75px; border:1px solid transparent; border-radius:12px; text-align:left; color:var(--ink); background:transparent; transition:background .15s,border-color .15s; position:relative; }
+  .template-card { display:grid; grid-template-columns:52px minmax(0,1fr) 16px; grid-template-rows:auto auto; column-gap:16px; width:100%; padding:14px 16px; min-height:75px; border:1px solid transparent; border-radius:12px; text-align:left; color:var(--ink); background:transparent; transition:background .15s,border-color .15s; position:relative; }
   .template-card:hover { background:#edf1f5; }
   .template-card[aria-pressed="true"] { background:#fff; border-color:var(--line); }
   .template-card[aria-pressed="true"]::after { content:"✓"; grid-column:3; grid-row:1 / 3; align-self:center; color:var(--accent); font-size:15px; }
   .template-name { grid-column:2; grid-row:1; font-size:15px; font-weight:600; line-height:1.5; }
   .template-summary { grid-column:2; grid-row:2; font-size:13px; line-height:1.6; color:var(--muted); margin-top:2px; }
-  .template-avatar,.template-symbol { grid-column:1; grid-row:1 / 3; align-self:center; width:42px; height:42px; border-radius:12px; }
+  .template-avatar,.template-symbol { grid-column:1; grid-row:1 / 3; align-self:center; width:52px; height:52px; border-radius:15px; }
   .template-avatar { display:block; object-fit:cover; }
   .template-symbol { display:grid; place-items:center; background:#e9eef3; color:#526b83; font-size:14px; font-weight:550; letter-spacing:-.05em; }
   .template-card[data-agent="mirror-v-full"] .template-symbol { background:#e5ebf2; color:#354e67; }
   .mobile-picker { display:none; }
   .gateway { background:#fff; border:1px solid var(--line); border-radius:20px; padding:30px; box-shadow:0 8px 32px #263b5005; min-width:0; }
-  .gateway-heading { display:grid; grid-template-columns:44px minmax(0,1fr); column-gap:14px; align-items:start; margin-bottom:24px; }
-  .selected-avatar,.selected-symbol { width:44px; height:44px; border-radius:12px; grid-column:1; grid-row:1 / 3; object-fit:cover; }
+  .gateway-heading { display:grid; grid-template-columns:54px minmax(0,1fr); column-gap:14px; align-items:start; margin-bottom:24px; }
+  .selected-avatar,.selected-symbol { width:54px; height:54px; border-radius:15px; grid-column:1; grid-row:1 / 3; object-fit:cover; }
   .selected-symbol { display:grid; place-items:center; background:#edf1f5; color:#526b83; font-size:18px; font-weight:500; }
   .gateway-heading h2 { grid-column:2; margin:0; font-size:22px; font-weight:550; line-height:1.4; letter-spacing:-.035em; }
   .template-description { grid-column:2; margin:5px 0 0; font-size:13px; line-height:1.65; color:var(--muted); }
@@ -91,24 +101,130 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .verify button { border:0; border-radius:8px; background:var(--accent); color:#fff; padding:0 16px; font-size:12px; }
   .connection-note { padding-top:23px; margin:23px 0 0; border-top:1px solid #edf0f4; color:#687789; text-align:center; font-size:12px; line-height:1.7; }
   .edge { width:100%; max-width:1120px; margin:0 auto; padding:22px 0 26px; border-top:1px solid #e4e9ef; display:flex; justify-content:space-between; gap:20px; color:#687789; font-size:12px; line-height:1.6; }
-  @media(max-width:1000px) { .portal-layout { gap:48px; grid-template-columns:minmax(0,1fr) 360px; } .intro h1 { font-size:49px; } .experience { padding:0 32px; } .template-card { column-gap:12px; padding:12px; } .gateway { padding:26px; } }
-  @media(max-width:760px) { .experience { padding:0 24px; } .masthead { padding:24px 0; } .brand strong { font-size:22px; } .brand-mark { width:30px; height:30px; } .brand small { font-size:11px; } .manage-link { font-size:12px; } .portal-layout { display:block; max-width:450px; padding:20px 0 38px; } .intro h1 { font-size:42px; line-height:1.18; } .intro p { margin:16px 0 26px; font-size:12px; } .template-list { display:none; } .picker-label { margin-bottom:10px; } .mobile-picker { display:block; width:100%; min-height:48px; padding:0 14px; border:1px solid #c9d3de; border-radius:9px; background:#fff; color:var(--ink); font-size:16px; } .account-connect input,.verify input { font-size:16px; } .account-connect input::placeholder { font-size:12px; } .gateway { margin-top:24px; padding:25px; border-radius:16px; } .gateway-heading { margin-bottom:20px; } .channel-picker { margin-bottom:22px; } .connection-note { margin-top:20px; padding-top:20px; } .edge { padding:19px 0 22px; font-size:11px; flex-wrap:wrap; gap:6px; } }
+  @media(max-width:1000px) { .hero { gap:48px; grid-template-columns:minmax(0,1fr) 360px; } .portal-layout { gap:48px; grid-template-columns:minmax(0,1fr) 360px; } .intro h1 { font-size:49px; } .experience { padding:0 32px; } .template-card { column-gap:12px; padding:12px; } .gateway { padding:26px; } }
+  @media(max-width:760px) { .hero { display:flex; flex-direction:column; align-items:stretch; gap:24px; max-width:450px; padding:16px 0 26px; } .mirror-window { aspect-ratio:2.05; border-radius:70px 70px 20px 20px; } .motion-toggle { bottom:10px; right:12px; } .experience { padding:0 24px; } .masthead { padding:24px 0; } .brand strong { font-size:22px; } .brand-mark { width:30px; height:30px; } .brand small { font-size:11px; } .manage-link { font-size:12px; } .portal-layout { display:block; max-width:450px; padding:0 0 38px; } .intro h1 { font-size:42px; line-height:1.18; } .intro p { margin:16px 0 0; font-size:12px; } .template-list { display:none; } .picker-label { margin-bottom:10px; } .mobile-picker { display:block; width:100%; min-height:48px; padding:0 14px; border:1px solid #c9d3de; border-radius:9px; background:#fff; color:var(--ink); font-size:16px; } .account-connect input,.verify input { font-size:16px; } .account-connect input::placeholder { font-size:12px; } .gateway { margin-top:24px; padding:25px; border-radius:16px; } .gateway-heading { margin-bottom:20px; } .channel-picker { margin-bottom:22px; } .connection-note { margin-top:20px; padding-top:20px; } .edge { padding:19px 0 22px; font-size:11px; flex-wrap:wrap; gap:6px; } }
   @media(max-width:350px) { .experience { padding:0 18px; } .intro h1 { font-size:37px; } .brand-wordmark { gap:7px; } .gateway { padding:20px; } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
+
+  body { background:#121b29; }
+  .experience { position:relative; z-index:1; }
+  .mirror-window { position:fixed; inset:0; z-index:0; width:100%; height:100%; margin:0; border-radius:0; aspect-ratio:auto; box-shadow:none; pointer-events:none; }
+  .mirror-window::after { content:""; position:absolute; inset:0; z-index:2; background:linear-gradient(90deg,rgba(6,14,26,.52),rgba(6,14,26,.1) 55%,rgba(6,14,26,.22)),linear-gradient(180deg,rgba(10,18,30,.55),rgba(13,24,39,.18) 43%,rgba(10,18,30,.55)); }
+  .mirror-window picture img,.mirror-window video { object-position:center; }
+  .header-actions { display:flex; align-items:center; gap:22px; }
+  .motion-toggle { position:static; width:34px; height:34px; background:#13213755; }
+  .brand,.brand-mark,.manage-link,.manage-link:hover { color:#f6f9fc; }
+  .brand small { color:#d3dbe5; }
+  .hero { display:block; padding:22px 0 32px; }
+  .intro { max-width:560px; }
+  .intro h1 { color:#fff; text-shadow:0 2px 24px #09122240; }
+  .intro p { color:#e6ebf1; text-shadow:0 1px 12px #09122255; }
+  .template-picker { padding:22px; border:1px solid #ffffff75; border-radius:20px; background:rgba(248,250,253,.91); backdrop-filter:blur(22px); box-shadow:0 16px 48px #06101d18; }
+  .template-card:hover { background:#ffffff90; }
+  .template-card[aria-pressed="true"] { background:#fff; border-color:#d0dce7; }
+  .gateway { background:rgba(255,255,255,.96); border-color:#ffffffb0; box-shadow:0 16px 48px #06101d18; }
+  .edge { color:#dce5ef; border-color:#ffffff30; }
+  @media(max-width:760px) {
+    .hero { display:block; padding:14px 0 28px; }
+    .template-picker { padding:18px; border-radius:16px; }
+    .mirror-window { border-radius:0; aspect-ratio:auto; }
+    .mirror-window::after { background:linear-gradient(180deg,#071221c4,#101d32b3 38%,#0b162a85); }
+    .gateway { margin-top:18px; }
+    .header-actions { gap:16px; }
+    .motion-toggle { width:32px; height:32px; }
+  }
+
+  :root { color-scheme:dark; color:var(--ink); --ink:#f6f9ff; --muted:#e0e9f7; --line:#ffffff38; --accent:#e7effb; background:#111c2c; }
+  html { scrollbar-color:#667990 #111c2c; }
+  .masthead,.edge { max-width:1080px; }
+  .brand-wordmark { font-size:23px; font-weight:550; letter-spacing:-.04em; line-height:1.1; white-space:nowrap; }
+  .portal-layout { gap:56px; }
+  .template-picker,.gateway { position:relative; isolation:isolate; border:1px solid #ffffff42; border-radius:24px; background:linear-gradient(135deg,#e3f0ff0c,transparent 46%,#f3f8ff06),rgba(15,27,45,.15); -webkit-backdrop-filter:blur(3px) saturate(115%); backdrop-filter:blur(3px) saturate(115%); box-shadow:inset 0 1px 0 #ffffff40,inset 0 -1px 0 #06112230,0 12px 36px #02091720; text-shadow:0 1px 3px #020914c0,0 0 12px #07122280; }
+  .template-picker::before,.gateway::before { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none; z-index:-1; background:linear-gradient(115deg,#ffffff05,transparent 38%,#ffffff02 70%,transparent); }
+  .template-picker { padding:22px; }
+  .gateway { padding:30px; }
+  .picker-label { color:#d7e3f4; }
+  .template-card { border-radius:16px; transition:background .18s,border-color .18s,box-shadow .18s; }
+  .template-card:hover { background:#f1f7ff0c; }
+  .template-card[aria-pressed="true"] { background:linear-gradient(135deg,#ffffff12,#e3efff06); border-color:#ffffff4d; box-shadow:inset 0 1px 0 #ffffff25,0 3px 16px #05112712; }
+  .template-card[aria-pressed="true"]::after { color:#f4f8ff; }
+  .template-avatar,.selected-avatar { border:1px solid #ffffff36; box-shadow:0 3px 10px #07101e22; }
+  .channel-picker { background:#07132635; border:1px solid #ffffff12; border-radius:13px; }
+  .channel-picker button { border-radius:9px; color:#e0e9f7; }
+  .channel-picker button[aria-pressed="true"] { background:linear-gradient(130deg,#ffffff29,#ffffff12); color:#fff; box-shadow:inset 0 1px 0 #ffffff36,0 3px 10px #030b1514; }
+  .account-connect input,.verify input,.mobile-picker { color:#f5f8ff; background:#07142626; border-color:#ffffff40; border-radius:12px; box-shadow:inset 0 1px 4px #07111f20; }
+  .account-connect input::placeholder { color:#d0ddee; }
+  .account-connect button,.verify button { text-shadow:none; color:#15263c; background:linear-gradient(145deg,#f5f9fff2,#d6e4f3ec); border:1px solid #ffffffb0; border-radius:12px; font-weight:600; box-shadow:inset 0 1px 0 #fff,0 4px 14px #08122326; }
+  .account-connect button:hover { background:#f5f9ff; }
+  .account-connect a { color:#e4edfb; }
+  .account-connect a:hover { color:#fff; }
+  .status { color:#e2ecf9; }
+  .status.warn { color:#ffdccb; }
+  .meta { color:#d4e1f3; }
+  .connection-note { color:#d8e4f4; border-color:#ffffff20; }
+  .retry { color:#f5f8ff; border-color:#ffffff40; background:#ffffff10; border-radius:12px; }
+  .retry:hover { background:#ffffff20; }
+  .portal { border-radius:16px; box-shadow:0 8px 24px #01081218; overflow:hidden; }
+  .beam-track { background:#ffffff20; }
+  .beam-fill { background:#d4e5ff; }
+  .core { border-color:#c7d3e5; border-top-color:#455f82; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline-color:#d7e8ff; }
+  .motion-toggle { border-color:#ffffff38; background:#f0f6ff0b; box-shadow:inset 0 1px 0 #ffffff1f; }
+  .manage-link { color:#e0e9f6; }
+  .manage-link:hover { color:#fff; }
+  @media(max-width:1000px) { .portal-layout { gap:32px; } .gateway { padding:26px; } }
+  @media(max-width:760px) { .brand-wordmark { font-size:21px; } .header-actions { gap:12px; } .manage-link { padding-left:0; } .template-picker { padding:18px; border-radius:21px; } .gateway { padding:25px; border-radius:21px; } .mobile-picker { color-scheme:dark; } }
+  @media(max-width:350px) { .brand-wordmark { font-size:19px; } .header-actions { gap:9px; } .gateway { padding:20px; } }
+  @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { .template-picker,.gateway { background:#1b2b40f2; } }
+  @media(prefers-reduced-transparency:reduce) { .template-picker,.gateway { background:#1b2b40f5; backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
+  .mobile-agent-switch { display:none; }
+  .agent-sheet { position:fixed; inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); margin:0; width:calc(100% - 24px); max-width:450px; max-height:min(85svh,650px); padding:18px 12px 12px; border:1px solid #ffffff45; border-radius:28px; color:#f6f9ff; background:linear-gradient(135deg,#dceaff16,transparent 60%),rgba(13,25,42,.92); box-shadow:inset 0 1px 0 #ffffff35,0 24px 70px #01071165; overflow:auto; -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); }
+  .agent-sheet::backdrop { background:#06122580; -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px); }
+  .agent-sheet-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 6px 14px 12px; }
+  .agent-sheet-header h2 { margin:0; font-size:18px; font-weight:550; letter-spacing:-.025em; }
+  .agent-sheet-close { width:44px; height:44px; display:grid; place-items:center; border:1px solid #ffffff20; background:#ffffff09; border-radius:50%; color:#e5eefb; }
+  .agent-sheet-close svg { width:16px; height:16px; }
+  .sheet-agent-list { display:flex; flex-direction:column; gap:5px; }
+  .sheet-agent-card { min-height:80px; padding:13px 12px; grid-template-columns:48px minmax(0,1fr) 16px; column-gap:14px; }
+  .sheet-agent-card .template-avatar,.sheet-agent-card .template-symbol { width:48px; height:48px; border-radius:14px; }
+  .sheet-agent-card .template-name { font-size:15px; }
+  .sheet-agent-card .template-summary { font-size:12px; line-height:1.5; color:#d1def0; }
+  html.agent-sheet-open,html.agent-sheet-open body { overflow:hidden; }
+  @media(max-width:760px) {
+    .template-picker { display:none; }
+    .gateway { margin-top:0; }
+    .gateway-heading { cursor:pointer; grid-template-columns:54px minmax(0,1fr) 48px; align-items:center; padding-bottom:22px; border-bottom:1px solid #ffffff24; margin-bottom:22px; }
+    .gateway-heading h2 { font-size:21px; }
+    .gateway-heading .template-description { font-size:12px; margin-top:4px; }
+    .mobile-agent-switch { grid-column:3; grid-row:1 / 3; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; width:48px; height:52px; padding:0; border:0; border-radius:13px; color:#e6effc; background:#ffffff08; }
+    .mobile-agent-switch:hover { background:#ffffff16; }
+    .mobile-agent-switch span { font-size:11px; line-height:1.1; }
+    .mobile-agent-switch svg { width:12px; height:12px; }
+    .mobile-agent-switch:disabled { opacity:.4; cursor:default; }
+  }
 </style>
 </head>
 <body>
+      <figure class="mirror-window" id="mirrorWindow">
+        <picture><source media="(max-width:760px)" srcset="/onboard/assets/nexus-world-mobile-v2.webp"><img src="/onboard/assets/nexus-world-v2.webp" alt="" decoding="async"></picture>
+        <video id="worldA" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-preview-480p-v6.mp4"></video>
+        <video id="worldB" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-preview-480p-v6.mp4"></video>
+
+      </figure>
 <main class="experience" aria-label="Mirror V Portal，选择 Agent">
   <header class="masthead">
     <a class="brand" href="/onboard" aria-label="Mirror V Portal">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M8 9l12 23L32 9" stroke="currentColor" stroke-width="1.5"/><path d="M4 9l12 23M36 9L24 32" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5"/></svg></span>
-      <span class="brand-wordmark"><strong>Mirror V</strong><small>Portal</small></span>
+      <span class="brand-wordmark">Mirror V Portal</span>
     </a>
-    <a class="manage-link" id="manageLink" href="/admin/agents">管理 Agent</a>
+    <div class="header-actions"><button class="motion-toggle" id="motionToggle" type="button" data-paused="false" aria-label="暂停背景视频"><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1l8 5-8 5z"/></svg></button><a class="manage-link" id="manageLink" href="/admin/agents">管理 Agent</a></div>
   </header>
+  <section class="hero" aria-labelledby="heroLine1">
+      <div class="intro"><h1><span id="heroLine1">找到你的</span><span id="heroLine2">下一位伙伴。</span></h1><p id="heroDescription">思考、创作与行动，从一段对话开始。</p></div>
+
+  </section>
   <div class="portal-layout">
     <section class="template-picker" aria-label="选择 Agent 模板">
-      <div class="intro"><h1><span id="heroLine1">找到你的</span><span id="heroLine2">下一位伙伴。</span></h1><p id="heroDescription">思考、创作与行动，从一段对话开始。</p></div>
       <h2 class="picker-label" id="pickerLabel">选择一位 Agent</h2>
       <select class="mobile-picker" id="templateSelect" aria-labelledby="pickerLabel"></select>
       <div class="template-list" id="templateList"></div>
@@ -118,6 +234,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         <img class="selected-avatar" id="selectedAgentAvatar" alt="" hidden>
         <span class="selected-symbol" id="selectedAgentSymbol" aria-hidden="true">V</span>
         <h2 id="selectedAgentName">开始一段对话</h2><p class="template-description" id="templateDescription"></p>
+        <button type="button" class="mobile-agent-switch" id="mobileAgentSwitch" aria-haspopup="dialog" aria-controls="agentSheet" aria-expanded="false" disabled><span id="mobileSwitchLabel">切换</span><svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <div class="channel-picker" role="group" aria-label="选择扫码 App"><button type="button" id="channelFeishu" aria-pressed="true">飞书</button><button type="button" id="channelWeixin" aria-pressed="false">微信</button></div>
       <form class="account-connect" id="makaronAccount" hidden>
@@ -139,6 +256,10 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   </div>
   <footer class="edge"><span>© 2026 Mirror V</span><span id="footerNote">你的 Agent，你的对话与工作空间。</span></footer>
 </main>
+<dialog class="agent-sheet" id="agentSheet" aria-labelledby="agentSheetTitle">
+  <header class="agent-sheet-header"><h2 id="agentSheetTitle">选择一位 Agent</h2><button type="button" class="agent-sheet-close" id="agentSheetClose"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></header>
+  <div class="sheet-agent-list" id="mobileAgentList"></div>
+</dialog>
 <script>
 (function () {
   var copies = {
@@ -151,8 +272,87 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var lang = copies[locale] ? locale : /^zh-(TW|HK|Hant)/i.test(locale) ? 'zh-Hant' : /^ja/i.test(locale) ? 'ja' : /^zh/i.test(locale) ? 'zh' : 'en';
   var text = copies[lang];
   ['heroLine1','heroLine2','heroDescription','pickerLabel','manageLink','connectionNote','footerNote'].forEach(function(id,index){document.getElementById(id).textContent=text[index];});
+  document.getElementById('agentSheetTitle').textContent=text[3];
+  var mobileWords={zh:['切换','关闭'], 'zh-Hant':['切換','關閉'], ja:['変更','閉じる'], en:['Change','Close']}[lang];
+  document.getElementById('mobileSwitchLabel').textContent=mobileWords[0];
+  document.getElementById('mobileAgentSwitch').setAttribute('aria-label',text[3]);
+  document.getElementById('agentSheetClose').setAttribute('aria-label',mobileWords[1]);
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
   document.title = {zh:'Mirror V Portal · 选择你的 Agent','zh-Hant':'Mirror V Portal · 選擇你的 Agent',ja:'Mirror V Portal · Agent を選ぶ',en:'Mirror V Portal · Choose your Agent'}[lang];
+})();
+(function () {
+  var videos=[document.getElementById('worldA'),document.getElementById('worldB')], control=document.getElementById('motionToggle'), surface=document.getElementById('mirrorWindow');
+  var reduced=matchMedia('(prefers-reduced-motion: reduce)'), paused=reduced.matches, current=0, switching=false, frame=null, fadeTimer=null;
+  var previewUrl=videos[0].dataset.src, hdUrl='/onboard/assets/nexus-world-hd-1080p-v6.mp4', hdBlobUrl=null, downloading=false, downloadAttempted=false, downloadAbort=null;
+  var words={zh:['暂停背景视频','播放背景视频'],'zh-Hant':['暫停背景影片','播放背景影片'],ja:['背景動画を一時停止','背景動画を再生'],en:['Pause background video','Play background video']};
+  var labels=words[document.documentElement.lang==='zh-CN'?'zh':document.documentElement.lang]||words.en;
+  surface.dataset.quality='preview';
+  function update(){control.dataset.paused=String(paused);control.setAttribute('aria-label',labels[paused?1:0]);}
+  function stop(){videos.forEach(function(v){v.pause();});cancelAnimationFrame(frame);frame=null;}
+  function ready(video,url) {
+    if(video.getAttribute('src')===url&&video.readyState>=2)return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var timer=setTimeout(function(){finish(new Error('video readiness timeout'));},20000);
+      function finish(error){clearTimeout(timer);video.removeEventListener('loadeddata',onReady);video.removeEventListener('error',onError);error?reject(error):resolve();}
+      function onReady(){finish();} function onError(){finish(new Error('video unavailable'));}
+      video.addEventListener('loadeddata',onReady);video.addEventListener('error',onError);
+      video.preload='auto';if(video.getAttribute('src')!==url){video.src=url;video.load();}
+      if(video.readyState>=2)finish();
+    });
+  }
+  function seek(video,time){
+    if(Math.abs(video.currentTime-time)<.02)return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var timer=setTimeout(function(){finish(new Error('video seek timeout'));},6000);
+      function finish(error){clearTimeout(timer);video.removeEventListener('seeked',done);error?reject(error):resolve();}
+      function done(){finish();} video.addEventListener('seeked',done);video.currentTime=time;
+    });
+  }
+  async function handover(aligned){
+    switching=true;var a=videos[current],b=videos[1-current],url=hdBlobUrl||previewUrl;
+    try {
+      await ready(b,url);
+      await seek(b,aligned?Math.min(a.currentTime,b.duration-.1):0);
+      if(paused||document.hidden){switching=false;return;}
+      await b.play();b.classList.add('visible');a.classList.remove('visible');current=1-current;
+      if(url===hdBlobUrl)surface.dataset.quality='hd';
+      clearTimeout(fadeTimer);fadeTimer=setTimeout(function(){a.pause();switching=false;},1650);
+    } catch(error) { b.pause();switching=false;if(url===hdBlobUrl){URL.revokeObjectURL(hdBlobUrl);hdBlobUrl=null;surface.dataset.enhancement='unavailable';} }
+  }
+  function watch(){
+    if(paused||document.hidden)return;
+    var a=videos[current];
+    if(!switching&&a.readyState>=2&&a.duration){
+      if(a.currentTime>=a.duration-1.8)handover(false);
+      else if(hdBlobUrl&&a.getAttribute('src')!==hdBlobUrl&&a.duration-a.currentTime>2)handover(true);
+    }
+    frame=requestAnimationFrame(watch);
+  }
+  async function downloadHD(){
+    if(downloadAttempted||reduced.matches||navigator.connection&&navigator.connection.saveData)return;
+    downloadAttempted=true;downloading=true;surface.dataset.enhancement='downloading';downloadAbort=new AbortController();
+    try {
+      var response=await fetch(hdUrl,{signal:downloadAbort.signal,priority:'low'});
+      if(!response.ok)throw new Error('HD unavailable');
+      var blob=await response.blob();if(!blob.size)throw new Error('HD empty');
+      hdBlobUrl=URL.createObjectURL(blob);surface.dataset.enhancement='downloaded';
+    } catch(error) { surface.dataset.enhancement='unavailable'; }
+    finally {downloading=false;}
+  }
+  async function start(){
+    if(paused||document.hidden)return;
+    try {
+      var a=videos[current];await ready(a,a.getAttribute('src')||previewUrl);
+      if(paused||document.hidden)return;
+      await a.play();a.classList.add('visible');cancelAnimationFrame(frame);watch();downloadHD();
+    } catch(error) {paused=true;stop();update();}
+  }
+  control.addEventListener('click',function(){paused=!paused;update();if(paused)stop();else start();});
+  document.addEventListener('visibilitychange',function(){if(document.hidden)stop();else start();});
+  reduced.addEventListener('change',function(event){if(event.matches){paused=true;stop();update();if(downloading)downloadAbort.abort();}});
+  videos.forEach(function(v){v.addEventListener('ended',function(){if(!paused&&!document.hidden&&!switching)handover(false);});});
+  window.addEventListener('pagehide',function(event){if(!event.persisted){stop();clearTimeout(fadeTimer);if(downloadAbort)downloadAbort.abort();if(hdBlobUrl)URL.revokeObjectURL(hdBlobUrl);}});
+  update();start();
 })();
 (function () {
   var feishuCode = null, weixinCode = null, pollTimer = null, tickTimer = null, expireAt = null, active = false;
@@ -168,6 +368,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var retry = document.getElementById('retry');
   var templateList = document.getElementById('templateList');
   var templateSelect = document.getElementById('templateSelect');
+  var mobileAgentList = document.getElementById('mobileAgentList'), agentSheet = document.getElementById('agentSheet'), mobileSwitch = document.getElementById('mobileAgentSwitch');
   var templateDescription = document.getElementById('templateDescription');
   var channelFeishu = document.getElementById('channelFeishu');
   var channelWeixin = document.getElementById('channelWeixin');
@@ -207,19 +408,47 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     metaEl.textContent = left <= 60 ? left + ' 秒后过期' : '';
     if (left <= 0) closeGate('入口码已过期，请重新生成');
   }
+  function resetMobilePicker() { mobileAgentList.replaceChildren(); mobileSwitch.disabled=true; }
+  function appendMobileAgent(card) {
+    var choice=card.cloneNode(true);
+    choice.classList.add('sheet-agent-card');
+    choice.addEventListener('click',function(){card.click();agentSheet.close();});
+    mobileAgentList.appendChild(choice);
+    mobileSwitch.disabled=false;
+  }
+  function updateMobileSelection() {
+    mobileAgentList.querySelectorAll('button').forEach(function(button){button.setAttribute('aria-pressed',String(button.getAttribute('data-agent')===selectedTemplate.id));});
+  }
+  document.querySelector('.gateway-heading').addEventListener('click',function(event){if(matchMedia('(max-width:760px)').matches&&!event.target.closest('button'))mobileSwitch.click();});
+  mobileSwitch.addEventListener('click',function(){
+    if(!selectedTemplate)return;
+    agentSheet.showModal();mobileSwitch.setAttribute('aria-expanded','true');document.documentElement.classList.add('agent-sheet-open');
+    var choice=mobileAgentList.querySelector('[aria-pressed="true"]');if(choice)choice.focus({preventScroll:true});
+  });
+  document.getElementById('agentSheetClose').addEventListener('click',function(){agentSheet.close();});
+  agentSheet.addEventListener('close',function(){document.documentElement.classList.remove('agent-sheet-open');mobileSwitch.setAttribute('aria-expanded','false');mobileSwitch.focus({preventScroll:true});});
+  agentSheet.addEventListener('click',function(event){var rect=agentSheet.getBoundingClientRect();if(event.target===agentSheet&&(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom))agentSheet.close();});
+  matchMedia('(max-width:760px)').addEventListener('change',function(event){if(!event.matches&&agentSheet.open)agentSheet.close();});
   async function loadTemplates() {
     try {
       var requested = new URLSearchParams(location.search).get('template');
+      if (requested === 'mirror-v') requested = 'mirror-v-full';
       var response = await fetch('/onboard/templates' + (requested ? '?template=' + encodeURIComponent(requested) : ''));
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
       if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');
+      data.templates = data.templates.filter(function(template){return template.id !== 'mirror-v';});
+      data.templates.forEach(function(template){if(template.id === 'mirror-v-full')template.name='Mirror V';});
+      var order = ['dealclaw','mirror-v-full','xingqing','makaron'];
+      data.templates.sort(function(a,b){return (order.indexOf(a.id)<0?99:order.indexOf(a.id))-(order.indexOf(b.id)<0?99:order.indexOf(b.id));});
       // An explicit agent link must never open another agent's authorization.
       if (requested !== null && !data.templates.some(function (template) { return template.id === requested; })) throw new Error('所选 Agent 暂未开放，请稍后重试');
-      var preferred = requested !== null ? requested : 'mirror-v';
+      var preferred = requested !== null ? requested : 'mirror-v-full';
       var initialCard = null;
-      templateList.replaceChildren(); templateSelect.replaceChildren();
+      templateList.replaceChildren(); templateSelect.replaceChildren(); resetMobilePicker();
+      var portraits = {"dealclaw":"agent-dealclaw-portrait-b651b1783968.png","mirror-v":"agent-mirror-v-full-portrait-ed4e1c0cbd1d.png","xingqing":"agent-xingqing-portrait-a376b49895b1.png","makaron":"agent-makaron-portrait-154a2a9faba7.png","mirror-v-full":"agent-mirror-v-portrait-1260c99c184d.png"};
       data.templates.forEach(function (template) {
+        if (portraits[template.id]) template.avatarUrl = '/onboard/assets/' + portraits[template.id];
         var card = document.createElement('button');
         card.type = 'button'; card.className = 'template-card'; card.setAttribute('aria-pressed', 'false'); card.setAttribute('data-agent', template.id);
         var option = document.createElement('option'); option.value = template.id; option.textContent = template.name; templateSelect.appendChild(option);
@@ -229,7 +458,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           card.append(avatar);
         } else {
           var symbol = document.createElement('span'); symbol.className = 'template-symbol'; symbol.setAttribute('aria-hidden','true');
-          symbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V'; card.append(symbol);
+          symbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : 'V'; card.append(symbol);
         }
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
         card.setAttribute('aria-label', template.name + '，' + template.description);
@@ -239,13 +468,15 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           if (selectedTemplate && selectedTemplate.id === template.id) return;
           selectedTemplate = template; templateSelect.value = template.id;
           templateList.querySelectorAll('button').forEach(function (button) { button.setAttribute('aria-pressed', String(button === card)); });
+          updateMobileSelection();
           templateDescription.textContent = template.description;
           var url = new URL(location.href); url.searchParams.set('template', template.id); history.replaceState(null, '', url);
           open();
         });
-        templateList.appendChild(card);
-        if (preferred === template.id || (!initialCard && template === data.templates[0])) initialCard = card;
+        templateList.appendChild(card); appendMobileAgent(card);
+        if (preferred === template.id) initialCard = card;
       });
+      if (!initialCard) throw new Error('所选 Agent 暂未开放，请稍后重试');
       initialCard.click();
     } catch (error) { closeGate(error.message || '模板加载失败'); }
   }
@@ -258,7 +489,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     var selectedSymbol = document.getElementById('selectedAgentSymbol');
     selectedAvatar.hidden = !template.avatarUrl; selectedSymbol.hidden = !!template.avatarUrl;
     if (template.avatarUrl) selectedAvatar.src = template.avatarUrl;
-    selectedSymbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V';
+    selectedSymbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : 'V';
     var channel = selectedChannel;
     var previousFeishu = feishuCode, previousWeixin = weixinCode;
     stopTimers(); active = false; feishuCode = null; weixinCode = null; expireAt = null;

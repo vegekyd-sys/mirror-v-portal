@@ -33,7 +33,8 @@ async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promi
 }
 async function selectSignupTemplate(config: ReturnType<typeof loadConfig>, id: unknown): Promise<SignupTemplate> {
   const templates = await loadSignupTemplates(config);
-  const template = templates.find((item) => item.id === (id ?? 'dealclaw'));
+  const requested = id == null || id === 'mirror-v' ? 'mirror-v-full' : id;
+  const template = templates.find((item) => item.id === requested);
   if (!template) throw new Error('TEMPLATE_NOT_AVAILABLE');
   return template;
 }
@@ -83,6 +84,7 @@ export function createApp() {
         imgSrc: ["'self'", 'data:', 'https:', 'http:'],
         styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
         connectSrc: ["'self'", 'https:', 'http:'],
+        mediaSrc: ["'self'", 'blob:'],
         upgradeInsecureRequests: null,
       },
     },
@@ -92,7 +94,7 @@ export function createApp() {
     setHeaders(res, filename) {
       // Feishu's creation page can display this public artwork from another
       // origin. Keep Helmet's default policy for every other static resource.
-      if (/(?:^|[\\/])makaron-avatar-[a-f0-9]{12}\.png$/.test(filename))
+      if (/(?:^|[\\/])(?:makaron-avatar-[a-f0-9]{12}|agent-(?:dealclaw|mirror-v|xingqing|makaron|mirror-v-full)-portrait-[a-f0-9]{12})\.png$/.test(filename))
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     },
   }));
@@ -148,7 +150,7 @@ export function createApp() {
   app.get('/onboard/templates', async (req, res) => {
     // An unlisted template stays out of the catalog but is offered to an explicit link (acceptance, invitations).
     const requested = typeof req.query.template === 'string' ? req.query.template : undefined;
-    try { res.json({ templates: (await loadSignupTemplates(config)).filter((template) => template.listed !== false || template.id === requested) }); }
+    try { res.json({ templates: (await loadSignupTemplates(config)).filter((template) => template.id !== 'mirror-v' && (template.listed !== false || template.id === requested)) }); }
     catch { res.status(503).json({ code: 'TEMPLATE_CATALOG_UNAVAILABLE' }); }
   });
 
@@ -157,7 +159,7 @@ export function createApp() {
   // sync without starting unused Feishu and WeChat registrations up front.
   app.post('/onboard/portal/start', onboardingRateLimit(10, 60_000), async (req, res) => {
     try {
-      const template = await selectSignupTemplate(config, req.body?.templateId ?? 'mirror-v');
+      const template = await selectSignupTemplate(config, req.body?.templateId ?? 'mirror-v-full');
       const entryId = randomUUID();
       const url = new URL('/onboard/scan', config.portalBaseUrl);
       url.searchParams.set('entry', entryId);
@@ -829,7 +831,7 @@ async function handleFeishuJsonOnboard(
   config: ReturnType<typeof loadConfig>,
 ) {
   try {
-    const template = await selectSignupTemplate(config, req.query.templateId);
+    const template = await selectSignupTemplate(config, req.query.templateId ?? req.query.template);
     const session = await startFeishuRegistration(async (registeredSession: RegistrationSession) => {
       const result = await orchestrateOnboarding(registeredSession, {
         provisioningServiceUrl: config.provisioningServiceUrl,
