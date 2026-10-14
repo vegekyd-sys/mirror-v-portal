@@ -7,6 +7,7 @@ export interface AgentTemplate {
   /** Channel app name; omitted when it equals the signup label. */
   appName?: string;
   description: string;
+  avatarUrl?: string;
   snapshotId: string;
   /** Hidden templates can be requested by id but are not offered on the signup page. */
   listed: boolean;
@@ -31,6 +32,15 @@ const TEMPLATE_SECRETS: Record<string, readonly string[]> = {
   makaron: ["MAKARON_API_KEY"],
 };
 
+function avatarMetadata(value: string | undefined): { avatarUrl?: string } {
+  if (value === undefined) return {};
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) throw Error();
+    return { avatarUrl: url.href };
+  } catch { throw Error("INVALID_TEMPLATE_AVATAR_URL"); }
+}
+
 export function templateSecretNames(templateId: string): readonly string[] {
   return TEMPLATE_SECRETS[templateId] ?? [];
 }
@@ -54,6 +64,7 @@ export function availableTemplates(config: Config): AgentTemplate[] {
   if (dealclaw?.snapshotId && dealclaw.version) entries.push({
     id: "dealclaw", version: dealclaw.version, ...LABELS.dealclaw,
     snapshotId: dealclaw.snapshotId, listed: dealclaw.listed !== false,
+    ...avatarMetadata(dealclaw.avatarUrl),
   });
   else if (config.snapshotId) entries.push({
     id: "dealclaw", version: "dealclaw-base.v2", ...LABELS.dealclaw,
@@ -65,7 +76,7 @@ export function availableTemplates(config: Config): AgentTemplate[] {
     const name = value.name?.trim() || label?.name || id;
     const description = value.description?.trim() || label?.description || "独立 Agent 模板";
     const appName = value.appName?.trim();
-    entries.push({ id, version: value.version, name, ...(appName && appName !== name ? { appName } : {}), description, snapshotId: value.snapshotId, listed: value.listed !== false });
+    entries.push({ id, version: value.version, name, ...(appName && appName !== name ? { appName } : {}), description, snapshotId: value.snapshotId, listed: value.listed !== false, ...avatarMetadata(value.avatarUrl) });
   }
   return entries;
 }

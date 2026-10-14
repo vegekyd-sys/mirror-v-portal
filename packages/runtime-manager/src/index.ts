@@ -28,14 +28,18 @@ const weixin = new WeixinEdge(store);
 // Portal scans hold a template in memory and create the tenant only after the
 // WeChat user confirms. Ordinary channel binding still uses an existing tenant.
 const pendingWeixinTemplates = new Map<string, ReturnType<typeof requireTemplate>>();
+const pendingWeixinSecrets = new Map<string, Record<string, string>>();
 const weixinLogin = new WeixinLogin({
   bind: async (tenantId, botToken, accountId, baseUrl) => {
     const template = pendingWeixinTemplates.get(tenantId);
     if (template) {
       await store.createTenant(tenantId, `扫码创建的 ${template.name}`, undefined, undefined, 'vercel', template);
+      const secrets = pendingWeixinSecrets.get(tenantId);
+      if (secrets) await store.setTenantSecrets(tenantId, secrets);
     }
     await weixin.bind(tenantId, botToken, accountId, baseUrl);
     pendingWeixinTemplates.delete(tenantId);
+    pendingWeixinSecrets.delete(tenantId);
   },
 });
 const dingtalk = new DingtalkEdge(store);
@@ -181,8 +185,12 @@ app.post("/v1/channels/weixin/portal-login", async (req, res, next) => {
       return;
     }
     const tenantId = randomUUID();
+    if (template.id === 'makaron') {
+      try { pendingWeixinSecrets.set(tenantId, validateTenantSecrets(template.id, req.body?.secrets)); }
+      catch { res.status(400).json({ error: 'MAKARON_ACCOUNT_REQUIRED' }); return; }
+    }
     pendingWeixinTemplates.set(tenantId, template);
-    setTimeout(() => pendingWeixinTemplates.delete(tenantId), 11 * 60_000).unref();
+    setTimeout(() => { pendingWeixinTemplates.delete(tenantId); pendingWeixinSecrets.delete(tenantId); }, 11 * 60_000).unref();
     try {
       const session = await weixinLogin.start(tenantId);
       res.json({
@@ -193,6 +201,7 @@ app.post("/v1/channels/weixin/portal-login", async (req, res, next) => {
       });
     } catch (error) {
       pendingWeixinTemplates.delete(tenantId);
+      pendingWeixinSecrets.delete(tenantId);
       throw error;
     }
   } catch (error) {
