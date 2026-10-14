@@ -53,3 +53,6 @@ packages/dealclaw-agent/payload/data/
 # Isolated elastic runtime credentials, data and trial logs
 /.elastic/
 .vercel/
+
+# Generated Portal homepage; copied into the release by the deploy script.
+/packages/central-gateway/public/onboard/index.html

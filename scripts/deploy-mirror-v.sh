@@ -36,6 +36,7 @@ stage() {
     cp -R "$repo_root/packages/$pkg/dist" "$tmp/release/packages/$pkg/dist"
   done
   cp -R "$repo_root/packages/admin-web/dist" "$tmp/release/packages/admin-web/dist"
+  cp "$repo_root/packages/central-gateway/public/onboard/index.html" "$tmp/release/packages/central-gateway/public/onboard/index.html"
   tar -czf "$tmp/release.tgz" -C "$tmp/release" .
   ssh "${ssh_args[@]}" "$target" "install -d -m 755 /opt/nexus/releases"
   scp "${ssh_args[@]}" "$tmp/release.tgz" "$target:/opt/nexus/releases/$sha.tgz"
@@ -73,6 +74,9 @@ for attempt in {1..15}; do
     && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1; then
     cp /etc/nginx/nexus-portal.locations.conf /opt/nexus/data/nginx-portal.previous.conf
     install -m 644 "$release/deploy/mirror-v/nginx-locations.conf" /etc/nginx/nexus-portal.locations.conf
+    if [[ -f "$release/deploy/mirror-v/nginx-onboard-maps.conf" ]]; then
+      install -m 644 "$release/deploy/mirror-v/nginx-onboard-maps.conf" /etc/nginx/conf.d/nexus-onboard-maps.conf
+    fi
     if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
       install -m 644 "$release/deploy/mirror-v/nginx-tls.conf" /etc/nginx/sites-enabled/nexus-tls.conf
     fi
