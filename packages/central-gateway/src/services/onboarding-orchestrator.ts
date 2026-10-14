@@ -17,6 +17,7 @@ export interface OrchestratorConfig {
   provisioningServiceUrl: string;
   provisioningApiToken?: string;
   baseUrl: string;
+  tenantSecrets?: Record<string, string>;
 }
 
 export interface OnboardingResult {
@@ -52,6 +53,17 @@ export async function orchestrateOnboarding(
       return { ok: false, error: tenantResult.error || 'Failed to create tenant' };
     }
     const tenantId = tenantResult.tenantId;
+
+    // Bind only this scan's customer account, before welcoming the user. Never
+    // copy a deployment-wide owner's account to a publicly created tenant.
+    if (config.tenantSecrets) {
+      const binding = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(tenantId)}/secrets`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', ...(config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {}) },
+        body: JSON.stringify({ secrets: config.tenantSecrets }), signal: AbortSignal.timeout(10000),
+      });
+      if (!binding.ok) return { ok: false, error: 'MAKARON_ACCOUNT_BIND_FAILED' };
+    }
 
     // Step 2: Get tenant_access_token
     const tokenResult = await getTenantAccessToken(appId, appSecret);

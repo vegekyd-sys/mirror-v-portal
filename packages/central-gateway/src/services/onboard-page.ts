@@ -46,6 +46,12 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   .template-card:focus-visible { outline:2px solid #fff; outline-offset:-5px; }
   .template-name { display:block; font-size:16px; line-height:1.3; font-weight:580; }
   .template-avatar { display:block; width:48px; height:48px; margin:0 auto 10px; border-radius:50%; object-fit:cover; box-shadow:0 2px 14px #0005; }
+  .account-connect { width:270px; padding:18px; border-radius:12px; background:#f4f8ffed; color:#26344b; font-size:13px; text-align:center; }
+  .account-connect[hidden] { display:none; }
+  .account-connect label,.account-connect small { display:block; margin-bottom:10px; line-height:1.5; }
+  .account-connect input { box-sizing:border-box; width:100%; padding:12px; border:1px solid #718096; border-radius:6px; background:#fff; }
+  .account-connect button { width:100%; min-height:44px; margin-top:10px; border:0; border-radius:6px; background:#5532aa; color:white; cursor:pointer; }
+  .account-connect a { color:#5532aa; }
   .template-description { min-height:20px; margin:14px 0 0; font-size:12px; line-height:1.5; color:#e3e8f1; }
   .gateway::before { content:""; position:absolute; z-index:-1; inset:-38px -40px; background:radial-gradient(ellipse, #f4f8fff5 30%, #f4f8ffe0 49%, #f4f8ff00 72%); filter:blur(14px); pointer-events:none; }
   .gate { width:216px; height:216px; display:grid; place-items:center; transition:transform 1s, filter 1s; }
@@ -99,6 +105,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   <header class="masthead"><span class="brand"><strong>Mirror V</strong><small>Portal</small></span><span class="signature">your agent, your world</span></header>
   <section class="template-picker" aria-label="选择 Agent 模板"><h1>选择你的 Agent</h1><div class="template-list" id="templateList"></div><p class="template-description" id="templateDescription"></p></section>
   <section class="gateway" aria-label="扫码创建 Agent">
+    <form class="account-connect" id="makaronAccount" hidden>
+      <label id="accountLabel" for="makaronApiKey"></label><small id="accountDescription"></small>
+      <input id="makaronApiKey" type="password" autocomplete="off" spellcheck="false" maxlength="220">
+      <button id="accountSubmit" type="submit"></button><p><a id="accountLogin" href="https://www.makaron.app" target="_blank" rel="noopener noreferrer"></a></p>
+    </form>
     <div class="gate" id="gate"><div class="portal">
       <div class="core" id="core" aria-hidden="true"></div>
       <img id="code" alt="扫码创建 Agent">
@@ -202,6 +213,19 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   var channelWeixin = document.getElementById('channelWeixin');
   var verify = document.getElementById('verify');
   var verifyCode = document.getElementById('verifyCode');
+  var accountForm = document.getElementById('makaronAccount'), accountInput = document.getElementById('makaronApiKey'), accountKey = '';
+  var accountCopy = {
+    zh: ['连接你的 Makaron 账号','作品与额度属于你，账号只绑定到你的专属 Agent。','粘贴你的 Makaron API Key','连接账号并生成二维码','注册 / 登录 Makaron','登录后，从右上角菜单获取 API Key。','请先连接你的 Makaron 账号','无法连接该账号，请检查 API Key','账号暂时无法连接，请稍后重试'],
+    'zh-Hant': ['連接你的 Makaron 帳號','作品與額度屬於你，帳號只綁定到你的專屬 Agent。','貼上你的 Makaron API Key','連接帳號並產生 QR 碼','註冊 / 登入 Makaron','登入後，從右上角選單取得 API Key。','請先連接你的 Makaron 帳號','無法連接此帳號，請檢查 API Key','帳號暫時無法連接，請稍後重試'],
+    ja: ['Makaron アカウントを接続','作品とクレジットはあなたのものです。アカウントは専用 Agent にのみ接続されます。','Makaron API Key を貼り付け','接続して QR コードを生成','Makaron に登録 / ログイン','ログイン後、右上のメニューから API Key を取得してください。','先に Makaron アカウントを接続してください','接続できません。API Key を確認してください','現在接続できません。後でもう一度お試しください'],
+    en: ['Connect your Makaron account','Your work and credits stay yours. This account is linked only to your personal Agent.','Paste your Makaron API Key','Connect and create QR code','Sign up / Log in to Makaron','After login, get your API Key from the top-right menu.','Connect your Makaron account first','Unable to connect. Check your API Key','Account connection is unavailable. Try again later']
+  };
+  var accountLang = new URLSearchParams(location.search).get('lang') || navigator.language || 'zh';
+  var copy = accountCopy[accountLang] || accountCopy[/^zh-(TW|HK|Hant)/i.test(accountLang) ? 'zh-Hant' : /^ja/i.test(accountLang) ? 'ja' : /^zh/i.test(accountLang) ? 'zh' : 'en'];
+  document.getElementById('accountLabel').textContent=copy[0]; document.getElementById('accountDescription').textContent=copy[1]+' '+copy[5];
+  accountInput.placeholder=copy[2]; accountInput.setAttribute('aria-label',copy[2]);
+  document.getElementById('accountSubmit').textContent=copy[3]; document.getElementById('accountLogin').textContent=copy[4]; document.getElementById('accountLogin').title=copy[5];
+  accountForm.addEventListener('submit',function(event){ event.preventDefault(); accountKey=accountInput.value.trim(); open(); });
 
   function say(text, warn) {
     statusEl.textContent = text;
@@ -270,11 +294,14 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (previousFeishu) fetch('/onboard/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: previousFeishu }), keepalive: true }).catch(function () {});
     if (previousWeixin) fetch('/onboard/weixin/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: previousWeixin }), keepalive: true }).catch(function () {});
     retry.classList.remove('on'); setState(''); core.style.display = 'block'; code.style.display = 'none';
+    var needsAccount = template.id === 'makaron';
+    accountForm.hidden = !needsAccount; gate.style.display = needsAccount && !accountKey ? 'none' : 'grid';
+    if (needsAccount && !accountKey) { core.style.display='none'; say(copy[6]); return; }
     verify.hidden = true; verifyCode.value = '';
     say('正在生成' + (channel === 'weixin' ? '微信授权码' : '飞书授权码') + '…'); metaEl.textContent = ''; progress(0);
     try {
       var response = await fetch(channel === 'weixin' ? '/onboard/weixin/start' : '/onboard/feishu/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: template.id }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: template.id, ...(needsAccount ? { makaronApiKey: accountKey } : {}) }),
       });
       var data = await response.json();
       if (currentGeneration !== generation) {
@@ -282,7 +309,11 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
         if (channel === 'feishu' && data.deviceCode) fetch('/onboard/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: data.deviceCode }), keepalive: true }).catch(function () {});
         return;
       }
-      if (!response.ok || !data.ok || !data.qrDataUri) throw new Error(data.message || '入口码生成失败');
+      if (!response.ok || !data.ok || !data.qrDataUri) {
+        if (needsAccount && /^MAKARON_ACCOUNT_/.test(data.code || '')) { accountKey=''; gate.style.display='none'; accountForm.hidden=false; throw new Error(copy[data.code==='MAKARON_ACCOUNT_INVALID' ? 7 : data.code==='MAKARON_ACCOUNT_REQUIRED' ? 6 : 8]); }
+        throw new Error(data.message || '入口码生成失败');
+      }
+      accountInput.value=''; accountForm.hidden=true;
       if (channel === 'weixin') weixinCode = data.deviceCode;
       else feishuCode = data.deviceCode;
       if (channel === 'weixin' ? !weixinCode : !feishuCode) throw new Error('授权会话不可用，请重新生成');

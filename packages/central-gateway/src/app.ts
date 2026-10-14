@@ -17,6 +17,7 @@ import { relayNotification, type NotifyPayload } from './services/notify-relay.j
 import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-onboarding.js';
 import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
+import { MakaronAccountError, signupAccountSecrets } from './services/makaron-account.js';
 
 // listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
 interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean }
@@ -329,13 +330,15 @@ export function createApp() {
   app.post('/onboard/weixin/start', onboardingRateLimit(5, 60_000), async (req, res) => {
     try {
       const template = await selectSignupTemplate(config, req.body?.templateId);
+      if (template.id === 'makaron' && template.listed === false) throw new Error('TEMPLATE_NOT_AVAILABLE');
+      const secrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey);
       const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/portal-login`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           ...(config.provisioningApiToken ? { authorization: `Bearer ${config.provisioningApiToken}` } : {}),
         },
-        body: JSON.stringify({ templateId: template.id, templateVersion: template.version }),
+        body: JSON.stringify({ templateId: template.id, templateVersion: template.version, ...(secrets ? { secrets } : {}) }),
         signal: AbortSignal.timeout(22_000),
       });
       if (!response.ok) throw new Error(`WEIXIN_LOGIN_${response.status}`);
@@ -351,6 +354,7 @@ export function createApp() {
         templateVersion: template.version,
       });
     } catch (error) {
+      if (error instanceof MakaronAccountError) { res.status(error.status).json({ code: error.code, message: error.message }); return; }
       console.error('[weixin-onboard] start failed', error);
       res.status(503).json({ code: 'WEIXIN_LOGIN_UNAVAILABLE', message: '微信扫码暂时不可用，请稍后重试' });
     }
@@ -427,7 +431,7 @@ export function createApp() {
     const platform = detectPlatform(ua);
 
     // Feishu app in-app access → start registration and return JSON
-    if (platform === 'feishu') {
+    if (platform === 'feishu' && req.query.template !== 'makaron' && req.query.templateId !== 'makaron') {
       handleFeishuJsonOnboard(req, res, config);
       return;
     }
@@ -456,12 +460,22 @@ export function createApp() {
   app.post('/onboard/feishu/start', onboardingRateLimit(5, 60_000), async (req: Request, res: Response) => {
     try {
       const template = await selectSignupTemplate(config, req.body?.templateId);
+      if (template.id === 'makaron' && template.listed === false) throw new Error('TEMPLATE_NOT_AVAILABLE');
+      let accountSecrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey);
+      const expiry = setTimeout(() => { accountSecrets = undefined; }, 11 * 60_000);
+      expiry.unref();
       const session = await startFeishuRegistration(async (registeredSession: RegistrationSession) => {
+        const tenantSecrets = accountSecrets;
+        accountSecrets = undefined; clearTimeout(expiry);
+        if (template.id === 'makaron' && !tenantSecrets) {
+          registeredSession.status = 'failed'; registeredSession.error = 'MAKARON_ACCOUNT_EXPIRED'; return;
+        }
         // Orchestrate tenant creation after registration completes
         const result = await orchestrateOnboarding(registeredSession, {
           provisioningServiceUrl: config.provisioningServiceUrl,
           provisioningApiToken: config.provisioningApiToken,
           baseUrl: config.baseUrl,
+          ...(tenantSecrets ? { tenantSecrets } : {}),
         });
 
         if (!result.ok) {
@@ -523,6 +537,7 @@ export function createApp() {
         templateVersion: session.templateVersion,
       });
     } catch (err: any) {
+      if (err instanceof MakaronAccountError) { res.status(err.status).json({ code: err.code, message: err.message }); return; }
       console.error('start registration error:', err);
       res.status(err.message === 'TEMPLATE_NOT_AVAILABLE' ? 400 : 503).json({ code: err.message === 'TEMPLATE_NOT_AVAILABLE' ? 'TEMPLATE_NOT_AVAILABLE' : 'REGISTRATION_UNAVAILABLE', message: err.message });
     }
