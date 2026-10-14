@@ -74,6 +74,9 @@ for attempt in {1..15}; do
     && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1; then
     cp /etc/nginx/nexus-portal.locations.conf /opt/nexus/data/nginx-portal.previous.conf
     install -m 644 "$release/deploy/mirror-v/nginx-locations.conf" /etc/nginx/nexus-portal.locations.conf
+    if [[ -f "$release/deploy/mirror-v/nginx-onboard-maps.conf" ]]; then
+      install -m 644 "$release/deploy/mirror-v/nginx-onboard-maps.conf" /etc/nginx/conf.d/nexus-onboard-maps.conf
+    fi
     if [[ -f /etc/letsencrypt/live/43.134.135.143/fullchain.pem ]]; then
       install -m 644 "$release/deploy/mirror-v/nginx-tls.conf" /etc/nginx/sites-enabled/nexus-tls.conf
     fi
