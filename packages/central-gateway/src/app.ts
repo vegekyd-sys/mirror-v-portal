@@ -83,6 +83,7 @@ export function createApp() {
         imgSrc: ["'self'", 'data:', 'https:', 'http:'],
         styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
         connectSrc: ["'self'", 'https:', 'http:'],
+        mediaSrc: ["'self'", 'blob:'],
         upgradeInsecureRequests: null,
       },
     },

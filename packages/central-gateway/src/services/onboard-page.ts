@@ -8,7 +8,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#111c2c">
+<link rel="icon" type="image/svg+xml" href="/onboard/assets/mirror-aperture-v3.svg">
 <title>Mirror V Portal · 选择你的 Agent</title>
 <style>
   * { box-sizing:border-box; }
@@ -131,20 +133,63 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     .header-actions { gap:16px; }
     .motion-toggle { width:32px; height:32px; }
   }
+
+  :root { color-scheme:dark; color:var(--ink); --ink:#f6f9ff; --muted:#e0e9f7; --line:#ffffff38; --accent:#e7effb; background:#111c2c; }
+  html { scrollbar-color:#667990 #111c2c; }
+  .masthead,.edge { max-width:1080px; }
+  .brand-wordmark { font-size:23px; font-weight:550; letter-spacing:-.04em; line-height:1.1; white-space:nowrap; }
+  .portal-layout { gap:56px; }
+  .template-picker,.gateway { position:relative; isolation:isolate; border:1px solid #ffffff42; border-radius:24px; background:linear-gradient(135deg,#e3f0ff24,#b7cde809 46%,#f3f8ff13),rgba(15,27,45,.58); -webkit-backdrop-filter:blur(24px) saturate(135%); backdrop-filter:blur(24px) saturate(135%); box-shadow:inset 0 1px 0 #ffffff40,inset 0 -1px 0 #06112250,0 18px 54px #02091730; }
+  .template-picker::before,.gateway::before { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none; z-index:-1; background:linear-gradient(115deg,#ffffff0a,transparent 38%,#ffffff05 70%,transparent); }
+  .template-picker { padding:22px; }
+  .gateway { padding:30px; }
+  .picker-label { color:#d7e3f4; }
+  .template-card { border-radius:16px; transition:background .18s,border-color .18s,box-shadow .18s; }
+  .template-card:hover { background:#f1f7ff0c; }
+  .template-card[aria-pressed="true"] { background:linear-gradient(135deg,#ffffff26,#e3efff12); border-color:#ffffff4d; box-shadow:inset 0 1px 0 #ffffff25,0 3px 16px #05112712; }
+  .template-card[aria-pressed="true"]::after { color:#f4f8ff; }
+  .template-avatar,.selected-avatar { border:1px solid #ffffff36; box-shadow:0 3px 10px #07101e22; }
+  .channel-picker { background:#07132635; border:1px solid #ffffff12; border-radius:13px; }
+  .channel-picker button { border-radius:9px; color:#e0e9f7; }
+  .channel-picker button[aria-pressed="true"] { background:linear-gradient(130deg,#ffffff29,#ffffff12); color:#fff; box-shadow:inset 0 1px 0 #ffffff36,0 3px 10px #030b1514; }
+  .account-connect input,.verify input,.mobile-picker { color:#f5f8ff; background:#07142626; border-color:#ffffff40; border-radius:12px; box-shadow:inset 0 1px 4px #07111f20; }
+  .account-connect input::placeholder { color:#d0ddee; }
+  .account-connect button,.verify button { color:#15263c; background:linear-gradient(145deg,#f5f9fff2,#d6e4f3ec); border:1px solid #ffffffb0; border-radius:12px; font-weight:600; box-shadow:inset 0 1px 0 #fff,0 4px 14px #08122326; }
+  .account-connect button:hover { background:#f5f9ff; }
+  .account-connect a { color:#e4edfb; }
+  .account-connect a:hover { color:#fff; }
+  .status { color:#e2ecf9; }
+  .status.warn { color:#ffdccb; }
+  .meta { color:#d4e1f3; }
+  .connection-note { color:#d8e4f4; border-color:#ffffff20; }
+  .retry { color:#f5f8ff; border-color:#ffffff40; background:#ffffff10; border-radius:12px; }
+  .retry:hover { background:#ffffff20; }
+  .portal { border-radius:16px; box-shadow:0 8px 24px #01081218; overflow:hidden; }
+  .beam-track { background:#ffffff20; }
+  .beam-fill { background:#d4e5ff; }
+  .core { border-color:#c7d3e5; border-top-color:#455f82; }
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline-color:#d7e8ff; }
+  .motion-toggle { border-color:#ffffff38; background:#f0f6ff0b; box-shadow:inset 0 1px 0 #ffffff1f; }
+  .manage-link { color:#e0e9f6; }
+  .manage-link:hover { color:#fff; }
+  @media(max-width:1000px) { .portal-layout { gap:32px; } .gateway { padding:26px; } }
+  @media(max-width:760px) { .brand-wordmark { font-size:21px; } .header-actions { gap:12px; } .manage-link { padding-left:0; } .template-picker { padding:18px; border-radius:21px; } .gateway { padding:25px; border-radius:21px; } .mobile-picker { color-scheme:dark; } }
+  @media(max-width:350px) { .brand-wordmark { font-size:19px; } .header-actions { gap:9px; } .gateway { padding:20px; } }
+  @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { .template-picker,.gateway { background:#1b2b40f2; } }
+  @media(prefers-reduced-transparency:reduce) { .template-picker,.gateway { background:#1b2b40f5; backdrop-filter:none; -webkit-backdrop-filter:none; } }
 </style>
 </head>
 <body>
       <figure class="mirror-window" id="mirrorWindow">
         <picture><source media="(max-width:760px)" srcset="/onboard/assets/nexus-world-mobile-v2.webp"><img src="/onboard/assets/nexus-world-v2.webp" alt="" decoding="async"></picture>
-        <video id="worldA" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-v5.mp4?v=6"></video>
-        <video id="worldB" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-v5.mp4?v=6"></video>
+        <video id="worldA" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-preview-480p-v6.mp4"></video>
+        <video id="worldB" muted playsinline preload="none" aria-hidden="true" data-src="/onboard/assets/nexus-world-preview-480p-v6.mp4"></video>
 
       </figure>
 <main class="experience" aria-label="Mirror V Portal，选择 Agent">
   <header class="masthead">
     <a class="brand" href="/onboard" aria-label="Mirror V Portal">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M8 9l12 23L32 9" stroke="currentColor" stroke-width="1.5"/><path d="M4 9l12 23M36 9L24 32" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5"/></svg></span>
-      <span class="brand-wordmark"><strong>Mirror V</strong><small>Portal</small></span>
+      <span class="brand-wordmark">Mirror V Portal</span>
     </a>
     <div class="header-actions"><button class="motion-toggle" id="motionToggle" type="button" data-paused="false" aria-label="暂停背景视频"><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1l8 5-8 5z"/></svg></button><a class="manage-link" id="manageLink" href="/admin/agents">管理 Agent</a></div>
   </header>
@@ -200,30 +245,77 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   document.title = {zh:'Mirror V Portal · 选择你的 Agent','zh-Hant':'Mirror V Portal · 選擇你的 Agent',ja:'Mirror V Portal · Agent を選ぶ',en:'Mirror V Portal · Choose your Agent'}[lang];
 })();
 (function () {
-  var videos=[document.getElementById('worldA'),document.getElementById('worldB')], control=document.getElementById('motionToggle');
-  var reduced=matchMedia('(prefers-reduced-motion: reduce)'), paused=reduced.matches, current=0, switching=false, frame=null;
+  var videos=[document.getElementById('worldA'),document.getElementById('worldB')], control=document.getElementById('motionToggle'), surface=document.getElementById('mirrorWindow');
+  var reduced=matchMedia('(prefers-reduced-motion: reduce)'), paused=reduced.matches, current=0, switching=false, frame=null, fadeTimer=null;
+  var previewUrl=videos[0].dataset.src, hdUrl='/onboard/assets/nexus-world-hd-1080p-v6.mp4', hdBlobUrl=null, downloading=false, downloadAttempted=false, downloadAbort=null;
   var words={zh:['暂停背景视频','播放背景视频'],'zh-Hant':['暫停背景影片','播放背景影片'],ja:['背景動画を一時停止','背景動画を再生'],en:['Pause background video','Play background video']};
   var labels=words[document.documentElement.lang==='zh-CN'?'zh':document.documentElement.lang]||words.en;
+  surface.dataset.quality='preview';
   function update(){control.dataset.paused=String(paused);control.setAttribute('aria-label',labels[paused?1:0]);}
   function stop(){videos.forEach(function(v){v.pause();});cancelAnimationFrame(frame);frame=null;}
+  function ready(video,url) {
+    if(video.getAttribute('src')===url&&video.readyState>=2)return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var timer=setTimeout(function(){finish(new Error('video readiness timeout'));},20000);
+      function finish(error){clearTimeout(timer);video.removeEventListener('loadeddata',onReady);video.removeEventListener('error',onError);error?reject(error):resolve();}
+      function onReady(){finish();} function onError(){finish(new Error('video unavailable'));}
+      video.addEventListener('loadeddata',onReady);video.addEventListener('error',onError);
+      video.preload='auto';if(video.getAttribute('src')!==url){video.src=url;video.load();}
+      if(video.readyState>=2)finish();
+    });
+  }
+  function seek(video,time){
+    if(Math.abs(video.currentTime-time)<.02)return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var timer=setTimeout(function(){finish(new Error('video seek timeout'));},6000);
+      function finish(error){clearTimeout(timer);video.removeEventListener('seeked',done);error?reject(error):resolve();}
+      function done(){finish();} video.addEventListener('seeked',done);video.currentTime=time;
+    });
+  }
+  async function handover(aligned){
+    switching=true;var a=videos[current],b=videos[1-current],url=hdBlobUrl||previewUrl;
+    try {
+      await ready(b,url);
+      await seek(b,aligned?Math.min(a.currentTime,b.duration-.1):0);
+      if(paused||document.hidden){switching=false;return;}
+      await b.play();b.classList.add('visible');a.classList.remove('visible');current=1-current;
+      if(url===hdBlobUrl)surface.dataset.quality='hd';
+      clearTimeout(fadeTimer);fadeTimer=setTimeout(function(){a.pause();switching=false;},1650);
+    } catch(error) { b.pause();switching=false;if(url===hdBlobUrl){URL.revokeObjectURL(hdBlobUrl);hdBlobUrl=null;surface.dataset.enhancement='unavailable';} }
+  }
   function watch(){
     if(paused||document.hidden)return;
-    var a=videos[current], b=videos[1-current];
-    if(!switching&&a.readyState>=2&&a.duration&&a.currentTime>=a.duration-1.8){
-      switching=true;b.currentTime=0;
-      b.play().then(function(){b.classList.add('visible');a.classList.remove('visible');current=1-current;setTimeout(function(){a.pause();switching=false;},1650);}).catch(function(){switching=false;});
+    var a=videos[current];
+    if(!switching&&a.readyState>=2&&a.duration){
+      if(a.currentTime>=a.duration-1.8)handover(false);
+      else if(hdBlobUrl&&a.getAttribute('src')!==hdBlobUrl&&a.duration-a.currentTime>2)handover(true);
     }
     frame=requestAnimationFrame(watch);
   }
-  function start(){
+  async function downloadHD(){
+    if(downloadAttempted||reduced.matches||navigator.connection&&navigator.connection.saveData)return;
+    downloadAttempted=true;downloading=true;surface.dataset.enhancement='downloading';downloadAbort=new AbortController();
+    try {
+      var response=await fetch(hdUrl,{signal:downloadAbort.signal,priority:'low'});
+      if(!response.ok)throw new Error('HD unavailable');
+      var blob=await response.blob();if(!blob.size)throw new Error('HD empty');
+      hdBlobUrl=URL.createObjectURL(blob);surface.dataset.enhancement='downloaded';
+    } catch(error) { surface.dataset.enhancement='unavailable'; }
+    finally {downloading=false;}
+  }
+  async function start(){
     if(paused||document.hidden)return;
-    videos.forEach(function(v){if(!v.getAttribute('src')){v.src=v.dataset.src;v.load();}});
-    videos[current].play().then(function(){videos[current].classList.add('visible');cancelAnimationFrame(frame);watch();}).catch(function(){paused=true;stop();update();});
+    try {
+      var a=videos[current];await ready(a,a.getAttribute('src')||previewUrl);
+      if(paused||document.hidden)return;
+      await a.play();a.classList.add('visible');cancelAnimationFrame(frame);watch();downloadHD();
+    } catch(error) {paused=true;stop();update();}
   }
   control.addEventListener('click',function(){paused=!paused;update();if(paused)stop();else start();});
   document.addEventListener('visibilitychange',function(){if(document.hidden)stop();else start();});
-  reduced.addEventListener('change',function(event){if(event.matches){paused=true;stop();update();}});
-  videos.forEach(function(v){v.addEventListener('error',function(){paused=true;stop();videos.forEach(function(item){item.classList.remove('visible');});update();});v.addEventListener('ended',function(){if(!paused&&!document.hidden){v.currentTime=0;start();}});});
+  reduced.addEventListener('change',function(event){if(event.matches){paused=true;stop();update();if(downloading)downloadAbort.abort();}});
+  videos.forEach(function(v){v.addEventListener('ended',function(){if(!paused&&!document.hidden&&!switching)handover(false);});});
+  window.addEventListener('pagehide',function(event){if(!event.persisted){stop();clearTimeout(fadeTimer);if(downloadAbort)downloadAbort.abort();if(hdBlobUrl)URL.revokeObjectURL(hdBlobUrl);}});
   update();start();
 })();
 (function () {
@@ -291,7 +383,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
       var preferred = requested !== null ? requested : 'mirror-v';
       var initialCard = null;
       templateList.replaceChildren(); templateSelect.replaceChildren();
-      var portraits = {"dealclaw":"agent-dealclaw-portrait-57e4cb1ee845.png","mirror-v":"agent-mirror-v-portrait-1260c99c184d.png","xingqing":"agent-xingqing-portrait-a376b49895b1.png","makaron":"agent-makaron-portrait-154a2a9faba7.png","mirror-v-full":"agent-mirror-v-full-portrait-ed4e1c0cbd1d.png"};
+      var portraits = {"dealclaw":"agent-dealclaw-portrait-b651b1783968.png","mirror-v":"agent-mirror-v-full-portrait-ed4e1c0cbd1d.png","xingqing":"agent-xingqing-portrait-a376b49895b1.png","makaron":"agent-makaron-portrait-154a2a9faba7.png","mirror-v-full":"agent-mirror-v-portrait-1260c99c184d.png"};
       data.templates.forEach(function (template) {
         if (portraits[template.id]) template.avatarUrl = '/onboard/assets/' + portraits[template.id];
         var card = document.createElement('button');

@@ -28,4 +28,11 @@ describe('template avatar', () => {
     const other = await request(app).get('/onboard/assets/nexus-world-v2.webp');
     expect(other.headers['cross-origin-resource-policy']).toBe('same-origin');
   });
+  it('allows the downloaded local video through the onboarding media policy', async () => {
+    const result = await request(createApp()).get('/onboard');
+    expect(result.status).toBe(200);
+    expect(result.headers['content-security-policy']).toContain("media-src 'self' blob:");
+    expect(result.headers['content-security-policy']).toContain("object-src 'none'");
+  });
+
 });
