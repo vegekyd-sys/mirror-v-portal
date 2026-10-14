@@ -35,4 +35,11 @@ describe('template avatar', () => {
     expect(result.headers['content-security-policy']).toContain("object-src 'none'");
   });
 
+  it('serves refreshed portraits for native registration across origins', async () => {
+    const result = await request(createApp()).get('/onboard/assets/agent-dealclaw-portrait-b651b1783968.png');
+    expect(result.status).toBe(200);
+    expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(createHash('sha256').update(result.body).digest('hex')).toBe('b651b17839689ab2e4a2187b9213c56a87104cda041156466dbcc50b2f96cb74');
+  });
+
 });

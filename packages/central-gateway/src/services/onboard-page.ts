@@ -194,7 +194,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   @media(max-width:760px) {
     .template-picker { display:none; }
     .gateway { margin-top:0; }
-    .gateway-heading { grid-template-columns:54px minmax(0,1fr) 48px; align-items:center; padding-bottom:22px; border-bottom:1px solid #ffffff24; margin-bottom:22px; }
+    .gateway-heading { cursor:pointer; grid-template-columns:54px minmax(0,1fr) 48px; align-items:center; padding-bottom:22px; border-bottom:1px solid #ffffff24; margin-bottom:22px; }
     .gateway-heading h2 { font-size:21px; }
     .gateway-heading .template-description { font-size:12px; margin-top:4px; }
     .mobile-agent-switch { grid-column:3; grid-row:1 / 3; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; width:48px; height:52px; padding:0; border:0; border-radius:13px; color:#e6effc; background:#ffffff08; }
@@ -419,6 +419,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   function updateMobileSelection() {
     mobileAgentList.querySelectorAll('button').forEach(function(button){button.setAttribute('aria-pressed',String(button.getAttribute('data-agent')===selectedTemplate.id));});
   }
+  document.querySelector('.gateway-heading').addEventListener('click',function(event){if(matchMedia('(max-width:760px)').matches&&!event.target.closest('button'))mobileSwitch.click();});
   mobileSwitch.addEventListener('click',function(){
     if(!selectedTemplate)return;
     agentSheet.showModal();mobileSwitch.setAttribute('aria-expanded','true');document.documentElement.classList.add('agent-sheet-open');
@@ -431,13 +432,18 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
   async function loadTemplates() {
     try {
       var requested = new URLSearchParams(location.search).get('template');
+      if (requested === 'mirror-v') requested = 'mirror-v-full';
       var response = await fetch('/onboard/templates' + (requested ? '?template=' + encodeURIComponent(requested) : ''));
       if (!response.ok) throw new Error('模板暂时不可用，请稍后重试');
       var data = await response.json();
       if (!data.templates || !data.templates.length) throw new Error('暂无可用模板');
+      data.templates = data.templates.filter(function(template){return template.id !== 'mirror-v';});
+      data.templates.forEach(function(template){if(template.id === 'mirror-v-full')template.name='Mirror V';});
+      var order = ['dealclaw','mirror-v-full','xingqing','makaron'];
+      data.templates.sort(function(a,b){return (order.indexOf(a.id)<0?99:order.indexOf(a.id))-(order.indexOf(b.id)<0?99:order.indexOf(b.id));});
       // An explicit agent link must never open another agent's authorization.
       if (requested !== null && !data.templates.some(function (template) { return template.id === requested; })) throw new Error('所选 Agent 暂未开放，请稍后重试');
-      var preferred = requested !== null ? requested : 'mirror-v';
+      var preferred = requested !== null ? requested : 'mirror-v-full';
       var initialCard = null;
       templateList.replaceChildren(); templateSelect.replaceChildren(); resetMobilePicker();
       var portraits = {"dealclaw":"agent-dealclaw-portrait-b651b1783968.png","mirror-v":"agent-mirror-v-full-portrait-ed4e1c0cbd1d.png","xingqing":"agent-xingqing-portrait-a376b49895b1.png","makaron":"agent-makaron-portrait-154a2a9faba7.png","mirror-v-full":"agent-mirror-v-portrait-1260c99c184d.png"};
@@ -452,7 +458,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           card.append(avatar);
         } else {
           var symbol = document.createElement('span'); symbol.className = 'template-symbol'; symbol.setAttribute('aria-hidden','true');
-          symbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V'; card.append(symbol);
+          symbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : 'V'; card.append(symbol);
         }
         var name = document.createElement('span'); name.className = 'template-name'; name.textContent = template.name;
         card.setAttribute('aria-label', template.name + '，' + template.description);
@@ -468,8 +474,9 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
           open();
         });
         templateList.appendChild(card); appendMobileAgent(card);
-        if (preferred === template.id || (!initialCard && template === data.templates[0])) initialCard = card;
+        if (preferred === template.id) initialCard = card;
       });
+      if (!initialCard) throw new Error('所选 Agent 暂未开放，请稍后重试');
       initialCard.click();
     } catch (error) { closeGate(error.message || '模板加载失败'); }
   }
@@ -482,7 +489,7 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     var selectedSymbol = document.getElementById('selectedAgentSymbol');
     selectedAvatar.hidden = !template.avatarUrl; selectedSymbol.hidden = !!template.avatarUrl;
     if (template.avatarUrl) selectedAvatar.src = template.avatarUrl;
-    selectedSymbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : template.id === 'mirror-v-full' ? 'V+' : 'V';
+    selectedSymbol.textContent = template.id === 'dealclaw' ? 'DC' : template.id === 'xingqing' ? '星' : 'V';
     var channel = selectedChannel;
     var previousFeishu = feishuCode, previousWeixin = weixinCode;
     stopTimers(); active = false; feishuCode = null; weixinCode = null; expireAt = null;

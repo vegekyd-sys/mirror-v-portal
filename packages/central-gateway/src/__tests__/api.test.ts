@@ -152,12 +152,12 @@ describe('GET /onboard — Feishu registration', () => {
   it('shows only manager-approved templates and rejects an unknown selection before registration', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
       { id: 'dealclaw', version: 'dealclaw-base.v2', name: 'DealClaw', description: '出海顾问' },
-      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+      { id: 'mirror-v-full', version: 'mirror-v-full.v1', name: 'Mirror V', description: '通用 Agent' },
     ] }));
     try {
       const catalog = await request(app).get('/onboard/templates');
       expect(catalog.status).toBe(200);
-      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['dealclaw', 'mirror-v']);
+      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['dealclaw', 'mirror-v-full']);
       const invalid = await request(app).post('/onboard/feishu/start').send({ templateId: 'unapproved' });
       expect(invalid.status).toBe(400);
       expect(invalid.body.code).toBe('TEMPLATE_NOT_AVAILABLE');
@@ -166,12 +166,12 @@ describe('GET /onboard — Feishu registration', () => {
   });
   it('hides unlisted templates from the signup page', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
-      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent', listed: true },
+      { id: 'mirror-v-full', version: 'mirror-v-full.v1', name: 'Mirror V', description: '通用 Agent', listed: true },
       { id: 'xingqing', version: 'xingqing-starter.v1', name: '星擎助手', description: '数据问答', listed: false },
     ] }));
     try {
       const catalog = await request(app).get('/onboard/templates');
-      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['mirror-v']);
+      expect(catalog.body.templates.map((item: { id: string }) => item.id)).toEqual(['mirror-v-full']);
     } finally { fetchMock.mockRestore(); }
   });
   it('returns JSON for feishu UA (registerApp may need real network)', async () => {
@@ -266,7 +266,7 @@ describe('Explicit onboarding template links', () => {
     await runInNewContext(ONBOARD_HTML.slice(start, end) + '\nloadTemplates()', context);
     return { context, opened, closed };
   }
-  const mirror = { id: 'mirror-v', name: 'Mirror V', description: '通用 Agent' };
+  const mirror = { id: 'mirror-v-full', name: 'Mirror V', description: '通用 Agent' };
   const makaron = { id: 'makaron', name: 'Makaron', description: '图片与视频创作' };
 
   it('opens Makaron when the explicit template is available', async () => {
@@ -284,9 +284,20 @@ describe('Explicit onboarding template links', () => {
       expect(result.context.fetch).toHaveBeenCalledTimes(1);
     }
   });
+  it('opens the current Mirror V from a retired mirror-v link', async () => {
+    const result = await selectFromPage('?template=mirror-v', [mirror, makaron, { id: 'mirror-v', name: 'old', description: 'retired' }]);
+    expect(result.context.selectedTemplate?.id).toBe('mirror-v-full');
+    expect(result.opened).toHaveBeenCalledTimes(1);
+  });
+  it('does not start another Agent if the current Mirror V default is unavailable', async () => {
+    const result = await selectFromPage('', [makaron, { id: 'mirror-v', name: 'old', description: 'retired' }]);
+    expect(result.context.selectedTemplate).toBeNull();
+    expect(result.opened).not.toHaveBeenCalled();
+    expect(result.closed).toHaveBeenCalledWith('所选 Agent 暂未开放，请稍后重试');
+  });
   it('retains the ordinary portal default without an explicit template', async () => {
     const result = await selectFromPage('', [makaron, mirror]);
-    expect(result.context.selectedTemplate?.id).toBe('mirror-v');
+    expect(result.context.selectedTemplate?.id).toBe('mirror-v-full');
     expect(result.opened).toHaveBeenCalledTimes(1);
     expect(result.closed).not.toHaveBeenCalled();
   });
@@ -298,7 +309,7 @@ describe('WeChat portal onboarding', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/v1/templates')) return Response.json({ templates: [
-        { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+        { id: 'mirror-v-full', version: 'mirror-v-full.v1', name: 'Mirror V', description: '通用 Agent' },
       ] });
       managerCalls.push({ url, body: init?.body as string | undefined });
       if (url.endsWith('/v1/channels/weixin/portal-login')) return Response.json({
@@ -311,11 +322,11 @@ describe('WeChat portal onboarding', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
     try {
-      const started = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v' });
+      const started = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v-full' });
       expect(started.status).toBe(200);
       expect(started.body.deviceCode).toBe('weixin-flow-test');
       expect(started.body.qrDataUri).toMatch(/^data:image\/png;base64,/);
-      expect(JSON.parse(managerCalls[0].body || '{}')).toEqual({ templateId: 'mirror-v', templateVersion: 'mirror-v.v1' });
+      expect(JSON.parse(managerCalls[0].body || '{}')).toEqual({ templateId: 'mirror-v-full', templateVersion: 'mirror-v-full.v1' });
       expect(managerCalls.some(call => call.url.endsWith('/v1/tenants'))).toBe(false);
       expect((await request(app).get('/onboard/weixin/status/unknown')).status).toBe(404);
       const status = await request(app).get('/onboard/weixin/status/weixin-flow-test');
@@ -332,7 +343,7 @@ describe('One-scan Portal entry', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/v1/templates')) return Response.json({ templates: [
-        { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+        { id: 'mirror-v-full', version: 'mirror-v-full.v1', name: 'Mirror V', description: '通用 Agent' },
       ] });
       if (url.endsWith('/v1/channels/weixin/portal-login')) return Response.json({
         sessionId: 'portal-weixin-test', qrImage: 'https://liteapp.weixin.qq.com/test', expiresIn: 600,
@@ -342,7 +353,7 @@ describe('One-scan Portal entry', () => {
       throw new Error(`Unexpected request: ${url} ${init?.method || 'GET'}`);
     });
     try {
-      const entry = await request(app).post('/onboard/portal/start').send({ templateId: 'mirror-v' });
+      const entry = await request(app).post('/onboard/portal/start').send({ templateId: 'mirror-v-full' });
       expect(entry.status).toBe(200);
       expect(entry.body.qrDataUri).toMatch(/^data:image\/png;base64,/);
       const id = entry.body.entryId;
@@ -357,9 +368,9 @@ describe('One-scan Portal entry', () => {
       expect(scan.text).not.toContain('location.assign(');
       expect(scan.text).not.toContain('飞书扫码</button>');
       const before = await request(app).get(`/onboard/portal/${id}/status`);
-      expect(before.body).toMatchObject({ templateId: 'mirror-v', channel: null, status: 'pending' });
+      expect(before.body).toMatchObject({ templateId: 'mirror-v-full', channel: null, status: 'pending' });
 
-      const native = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v' });
+      const native = await request(app).post('/onboard/weixin/start').send({ templateId: 'mirror-v-full' });
       expect(native.status).toBe(200);
       const linked = await request(app).post(`/onboard/portal/${id}/link`).send({ channel: 'weixin', deviceCode: native.body.deviceCode });
       expect(linked.status).toBe(200);
@@ -383,7 +394,7 @@ describe('One-scan Portal entry', () => {
 
   it('rejects expired or unapproved entries before any channel session starts', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ templates: [
-      { id: 'mirror-v', version: 'mirror-v.v1', name: 'Mirror V', description: '通用 Agent' },
+      { id: 'mirror-v-full', version: 'mirror-v-full.v1', name: 'Mirror V', description: '通用 Agent' },
     ] }));
     try {
       expect((await request(app).post('/onboard/portal/start').send({ templateId: 'unknown' })).status).toBe(400);
