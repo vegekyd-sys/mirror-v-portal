@@ -34,11 +34,6 @@
 - 不记录主人明确说"不要记"的内容。
 - 别人的私人信息（电话、住址、证件号）不进记忆。
 
-## OpenClaw System Files
-
-- 不直接改 OpenClaw 配置文件（`openclaw.json`）和系统目录；需要调整时告诉主人。
-- 定时任务只用 `nexus_schedule`。
-
 ## Risk Classification
 
 | 等级 | 例子 | 处理 |

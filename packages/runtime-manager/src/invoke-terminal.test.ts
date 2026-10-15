@@ -84,13 +84,12 @@ async function startInvoke(respond: (response: ServerResponse) => void) {
 const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
 
 describe("actual invoke terminal SSE handling", () => {
-  it("sends current sandbox install facts and Nexus attachment delivery instructions to the agent", async () => {
+  it("sends user input without platform instructions or an install-capability prompt", async () => {
     const run = await startInvoke(response => response.write(sse({ type: "response.completed", response: { status: "completed" } })));
     const body = await bounded(run.requestBody);
-    expect(body.instructions).toContain("npm install -g");
-    expect(body.instructions).toContain("不需要人工审核");
-    expect(body.instructions).toContain("MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg");
-    expect(body.instructions).not.toContain("一律不可用，不要尝试");
+    expect(body).not.toHaveProperty("instructions");
+    expect(body.input).toBe("本地终态流验证");
+    expect(JSON.stringify(body)).not.toMatch(/npm install|MEDIA:|nexus_schedule|Portal 运行环境/);
     expect((await bounded(run.exit)).code).toBe(0);
   });
 

@@ -13,7 +13,7 @@ try {
   ).rows[0];
   if (!prior?.session_key.includes(":oc_")) throw Error("GROUP_NOT_FOUND");
   const at = new Date(Date.now() + 180000).toISOString();
-  const text = `管理员授权的 Nexus Cron 和 heartbeat 验收。请调用 nexus_schedule 工具创建下面两项测试任务，并列出结果。不要编辑配置，不要用 exec，不要再次确认。\n1. name=nexus-cron-acceptance，kind=cron，schedule={kind:at,at:${at}}，prompt=只回复「Cron 冷启动验收成功：这是 Nexus 定时唤醒后的主动消息。」不要调用工具。\n2. name=nexus-heartbeat-acceptance，kind=heartbeat，schedule={kind:every,everySeconds:300}，prompt=只回复「Heartbeat 冷启动验收成功：这是周期检查主动唤醒后的消息。」不要调用工具。\n这两项仅用于管理员测试，后续由管理员取消。`;
+  const text = `管理员授权的 Portal Cron 和 heartbeat 验收。请调用 portal_schedule 工具创建下面两项测试任务，并列出结果。不要编辑配置，不要用 exec，不要再次确认。\n1. name=nexus-cron-acceptance，kind=cron，schedule={kind:at,at:${at}}，prompt=只回复「Cron 冷启动验收成功：这是 Portal 定时唤醒后的主动消息。」不要调用工具。\n2. name=nexus-heartbeat-acceptance，kind=heartbeat，schedule={kind:every,everySeconds:300}，prompt=只回复「Heartbeat 冷启动验收成功：这是周期检查主动唤醒后的消息。」不要调用工具。\n这两项仅用于管理员测试，后续由管理员取消。`;
   const r = await s.enqueue(
     tenant,
     "schedule-acceptance-" + randomUUID(),

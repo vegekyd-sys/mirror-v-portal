@@ -45,13 +45,13 @@ export function normalizeRuntimeOptions(input = {}) {
     if (!Array.isArray(list) || list.some(name => typeof name !== "string" || !/^[a-zA-Z0-9_.:*\/-]+$/.test(name))) throw Error("INVALID_RUNTIME_TOOLS");
   }
   return {
-    agentId, displayName: input.displayName ?? "Nexus Trial",
+    agentId, displayName: input.displayName ?? "Portal Agent",
     payloadVersion: input.payloadVersion ?? "dealclaw-2026-09-14",
     payloadLayout, envKeys: [...envKeys], modelInput: [...new Set(modelInput)], mediaBinaries: input.mediaBinaries ?? false,
     ...(skills !== undefined ? { skills: [...new Set(skills)] } : {}),
     ...(skillsLimits !== undefined ? { skillsLimits: { ...skillsLimits } } : {}),
     plugins: plugins.map(plugin => ({ id: plugin.id, path: plugin.path, config: plugin.config ?? {} })),
-    tools: { profile: tools.profile ?? "coding", alsoAllow: [...new Set(["nexus_schedule", ...(tools.alsoAllow ?? [])])], deny: [...(tools.deny ?? defaultDeny)], ...(tools.exec ? { exec: { security: tools.exec.security, ask: tools.exec.ask } } : {}) },
+    tools: { profile: tools.profile ?? "coding", alsoAllow: [...new Set(["portal_schedule", "portal_environment", ...(tools.alsoAllow ?? []).filter(name => name !== "nexus_schedule")])], deny: [...(tools.deny ?? defaultDeny)], ...(tools.exec ? { exec: { security: tools.exec.security, ask: tools.exec.ask } } : {}) },
   };
 }
 

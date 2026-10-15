@@ -4,7 +4,7 @@ Portal 的隔离边界是每个租户自己的云端 VM。Agent 在这个 VM 内
 
 ## 修复原因
 
-旧的每轮附件说明禁止尝试 `lark-cli`。Agent 把“当前聊天由外部网关投递”和“没有预装 CLI”误判为不能安装，还错误声称安装会在休眠后丢失。`turn-instructions.mjs` 现在分别说明沙盒执行能力、CLI 安装、外部账号授权和当前聊天的 `MEDIA:` 投递方式，并纠正旧笔记或历史回复中的限制。
+旧的每轮附件说明禁止尝试 `lark-cli`。Agent 把“当前聊天由外部网关投递”和“没有预装 CLI”误判为不能安装，还错误声称安装会在休眠后丢失。每轮的固定 `instructions` 已删除，权限由实际 OpenClaw/宿主审批和 npm 配置保证。
 
 当前镜像的 npm 11.17.0 还会默认跳过未获允许的安装脚本，可能出现安装成功但 CLI 缺少二进制的情况。专属 VM 的启动环境明确允许生命周期脚本，不需要逐包批准。[npm 配置文档](https://docs.npmjs.com/cli/using-npm/config/)
 
@@ -17,11 +17,15 @@ Portal 的隔离边界是每个租户自己的云端 VM。Agent 在这个 VM 内
 - 休眠快照保留 VM 文件系统。工作区、本地 node_modules、全局 npm 的包与 bin 符号链接也纳入 agent-data 备份。后台进程需在唤醒后重启。
 - Gateway 和 Worker 在轮次边界检测配置及执行环境 hash；发生变化时重启对应 VM 内的进程，避免继续沿用旧 npm prefix 或权限环境。
 
-当前聊天仍由 Nexus 网关负责投递，定时任务仍用 `nexus_schedule`。安装 CLI 不会自动获得用户的外部账号授权。
+当前聊天由 Portal 网关投递，调度工具为 `portal_schedule`，环境查询工具为 `portal_environment`。安装 CLI 与外部账号授权是独立操作。内部持久化名称、RPC 事件和旧工具别名保留兼容，避免迁移已有租户。
 
 ## 验证
 
-本地测试覆盖实际 invoke HTTP 请求中的环境说明、可写 npm prefix、审批迁移与已有 allowlist/socket 数据保留，以及普通和完整 V 模板的执行配置。
+本地测试断言实际 invoke HTTP 请求中没有 `instructions`，用户原文保持原值；动态上下文只有渠道能力头、图片源文件/字节/来源和调度触发信息。图片工具工作流、平台操作禁令和平台要求的回复风格均不在轮次请求中。
+
+稳定环境事实集中在工作区 `TOOLS.md` 的 Portal 管理区段和 `agent-data/portal-environment.json` 中，`portal_environment` 返回同一份事实。文档描述实际配置和接口格式，不以文字限制能力。更新只替换该管理区段及精确匹配的旧平台禁令，保留用户自定义笔记与规则；符号链接的自定义文档保持原值。
+
+另覆盖可写 npm prefix、审批迁移与已有 allowlist/socket 数据保留、普通/完整 V 模板的执行配置，以及新名称下的真实文件 RPC 应答。
 
 真实验收使用独立的 Makaron 和完整 V Sandbox，通过实际模型与 Agent 原生 exec 工具安装 `is-number`、`@larksuite/cli`，验证 CLI、管道/重定向和 `sudo -n true`；同时独立读文件和执行程序核对结果。随后实际 stop/resume，再验证包与文件保留，并核对备份包含全局 CLI 符号链接和本地包。
 

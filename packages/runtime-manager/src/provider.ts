@@ -86,7 +86,7 @@ export const RUNTIME_SCRIPTS = [
   "boot.mjs", "invoke.mjs", "inbound-input.mjs", "quiesce.mjs", "model-proxy.mjs", "backup.mjs",
   "progress-patch.mjs", "stream-preview-patch.mjs", "scheduler-plugin.mjs", "agent-config.mjs",
   "v-release.mjs", "v-config.mjs", "v-features.mjs",
-  "sandbox-exec.mjs", "turn-instructions.mjs",
+  "sandbox-exec.mjs", "portal-environment.mjs",
 ];
 export function runtimeRevision() {
   return createHash("sha256")

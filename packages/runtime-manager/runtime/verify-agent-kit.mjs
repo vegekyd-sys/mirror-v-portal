@@ -19,7 +19,7 @@ try {
   const schedulerPath = path.join(temporary, "scheduler-plugin");
   fs.mkdirSync(schedulerPath);
   fs.copyFileSync(path.join(base, "scheduler-plugin.mjs"), path.join(schedulerPath, "index.mjs"));
-  fs.writeFileSync(path.join(schedulerPath, "openclaw.plugin.json"), JSON.stringify({ id: "nexus-scheduler", name: "Nexus schedules", version: "1.0.0", contracts: { tools: ["nexus_schedule"] }, activation: { onStartup: true }, configSchema: { type: "object", additionalProperties: false } }));
+  fs.writeFileSync(path.join(schedulerPath, "openclaw.plugin.json"), JSON.stringify({ id: "nexus-scheduler", name: "Portal runtime", version: "1.0.0", contracts: { tools: ["portal_schedule", "portal_environment", "nexus_schedule"] }, activation: { onStartup: true }, configSchema: { type: "object", additionalProperties: false } }));
   const config = createOpenClawConfig({ runtime: profile.runtime, workspace, payloadRoot: path.join(base, "payload"), schedulerPath, modelId: "registry-only" });
   const configPath = path.join(temporary, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify(config));

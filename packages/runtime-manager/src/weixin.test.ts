@@ -125,7 +125,7 @@ describe("weixin image ingress", () => {
     expect(download).toHaveBeenCalledOnce();
     const call = (s.enqueue as any).mock.calls[0];
     expect(call[2]).toBe("t1:u@im.wechat");
-    expect(call[3]).toContain("不要自行生成或编辑");
+    expect(call[3]).toContain("没有附带文字");
     expect(call[4]).toBe("weixin");
     expect(call[6]).toHaveLength(1);
     const attachment = call[6][0];
@@ -196,8 +196,8 @@ describe("weixin image ingress", () => {
     await ingest(edge,message());
     const call = (s.enqueue as any).mock.calls[0];
     expect(call[3]).toContain("接收失败");
-    expect(call[3]).toContain("不要调用生成工具");
-    expect(call[3]).toContain("不要建议用户换图");
+    expect(call[3]).toContain("本轮没有可用图片附件");
+    expect(call[3]).not.toMatch(/不要|必须|不能/);
     expect(call[6]).toEqual([]);
     expect(call[7]).toEqual({inheritAttachments:false});
     expect(JSON.stringify((s.event as any).mock.calls)).not.toMatch(/secret-cdn-query|secret-key/);

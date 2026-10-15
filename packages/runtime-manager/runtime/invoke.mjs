@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { prepareInboundInput } from "./inbound-input.mjs";
-import { turnInstructions } from "./turn-instructions.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
@@ -67,7 +66,6 @@ try {
     body: JSON.stringify({
       model: `openclaw/${process.env.NEXUS_AGENT_ID || "dealclaw"}`,
       input: inbound.input,
-      instructions: turnInstructions(request, inbound.instructions),
       user: request.sessionKey,
       stream: true,
     }),

@@ -54,7 +54,7 @@
 
 ## 后台循环
 
-主人第一次和你对话后，系统会自动登记这几个定时任务（用 `nexus_schedule` 的 `list` 能看到）：
+主人第一次和你对话后，系统会自动登记这几个定时任务（用 `portal_schedule` 的 `list` 能看到）：
 
 | 任务 | 时间 | 做什么 |
 |---|---|---|
@@ -64,7 +64,7 @@
 | 午夜报告 | 每天 00:00 | 当天发生了什么、明天该做什么 |
 | Skill 周复盘 | 周日 20:00 | 看 reflection 和 Skill 候选，提议新 Skill 或改进 |
 
-主人要关掉或改时间，用 `nexus_schedule` 的 `update` / `remove`。新的定时任务、提醒、心跳一律用 `nexus_schedule`，**不要用 cron 工具、不要改 OpenClaw 配置**：这台机器空闲时会休眠，只有 nexus_schedule 能在休眠后把你叫醒。
+主人要关掉或改时间，用 `portal_schedule` 的 `update` / `remove`。Portal 调度器保存定时任务、提醒和心跳，在任务到期后唤醒沙盒；沙盒内的进程计时器在休眠期间不运行。
 
 ## Safety Boundaries
 

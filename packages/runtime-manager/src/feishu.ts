@@ -231,12 +231,12 @@ export class FeishuEdge implements ChannelEdge {
         try {normalizeInboundAttachments(attachments,tenant.id);} catch {failure="FEISHU_IMAGES_TOO_LARGE";break;}
       }
       if (!failure && attachments.length) {
-        if (!text.trim()) text="本条消息只有用户图片，没有附带文字。请确认收到；若此前同会话已有明确且未完成的创作要求，请使用这份实际原图继续完成。否则仅确认收到，等待用户说明怎么处理，不要自行生成或编辑。";
+        if (!text.trim()) text="【Portal 附件信息】本条消息只有用户图片，没有附带文字。";
       } else {
         failedImage=true;
         attachments=[];
         await this.store.event(tenant.id,"feishu-image-receive-failed",{code:failure ?? "FEISHU_IMAGE_RESOURCE_INVALID",messageType:m.message_type});
-        text="这条飞书图片暂时未能接入系统，系统没有把实际原图交给你。请简洁说明当前接入失败；不要假装已经看过图片，不要使用以前的图片替代，不要生成或编辑。";
+        text="【Portal 附件接收失败】本条飞书图片的实际原图未能接入；本轮没有可用图片附件。";
       }
     }
     const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage ? {inheritAttachments:false} : {});

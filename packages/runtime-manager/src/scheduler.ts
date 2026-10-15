@@ -112,7 +112,7 @@ export class Scheduler {
         const prompt = String(
           args.prompt ||
             (kind === "heartbeat"
-              ? "读取工作目录 HEARTBEAT.md，执行其中当前到期的检查。没有值得提醒用户的新情况时只回复 HEARTBEAT_OK。不要重复旧提醒。"
+              ? "检查工作目录 HEARTBEAT.md 中当前到期的事项。静默结果：HEARTBEAT_OK。"
               : ""),
         );
         if (!prompt.trim() || prompt.length > 16000)
@@ -231,8 +231,8 @@ export class Scheduler {
           key = `schedule:${j.id}:${new Date(j.next_at).toISOString()}`;
         const prefix =
           j.kind === "heartbeat"
-            ? "[Nexus heartbeat] 无需创建新的定时任务。没有需提醒事项时只回复 HEARTBEAT_OK。"
-            : "[Nexus 定时任务触发] 执行下面的任务，不要再次创建定时任务。";
+            ? "[Portal heartbeat trigger; quiet_reply=HEARTBEAT_OK]"
+            : "[Portal scheduled task trigger]";
         const r = await db.query(
           `INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,schedule_id,schedule_kind,chat_id) VALUES($1,$2,$3,$4,$5,'feishu',$6,$7,$8) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING id`,
           [

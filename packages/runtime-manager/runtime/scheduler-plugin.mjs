@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-const root = "/tmp/nexus-schedule-rpc";
-export default {
+export function createPortalRuntimePlugin({ root = "/tmp/nexus-schedule-rpc", environmentFile = "/vercel/sandbox/agent-data/portal-environment.json" } = {}) {
+return {
   id: "nexus-scheduler",
-  name: "Nexus schedules",
+  name: "Portal runtime",
   register(api) {
-    api.registerTool({
-      name: "nexus_schedule",
+    const schedule = {
+      name: "portal_schedule",
       label: "Cron 与 heartbeat",
       description:
-        "管理持久化 Cron 定时任务和 heartbeat 周期检查。Sandbox 休眠后仍会被 Nexus 唤醒，结果回到当前飞书会话。设置、查看、修改、取消定时任务或心跳时必须使用此工具，不能编辑 OpenClaw 配置或本地 cron 文件。只有返回 durable:true 才确认创建成功。默认时区 Asia/Shanghai；最短周期60秒。",
+        "Portal 持久化定时任务与 heartbeat。调度器在沙盒外运行，到期唤醒沙盒，结果回到创建任务的对话。创建成功回执 durable:true。默认时区 Asia/Shanghai；最短周期60秒。",
       parameters: {
         type: "object",
         required: ["action"],
@@ -58,9 +58,25 @@ export default {
           }
         }
         throw Error(
-          "NEXUS_SCHEDULE_ACK_TIMEOUT: 不要宣称成功，请先 list 核对是否已创建",
+          "PORTAL_SCHEDULE_ACK_TIMEOUT: durable acknowledgement unavailable; schedule state unknown",
         );
+      },
+    };
+    api.registerTool(schedule);
+    // Callable for explicitly allowlisted old integrations, absent from the
+    // ordinary Portal tool list. Persistent schedule IDs and RPC stay stable.
+    api.registerTool({ ...schedule, name: "nexus_schedule", description: "Portal 定时工具的兼容名称。" }, { optional: true });
+    api.registerTool({
+      name: "portal_environment",
+      label: "Portal 运行环境",
+      description: "读取 Portal 沙盒的运行环境事实：工作区、实际执行配置、npm 目录、休眠持久化、附件投递格式与调度接口。",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        const facts = JSON.parse(fs.readFileSync(environmentFile, "utf8"));
+        return { content: [{ type: "text", text: JSON.stringify(facts) }], details: facts };
       },
     });
   },
 };
+}
+export default createPortalRuntimePlugin();
