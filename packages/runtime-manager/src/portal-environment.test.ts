@@ -18,7 +18,7 @@ describe("Portal environment facts", () => {
     const f = fixture();
     try {
       const file = path.join(f.workspace, "TOOLS.md");
-      const owner = "# Tools\n\n用户自定义：Nexus 项目的历史笔记不能改。\n";
+      const owner = "# Tools\n\n用户自定义：Nexus 项目的历史笔记不能改。  \n\n\n";
       fs.writeFileSync(file, owner);
       const before = JSON.stringify(config);
       const facts = writePortalEnvironment({ ...f, config });

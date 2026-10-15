@@ -51,7 +51,7 @@ export function writePortalEnvironment({ workspace, data, config }) {
   if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) return facts;
   let text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "# Tools\n";
   const a = text.indexOf(start), b = text.indexOf(end, a);
-  text = a >= 0 && b >= a ? text.slice(0, a) + block + text.slice(b + end.length) : text.trimEnd() + "\n\n" + block + "\n";
+  text = a >= 0 && b >= a ? text.slice(0, a) + block + text.slice(b + end.length) : text + (text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n") + block + "\n";
   fs.writeFileSync(file, text);
   return facts;
 }
