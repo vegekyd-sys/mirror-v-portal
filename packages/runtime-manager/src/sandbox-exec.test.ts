@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { ensureSandboxExecApprovals, sandboxExecEnv } from "../runtime/sandbox-exec.mjs";
-import { turnInstructions } from "../runtime/turn-instructions.mjs";
 
 describe("tenant sandbox execution", () => {
   it("gives npm a writable persistent prefix and puts installed binaries before inherited tools", () => {
@@ -41,17 +40,4 @@ describe("tenant sandbox execution", () => {
     expect(ensureSandboxExecApprovals("/runtime/openclaw.mjs", {}, () => JSON.stringify({ file: stored }))).toBe(false);
   });
 
-  it("states install capability on every channel without losing attachment and scheduling instructions", () => {
-    for (const caps of [undefined, "media,images,files"]) {
-      const text = turnInstructions({ caps }, "actual image input");
-      expect(text).toContain("npm install -g");
-      expect(text).toContain("不需要人工审核");
-      expect(text).toContain("实际操作飞书等外部服务时再使用用户已有授权");
-      expect(text).toContain("nexus_schedule");
-      expect(text).toContain("actual image input");
-      expect(text).not.toContain("一律不可用，不要尝试");
-      if (caps) expect(text).toContain("MEDIA: /vercel/sandbox/agent-data/workspace/poster.jpg");
-      else expect(text).toContain("本渠道只能发送纯文本");
-    }
-  });
 });

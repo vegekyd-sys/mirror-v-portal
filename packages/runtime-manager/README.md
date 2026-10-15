@@ -65,6 +65,6 @@ NEXUS_PROFILE_TENANT_ID=<目标租户ID> pnpm --filter @dealclaw/runtime-manager
 
 ## Cron 与 heartbeat
 
-已支持 OpenClaw 的 `nexus_schedule` 工具登记持久化计划，由 Nexus 在 Sandbox 释放后到点唤醒。支持一次性、固定周期、五字段 Cron 和静默 heartbeat。用户可在飞书聊天中创建、查询、修改和取消。详见 [弹性调度说明](../../docs/nexus-elastic-scheduling.md)。
+已支持 OpenClaw 的 `portal_schedule` 工具登记持久化计划，由 Portal 在 Sandbox 释放后到点唤醒。支持一次性、固定周期、五字段 Cron 和静默 heartbeat。用户可在飞书聊天中创建、查询、修改和取消。详见 [弹性调度说明](../../docs/nexus-elastic-scheduling.md)。
 
 控制服务目前运行在本机；准时无人值守依赖控制服务和数据库持续在线。

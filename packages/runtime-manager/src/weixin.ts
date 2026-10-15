@@ -254,7 +254,7 @@ export class WeixinEdge implements ChannelEdge {
       }
       stage = "validate";
       normalizeInboundAttachments(attachments, tenantId);
-      const input = text || "本条消息只有用户图片，没有附带文字。请确认收到；若此前同会话已有明确且未完成的创作要求，请使用这份实际原图继续完成。否则仅确认收到，等待用户说明怎么处理，不要自行生成或编辑。";
+      const input = text || "【Portal 附件信息】本条消息只有用户图片，没有附带文字。";
       stage = "enqueue";
       await this.store.enqueue(tenantId, requestKey, session, input, this.channel, encodeReplyTarget(target), ...(attachments.length ? [attachments] as const : []));
       this.ingressFailures.delete(`${tenantId}:${messageHash}`);
@@ -281,7 +281,7 @@ export class WeixinEdge implements ChannelEdge {
         // receives a durable failure turn so the user can resend and the poll can progress.
         if (failures < 3) throw Error("ILINK_IMAGE_INGRESS_RETRY");
         await this.store.enqueue(tenantId, requestKey, session,
-          "微信图片在本系统接收处理时失败，尚未得到可用图片。这是接入链路问题，未证实是用户图片的问题。请简短说明图片接收失败、系统正在排查；不要建议用户换图、保存原图或反复重发。不要根据旧图或猜测创作，也不要调用生成工具。",
+          "【Portal 附件接收失败】微信图片接收链路失败；本轮没有可用图片附件；失败发生在平台接入阶段，未证实为用户源文件问题。",
           this.channel, encodeReplyTarget(target), [], {inheritAttachments: false});
         this.ingressFailures.delete(failureKey);
       }

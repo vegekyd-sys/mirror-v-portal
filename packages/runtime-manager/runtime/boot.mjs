@@ -7,6 +7,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
 import { sandboxExecPolicy, sandboxExecEnv, ensureSandboxExecApprovals } from "./sandbox-exec.mjs";
+import { writePortalEnvironment } from "./portal-environment.mjs";
 import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, startNodeApprover } from "./v-features.mjs";
 
 const bootStart = Date.now();
@@ -129,9 +130,9 @@ fs.writeFileSync(
   pluginDir + "/openclaw.plugin.json",
   JSON.stringify({
     id: "nexus-scheduler",
-    name: "Nexus schedules",
+    name: "Portal runtime",
     version: "1.0.0",
-    contracts: { tools: ["nexus_schedule"] },
+    contracts: { tools: ["portal_schedule", "portal_environment", "nexus_schedule"] },
     activation: { onStartup: true },
     configSchema: { type: "object", additionalProperties: false },
   }),
@@ -163,7 +164,7 @@ const cfg = vRelease ? createVReleaseConfig({
         models: [
           {
             id: process.env.NEXUS_MODEL_ID,
-            name: "Nexus Trial",
+            name: "Portal Agent",
             input: ["text"],
             contextWindow: 200000,
             maxTokens: 8192,
@@ -194,7 +195,7 @@ const cfg = vRelease ? createVReleaseConfig({
   ...(agentId === "xingqing" ? { memory: { citations: "off" } } : {}),
   tools: {
     profile: "coding",
-    alsoAllow: ["nexus_schedule"],
+    alsoAllow: ["portal_schedule", "portal_environment"],
     deny: ["cron", "gateway", "sessions_spawn", "sessions_send"],
     elevated: { enabled: false },
     exec: sandboxExecPolicy(data),
@@ -210,6 +211,8 @@ const cfg = vRelease ? createVReleaseConfig({
     },
   },
 };
+writePortalEnvironment({ workspace, data, config: cfg });
+fs.rmSync(`${base}/turn-instructions.mjs`, { force: true });
 // Patch revisions count as configuration: a running Gateway restarts once to load new patch code.
 const RUNTIME_PATCHES = vRelease ? "progress-v4+reasoning-preview-v1" : "";
 const configHash = createHash("sha256").update(JSON.stringify(cfg) + JSON.stringify(execEnv) + RUNTIME_PATCHES).digest("hex");

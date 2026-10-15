@@ -399,7 +399,7 @@ app.use((err: any, _req: any, res: any, _next: any) => {
   res.status(500).json({ error: "REQUEST_FAILED" });
 });
 const server = app.listen(config.port, "127.0.0.1", () =>
-  console.log(`Nexus trial http://127.0.0.1:${config.port}`),
+  console.log(`Portal trial http://127.0.0.1:${config.port}`),
 );
 async function close() {
   manager.stopTimer();

@@ -90,7 +90,7 @@ export function createVReleaseConfig(o) {
     session: { dmScope: "per-channel-peer", maintenance: { mode: "enforce", pruneAfter: "30d", maxEntries: 2000, maxDiskBytes: "8gb" }, reset: { mode: "idle", idleMinutes: 43200 } },
     tools: {
       profile: "full",
-      alsoAllow: ["nexus_schedule"],
+      alsoAllow: ["portal_schedule", "portal_environment"],
       // Config writes restart the Gateway and would kill the Worker pool; cron is
       // replaced by nexus_schedule because a sleeping sandbox runs no timers;
       // ask_user waits for a UI answer the channel edge cannot give (the turn hangs).

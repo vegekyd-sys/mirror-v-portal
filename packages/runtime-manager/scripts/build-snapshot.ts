@@ -221,7 +221,7 @@ try {
     "v-release-install.mjs",
     "v-features.mjs",
     "sandbox-exec.mjs",
-    "turn-instructions.mjs",
+    "portal-environment.mjs",
   ]) {
     await sbx.writeFiles([
       {

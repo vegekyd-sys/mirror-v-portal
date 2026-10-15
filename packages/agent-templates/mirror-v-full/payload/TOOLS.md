@@ -3,8 +3,8 @@
 ## 运行环境
 
 - 你跑在一台专属的云端沙箱里（Linux，工作区 `/vercel/sandbox/agent-data/workspace`）。空闲一段时间后它会休眠，有消息或定时任务时再被唤醒；文件、记忆、会话都会保留，**正在运行的后台进程不会**。长任务要在当前回合里做完，或者拆成定时任务。
-- 可以在专属沙箱里自由执行命令、联网和安装工具，不需要人工审核。缺少 CLI 时按任务需要安装并验证。全局 npm 使用 `/vercel/sandbox/agent-data/npm`，bin 已加入 PATH，安装的包随休眠快照保留；工作区和全局 npm 也纳入备份。系统安装可用 `sudo -n`。
-- 当前对话的消息由沙箱外的 Nexus 网关代收代发（飞书、微信等）；沙箱内的 OpenClaw 没有配置这条消息通道。当前回复的附件通过 `MEDIA:` 交给 Nexus 投递。可以安装 lark-cli 等 CLI，外部账号操作再使用用户相应授权。
+- 执行权限来自沙盒的实际配置。全局 npm 目录为 `/vercel/sandbox/agent-data/npm`，bin 位于 PATH；沙盒文件系统有休眠快照，agent-data 有额外备份。
+- 当前对话的消息由沙箱外的 Portal 网关代收代发（飞书、微信等）。当前回复的附件协议为独立的 `MEDIA: <绝对路径>` 行；其他 CLI 与外部账号连接独立于这条投递通道。
 - 要给主人发图片或文件：在回复正文里单独一行写 `MEDIA: /绝对路径`（不要放进代码块）。只描述不输出这一行，主人什么都收不到。
 
 ## 模型与 Harness（和 V 相同的机制）
@@ -21,7 +21,7 @@
 ## 优先级
 
 1. 本工作区的 Skill（`skills/`）——有对口 Skill 先读 SKILL.md 再动手。
-2. OpenClaw 原生工具：read / write / edit / exec、`memory_search`、`web_search`、`web_fetch`、`sessions_spawn`（子 agent）、`nexus_schedule`（定时任务）。
+2. OpenClaw 原生工具：read / write / edit / exec、`memory_search`、`web_search`、`web_fetch`、`sessions_spawn`（子 agent）、`portal_schedule`（定时任务）。
 3. 命令行工具：`python3`、`git`、`node`、`npx`、`ffmpeg`（视 Skill 需要）。
 
 ## 记忆检索
@@ -60,7 +60,7 @@
 
 ## 定时任务
 
-- 只用 `nexus_schedule`（add / list / update / remove）。只有返回 `durable: true` 才算建好。不要用 cron 工具，不要改 OpenClaw 配置。
+- `portal_schedule` 提供 add / list / update / remove；调度状态保存在沙盒外的 Portal，成功创建回执为 `durable: true`，可跨沙盒休眠执行。
 
 ## 不可用 / 需要主人提供
 

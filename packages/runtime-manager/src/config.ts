@@ -96,9 +96,9 @@ export function loadConfig(): Config {
     !saved.adminToken ||
     !/^[a-f0-9]{64}$/.test(saved.encryptionKey)
   )
-    throw new Error("Invalid Nexus private configuration");
+    throw new Error("Invalid Portal private configuration");
   if (!saved.model?.apiKey)
-    throw new Error("Nexus model credentials are not configured");
+    throw new Error("Portal model credentials are not configured");
   return {
     ...saved,
     port: saved.port ?? 8097,
