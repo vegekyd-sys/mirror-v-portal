@@ -8,7 +8,7 @@ Makaron 实例的 payload/snapshot 绑定保持原值。
 
 Portal 选择 Makaron → 注册或登录 Makaron，获取自己的 API Key →
 连接账号并生成二维码 → 用飞书或微信扫码确认 → 创建专属 Agent。
-创建页显示 Pixel Wizard 抱着 Spark 的头像，飞书新建应用预选同一张头像。
+创建页显示 Portal 当前的 Pixel Wizard 近景头像，飞书新建应用预选配置中的对应头像。2026-10-15 的 UI 改版更新了公开展示和新注册头像，未重建下述 payload 原包，也不会自动修改已有飞书账号头像，详见 [UI 更新记录](portal-ui-release-20261015.md)。
 
 账号 Key 只在请求正文和短期服务内存中使用，验证账号后，在该扫码创建的
 租户中加密保存。绑定失败不会发送就绪欢迎消息。Key 不进入 URL、返回值、
@@ -18,7 +18,7 @@ payload、共享模板或对话。创建流程不产生媒体费用；创作使�
 Vercel 经 HTTPS 连接专属源站，隧道传输使用 TLS，最后一段仅在本机
 loopback 上转发。无需腾讯云控制台登录或公网 443 入站变更。
 
-## 不可变产物
+## 不可变产物（v2.1.2 原包）
 
 - Payload：`makaron.v2.1.2`
 - 源码：`1181b36f7ddfb7860afaaf70920093929236f7c9`
