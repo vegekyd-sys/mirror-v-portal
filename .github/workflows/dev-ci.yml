@@ -36,7 +36,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # feishu-media tests encode and decode real MP4/WAV/PNG with ffmpeg and ffprobe.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      # The runner image ships third-party apt sources (packages.microsoft.com) that
+      # fail from time to time and make the whole `apt-get update` exit non-zero even
+      # though the Ubuntu lists ffmpeg needs were fetched. Don't let them gate CI;
+      # the install below still fails loudly if ffmpeg itself is unavailable.
+      - run: sudo apt-get update || true; sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pnpm --filter @dealclaw/central-gateway build
       - run: pnpm --filter @dealclaw/runtime-manager build
       - run: pnpm --filter @dealclaw/credits-ledger build
