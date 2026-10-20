@@ -4,6 +4,10 @@ __pycache__/
 artifacts/memory-graph/index.html
 artifacts/onboarding/
 artifacts-out/
+# 飞书授权进度、盘点结果、授权二维码和 lark-cli 日志：运行状态，不是记忆
+onboarding/feishu-*.json
+onboarding/lark-init.log
+feishu-auth.png
 
 # 注意：.gitignore 只防新增，防不住已经进过历史的 blob（进去了只能 filter-repo 或重建工作区）。
 # 主要防线不在这里：产物目录放到工作区根的 artifacts-out/，根本不进 git。

@@ -105,6 +105,7 @@
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
+| `feishu-docs.py` | 飞书文档库：`setup`（装 lark-cli）/ `status` / `scopes`（缺什么权限）/ `inventory`（盘点）/ `pull`（拉正文交给采集器） |
 | `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |
 | `onboard-budget.py` | 落盘前的体积闸门（workspace / `.git` / 预估备份包），超限非零退出 |
 | `memory-index-verify.py` | 用探针题库验收检索召回（recall@5 + 逐条命中页） |

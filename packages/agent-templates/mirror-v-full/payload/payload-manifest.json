@@ -1,6 +1,6 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v7",
+ "version": "mirror-v-full.v8",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
  "files": [
@@ -30,6 +30,7 @@
   "onboarding/probes.json",
   "onboarding/templates/data-sovereignty.md",
   "scripts/compress-memory.py",
+  "scripts/feishu-docs.py",
   "scripts/heartbeat-dispatch.py",
   "scripts/heartbeat.py",
   "scripts/import-v001-sample.sh",
@@ -68,6 +69,7 @@
   "skills/makaron-video/references/prompt-rules.md",
   "skills/memory-cold-start/SKILL.md",
   "skills/memory-cold-start/references/collection-sop.md",
+  "skills/memory-cold-start/references/feishu-lark-cli.md",
   "skills/memory-cold-start/references/no-api-playbook.md",
   "skills/memory-promotion-audit/SKILL.md",
   "skills/meshy-3d-agent/.clawhub/origin.json",

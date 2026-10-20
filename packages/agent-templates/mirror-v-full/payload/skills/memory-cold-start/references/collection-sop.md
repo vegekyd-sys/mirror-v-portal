@@ -104,14 +104,7 @@
 
 ## 飞书知识库采集
 
-**先说适用范围（否则会白写一套流程）：**
-
-沙箱里**没有飞书凭据**（见 `TOOLS.md` 的「不可用 / 需要主人提供」）。本节今天只适用于两种场景：
-
-1. **主人在真人轮里用 `v_browser_*` / `desktop_handoff`** 操作他自己已登录的飞书 —— 只能真人轮，`v_browser` 在 cron / heartbeat / subagent 里 fail-closed（`skills/v-browser-device/SKILL.md:110-119`，故意设计，不要绕）。
-2. **平台侧 L2 连接器上线后** —— 已实测可行：`user_access_token` 路线（`lark-cli whoami` → `identity: user`），读到的范围 = 这个人自己能看到的，不需要逐个文档加协作者。平台要做的是把 OAuth 搬到 Portal，不是从零摸索。
-
-在这两种情况成立之前，**不要向主人承诺「我去读你们飞书」** —— 走 `no-api-playbook.md`。
+这一节是读法的底层细节（接口、字段、坑）。日常照着 `scripts/feishu-docs.py` 跑就行，装 lark-cli、主人授权、补权限的完整流程在 `feishu-lark-cli.md`。下面这些命令都是用**主人的身份**（`lark-cli whoami` → `identity: user`）跑的，读到的范围就是主人自己能看到的，不需要逐个文档加协作者。
 
 ### 第 1 步 · 盘点（只读目录，不碰正文）
 
