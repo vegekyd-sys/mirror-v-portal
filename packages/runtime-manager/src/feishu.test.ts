@@ -150,3 +150,20 @@ test('a successful attachment-only response gets a neutral caption instead of a 
  expect(JSON.parse(caption[0].data.content).text).toBe('附件已准备好。');
  expect(f.api.im.message.reply.mock.calls.some((args:any[])=>args[0].data.msg_type==='image')).toBe(true);
 });
+test("an inbound file is answered in words instead of vanishing, and leaks neither name nor key",async()=>{
+  const f=await fixture();
+  const data={sender:{sender_type:"user"},message:{message_id:"incoming-file",chat_id:"chat",message_type:"file",content:JSON.stringify({file_key:"file_v3_SECRETKEY",file_name:"2026 薪酬表.PDF"})}};
+  const run=await f.edge.receive(f.tenant,f.api,data);
+  expect(run?.text).toContain(".pdf");expect(run?.text).toContain("粘");
+  expect(run?.attachments).toEqual([]);expect(run?.inherit_attachments).toBe(false);
+  expect(f.api.im.messageResource.get).not.toHaveBeenCalled();
+  expect(f.events.some(event=>event[1]==="feishu-file-unsupported" && event[2].extension==="pdf")).toBe(true);
+  expect(JSON.stringify(f.events)).not.toContain("SECRETKEY");expect(JSON.stringify(f.events)).not.toContain("薪酬");
+  // A replay reuses the durable run, and a bot's own file is still dropped.
+  await f.edge.receive(f.tenant,f.api,data);
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"app"},message:{message_id:"bot-file",chat_id:"chat",message_type:"file",content:"{}"}});
+  expect(f.store.enqueue).toHaveBeenCalledTimes(1);
+  // An extensionless file still gets an answer rather than silence.
+  const bare=await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"bare-file",chat_id:"chat",message_type:"file",content:JSON.stringify({file_key:"k",file_name:"合同"})}});
+  expect(bare?.text).toContain("主人发来一个文件，");
+});

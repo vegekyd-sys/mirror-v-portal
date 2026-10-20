@@ -22,6 +22,18 @@ const feishuHttp: NonNullable<ConstructorParameters<typeof lark.Client>[0]["http
   put: (url:string,data:any,opts:any) => lark.defaultHttpInstance.put(url,data,{...opts,timeout:opts?.timeout ?? 60_000}) as any,
   patch: (url:string,data:any,opts:any) => lark.defaultHttpInstance.patch(url,data,{...opts,timeout:opts?.timeout ?? 60_000}) as any,
 };
+/**
+ * An inbound `file` carries only a name we never read and a key we do not download
+ * yet. Report its extension (letters/digits only, truncated) so the Agent can be
+ * concrete without any user-controlled text landing inside a Portal notice.
+ */
+function feishuFileExtension(input: unknown): string {
+  let content: any;
+  try {content=typeof input === "string" ? JSON.parse(input) : input;} catch {return "";}
+  const name = typeof content?.file_name === "string" ? content.file_name : "";
+  const extension = name.slice(name.lastIndexOf(".") + 1);
+  return name.includes(".") && /^[A-Za-z0-9]{1,12}$/.test(extension) ? extension.toLowerCase() : "";
+}
 export class FeishuEdge implements ChannelEdge {
   readonly channel = "feishu";
   clients = new Map<string, { ws: lark.WSClient; api: lark.Client }>();
@@ -200,7 +212,8 @@ export class FeishuEdge implements ChannelEdge {
   }
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
-    if (!m?.message_id || data.sender?.sender_type === "app" || !["text","image","post"].includes(m.message_type)) return;
+    // `file` is on the whitelist only so the turn can be answered: nothing is downloaded.
+    if (!m?.message_id || data.sender?.sender_type === "app" || !["text","image","post","file"].includes(m.message_type)) return;
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
     const content = parseFeishuContent(m.message_type,m.content);
     let text = content.text;
@@ -209,8 +222,18 @@ export class FeishuEdge implements ChannelEdge {
     // A replay reuses the durable run. Never redownload or rewrite an already committed image turn.
     const prior = await this.store.pool.query<Run>("SELECT * FROM elastic_runs WHERE tenant_id=$1 AND request_key=$2",[tenant.id,m.message_id]);
     if (prior.rows[0]) {if (prior.rows[0].delivery !== "sent") this.typing.start(prior.rows[0],api);return prior.rows[0];}
-    let attachments: InboundAttachment[] = [], failedImage = false;
-    if (m.message_type === "image" || content.imageKeys.length) {
+    let attachments: InboundAttachment[] = [], failedImage = false, unreadableFile = false;
+    if (m.message_type === "file") {
+      // Until download + MIME screening ships, an owner's PDF must not disappear in
+      // silence — that is a product failure, not a limitation. Enqueue a turn that
+      // states what happened so the Agent answers in plain words and offers a path
+      // that works. Attachment inheritance is blocked for the same reason a failed
+      // image blocks it: this turn is an acknowledgement, never an edit request.
+      unreadableFile = true;
+      const extension = feishuFileExtension(m.content);
+      await this.store.event(tenant.id,"feishu-file-unsupported",{code:"FEISHU_FILE_NOT_SUPPORTED",extension:extension || null});
+      text=`【Portal 附件接收失败】主人发来一个文件${extension ? `（.${extension}）` : ""}，但飞书入站通道目前只收文字、图片和富文本，文件内容没有到你这里，你读不到其中任何一个字。请用人话回他一句：你收不到文件，这是你这边的短板、不是他的操作问题；能用的办法是把正文粘过来、发截图、或者发链接。`;
+    } else if (m.message_type === "image" || content.imageKeys.length) {
       let failure: string | undefined;
       if (!content.imageKeys.length) failure="FEISHU_IMAGE_RESOURCE_INVALID";
       if (content.imageKeys.length > MAX_INBOUND_IMAGES) failure="FEISHU_IMAGES_TOO_MANY";
@@ -239,7 +262,7 @@ export class FeishuEdge implements ChannelEdge {
         text="【Portal 附件接收失败】本条飞书图片的实际原图未能接入；本轮没有可用图片附件。";
       }
     }
-    const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage ? {inheritAttachments:false} : {});
+    const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage || unreadableFile ? {inheritAttachments:false} : {});
     if (run.delivery !== "sent") this.typing.start(run,api);
     const createdAt=Number(m.create_time);
     await this.store.event(tenant.id,"feishu-ingress",{
