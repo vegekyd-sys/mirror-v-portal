@@ -63,6 +63,9 @@ def main():
         groups[owner(n["id"])].append({"path": n["id"], "title": n["t"], "kind": n["k"], "inbound": n["in"],
                                        "first_line": first_line(ROOT / n["id"])})
     out = ROOT / "memory" / "librarian" / "unreachable.json"
+    # 生产环境靠 boot 建好 librarian/，但从备份恢复的工作区没有这一步，
+    # 目录不在时整个夜间 step 3 会挂掉。自己兜底建。
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"metric": metric, "groups": dict(sorted(groups.items(), key=lambda kv: -len(kv[1])))},
                               ensure_ascii=False, indent=1))
     print(json.dumps({**metric, "unreachable": len(unreach), "groups": len(groups)}, ensure_ascii=False))

@@ -60,6 +60,66 @@ def index_link(path_str: str) -> str:
     return path_str[len("memory/"):] if path_str.startswith("memory/") else path_str
 
 
+SUMMARY_MAX = 60  # index.md 一行一页，摘要截断到 60 字，别把目录撑成正文
+
+
+def first_sentence(path: Path, limit: int = SUMMARY_MAX) -> str:
+    """页面首段的第一句，给 index.md 的 `- [标题](路径) — 一句话` 用。
+
+    首段 = 标题行之后到第一个 `##` 之间的正文（SCHEMA「检索友好的首段规范」）。
+    丢掉 `关键词：` 那行（它是首段最后一行，不是人话摘要），行内链接只留文字，
+    按中英文句末标点切第一句，超过 limit 字就截断。取不到就返回空串。
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+    lines = text.splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            start = i + 1
+            break
+
+    body: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("##"):
+            break
+        s = line.strip()
+        if not s:
+            if body:
+                break  # 空行 = 首段结束
+            continue
+        if s.startswith(("<!--", "---", ">", "|", "_最近复核")):
+            continue
+        if re.match(r"^(别名/)?关键词[：:]", s):
+            continue
+        body.append(s)
+
+    para = " ".join(body)
+    if not para:
+        return ""
+    para = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", para)  # 行内链接只留文字
+    para = re.sub(r"[*_]{2}", "", para)
+    para = re.sub(r"\s+", " ", para).strip()
+    if not para:
+        return ""
+
+    m = re.search(r"[。！？!?；;]", para)
+    if m:
+        para = para[: m.start()].strip()
+    if len(para) > limit:
+        para = para[:limit].rstrip() + "…"
+    return para
+
+
+def index_line(title: str, link_target: str, summary: str = "") -> str:
+    """SCHEMA 要求的 index 行：`- [标题](路径) — 一句话`；没摘要就不留空破折号。"""
+    line = f"- [{title}]({link_target})"
+    return f"{line} — {summary}" if summary else line
+
+
 def existing_links(text: str) -> set[str]:
     return set(re.findall(r"\[[^\]]+\]\(([^)]+)\)", text))
 
@@ -125,7 +185,8 @@ def append_log(kind: str, title: str, lines: list[str]) -> None:
 def recent_daily_files(days: int) -> list[Path]:
     cutoff = dt.date.today() - dt.timedelta(days=days - 1)
     files: list[Path] = []
-    for path in sorted(MEMORY.glob("2026-*.md")):
+    # 不要硬编码年份：跨年后 glob("2026-*.md") 会一条日志都扫不到。
+    for path in sorted(MEMORY.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md")):
         m = re.match(r"(\d{4}-\d{2}-\d{2})\.md$", path.name)
         if not m:
             continue
@@ -376,7 +437,7 @@ def _update_index_for_promoted(results: list[dict]) -> None:
     existing_links_set = existing_links(idx_text)
 
     section_map = {
-        "concept": "## Core Concepts",
+        "concept": "## Concepts",
         "decision": "## Decisions",
         "people": "## People",
         "project": "## Projects",
@@ -421,7 +482,7 @@ def reindex_all_wiki_pages() -> int:
     existing_links_set = existing_links(idx_text)
 
     section_map = {
-        "concepts": "## Core Concepts",
+        "concepts": "## Concepts",
         "decisions": "## Decisions",
         "people": "## People",
         "projects": "## Projects",
@@ -445,7 +506,7 @@ def reindex_all_wiki_pages() -> int:
                 continue
             t = title_of(page)
             missing_by_kind.setdefault(kind_dir_name, []).append(
-                f"- [{t}]({link_target})"
+                index_line(t, link_target, first_sentence(page))
             )
 
     if not missing_by_kind:
@@ -470,7 +531,13 @@ def reindex_all_wiki_pages() -> int:
 def run_lint() -> tuple[int, str]:
     script = ROOT / "scripts" / "v-evolution.py"
     if not script.exists():
-        return 0, "lint unavailable: scripts/v-evolution.py missing"
+        # 这个脚本不在 payload 的 files[] 里，所以 lint 其实一次都没跑过。
+        # 以前这里返回 0，heartbeat 据此恒报 lint=ok —— 批量导入最需要的
+        # 那道质量闸门是空的，而且没人看得见。返回非 0 让缺口浮出来。
+        return 2, (
+            "lint unavailable: scripts/v-evolution.py missing — "
+            "wiki lint has never actually run; treat `lint ok` from older reports as meaningless"
+        )
     proc = subprocess.run(
         ["python3", str(script), "lint-wiki"],
         cwd=ROOT,

@@ -4,7 +4,16 @@
 
 ## 首次启动
 
-如果工作区里有 `BOOTSTRAP.md`，先按它完成认主人和起名，再做别的。用户第一句话是在派活时，先把活干完，再找安静的时机走完首启流程。
+按顺序判断：
+
+1. 工作区里有 `BOOTSTRAP.md` → 先按它走完，再做别的。走完就把它删掉。
+2. 没有 `BOOTSTRAP.md` → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。
+
+用户第一句话是在派活时，先把活干完，再找安静的时机走首启流程。
+
+⚠️ `skills/proactive-agent/` 里的 `assets/ONBOARDING.md` 和 `references/onboarding-flow.md` 是那个
+第三方 skill 自带的样例流程，**不是这台机器的上手流程**。本机以 `BOOTSTRAP.md` 和
+`skills/memory-cold-start/SKILL.md` 为准，不要去找或创建 `ONBOARDING.md`。
 
 ## File Responsibilities
 
@@ -36,6 +45,7 @@
 规则以 `memory/SCHEMA.md` 为准。一句话：**daily log 记录发生了什么，wiki 保存现在什么是真的。**
 
 - **当天的事**写进 `memory/YYYY-MM-DD.md`（日期按主人时区）。每件事一个 `## ` 小节：标题一句话，正文写事实、决定、来源。每晚 21:00 的 Librarian 会按这些小节编译进 wiki，所以小节要能独立看懂。
+- **主人给的原料（网页、文档、别的 AI 助手里的记忆）一律走 `scripts/onboard-collect.py` 落盘，不要抄进 daily log，也不要自己当场编译成 wiki。** 它们会进 Librarian 的 import 队列，由每晚 21:00 的整理编译。抄进日志会被编译两遍，自己当场写会和 Librarian 写出两套说法。日志只记当天发生的事。见 `memory/SCHEMA.md` 的 Import Compile。
 - **项目**：`memory/projects/<slug>/main.md` 只放现在为真的结论，过程放同目录 `history.md`。
 - **人**：`memory/people/<slug>.md`，只写观察到的事实和来源。
 - **跨项目的规则和教训**：`memory/concepts/`；工程踩坑放 `concepts/<领域>-engineering-lessons.md`。
@@ -89,12 +99,16 @@
 | `reflection-capture.py` | 有活动但没写 reflection 时补一条种子 |
 | `write-skill-candidate.py` | 记录 Skill 候选 |
 | `heartbeat.py` / `heartbeat-dispatch.py` | Knight heartbeat：维护调度和派工队列 |
-| `librarian-daily-queue.py` | 21:00 编译队列（按 daily log 小节） |
+| `librarian-daily-queue.py` | 21:00 编译队列：daily log 小节 + `kind=import` 导入原料（`stats` 看还剩几片） |
 | `librarian-adopt-untracked.py` | 收编没进 git 的新记忆页 |
 | `librarian-relations.py` / `librarian-reachability.py` | 关联候选、可达性检查 |
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
+| `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |
+| `onboard-budget.py` | 落盘前的体积闸门（workspace / `.git` / 预估备份包），超限非零退出 |
+| `memory-index-verify.py` | 用探针题库验收检索召回（recall@5 + 逐条命中页） |
+| `index-compact.py` | `index.md` 按三级标题分组折叠 + 行数水位告警 |
 
 脚本都在工作区根目录下运行：`cd /vercel/sandbox/agent-data/workspace`。
 

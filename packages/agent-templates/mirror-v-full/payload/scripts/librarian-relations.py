@@ -9,7 +9,7 @@ candidate and writes a typed line into both pages' `## 相关` section.
 - unlinked_mentions: page A names project B (slug path or an alias from B's
   `关键词` line) but has no markdown link to B.
 - co_mentions: pairs of projects named in the same daily-log section
-  (memory/2026-*.md, split on `## `), counted over sections.
+  (memory/YYYY-MM-DD.md, split on `## `), counted over sections.
 
 Writes memory/librarian/relation-candidates.json. Usage:
   librarian-relations.py [--min-co 3] [--top 150] [--metric-only]
@@ -96,7 +96,8 @@ def main():
                 unlinked.append({"from": s, "to": t, "hit": m.group(0)})
 
     co, freq, nsec = Counter(), Counter(), 0
-    for daily in sorted(MEM.glob("2026-*.md")):
+    # 不要硬编码年份：跨年后 glob("2026-*.md") 一条日志都扫不到，co_mentions 直接归零。
+    for daily in sorted(MEM.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md")):
         for sec in daily.read_text(errors="ignore").split("\n## "):
             low = sec.lower()
             hit = sorted(s for s in P if rx[s].search(low))
@@ -115,6 +116,9 @@ def main():
                         "linked": (y in links[x] or x in links[y])})
     co_list = sorted(co_list, key=lambda c: -c["score"])[: a.top]
 
+    # 和 librarian-reachability.py 同一个坑：从备份恢复的工作区没有 memory/librarian/，
+    # 这里不兜底的话夜间 step 2 就挂了，step 3 的 mkdir 也就白加了。
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"metric": metric, "unlinked_mentions": unlinked, "co_mentions": co_list,
                                "hubs": hubs, "aliases": {s: d["aliases"] for s, d in P.items()}}, ensure_ascii=False, indent=1))
     print(json.dumps({**metric, "hubs": hubs, "unlinked_mentions": len(unlinked), "co_pairs": len(co_list),

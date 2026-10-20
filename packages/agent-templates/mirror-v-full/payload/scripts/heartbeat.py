@@ -10,6 +10,7 @@ Executes periodic maintenance tasks:
   5. Project queue scan — scan project TODOs for ready tasks
   6. Token budget check — verify GPT-5.5 weekly usage against thresholds
   7. Makaron marketing image — generate next cover image
+  8. Librarian idle check — alarm when the compile queue has backlog but last night compiled nothing
 
 Usage:
   python3 scripts/heartbeat.py
@@ -21,7 +22,7 @@ import re
 import sys
 import subprocess
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import Counter
 
@@ -506,6 +507,176 @@ def step_wiki_maintenance(config, tracker: MemoryUsageTracker | None = None) -> 
     except Exception as e:
         log(f"  Wiki maintenance error: {e}")
         return "Wiki maintenance: error"
+
+
+# ── Librarian 空跑检测 ───────────────────────────────────────────────────────
+# 21:00 的 Librarian 队列为空时回 NO_REPLY（静默），所以「队列有积压、当晚却
+# compiled=0」这种真故障没有任何出口。heartbeat 是 kind=heartbeat，没事时回
+# HEARTBEAT_OK 同样静默 —— 正好拿来承载这条告警：只有真出问题时才出声。
+# 做成 payload 改动而不是新增 system schedule：ensureSystemSchedules 的
+# WHERE NOT EXISTS (tenant_id, name) 连 disabled 行一起算，新增就是单向门。
+
+
+def _librarian_yesterday(config) -> str:
+    """按工作区时区算的昨天。8:30 和 20:30 两轮 heartbeat 看的都是昨晚那次编译。"""
+    tzname = config.get("timezone") or "Asia/Shanghai"
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo(tzname))
+    except Exception:
+        now = datetime.now()
+    return (now.date() - timedelta(days=1)).isoformat()
+
+
+def _librarian_run_counts(runs_path: Path) -> tuple[int, int]:
+    """昨晚运行记录里的 (compiled, skipped)；文件缺失或读不动返回 (-1, -1)。
+
+    格式见 memory/SCHEMA.md「运行记录」：{"runs": [{stats, sources[{action}], outputs[]}]}。
+    stats.compiled 优先；没有就按 sources[].action 数（skipped 之外都算编译过）；
+    再没有就退到 outputs[] 的条数。Librarian 是 LLM 写的这份 JSON，字段不保证齐全，
+    所以每一层都要能退。
+    """
+    try:
+        data = json.loads(runs_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return -1, -1
+    if isinstance(data, dict):
+        runs = data.get("runs")
+        if runs is None:
+            runs = [data]
+    else:
+        runs = data
+    if isinstance(runs, dict):
+        runs = [runs]
+    if not isinstance(runs, list):
+        return -1, -1
+
+    compiled = skipped = 0
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        stats = run.get("stats") if isinstance(run.get("stats"), dict) else {}
+        sources = [s for s in (run.get("sources") or []) if isinstance(s, dict)]
+        outputs = [o for o in (run.get("outputs") or []) if isinstance(o, dict)]
+        if isinstance(stats.get("compiled"), int):
+            compiled += stats["compiled"]
+        elif sources:
+            compiled += sum(1 for s in sources if str(s.get("action", "")) not in ("", "skipped"))
+        else:
+            compiled += len(outputs)
+        if isinstance(stats.get("skipped"), int):
+            skipped += stats["skipped"]
+        else:
+            skipped += sum(1 for s in sources if str(s.get("action", "")) == "skipped")
+    return compiled, skipped
+
+
+def _librarian_marked_compiled(queue_path: Path, day: str) -> int:
+    """daily-queue.json 里 at=昨天、status=compiled 的段数；读不动返回 -1。
+
+    和运行记录互为旁证：运行记录没写但 mark 写了，说明它其实跑了，不该告警。
+    """
+    try:
+        state = json.loads(queue_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return -1
+    done = state.get("done") if isinstance(state, dict) else None
+    if not isinstance(done, dict):
+        return -1
+    return sum(
+        1
+        for v in done.values()
+        if isinstance(v, dict)
+        and v.get("status") == "compiled"
+        and str(v.get("at", "")).startswith(day)
+    )
+
+
+def step_librarian_idle_check(config, tracker: MemoryUsageTracker | None = None) -> str:
+    """队列有积压但昨晚一段都没编译 → 报一条。健康时返回空串，不进报告。"""
+    log("Step: Librarian idle check")
+    if not config.get("heartbeat", {}).get("librarian_idle_check", {}).get("enabled", True):
+        log("  disabled in knight.config.json, skipping")
+        return ""
+
+    workspace = resolve_workspace(config)
+    librarian = workspace / "memory" / "librarian"
+    queue_file = librarian / "daily-queue.json"
+    if not queue_file.exists():
+        # Librarian 还没跑过第一轮（新租户的常态），没什么可比的。
+        log("  memory/librarian/daily-queue.json not found, skipping")
+        return ""
+
+    script = workspace / "scripts" / "librarian-daily-queue.py"
+    if not script.exists():
+        log("  librarian-daily-queue.py not found")
+        return "Librarian 空跑检测无法执行：scripts/librarian-daily-queue.py 不在工作区里，夜间编译队列目前没有任何监控。"
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), "stats"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        log("  queue stats timed out")
+        return "Librarian 空跑检测无法执行：librarian-daily-queue.py stats 60 秒没返回。"
+    except Exception as e:
+        log(f"  queue stats error: {e}")
+        return f"Librarian 空跑检测无法执行：{e}"
+
+    if result.returncode != 0:
+        last = ((result.stderr or result.stdout or "").strip().splitlines() or ["no output"])[-1]
+        log(f"  queue stats failed: {last}")
+        return f"Librarian 空跑检测无法执行：librarian-daily-queue.py stats 失败（{last}）。"
+    try:
+        stats = json.loads(result.stdout)
+    except ValueError:
+        log("  queue stats output is not JSON")
+        return "Librarian 空跑检测无法执行：librarian-daily-queue.py stats 的输出不是 JSON。"
+
+    daily_pending = int(stats.get("daily_pending") or 0)
+    backfill_pending = int(stats.get("backfill_pending") or 0)
+    # import = onboarding corpus. On a new tenant it is usually the only thing queued,
+    # so leaving it out would make this check blind exactly when it matters most.
+    import_pending = int(stats.get("import_pending") or 0)
+    pending = daily_pending + backfill_pending + import_pending
+
+    day = _librarian_yesterday(config)
+    runs_file = librarian / "runs" / f"{day}.json"
+    compiled, skipped = _librarian_run_counts(runs_file)
+    marked = _librarian_marked_compiled(queue_file, day)
+
+    log(f"  pending={pending} (daily {daily_pending} / backfill {backfill_pending} / import {import_pending}); "
+        f"runs/{day}.json compiled={compiled} skipped={skipped}; marked_compiled={marked}")
+
+    if tracker:
+        tracker.record_path(
+            "scan",
+            queue_file,
+            trigger="librarian idle check",
+            effect=f"compile backlog {pending}, last night ({day}) compiled {max(compiled, 0)}",
+            follow_up="check the 21:00 Librarian run" if pending > 0 and compiled <= 0 and marked <= 0 else "none",
+        )
+
+    if pending <= 0 or compiled > 0 or marked > 0:
+        return ""
+
+    if compiled < 0:
+        why = f"昨晚（{day}）连运行记录 memory/librarian/runs/{day}.json 都没有 —— 21:00 那轮很可能根本没跑起来"
+    elif skipped > 0:
+        why = f"昨晚（{day}）跑是跑了，{skipped} 段却全被跳过，一段都没编译进 wiki"
+    else:
+        why = f"昨晚（{day}）的运行记录里没有任何编译产出"
+    return (
+        f"Librarian 空跑告警：编译队列还积着 {pending} 段"
+        f"（daily {daily_pending} / backfill {backfill_pending} / 导入 {import_pending}），但{why}。"
+        "队列为空时 Librarian 是静默的，这种情况只有这条告警会说出来：请查 21:00 那一轮的执行情况，必要时今晚补跑。"
+    )
+
 
 def stable_task_id(project: str, task_text: str) -> str:
     """Stable short id for TODO task matching across heartbeat runs."""
@@ -1032,6 +1203,10 @@ def main():
 
     if "wiki_maintenance" in tasks:
         results.append(step_wiki_maintenance(config, tracker))
+
+    # 无条件执行，不挂在 tasks 开关上：它补的就是「静默失败没人发现」这个洞，
+    # 放进可选列表等于白补。要关只能显式写 heartbeat.librarian_idle_check.enabled=false。
+    results.append(step_librarian_idle_check(config, tracker))
 
     if "skill_dashboard" in tasks or "v_learning_loop_dashboard" in tasks:
         results.append(step_skill_dashboard(config, tracker))

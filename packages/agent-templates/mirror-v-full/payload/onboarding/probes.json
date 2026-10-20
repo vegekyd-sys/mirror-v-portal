@@ -1,0 +1,45 @@
+{
+  "_howto": [
+    "探针 = 只有读过这位主人的原料才答得出的问题，用来考记忆库能不能真的被检索到。",
+    "冷启动时出 10 道题：公开层 4 道（官网、公开报道能答的），内部层 6 道（只有主人的文档或他在别的 AI 助手里的记忆能答的）。公开层只作对照，用来区分「检索坏了」和「料不够」。",
+    "什么时候考：import 队列编译完（librarian-daily-queue.py stats 的 import_pending 归零）考一次；之后每次大批导入编译完再考。同一套题，不许中途改题，否则分数不可比。",
+    "怎么考：python3 scripts/memory-index-verify.py --probes onboarding/probes.json emit → 对每题跑 memory_search → record 回填 → report 出 recall@5。",
+    "通过线：recall@5 ≥ 0.8。低于这个数，先看是哪一层答不出：内部层低多半是料没接进来，公开层也低多半是页面首段写得搜不到。",
+    "下面标了 \"example\": true 的是示例，必须整条替换成这位主人自己的题。memory-index-verify.py 遇到 example 题会拒绝出分。"
+  ],
+  "version": 1,
+  "probes": [
+    {
+      "id": "P1",
+      "question": "我们为什么从 C 端影像工具转向 B 端 Agent？这个决定是哪一年、谁拍的？",
+      "expect_pages": [
+        "projects/versa-agent-business/main.md",
+        "decisions/2026-10-20-pivot-to-b2b-agent.md"
+      ],
+      "layer": "internal",
+      "added_on": "2026-10-20",
+      "example": true
+    },
+    {
+      "id": "P2",
+      "question": "官网『创始人』栏的 CTO 卡片写错了什么？正确的口径是什么、是谁哪天纠正的？",
+      "expect_pages": [
+        "people/zhao-weijie.md",
+        "projects/versa-company/main.md"
+      ],
+      "layer": "internal",
+      "added_on": "2026-10-20",
+      "example": true
+    },
+    {
+      "id": "P3",
+      "question": "马卡龙玩图是哪一年上线的，拿过哪两个奖？",
+      "expect_pages": [
+        "projects/versa-company/history.md"
+      ],
+      "layer": "public",
+      "added_on": "2026-10-20",
+      "example": true
+    }
+  ]
+}
