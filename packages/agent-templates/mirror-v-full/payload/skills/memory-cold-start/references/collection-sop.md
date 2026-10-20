@@ -161,12 +161,12 @@ lark-cli wiki +node-list --space-id <space_id> --parent-node-token <token> --pag
 凭证  密码  账号  secret  token  key  身份证  银行卡  私钥  credential
 ```
 
-实测 `客户交付相关` 空间下有 `客户TK账号凭证库`（bitable）和 `客户TK账号凭证查询 SOP`。
+企业知识库里真的会有这类页面，比如专门存放客户账号凭证的多维表格，以及配套的查询 SOP。
 
 **命中后怎么做**：不是无视，是在 index 里留一行
 
 ```
-- 客户交付相关 / 客户TK账号凭证库（bitable）— 标题命中凭证关键词，未读取正文（2026-10-20）
+- <空间名> / <页面标题>（bitable）— 标题命中凭证关键词，未读取正文（<日期>）
 ```
 
 让主人看见你知道边界在哪。这一行本身就是信任建立的动作。
