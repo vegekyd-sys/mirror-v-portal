@@ -37,12 +37,20 @@ describe('template avatar', () => {
     expect(result.headers['content-security-policy']).toContain("object-src 'none'");
   });
 
-  it('serves refreshed portraits for native registration across origins', async () => {
-    const result = await request(createApp()).get('/onboard/assets/agent-dealclaw-portrait-b651b1783968.png').set('Origin', 'https://open.feishu.cn');
+  it.each([
+    ['dealclaw', 'b651b1783968'],
+    ['xingqing', 'a376b49895b1'],
+    ['makaron', '154a2a9faba7'],
+    ['mirror-v', '1260c99c184d'],
+  ])('allows Feishu canvas conversion of the %s portrait, including refreshed URLs', async (agent, hash) => {
+    const pathname = `/onboard/assets/agent-${agent}-portrait-${hash}.png?v=canvas-cors-20261021`;
+    const result = await request(createApp()).get(pathname).set('Origin', 'https://open.feishu.cn');
     expect(result.status).toBe(200);
+    expect(result.headers['content-type']).toContain('image/png');
     expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
     expect(result.headers['access-control-allow-origin']).toBe('*');
-    expect(createHash('sha256').update(result.body).digest('hex')).toBe('b651b17839689ab2e4a2187b9213c56a87104cda041156466dbcc50b2f96cb74');
+    expect(createHash('sha256').update(result.body).digest('hex').slice(0, 12)).toBe(hash);
+    expect(registrationAvatarPreset({ avatarUrl: `https://mirror-v-portal.vercel.app${pathname}` })).toEqual({ avatar: [`https://mirror-v-portal.vercel.app${pathname}`] });
   });
 
 });
