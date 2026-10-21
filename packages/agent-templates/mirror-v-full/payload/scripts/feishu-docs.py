@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""飞书文档库 → 记忆冷启动：装 lark-cli、查权限、盘点、拉正文，交给 Librarian。
+"""飞书文档库 → 记忆冷启动：用主人扫码绑定的那个 Mirror V 应用读他的文档，交给 Librarian。
 
-对大多数主人来说，飞书文档库是最大的记忆来源。这台机器可以自己装 npm 包
-（全局前缀在 agent-data/npm，休眠和备份都保留），所以读飞书的办法就是装上
-官方的 lark-cli，让主人自己授权，然后用主人的身份去读他本来就能看到的文档。
-凭据只在 lark-cli 自己的目录里（agent-data/lark-cli），不经过记忆、不进 git。
+对大多数主人来说，飞书文档库是最大的记忆来源。平台在沙箱启动时把主人扫码时
+绑定的那个飞书应用交给 lark-cli（LARKSUITE_CLI_APP_ID / _APP_SECRET / _CONFIG_DIR），
+所以这里不再新建应用：缺权限就在这个应用上补，主人授权一次，就能用他的身份读
+他本来就能看到的文档。用户 token 存在 agent-data/lark-cli，不进记忆、不进 git。
 
 子命令（都在工作区根目录跑）：
-  setup        装 lark-cli（已装就跳过），把它的配置目录放进 agent-data，打印当前状态
-  status       只看状态：装没装、有没有绑定应用、是不是用户身份、token 是否有效
-  scopes       对照拉文档需要的权限，列出应用还缺哪几项
+  setup        装 lark-cli（已装就跳过），打印状态和下一步
+  status       看状态：装没装、应用绑上没有、主人授权没有
+  scopes       对照读文档要的用户身份权限，缺的给出一键开通链接（退出码 2）
+  login        发起授权：输出给主人点的链接（和二维码图片），记下设备码
+  login --finish   主人点完之后收尾，拿到主人身份
   inventory    盘点：所有知识空间 + 个人文档库的节点树，只读目录不读正文
-  pull         按盘点结果拉正文，逐份交给 onboard-collect.py（--source feishu）
-
-授权本身不在这个脚本里做，因为要主人在手机上点链接，跨好几轮对话，
-步骤见 skills/memory-cold-start/SKILL.md 的「飞书文档库」一节。
+  pull         按主人选的空间拉正文，逐份交给 onboard-collect.py（--source feishu）
 
 实测（2026-10-20，一个真实企业飞书）：13 个空间 / 117 个节点，盘点 41 秒；
 81 篇正文 199k 字，拉取 84 秒、零失败。117 个节点里 70 个是老版 doc，
@@ -33,7 +32,6 @@ import time
 from pathlib import Path
 
 LARK_VERSION = "1.0.89"
-SANDBOX_DATA = Path("/vercel/sandbox/agent-data")
 # 拉文档实际用到的用户身份只读权限。老版 doc 那一项是按本机实测推的，
 # 以 `lark-cli auth check` 在真实租户上的结果为准。
 REQUIRED_SCOPES = {
@@ -62,6 +60,8 @@ WS = workspace()
 STATE_DIR = WS / "onboarding"
 INVENTORY = STATE_DIR / "feishu-inventory.json"
 PULLED = STATE_DIR / "feishu-pulled.json"
+AUTH = STATE_DIR / "feishu-auth.json"
+QR = WS / "feishu-auth.png"
 
 
 def lark_env() -> dict:
@@ -99,44 +99,38 @@ def say(obj) -> None:
 
 # ---------- setup / status ----------
 
-def link_config_dir() -> str:
-    """lark-cli 的配置和 token 默认在 ~/.lark-cli。挪进 agent-data，备份恢复后也还在。"""
-    if not SANDBOX_DATA.exists():
-        return "不在沙箱里，保持默认 ~/.lark-cli"
-    target = SANDBOX_DATA / "lark-cli"
-    target.mkdir(parents=True, exist_ok=True)
-    os.chmod(target, 0o700)
-    home = Path.home() / ".lark-cli"
-    if home.is_symlink() and os.readlink(home) == str(target):
-        return f"~/.lark-cli -> {target}"
-    if home.exists() and not home.is_symlink():
-        for item in home.iterdir():  # 已经有配置就搬过去，不丢授权
-            dest = target / item.name
-            if not dest.exists():
-                shutil.move(str(item), str(dest))
-        shutil.rmtree(home, ignore_errors=True)
-    elif home.is_symlink():
-        home.unlink()
-    home.symlink_to(target)
-    return f"~/.lark-cli -> {target}"
+def ensure_config_dir() -> str:
+    """平台把 LARKSUITE_CLI_CONFIG_DIR 指到 agent-data（休眠、备份都保留）；这里只保证目录在、权限收紧。"""
+    d = os.environ.get("LARKSUITE_CLI_CONFIG_DIR")
+    if not d:
+        return "未设置 LARKSUITE_CLI_CONFIG_DIR，lark-cli 用默认 ~/.lark-cli"
+    Path(d).mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    return f"lark-cli 配置目录 {d}"
+
+
+def bound_app() -> str | None:
+    return os.environ.get("LARKSUITE_CLI_APP_ID") or None
 
 
 def status() -> dict:
-    s: dict = {"installed": bool(shutil.which("lark-cli"))}
+    s: dict = {"installed": bool(shutil.which("lark-cli")), "boundApp": bound_app()}
     if not s["installed"]:
         s["next"] = "python3 scripts/feishu-docs.py setup"
         return s
+    if not s["boundApp"]:
+        s["next"] = ("这台机器没有拿到绑定的飞书应用（LARKSUITE_CLI_APP_ID 为空），读不了飞书。"
+                     "如实告诉主人，改走粘正文 / 发截图，不要让他另建应用。")
+        return s
     data, err = lark("whoami")
     if err:
-        s.update(configured=False, detail=err,
-                 next="还没有绑定应用：按 SKILL.md 跑 lark-cli config init --new --force-init（后台跑，把链接发给主人）")
+        s.update(detail=err, next="python3 scripts/feishu-docs.py scopes")
         return s
-    s.update(configured=True, appId=data.get("appId"), identity=data.get("identity"),
-             tokenStatus=data.get("tokenStatus"), user=(data.get("onBehalfOf") or {}).get("userName"))
-    if data.get("identity") != "user" or not s["user"]:
-        s["next"] = "应用已绑定，但主人还没授权：lark-cli auth login --no-wait --json --domain wiki,docs,drive"
-    else:
-        s["next"] = "python3 scripts/feishu-docs.py scopes"
+    user = (data.get("onBehalfOf") or {}).get("userName")
+    s.update(identity=data.get("identity"), tokenStatus=data.get("tokenStatus"), user=user)
+    s["authorized"] = data.get("identity") == "user" and bool(user)
+    s["next"] = ("python3 scripts/feishu-docs.py inventory" if s["authorized"]
+                 else "python3 scripts/feishu-docs.py scopes，权限齐了再 login")
     return s
 
 
@@ -152,7 +146,7 @@ def cmd_setup(_a) -> None:
                  "hint": "确认 npm prefix 可写（应为 /vercel/sandbox/agent-data/npm）且允许安装脚本"})
             sys.exit(1)
         steps.append(f"已安装 @larksuite/cli@{LARK_VERSION}")
-    steps.append(link_config_dir())
+    steps.append(ensure_config_dir())
     say({"ok": True, "steps": steps, "status": status()})
 
 
@@ -162,26 +156,84 @@ def cmd_status(_a) -> None:
 
 # ---------- scopes ----------
 
+def grant_link(app_id: str, scopes: list[str]) -> str:
+    """开放平台的权限申请页，带上要开的那几项，主人打开就是勾选好的状态。"""
+    return f"https://open.feishu.cn/app/{app_id}/auth?q={','.join(scopes)}&op_from=openapi&token_type=user"
+
+
 def cmd_scopes(_a) -> None:
+    app_id = bound_app()
+    if not app_id:
+        say(status()); sys.exit(1)
     data, err = lark("auth", "scopes")
     if err:
-        say({"ok": False, "detail": err}); sys.exit(1)
+        say({"ok": False, "detail": err, "hint": "多半是网络抖动，过几秒重试一次"}); sys.exit(1)
     enabled = set(data.get("userScopes") or [])
-    missing = {k: v for k, v in REQUIRED_SCOPES.items() if k not in enabled}
-    optional_missing = {k: v for k, v in OPTIONAL_SCOPES.items() if k not in enabled}
-    say({
+    missing = [k for k in REQUIRED_SCOPES if k not in enabled]
+    out = {
         "ok": not missing,
-        "appId": data.get("appId"),
-        "enabledUserScopes": len(enabled),
-        "missing": missing,
-        "optionalMissing": optional_missing,
-        "fix": None if not missing else (
-            f"请主人在飞书开放平台打开 https://open.feishu.cn/app/{data.get('appId')}/auth ，"
-            "在「用户身份权限」里开通上面这几项，然后「版本管理与发布」发一个新版本"
-            "（企业里可能要管理员审核）。开通后重新跑一次 scopes，"
-            "再让主人重新授权一次：lark-cli auth login --no-wait --json --domain wiki,docs,drive"),
-    })
+        "appId": app_id,
+        "missing": {k: REQUIRED_SCOPES[k] for k in missing},
+        "optionalMissing": {k: v for k, v in OPTIONAL_SCOPES.items() if k not in enabled},
+    }
+    if missing:
+        out["grantLink"] = grant_link(app_id, missing)
+        out["tellOwner"] = (
+            "读你的文档，需要给 Mirror V 这个应用再开几项只读权限（就是你扫码时绑定的那个，不是新应用）。"
+            "打开下面的链接，要开的几项已经勾好了，点「开通」；然后在左边「版本管理与发布」里"
+            "建一个新版本并发布。你是管理员的话一分钟就好，不是的话要等管理员审核。弄完回我「好了」。")
+    else:
+        out["next"] = "python3 scripts/feishu-docs.py login"
+    say(out)
     sys.exit(0 if not missing else 2)
+
+
+# ---------- login (Device Flow) ----------
+
+def _find(obj, *keys):
+    """在 lark-cli 的输出里按标准字段名（RFC 8628）找值，找不到就扫一遍所有字符串。"""
+    if isinstance(obj, dict):
+        for k in keys:
+            if obj.get(k):
+                return obj[k]
+        for v in obj.values():
+            hit = _find(v, *keys)
+            if hit:
+                return hit
+    return None
+
+
+def cmd_login(a) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if a.finish:
+        if not AUTH.exists():
+            raise SystemExit("还没有发起授权：先跑 login")
+        code = json.loads(AUTH.read_text(encoding="utf-8")).get("device_code")
+        data, err = lark("auth", "login", "--device-code", code, "--json", timeout=60)
+        if err:
+            say({"ok": False, "detail": err,
+                 "hint": "主人还没点完、或者链接过期了。过期就重新 login 发一个新链接。"}); sys.exit(1)
+        AUTH.unlink(missing_ok=True)
+        QR.unlink(missing_ok=True)
+        say({"ok": True, "status": status()})
+        return
+    scope = " ".join(REQUIRED_SCOPES)
+    data, err = lark("auth", "login", "--no-wait", "--json", "--scope", scope, timeout=60)
+    if err:
+        say({"ok": False, "detail": err, "hint": "权限没开全会在这一步报错：先跑 scopes"}); sys.exit(1)
+    url = _find(data, "verification_uri_complete", "verification_url", "verification_uri", "url")
+    code = _find(data, "device_code")
+    if not url or not code:
+        say({"ok": False, "detail": "没认出授权链接或设备码，原样输出给你看", "raw": data}); sys.exit(1)
+    AUTH.write_text(json.dumps({"device_code": code, "url": url, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                "expires_in": _find(data, "expires_in")}, ensure_ascii=False), encoding="utf-8")
+    os.chmod(AUTH, 0o600)
+    qr_ok = subprocess.run(["lark-cli", "auth", "qrcode", url, "-o", QR.name], cwd=WS,
+                           capture_output=True, text=True, env=lark_env()).returncode == 0
+    say({"ok": True, "url": url, "qrcode": str(QR) if qr_ok and QR.exists() else None,
+         "expiresIn": _find(data, "expires_in"),
+         "tellOwner": "点这个链接（或者扫二维码），用你的飞书账号确认授权。我只申请了读文档的几项权限。点完回我「好了」。",
+         "next": "主人回「好了」之后：python3 scripts/feishu-docs.py login --finish"})
 
 
 # ---------- inventory ----------
@@ -326,6 +378,9 @@ def main() -> None:
     sub.add_parser("setup").set_defaults(fn=cmd_setup)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("scopes").set_defaults(fn=cmd_scopes)
+    lg = sub.add_parser("login")
+    lg.add_argument("--finish", action="store_true", help="主人点完授权链接之后收尾")
+    lg.set_defaults(fn=cmd_login)
     sub.add_parser("inventory").set_defaults(fn=cmd_inventory)
     p = sub.add_parser("pull")
     p.add_argument("--spaces", help="逗号分隔的 space_id（my_library 是个人文档库）")

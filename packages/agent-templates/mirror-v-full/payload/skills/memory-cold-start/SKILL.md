@@ -28,18 +28,17 @@ description: 记忆冷启动：主人的记忆是空的时候，把他已有的�
 
 ### 1. 飞书文档库（多数主人最大的来源）
 
-办法：**装官方的 lark-cli，让主人自己授权，用主人的身份读他本来就能看到的文档。** 凭据只在 `agent-data/lark-cli` 里，不进记忆、不进 git、不出现在回复里。授权要主人在手机上点链接，会跨好几轮；进度写进 `onboarding/feishu-auth.json`，每轮先读它。
+**用主人扫码时绑定的那个 Mirror V 应用读，不新建应用。** 平台在启动时已经把这个应用交给 lark-cli（`LARKSUITE_CLI_APP_ID` 等环境变量）。缺权限就在这个应用上补；主人授权一次，就能用他的身份读他本来就能看到的文档。用户 token 存在 `agent-data/lark-cli`，不进记忆、不进 git、不出现在回复里。
 
-1. `python3 scripts/feishu-docs.py setup`：安装，`status.next` 告诉你下一步
-2. 还没有应用：后台跑 `lark-cli config init --new --force-init`，把链接发给主人建一个只读文档的应用，**结束这一轮**
-3. 授权：`lark-cli auth login --no-wait --json --domain wiki,docs,drive`，把链接（或 `auth qrcode` 生成的二维码）发给主人，**结束这一轮**；主人说好了再 `--device-code` 收尾
-4. `python3 scripts/feishu-docs.py scopes`：缺权限时输出里有现成的 `fix`，补完要回到第 3 步重新授权
-5. `python3 scripts/feishu-docs.py inventory`：只盘点目录（百来页约 40 秒），把空间清单给主人选。默认跳过示例库和像凭据库的空间
-6. `python3 scripts/feishu-docs.py pull --spaces <id,...>`：每轮最多 40 份、240 秒，没拉完下一轮接着跑
+1. `python3 scripts/feishu-docs.py setup`：装 lark-cli。`boundApp` 为空说明没拿到绑定的应用，如实告诉主人，改走粘正文，**不要让他另建应用**
+2. `python3 scripts/feishu-docs.py scopes`：缺权限时退出码 2，输出里有已经勾好权限的 `grantLink` 和要跟主人说的话 `tellOwner`。主人开通、发布新版本后回「好了」，再跑一次确认
+3. `python3 scripts/feishu-docs.py login`：把 `url`（和 `qrcode` 二维码图片）发给主人，**结束这一轮**；主人回「好了」再跑 `login --finish`
+4. `python3 scripts/feishu-docs.py inventory`：只盘点目录（百来页约 40 秒），把空间清单编号发给主人选。默认跳过示例库和像凭据库的空间
+5. `python3 scripts/feishu-docs.py pull --spaces <id,...>`：每轮最多 40 份、240 秒。没读完，用 `portal_schedule` 加一条 1 分钟后的一次性任务接着读，不让主人等
 
-每一步的命令细节、二维码、过期怎么办、缺权限怎么跟主人说：`references/feishu-lark-cli.md`。
+每一步的细节、过期了怎么办、权限审核卡住了怎么跟主人说：`references/feishu-lark-cli.md`。
 
-**这个应用只用来读文档**，不要用 lark-cli 发消息、改文档、建群、加人。消息一律走 Mirror V 自己的通道。主人不想授权就退回粘正文 / 发截图，并把「不读飞书」记进 `USER.md` 的「已明确拒绝的采集源」。
+**这个应用只用来读文档。** 凭据就是 Mirror V 机器人自己的：不打印、不用它发消息、不改文档、不建群、不加人。消息一律走 Mirror V 自己的通道。主人不想授权，就退回粘正文 / 发截图，并把「不读飞书」记进 `USER.md` 的「已明确拒绝的采集源」。
 
 ### 2. 官网 / 公开主页（零授权）
 

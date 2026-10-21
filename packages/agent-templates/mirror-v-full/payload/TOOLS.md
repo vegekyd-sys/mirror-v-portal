@@ -66,7 +66,7 @@
 
 | 通道 | 上限 | 注意 |
 |---|---|---|
-| 飞书文档库（lark-cli，主人身份只读） | 每轮约 40 份 / 240 秒，没拉完下一轮接着跑 | **多数主人最大的来源**。`npm install -g` 可用且休眠保留，按 `skills/memory-cold-start/SKILL.md` 装 lark-cli、请主人授权。**只用来读文档**：不要用它发消息、改文档、建群、加人，消息一律走 Mirror V 自己的通道 |
+| 飞书文档库（lark-cli，主人身份只读） | 每轮约 40 份 / 240 秒，没读完用一次性定时任务接着读 | **多数主人最大的来源**。平台在启动时把主人扫码绑定的那个 Mirror V 应用交给了 lark-cli（`LARKSUITE_CLI_APP_ID` 等环境变量），**不要新建应用**。按 `skills/memory-cold-start/SKILL.md` 用 `scripts/feishu-docs.py`。**只用来读文档**：不发消息、不改文档、不建群、不加人，消息一律走 Mirror V 自己的通道 |
 | 主人粘贴正文 | 无实际上限 | 没有接口的资料（钉钉、Notion、本地文件）走这里 |
 | 主人发图片 / 截图 | **≤4 张、单张 ≤10 MB、总计 ≤12 MB**（jpeg\|png\|webp\|gif） | 超出的部分收不到；让主人分几条发 |
 | `web_fetch` | —— | 对 Vue / React 这类单页应用**只能拿到 `<title>`**，正文全在 JS 包里。回落办法：直接取 `/js/app.*.js` 抽 i18n 词条 |

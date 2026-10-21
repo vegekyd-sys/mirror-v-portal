@@ -6,10 +6,10 @@
 
 按顺序判断：
 
-1. 工作区里有 `BOOTSTRAP.md` → 先按它走完，再做别的。走完就把它删掉。
+1. 工作区里有 `BOOTSTRAP.md` → **由你主导**把它走完：每一轮先读进度（`python3 scripts/onboard-progress.py get`），做这一步，回复的最后一句永远是下一步要主人做的那件事。走完就把它删掉。
 2. 没有 `BOOTSTRAP.md` → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。
 
-用户第一句话是在派活时，先把活干完，再找安静的时机走首启流程。
+主人中途派活：先把活干完，**在同一条回复的末尾接回引导的当前一步**。不要等「安静的时机」，那样引导永远不会发生。
 
 ⚠️ `skills/proactive-agent/` 里的 `assets/ONBOARDING.md` 和 `references/onboarding-flow.md` 是那个
 第三方 skill 自带的样例流程，**不是这台机器的上手流程**。本机以 `BOOTSTRAP.md` 和
@@ -105,7 +105,8 @@
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
-| `feishu-docs.py` | 飞书文档库：`setup`（装 lark-cli）/ `status` / `scopes`（缺什么权限）/ `inventory`（盘点）/ `pull`（拉正文交给采集器） |
+| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：`setup` / `status` / `scopes`（缺什么权限，给一键开通链接）/ `login`（发授权链接，`--finish` 收尾）/ `inventory`（盘点）/ `pull`（拉正文交给采集器） |
+| `onboard-progress.py` | 上手引导走到哪一步：`get` / `set --step ... --chosen ... --done ... --skipped ...` |
 | `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |
 | `onboard-budget.py` | 落盘前的体积闸门（workspace / `.git` / 预估备份包），超限非零退出 |
 | `memory-index-verify.py` | 用探针题库验收检索召回（recall@5 + 逐条命中页） |
