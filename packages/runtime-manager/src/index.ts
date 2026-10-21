@@ -33,8 +33,8 @@ const weixinLogin = new WeixinLogin({
   bind: async (tenantId, botToken, accountId, baseUrl) => {
     const template = pendingWeixinTemplates.get(tenantId);
     if (template) {
-      await store.createTenant(tenantId, `扫码创建的 ${template.name}`, undefined, undefined, 'vercel', template);
       const secrets = pendingWeixinSecrets.get(tenantId);
+      await store.createTenant(tenantId, `扫码创建的 ${template.name}`, undefined, undefined, 'vercel', template, secrets?.MAKARON_API_KEY);
       if (secrets) await store.setTenantSecrets(tenantId, secrets);
     }
     await weixin.bind(tenantId, botToken, accountId, baseUrl);
@@ -254,7 +254,7 @@ app.delete("/v1/channels/weixin/login/:sessionId", (req, res) => {
   res.json({ ok: true });
 });
 app.get("/v1/templates", (_req, res) => {
-  res.json({ templates: availableTemplates(config).map(({ snapshotId: _snapshotId, ...template }) => template) });
+  res.json({ templates: availableTemplates(config).map(({ snapshotId: _snapshotId, ...template }) => ({ ...template, ...(template.id === "makaron" && config.makaronProvisioning ? { accountProvisioning: "automatic" } : {}) })) });
 });
 app.post("/v1/tenants", async (req, res, next) => {
   try {
@@ -286,6 +286,7 @@ app.post("/v1/tenants", async (req, res, next) => {
       botAppSecret,
       runtimeProvider,
       template,
+      template.id === "makaron" ? req.body.secrets?.MAKARON_API_KEY : undefined,
     );
     await edge.connect(t);
     res.json({ tenant: { tenantId: t.id, templateId: t.template_id, templateVersion: t.template_version } });

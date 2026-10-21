@@ -18,6 +18,31 @@ describe('Makaron signup account isolation', () => {
     }
     expect(fetcher.mock.calls.every(([url]) => String(url).endsWith('/v1/templates'))).toBe(true);
   });
+  it('allows automatic signup only when enabled by the runtime catalog', async () => {
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+    expect(await signupAccountSecrets('makaron', undefined, true)).toBeUndefined();
+    await expect(signupAccountSecrets('makaron', undefined)).rejects.toMatchObject({ code: 'MAKARON_ACCOUNT_REQUIRED' });
+    await expect(signupAccountSecrets('makaron', 'bad', true)).rejects.toMatchObject({ code: 'MAKARON_ACCOUNT_REQUIRED' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('starts a scan without accepting a browser auto-provisioning override', async () => {
+    let automatic = false;
+    const fetcher = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/templates')) return Response.json({ templates: [{ id: 'makaron', version: 'makaron.v2.1.2', ...(automatic ? { accountProvisioning: 'automatic' } : {}) }] });
+      if (url.endsWith('/v1/channels/weixin/portal-login')) return Response.json({ sessionId: 'makaron-auto-scan', qrImage: 'https://example.invalid/qr', expiresIn: 600 });
+      throw Error('Unexpected request');
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const app = createApp();
+    const rejected = await request(app).post('/onboard/weixin/start').send({ templateId: 'makaron', accountProvisioning: 'automatic' });
+    expect(rejected.status).toBe(400);
+    automatic = true;
+    const started = await request(app).post('/onboard/weixin/start').send({ templateId: 'makaron' });
+    expect(started.status).toBe(200);
+    expect(started.body.qrDataUri).toMatch(/^data:image\/png;base64,/);
+    const call = fetcher.mock.calls.find(([url]) => String(url).endsWith('/v1/channels/weixin/portal-login'));
+    expect(JSON.parse(call![1].body)).toEqual({ templateId: 'makaron', templateVersion: 'makaron.v2.1.2' });
+  });
   it('checks only the fixed Makaron account endpoint and returns the exact customer secret', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetcher);

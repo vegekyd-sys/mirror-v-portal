@@ -55,6 +55,8 @@ export interface SystemSchedule {
 }
 
 export interface Config {
+  /** Server-only account bootstrap after confirmed channel registration. */
+  makaronProvisioning?: { endpoint: string; secret: string };
   databaseUrl: string;
   adminToken: string;
   encryptionKey: string;

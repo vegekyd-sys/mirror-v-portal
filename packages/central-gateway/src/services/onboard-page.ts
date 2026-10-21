@@ -416,8 +416,15 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     ja: ['Makaron アカウントを接続','作品とクレジットはあなたのものです。アカウントは専用 Agent にのみ接続されます。','Makaron API Key を貼り付け','接続して QR コードを生成','Makaron に登録 / ログイン','ログイン後、右上のメニューから API Key を取得してください。','先に Makaron アカウントを接続してください','接続できません。API Key を確認してください','現在接続できません。後でもう一度お試しください'],
     en: ['Connect your Makaron account','Your work and credits stay yours. This account is linked only to your personal Agent.','Paste your Makaron API Key','Connect and create QR code','Sign up / Log in to Makaron','After login, get your API Key from the top-right menu.','Connect your Makaron account first','Unable to connect. Check your API Key','Account connection is unavailable. Try again later']
   };
+  var automaticAccountCopy = {
+    zh: ['扫码后自动创建你的专属 Makaron 创作账号，并绑定到这个 Agent。已有账号可在下方连接（可选）。','连接已有 Makaron 账号（可选）','连接已有账号并更新二维码'],
+    'zh-Hant': ['掃碼後自動建立你的專屬 Makaron 創作帳號，並綁定到此 Agent。已有帳號可在下方連接（選填）。','連接已有 Makaron 帳號（選填）','連接已有帳號並更新 QR 碼'],
+    ja: ['スキャン後、専用の Makaron 制作アカウントを自動作成し、この Agent に接続します。既存アカウントの接続は任意です。','既存の Makaron アカウントを接続（任意）','既存アカウントに接続して QR コードを更新'],
+    en: ['After scanning, a private Makaron creative account is created and linked to this Agent. Connecting an existing account below is optional.','Connect an existing Makaron account (optional)','Connect existing account and update QR code']
+  };
   var accountLang = new URLSearchParams(location.search).get('lang') || navigator.language || 'zh';
-  var copy = accountCopy[accountLang] || accountCopy[/^zh-(TW|HK|Hant)/i.test(accountLang) ? 'zh-Hant' : /^ja/i.test(accountLang) ? 'ja' : /^zh/i.test(accountLang) ? 'zh' : 'en'];
+  var resolvedAccountLang = accountCopy[accountLang] ? accountLang : /^zh-(TW|HK|Hant)/i.test(accountLang) ? 'zh-Hant' : /^ja/i.test(accountLang) ? 'ja' : /^zh/i.test(accountLang) ? 'zh' : 'en';
+  var copy = accountCopy[resolvedAccountLang];
   document.getElementById('accountLabel').textContent=copy[0]; document.getElementById('accountDescription').textContent=copy[1]+' '+copy[5];
   accountInput.placeholder=copy[2]; accountInput.setAttribute('aria-label',copy[2]);
   document.getElementById('accountSubmit').textContent=copy[3]; document.getElementById('accountLogin').textContent=copy[4]; document.getElementById('accountLogin').title=copy[5];
@@ -532,8 +539,14 @@ export const ONBOARD_HTML = `<!DOCTYPE html>
     if (previousWeixin) fetch('/onboard/weixin/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode: previousWeixin }), keepalive: true }).catch(function () {});
     retry.classList.remove('on'); setState(''); core.style.display = 'block'; code.style.display = 'none';
     var needsAccount = template.id === 'makaron';
-    accountForm.hidden = !needsAccount; gate.style.display = needsAccount && !accountKey ? 'none' : 'grid';
-    if (needsAccount && !accountKey) { core.style.display='none'; say(copy[6]); return; }
+    var automaticAccount = needsAccount && template.accountProvisioning === 'automatic';
+    var automaticCopy = automaticAccountCopy[resolvedAccountLang];
+    document.getElementById('accountLabel').textContent = automaticAccount ? automaticCopy[1] : copy[0];
+    document.getElementById('accountDescription').textContent = automaticAccount ? automaticCopy[0] : copy[1]+' '+copy[5];
+    document.getElementById('accountSubmit').textContent = automaticAccount ? automaticCopy[2] : copy[3];
+    accountInput.required = !automaticAccount;
+    accountForm.hidden = !needsAccount; gate.style.display = needsAccount && !automaticAccount && !accountKey ? 'none' : 'grid';
+    if (needsAccount && !automaticAccount && !accountKey) { core.style.display='none'; say(copy[6]); return; }
     verify.hidden = true; verifyCode.value = '';
     say('正在生成' + (channel === 'weixin' ? '微信授权码' : '飞书授权码') + '…'); metaEl.textContent = ''; progress(0);
     try {

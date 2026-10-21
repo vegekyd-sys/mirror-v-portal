@@ -18,9 +18,10 @@ import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-o
 import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 import { MakaronAccountError, signupAccountSecrets } from './services/makaron-account.js';
+import { isPublicAvatarFile, nativeAvatarUrl } from './services/avatar-policy.js';
 
 // listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
-interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean }
+interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean; accountProvisioning?: 'automatic' }
 async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promise<SignupTemplate[]> {
   const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/templates`, {
     headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},
@@ -29,7 +30,9 @@ async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promi
   if (!response.ok) throw new Error(`TEMPLATE_CATALOG_UNAVAILABLE:${response.status}`);
   const body = await response.json() as { templates?: SignupTemplate[] };
   if (!Array.isArray(body.templates)) throw new Error('TEMPLATE_CATALOG_INVALID');
-  return body.templates;
+  return body.templates.map(template => ({ ...template,
+    ...(template.avatarUrl ? { avatarUrl: nativeAvatarUrl(template.avatarUrl, config.portalBaseUrl) } : {}),
+  }));
 }
 async function selectSignupTemplate(config: ReturnType<typeof loadConfig>, id: unknown): Promise<SignupTemplate> {
   const templates = await loadSignupTemplates(config);
@@ -92,10 +95,13 @@ export function createApp() {
   app.use('/onboard/assets', express.static(fileURLToPath(new URL('../public/onboard/', import.meta.url)), {
     maxAge: '1d', index: false,
     setHeaders(res, filename) {
-      // Feishu's creation page can display this public artwork from another
-      // origin. Keep Helmet's default policy for every other static resource.
-      if (/(?:^|[\\/])(?:makaron-avatar-[a-f0-9]{12}|agent-(?:dealclaw|mirror-v|xingqing|makaron|mirror-v-full)-portrait-[a-f0-9]{12})\.png$/.test(filename))
+      // Feishu loads public avatars with crossOrigin=anonymous, draws them to
+      // a canvas, then uploads that result. CORP alone permits embedding but
+      // does not authorize that CORS read. Keep all other resources private.
+      if (isPublicAvatarFile(filename)) {
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
     },
   }));
   app.use(express.json({ limit: '1mb' }));
@@ -333,7 +339,7 @@ export function createApp() {
     try {
       const template = await selectSignupTemplate(config, req.body?.templateId);
       if (template.id === 'makaron' && template.listed === false) throw new Error('TEMPLATE_NOT_AVAILABLE');
-      const secrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey);
+      const secrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey, template.accountProvisioning === 'automatic');
       const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/channels/weixin/portal-login`, {
         method: 'POST',
         headers: {
@@ -463,13 +469,13 @@ export function createApp() {
     try {
       const template = await selectSignupTemplate(config, req.body?.templateId);
       if (template.id === 'makaron' && template.listed === false) throw new Error('TEMPLATE_NOT_AVAILABLE');
-      let accountSecrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey);
+      let accountSecrets = await signupAccountSecrets(template.id, req.body?.makaronApiKey, template.accountProvisioning === 'automatic');
       const expiry = setTimeout(() => { accountSecrets = undefined; }, 11 * 60_000);
       expiry.unref();
       const session = await startFeishuRegistration(async (registeredSession: RegistrationSession) => {
         const tenantSecrets = accountSecrets;
         accountSecrets = undefined; clearTimeout(expiry);
-        if (template.id === 'makaron' && !tenantSecrets) {
+        if (template.id === 'makaron' && template.accountProvisioning !== 'automatic' && !tenantSecrets) {
           registeredSession.status = 'failed'; registeredSession.error = 'MAKARON_ACCOUNT_EXPIRED'; return;
         }
         // Orchestrate tenant creation after registration completes

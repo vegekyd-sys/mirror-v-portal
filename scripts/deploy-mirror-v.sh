@@ -72,6 +72,12 @@ for attempt in {1..15}; do
   if curl -fsS http://127.0.0.1:8098/healthz >/dev/null 2>&1 \
     && curl -fsS http://127.0.0.1:8098/onboard/templates >/dev/null 2>&1 \
     && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1; then
+    # A healthy catalog is insufficient: Feishu must be able to read/decode
+    # every listed avatar across origins. Failure follows normal rollback.
+    if ! /root/.nvm/versions/node/v22.22.1/bin/node "$release/packages/central-gateway/dist/check-template-avatars.js" --catalog http://127.0.0.1:8098/onboard/templates; then
+      echo 'Public template avatar preflight failed' >&2
+      break
+    fi
     cp /etc/nginx/nexus-portal.locations.conf /opt/nexus/data/nginx-portal.previous.conf
     install -m 644 "$release/deploy/mirror-v/nginx-locations.conf" /etc/nginx/nexus-portal.locations.conf
     if [[ -f "$release/deploy/mirror-v/nginx-onboard-maps.conf" ]]; then

@@ -93,6 +93,29 @@ Existing tenants remain pinned to their original snapshot until migrated.
 The V001 knowledge seed does not install old host credentials or tools; verify
 memory indexing and real replies before exposing the new template.
 
+## New-template avatar publication gate
+
+New snapshots start with `listed:false`. Use a content-addressed PNG named
+`agent-<id>-portrait-<sha256-first-12>.png` in the onboarding static directory.
+The shared avatar policy supplies anonymous CORS and a cache revision for any
+new Agent name; template rebuilds preserve `avatarUrl`.
+
+After the candidate static asset and hidden template are available, run:
+
+```bash
+pnpm --filter @dealclaw/central-gateway build
+node packages/central-gateway/dist/check-template-avatars.js \
+  --catalog 'https://mirror-v-portal.vercel.app/onboard/templates?template=<id>'
+```
+
+This read-only gate checks every returned template for a public HTTPS image,
+Feishu CORS permission, PNG decoding, dimensions, and its content-address hash.
+A missing/broken avatar exits non-zero. Then inspect the actual Feishu creation
+page in the Codex in-app browser and confirm its 240×240 Canvas avatar; no new
+application needs to be created for that image check. Only then enable `listed`.
+Normal `activate` also runs this gate for all public templates and rolls back
+if it fails. HTTP 200 and health alone are not avatar acceptance.
+
 ## 星擎 template (`xingqing`)
 
 The third template is a public starter in `packages/agent-templates/xingqing/`.
