@@ -46,7 +46,7 @@ try {
     const config = request.images?.length ? JSON.parse(fs.readFileSync("/vercel/sandbox/agent-data/openclaw.json", "utf8")) : undefined;
     inbound = prepareInboundInput(request,config,{agentId:process.env.NEXUS_AGENT_ID || "dealclaw"});
   } catch (error) {
-    const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE)[A-Z_]*$/.test(error?.message || "") ? error.message : "INBOUND_MEDIA_INPUT_REJECTED";
+    const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE|SANDBOX_FILE)[A-Z_]*$/.test(error?.message || "") ? error.message : "INBOUND_MEDIA_INPUT_REJECTED";
     process.stdout.write("data: " + JSON.stringify({type:"nexus.input_rejected",code}) + "\n\n");
     throw Error("INBOUND_MEDIA_INPUT_REJECTED");
   }

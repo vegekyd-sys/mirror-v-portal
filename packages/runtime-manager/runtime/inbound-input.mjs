@@ -16,7 +16,7 @@ export function supportsInboundVision(config,agentId) {
   return !!config.models?.providers?.[provider]?.models?.find(item=>item.id===modelId)?.input?.includes('image');
 }
 
-export function prepareInboundInput(request,config,{workspace='/vercel/sandbox/agent-data/workspace',agentId='dealclaw'}={}) {
+function prepareImageInput(request,config,{workspace='/vercel/sandbox/agent-data/workspace',agentId='dealclaw'}={}) {
   const images=request.images??[];
   if(!Array.isArray(images)||images.length>4)throw Error('INVALID_SANDBOX_IMAGES');
   if(!images.length)return {input:request.text};
@@ -42,4 +42,27 @@ export function prepareInboundInput(request,config,{workspace='/vercel/sandbox/a
     ...read.map(({image},index)=>`图片${index+1}: ${image.path}`)].join('\n');
   const input=vision?[{type:'message',role:'user',content:[{type:'input_text',text:caption},...read.map(({image,buffer})=>({type:'input_image',source:{type:'base64',media_type:image.mimeType,data:buffer.toString('base64')}}))]}]:caption;
   return {input};
+}
+
+
+// Videos remain files. Do not put their bytes (or a thumbnail) into input_image.
+export function prepareInboundInput(request,config,options={}) {
+  const files=request.files??[];
+  if(!Array.isArray(files)||files.length+(request.images?.length||0)>4)throw Error('INVALID_SANDBOX_FILES');
+  if(!files.length)return prepareImageInput(request,config,options);
+  const workspace=options.workspace||'/vercel/sandbox/agent-data/workspace';
+  const lexicalRoot=path.resolve(workspace),root=fs.realpathSync(workspace),extensions={'video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm'};
+  let total=0;
+  for(const file of files){
+    if(!file||file.kind!=='video'||typeof file.path!=='string'||!Object.hasOwn(extensions,file.mimeType)||typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256)||!Number.isSafeInteger(file.bytes)||file.bytes<=0||file.bytes>64*1024*1024)throw Error('INVALID_SANDBOX_FILE');
+    const filename=path.resolve(file.path),name=file.sha256+'.'+extensions[file.mimeType],expected=path.join(root,'inbound',name);
+    if(filename!==expected&&filename!==path.join(lexicalRoot,'inbound',name))throw Error('SANDBOX_FILE_PATH_INVALID');
+    if(fs.lstatSync(path.join(root,'inbound')).isSymbolicLink()||fs.lstatSync(filename).isSymbolicLink())throw Error('SANDBOX_FILE_SYMLINK_FORBIDDEN');
+    if(fs.realpathSync(filename)!==expected)throw Error('SANDBOX_FILE_PATH_INVALID');
+    const stat=fs.statSync(filename);if(!stat.isFile()||stat.size!==file.bytes)throw Error('SANDBOX_FILE_SIZE_MISMATCH');
+    const bytes=fs.readFileSync(filename);if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('SANDBOX_FILE_CHECKSUM_MISMATCH');
+    total+=file.bytes;if(total>64*1024*1024)throw Error('SANDBOX_FILES_TOO_LARGE');
+  }
+  const caption=[request.text||'',request.filesFromPreviousTurn?'【同一会话此前提供的视频】':'【本条消息的用户视频】','视频输入：真实本地文件',...files.map((file,index)=>`视频${index+1}: ${file.path}`)].join('\n');
+  return prepareImageInput({...request,text:caption},config,options);
 }
