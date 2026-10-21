@@ -101,8 +101,9 @@ test("persists image-only receipts and never rewrites or replays duplicate compl
   await m.process(duplicate.id);
   expect(executions).toBe(1);
 });
-test("inherits images only within the exact tenant, session and channel using PostgreSQL timestamp precision", async () => {
-  const t = await tenant(), other = await tenant(), image = imageReceipt(t.id);
+test.each(["image", "video"] as const)("inherits %s only within the exact tenant, session and channel using PostgreSQL timestamp precision", async (kind) => {
+  const t = await tenant(), other = await tenant();
+  const image: InboundAttachment = kind === "image" ? imageReceipt(t.id) : { ...imageReceipt(t.id), kind: "video", mimeType: "video/mp4", storagePath: imageReceipt(t.id).storagePath.replace(/\.jpg$/, ".mp4") };
   const received = await s.enqueue(t.id,"image","chat","","weixin",undefined,[image]);
   await s.pool.query("UPDATE elastic_runs SET status='succeeded',created_at='2026-10-03 00:00:00.000123+00' WHERE id=$1",[received.id]);
   const followup = await s.enqueue(t.id,"caption","chat","用上一张照片","weixin");

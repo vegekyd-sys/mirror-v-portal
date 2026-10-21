@@ -30,3 +30,9 @@ Portal 的隔离边界是每个租户自己的云端 VM。Agent 在这个 VM 内
 真实验收使用独立的 Makaron 和完整 V Sandbox，通过实际模型与 Agent 原生 exec 工具安装 `is-number`、`@larksuite/cli`，验证 CLI、管道/重定向和 `sudo -n true`；同时独立读文件和执行程序核对结果。随后实际 stop/resume，再验证包与文件保留，并核对备份包含全局 CLI 符号链接和本地包。
 
 安装脚本的额外验收使用带 postinstall 的本地 npm tarball：不增加逐包 `--allow-scripts` 参数，安装后执行 CLI 必须输出安装脚本生成的值。另验证健康进程复用与配置变更时的 VM 内重启。
+
+## 飞书视频输入合同
+
+Portal 默认接收原生 `media`、视频 `file` 和富文本 `post` 内的 `media`，覆盖所有现有与新建模板实例，无租户名单。控制面按租户与消息作用域下载真实原文件，校验 MIME、大小与 SHA-256，再以相同字节写入租户 VM 工作区 `inbound/`。Agent 请求中的 `files` 仅包含本地绝对路径、MIME、字节数与 SHA-256，不把视频作为 `input_image` 或 Base64 消息体。
+
+每条消息最多四个附件，视频与整条传输最多 64 MiB；图片单张 10 MiB、合计 12 MiB。同一会话的后续文字可继承附件，并显式标记来源；下载失败清空本轮附件且关闭继承，消息重放复用已提交 run。该合同在每次 boot 时写入 payload 工作区 `TOOLS.md` 管理区段、`portal-environment.json` 及 `portal_environment`，保留原 payload 版本、用户笔记和私有账号配置。旧 snapshot 新建的实例也通过当前 Runtime Manager 注入该合同，不依赖单实例补丁。

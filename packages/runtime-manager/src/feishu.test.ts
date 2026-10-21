@@ -136,9 +136,9 @@ test("one unusable rich-post image fails the whole source set rather than editin
   expect(run?.attachments).toEqual([]);expect(run?.inherit_attachments).toBe(false);expect(run?.text).not.toMatch(/不要|必须|不能/);
   expect(f.events.some(event=>event[1]==="feishu-image-receive-failed" && event[2].messageType==="post")).toBe(true);
 });
-test("bot messages and unsupported inbound video are not mislabeled as text or images",async()=>{
+test("bot messages and unsupported inbound audio are not mislabeled as text or images",async()=>{
   const f=await fixture();
-  for(const [senderType,messageType] of [["app","image"],["user","media"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});
+  for(const [senderType,messageType] of [["app","image"],["user","audio"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});
   expect(f.store.enqueue).not.toHaveBeenCalled();expect(f.api.im.messageResource.get).not.toHaveBeenCalled();
 });
 

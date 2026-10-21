@@ -8,7 +8,7 @@ import { StreamingReply } from "./streaming-reply.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { prepareFeishuMedia, uploadKey } from "./feishu-media.js";
 import { FeishuOutboundVault } from "./feishu-outbound.js";
-import { downloadFeishuImage, parseFeishuContent, persistFeishuImage } from "./feishu-inbound.js";
+import { downloadFeishuVideo, persistFeishuVideo, parseFeishuVideos, downloadFeishuImage, parseFeishuContent, persistFeishuImage } from "./feishu-inbound.js";
 import { MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 // Preserve the SDK's response-unwrapping and $return_headers interceptor; a fresh axios instance loses both.
@@ -205,12 +205,15 @@ export class FeishuEdge implements ChannelEdge {
   }
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
-    if (!m?.message_id || data.sender?.sender_type === "app" || !["text","image","post"].includes(m.message_type)) return;
+    if (!m?.message_id || data.sender?.sender_type === "app") return;
+    if (!["text","image","post","media","file"].includes(m.message_type)) return;
+    const videos=parseFeishuVideos(m.message_type,m.content);
+    if (m.message_type === "file" && !videos.length) return;
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
     const content = parseFeishuContent(m.message_type,m.content);
     let text = content.text;
     if (m.message_type === "text" && !text.trim()) return;
-    if (m.message_type === "post" && !text.trim() && !content.imageKeys.length) return;
+    if (m.message_type === "post" && !text.trim() && !content.imageKeys.length && !videos.length) return;
     // A replay reuses the durable run. Never redownload or rewrite an already committed image turn.
     const prior = await this.store.pool.query<Run>("SELECT * FROM elastic_runs WHERE tenant_id=$1 AND request_key=$2",[tenant.id,m.message_id]);
     if (prior.rows[0]) {if (prior.rows[0].delivery !== "sent") this.typing.start(prior.rows[0],api);return prior.rows[0];}
@@ -243,6 +246,20 @@ export class FeishuEdge implements ChannelEdge {
         await this.store.event(tenant.id,"feishu-image-receive-failed",{code:failure ?? "FEISHU_IMAGE_RESOURCE_INVALID",messageType:m.message_type});
         text="【Portal 附件接收失败】本条飞书图片的实际原图未能接入；本轮没有可用图片附件。";
       }
+    }
+    if (m.message_type === "media" || videos.length) {
+      let failure:string|undefined=failedImage ? "FEISHU_IMAGE_RESOURCE_INVALID" : undefined;
+      if (!videos.length || videos.length + attachments.length > MAX_INBOUND_IMAGES) failure="FEISHU_VIDEO_RESOURCE_INVALID";
+      for (const video of failure ? [] : videos) {
+        let buffer:Buffer;
+        try {buffer=await downloadFeishuVideo(api,m.message_id,video.fileKey);}
+        catch(error:any){failure=/^[A-Z_]+$/.test(error.message) ? error.message : "FEISHU_VIDEO_DOWNLOAD_FAILED";break;}
+        // Durable filesystem failures must escape before acknowledging the message.
+        attachments.push(await persistFeishuVideo(this.store.config.dataDir,tenant.id,m.message_id,buffer));
+        try {normalizeInboundAttachments(attachments,tenant.id);}catch{failure="FEISHU_VIDEOS_TOO_LARGE";break;}
+      }
+      if(failure){failedImage=true;attachments=[];await this.store.event(tenant.id,"feishu-video-receive-failed",{code:failure,messageType:m.message_type});text="【Portal 附件接收失败】本条飞书视频原文件未能接入；本轮没有可用视频附件。";}
+      else if(!text.trim())text="【Portal 附件信息】本条消息只有用户视频，没有附带文字。";
     }
     const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage ? {inheritAttachments:false} : {});
     if (run.delivery !== "sent") this.typing.start(run,api);

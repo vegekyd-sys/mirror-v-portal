@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import type * as lark from "@larksuiteoapi/node-sdk";
 import { imageMime } from "./feishu-media.js";
-import { IMAGE_EXTENSIONS, MAX_INBOUND_IMAGE_BYTES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
+import { INBOUND_EXTENSIONS, MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_VIDEO_BYTES, type VideoMime, type InboundMime, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 /** Feishu rich-text posts contain native text/image elements, not HTML. Read one locale only. */
 export function parseFeishuContent(messageType: string, input: unknown): {text: string;imageKeys: string[]} {
@@ -72,10 +72,14 @@ export async function downloadFeishuImage(api: lark.Client, messageId: string, i
 export async function persistFeishuImage(dataDir: string, tenantId: string, messageId: string, buffer: Buffer): Promise<InboundAttachment> {
   const mimeType = imageMime(buffer);
   if (!mimeType || !buffer.length || buffer.length > MAX_INBOUND_IMAGE_BYTES) throw Error("FEISHU_IMAGE_RESOURCE_INVALID");
+  return persistFeishuInbound(dataDir,tenantId,messageId,buffer,"image",mimeType);
+}
+
+async function persistFeishuInbound(dataDir: string, tenantId: string, messageId: string, buffer: Buffer, kind: "image" | "video", mimeType: InboundMime): Promise<InboundAttachment> {
   const sha256 = createHash("sha256").update(buffer).digest("hex");
   const messageHash = createHash("sha256").update(messageId).digest("hex");
-  const storagePath = `inbound/${tenantId}/${messageHash}/${sha256}.${IMAGE_EXTENSIONS[mimeType]}`;
-  const [attachment] = normalizeInboundAttachments([{kind:"image",mimeType,storagePath,sha256,bytes:buffer.length,filename:`${sha256}.${IMAGE_EXTENSIONS[mimeType]}`}],tenantId);
+  const storagePath = `inbound/${tenantId}/${messageHash}/${sha256}.${INBOUND_EXTENSIONS[mimeType]}`;
+  const [attachment] = normalizeInboundAttachments([{kind,mimeType,storagePath,sha256,bytes:buffer.length,filename:`${sha256}.${INBOUND_EXTENSIONS[mimeType]}`}],tenantId);
   let directory = await fs.realpath(dataDir);
   for (const segment of storagePath.split("/").slice(0,-1)) {
     directory = path.join(directory,segment);
@@ -101,4 +105,35 @@ export async function persistFeishuImage(dataDir: string, tenantId: string, mess
     try {await directoryHandle.sync();} finally {await directoryHandle.close();}
   } finally {await fs.unlink(temporary).catch((error: NodeJS.ErrnoException) => {if (error.code !== "ENOENT") throw error;});}
   return attachment;
+}
+
+
+/** Native video and rich-post media use the file resource, never the thumbnail image. */
+export function parseFeishuVideos(messageType: string,input: unknown): {fileKey:string}[] {
+  let c:any;try{c=typeof input === "string" ? JSON.parse(input) : input;}catch{return [];}
+  if(messageType === "media" || messageType === "file" && /\.(mp4|mov|m4v|webm)$/i.test(c?.file_name || ""))
+    return [{fileKey:typeof c?.file_key === "string" ? c.file_key : ""}];
+  if(messageType !== "post")return [];
+  if(!Array.isArray(c?.content)){const locale=["zh_cn","en_us",...Object.keys(c||{}).filter(k=>/^[a-z]{2}_[a-z]{2}$/.test(k))].find(k=>Array.isArray(c?.[k]?.content));c=locale?c[locale]:{};}
+  const keys=new Set<string>();
+  for(const row of c?.content || [])if(Array.isArray(row))for(const e of row)if(e?.tag === "media" && typeof e.file_key === "string")keys.add(e.file_key);
+  return [...keys].map(fileKey=>({fileKey}));
+}
+export function videoMime(buffer: Buffer): VideoMime | undefined {
+  if(buffer.length>=12 && buffer.toString("ascii",4,8)==="ftyp")return buffer.toString("ascii",8,12)==="qt  " ? "video/quicktime" : "video/mp4";
+  if(buffer.length>=4 && buffer.readUInt32BE(0)===0x1a45dfa3 && buffer.subarray(0,4096).includes(Buffer.from("webm")))return "video/webm";
+}
+export async function downloadFeishuVideo(api:lark.Client,messageId:string,fileKey:string,timeoutMs=60_000):Promise<Buffer>{
+  if(!messageId || typeof fileKey!=="string" || !fileKey || fileKey.length>1024)throw Error("FEISHU_VIDEO_RESOURCE_INVALID");
+  let stream:Readable|undefined,expired=false,timer:NodeJS.Timeout|undefined;
+  const pending=api.im.messageResource.get({path:{message_id:messageId,file_key:fileKey},params:{type:"file"}});
+  void pending.then(r=>{if(expired)r.getReadableStream().destroy();},()=>{}).catch(()=>{});
+  try{return await Promise.race([(async()=>{const response=await pending;if(expired)throw Error("FEISHU_VIDEO_DOWNLOAD_TIMEOUT");stream=response.getReadableStream();const chunks:Buffer[]=[];let bytes=0;
+    for await(const chunk of stream){const b=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);bytes+=b.length;if(bytes>MAX_INBOUND_VIDEO_BYTES)throw Error("FEISHU_VIDEO_TOO_LARGE");chunks.push(b);}
+    const buffer=Buffer.concat(chunks,bytes);if(!videoMime(buffer))throw Error("FEISHU_VIDEO_FORMAT_UNSUPPORTED");return buffer;})(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;stream?.destroy();reject(Error("FEISHU_VIDEO_DOWNLOAD_TIMEOUT"));},timeoutMs);})]);
+  }catch(e:any){stream?.destroy();throw Error(/^FEISHU_VIDEO_[A-Z_]+$/.test(e?.message)?e.message:"FEISHU_VIDEO_DOWNLOAD_FAILED");}finally{if(timer)clearTimeout(timer);}
+}
+export async function persistFeishuVideo(dataDir:string,tenantId:string,messageId:string,buffer:Buffer):Promise<InboundAttachment>{
+  const mimeType=videoMime(buffer);if(!mimeType || buffer.length>MAX_INBOUND_VIDEO_BYTES)throw Error("FEISHU_VIDEO_RESOURCE_INVALID");
+  return persistFeishuInbound(dataDir,tenantId,messageId,buffer,"video",mimeType);
 }
