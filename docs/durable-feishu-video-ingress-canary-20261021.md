@@ -1,4 +1,4 @@
-# Makaron 0.2 视频入站灰度修复
+# 飞书视频入站修复：单实例验证与默认能力
 
 2026-10-21，Asia/Shanghai。用户报告“飞书里面发视频无效”。本次修复属于 Portal 通道层，不是 Makaron 媒体模型或账号改动。
 
@@ -20,7 +20,7 @@
 - 真实原文件为 QuickTime/MOV，872,239 bytes；controller 与 VM SHA-256 完全一致。实际 DeepSeek Flash Agent 仅运行原生 exec/ffprobe，读出容器时长 5.225s、960×548、H.264/30fps、1 条 AAC 音轨。付费尝试计数 2→2，无新媒体生成。
 - 用户重新发送后经在线事件通道的完整回归仍待本人确认；上述真实文件重放不能扩大为这一项已通过。
 
-## 当前现场与发布边界
+## 首次灰度现场与发布边界（历史记录）
 
 实现 commit：`e2644c2aa18e`，本地分支 `codex/durable-feishu-video-ingress-20261021`，基于现场 Portal `c09046572131`。未推送、合并 dev 或发布 npm。
 
@@ -35,3 +35,11 @@
 暂停在安全空闲窗口；仅移除 `/etc/systemd/system/nexus-runtime-manager.service.d/60-durable-video-canary.conf`，恢复之前的视频 allowlist 字段，daemon-reload 后重启 Runtime Manager，并核验依赖 Gateway 恢复。保留候选 VM、原项目、原消息、已落盘视频、计数与账目。
 
 这是临时组件 canary。下一次正式 Portal 发布须先处理该 drop-in，避免旧组件目录继续覆盖正式 release 的 WorkingDirectory；应将源改动 review/合入标准发布线后再移除覆盖。没有自动把视频功能开放给其他 Agent，也未把本次接入视为完整媒体 A/B 或正式晋升通过。
+
+## 后续默认能力与新建实例验证
+
+用户明确要求“在 payload 里修好，其他人扫码后也能发视频”。后续源改动移除了租户名单，所有实例默认使用同一 FeishuEdge 视频路径；每次 boot 将事实合同写入 payload 工作区 TOOLS.md、portal-environment.json 与 portal_environment。旧公开 snapshot 创建的新实例同样收到当前运行时，不修改其身份、账号、创作模型或模板 pin。源码与完整 CI 见 [PR #18](https://github.com/vegekyd-sys/mirror-v-portal/pull/18)。
+
+已使用公开 `makaron.v2.1.2` snapshot 创建全新独立实例，只绑定已有测试账号的 MAKARON_API_KEY，没有 NODE_OPTIONS、DeepSeek 密钥或 candidate 覆盖目录，也没有视频名单。通过真实飞书资源 API 获取同一原始 MOV，经默认 receive 路径进入新 VM；Agent 原生 exec/ffprobe 得到同一 5.225s、960×548、1 条音轨。后续文字引用通过 exec 读得 872,239 bytes 和相同 SHA-256；最终已按 owning provider stop 保存休眠快照。未新建媒体或向飞书外发消息。此项验证新建公开 payload 的实际 Agent 调用，不等同于另一个人已完成扫码及手机验收。
+
+正式切换必须使用合并后的 GitHub dev release，撤掉上述临时 systemd drop-in 并仅删除私有配置中的旧名单字段，保留其他配置与原 Makaron 0.2 candidate。切换前检查持久化任务空闲并持有现有租户 advisory lock，失败恢复指针、名单字段与精确 drop-in。不能只切换 /opt/nexus/current 而遗留 WorkingDirectory 覆盖。发布后的实际 release、服务健康与模板 pin 核验记录在 PR 发布回执；本节自身不是已部署声明。
