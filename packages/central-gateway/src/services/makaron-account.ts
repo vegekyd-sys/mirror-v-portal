@@ -3,8 +3,10 @@ export class MakaronAccountError extends Error {
 }
 
 /** Validate the customer's own account without creating a project or spending credits. */
-export async function signupAccountSecrets(templateId: string, value: unknown): Promise<Record<string, string> | undefined> {
+export async function signupAccountSecrets(templateId: string, value: unknown, automaticProvisioning = false): Promise<Record<string, string> | undefined> {
   if (templateId !== 'makaron') return undefined;
+  // Only the trusted runtime catalog can enable scan-first automatic accounts.
+  if (automaticProvisioning && (value == null || value === '')) return undefined;
   if (typeof value !== 'string' || !/^mk_live_[A-Za-z0-9_-]{20,200}$/.test(value.trim()))
     throw new MakaronAccountError('MAKARON_ACCOUNT_REQUIRED', 400, '请先连接你的 Makaron 账号，再生成二维码');
   const key = value.trim();

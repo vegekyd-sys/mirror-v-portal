@@ -316,6 +316,7 @@ export class Store {
     template: { id: string; version: string; snapshotId: string } = {
       id: "dealclaw", version: "dealclaw-base.v2", snapshotId: this.config.snapshotId ?? "",
     },
+    makaronApiKey?: string,
   ) {
     const existing = appId
       ? await this.pool.query<Tenant>(
@@ -328,7 +329,7 @@ export class Store {
         throw Error("TENANT_PROVIDER_IMMUTABLE");
       if (existing.rows[0].template_id !== template.id || existing.rows[0].template_version !== template.version)
         throw Error("TENANT_TEMPLATE_IMMUTABLE");
-      return existing.rows[0];
+      return this.provisionTemplateAccount(existing.rows[0], makaronApiKey);
     }
     await this.pool.query(
       "INSERT INTO elastic_tenants(id,name,app_id,secret,idle_seconds,runtime_provider,template_id,template_version,template_snapshot_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING",
@@ -344,7 +345,37 @@ export class Store {
         template.snapshotId || null,
       ],
     );
-    return this.tenant(id);
+    return this.provisionTemplateAccount(await this.tenant(id), makaronApiKey);
+  }
+  private async provisionTemplateAccount(tenant: Tenant, accountKey?: string): Promise<Tenant> {
+    const settings = this.config.makaronProvisioning;
+    if (tenant.template_id !== "makaron" || (!settings && !accountKey)) return tenant;
+    if (accountKey && (typeof accountKey !== "string" || !/^mk_live_[A-Za-z0-9_-]{20,200}$/.test(accountKey))) throw Error("INVALID_MAKARON_CREDENTIAL");
+    const result = await this.locked(tenant.id, async () => {
+      // A validated existing account binds before boot; it must not also receive
+      // an unused guest identity or overwrite another account on a retry.
+      if (accountKey) {
+        await this.pool.query("INSERT INTO elastic_tenant_secrets(tenant_id,name,value) VALUES($1,'MAKARON_API_KEY',$2) ON CONFLICT(tenant_id,name) DO NOTHING", [tenant.id, this.seal(accountKey)]);
+        const bound = await this.tenantSecretEnv(tenant.id);
+        if (bound.MAKARON_API_KEY !== accountKey) throw Error("MAKARON_BINDING_CHANGED");
+        return { bound: true, reused: true };
+      }
+      const moduleUrl = new URL("../runtime/makaron-account-provision.mjs", import.meta.url).href;
+      const { ensureMakaronAccount } = await import(moduleUrl);
+      return ensureMakaronAccount({ tenant, ...settings, store: {
+        tenantSecretStatus: (id: string) => this.tenantSecretStatus(id),
+        bindMakaronCredential: async (id: string, key: string) => {
+          const inserted = await this.pool.query(
+            "INSERT INTO elastic_tenant_secrets(tenant_id,name,value) VALUES($1,$2,$3) ON CONFLICT(tenant_id,name) DO NOTHING RETURNING name",
+            [id, "MAKARON_API_KEY", this.seal(key)],
+          );
+          if (!inserted.rowCount) throw Error("MAKARON_BINDING_CHANGED");
+        },
+        event: (id: string, kind: string, data: object) => this.event(id, kind, data),
+      } });
+    });
+    if (!result) throw Error("MAKARON_BINDING_BUSY");
+    return tenant;
   }
   async enqueue(
     tenantId: string,

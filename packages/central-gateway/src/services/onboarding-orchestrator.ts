@@ -48,6 +48,7 @@ export async function orchestrateOnboarding(
       config.provisioningApiToken,
       session.templateId,
       session.templateVersion,
+      config.tenantSecrets,
     );
     if (!tenantResult.ok || !tenantResult.tenantId) {
       return { ok: false, error: tenantResult.error || 'Failed to create tenant' };
@@ -232,6 +233,7 @@ async function createTenant(
   provisioningApiToken?: string,
   templateId = 'dealclaw',
   templateVersion = 'dealclaw-base.v2',
+  tenantSecrets?: Record<string, string>,
 ): Promise<{ ok: boolean; tenantId?: string; error?: string }> {
   try {
     const res = await fetch(`${provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants`, {
@@ -248,8 +250,9 @@ async function createTenant(
         botAppSecret: appSecret,
         templateId,
         templateVersion,
+        ...(tenantSecrets ? { secrets: tenantSecrets } : {}),
       }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(templateId === 'makaron' ? 45_000 : 10_000),
     });
 
     if (!res.ok) {
