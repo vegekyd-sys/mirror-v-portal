@@ -73,6 +73,7 @@ export function templateRecord(
     ...(previous?.name ? { name: previous.name } : {}),
     ...(previous?.appName ? { appName: previous.appName } : {}),
     ...(previous?.description ? { description: previous.description } : {}),
+    ...(previous?.avatarUrl ? { avatarUrl: previous.avatarUrl } : {}),
     ...(previous?.model ? { model: previous.model, modelVersion: previous.modelVersion || previous.version } : {}),
     ...(build.agentKit ? { agentKit: build.agentKit } : {}),
     version: build.version,

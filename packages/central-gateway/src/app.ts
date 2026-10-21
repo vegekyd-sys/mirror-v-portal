@@ -18,6 +18,7 @@ import { DINGTALK_ONBOARD_HTML, WECOM_ONBOARD_HTML } from './services/platform-o
 import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 import { MakaronAccountError, signupAccountSecrets } from './services/makaron-account.js';
+import { isPublicAvatarFile, nativeAvatarUrl } from './services/avatar-policy.js';
 
 // listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
 interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean }
@@ -29,7 +30,9 @@ async function loadSignupTemplates(config: ReturnType<typeof loadConfig>): Promi
   if (!response.ok) throw new Error(`TEMPLATE_CATALOG_UNAVAILABLE:${response.status}`);
   const body = await response.json() as { templates?: SignupTemplate[] };
   if (!Array.isArray(body.templates)) throw new Error('TEMPLATE_CATALOG_INVALID');
-  return body.templates;
+  return body.templates.map(template => ({ ...template,
+    ...(template.avatarUrl ? { avatarUrl: nativeAvatarUrl(template.avatarUrl, config.portalBaseUrl) } : {}),
+  }));
 }
 async function selectSignupTemplate(config: ReturnType<typeof loadConfig>, id: unknown): Promise<SignupTemplate> {
   const templates = await loadSignupTemplates(config);
@@ -95,7 +98,7 @@ export function createApp() {
       // Feishu loads public avatars with crossOrigin=anonymous, draws them to
       // a canvas, then uploads that result. CORP alone permits embedding but
       // does not authorize that CORS read. Keep all other resources private.
-      if (/(?:^|[\\/])(?:makaron-avatar-[a-f0-9]{12}|agent-(?:dealclaw|mirror-v|xingqing|makaron|mirror-v-full)-portrait-[a-f0-9]{12})\.png$/.test(filename)) {
+      if (isPublicAvatarFile(filename)) {
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('Access-Control-Allow-Origin', '*');
       }

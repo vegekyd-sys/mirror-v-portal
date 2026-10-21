@@ -40,8 +40,9 @@ describe("template payloads", () => {
     const fresh = templateRecord(undefined, { version: "xingqing-starter.v1", snapshotId: "snap_1", builtAt, tools: { "xingqing-cli": "0.5.6" } });
     expect(fresh).toMatchObject({ listed: false, builtAt: "2026-09-28T00:00:00.000Z", expiresAt: "2026-10-28T00:00:00.000Z" });
     expect(fresh.runtime).toEqual({ openclaw: TEMPLATE_OPENCLAW_VERSION, "xingqing-cli": "0.5.6" });
-    const rebuilt = templateRecord({ version: "mirror-v.v1", snapshotId: "old", name: "Mirror V" }, { version: "mirror-v.v2", snapshotId: "snap_2", builtAt });
-    expect(rebuilt).toMatchObject({ name: "Mirror V", listed: true, snapshotId: "snap_2" });
+    const avatarUrl = "https://example.com/agent-new-agent-portrait-0123456789ab.png";
+    const rebuilt = templateRecord({ version: "mirror-v.v1", snapshotId: "old", name: "Mirror V", avatarUrl }, { version: "mirror-v.v2", snapshotId: "snap_2", builtAt });
+    expect(rebuilt).toMatchObject({ name: "Mirror V", avatarUrl, listed: true, snapshotId: "snap_2" });
     expect(templateRecord({ version: "x", snapshotId: "old", listed: false }, { version: "x", snapshotId: "new", builtAt }).listed).toBe(false);
   });
 });
