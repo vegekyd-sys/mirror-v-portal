@@ -41,6 +41,19 @@ function avatarMetadata(value: string | undefined): { avatarUrl?: string } {
   } catch { throw Error("INVALID_TEMPLATE_AVATAR_URL"); }
 }
 
+/**
+ * Templates whose agent reads the owner's Feishu documents with lark-cli through
+ * the Feishu app the owner already bound by scanning. The app's credentials are
+ * otherwise kept at the channel edge; handing them to the sandbox is what lets the
+ * agent ask for user authorization on that same app instead of making the owner
+ * create a second one (which shows up in Feishu as another bot).
+ */
+const FEISHU_CLI_TEMPLATES: ReadonlySet<string> = new Set(["mirror-v-full"]);
+
+export function templateUsesFeishuCli(templateId: string | null | undefined): boolean {
+  return FEISHU_CLI_TEMPLATES.has(templateId ?? "");
+}
+
 export function templateSecretNames(templateId: string): readonly string[] {
   return TEMPLATE_SECRETS[templateId] ?? [];
 }

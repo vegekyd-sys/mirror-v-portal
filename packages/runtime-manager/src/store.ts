@@ -265,17 +265,7 @@ export class Store {
     ]).toString("base64");
   }
   unseal(value: string): string {
-    const b = Buffer.from(value, "base64");
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      Buffer.from(this.config.encryptionKey, "hex"),
-      b.subarray(0, 12),
-    );
-    decipher.setAuthTag(b.subarray(-16));
-    return Buffer.concat([
-      decipher.update(b.subarray(12, -16)),
-      decipher.final(),
-    ]).toString();
+    return unsealWith(this.config.encryptionKey, value);
   }
   async tenant(
     id: string,
@@ -491,4 +481,12 @@ export class Store {
     await this.boss.stop({ graceful: true, timeout: 650000 });
     await this.pool.end();
   }
+}
+
+/** AES-256-GCM counterpart of Store.seal, usable without a Store instance. */
+export function unsealWith(encryptionKey: string, value: string): string {
+  const b = Buffer.from(value, "base64");
+  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(encryptionKey, "hex"), b.subarray(0, 12));
+  decipher.setAuthTag(b.subarray(-16));
+  return Buffer.concat([decipher.update(b.subarray(12, -16)), decipher.final()]).toString();
 }

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { loadConfig } from "./config.js";
 import { Store } from "./store.js";
-import { RuntimeManager } from "./manager.js";
+import { RuntimeManager, GREETING_PROMPT } from "./manager.js";
+import { Scheduler } from "./scheduler.js";
 import type { RuntimeProvider } from "./provider.js";
 import type { InboundAttachment } from "./inbound-media.js";
 let s: Store, admin: pg.Pool;
@@ -320,4 +321,25 @@ test("shutdown waits for an in-flight idle release before closing storage",async
  await new Promise(r=>setTimeout(r,20));expect(drained).toBe(false);
  release();await collecting;await draining;
  expect((await s.tenant(t.id)).state).toBe('sleeping');
+});
+
+test("greet queues exactly one first turn in the owner's chat, idempotently", async () => {
+  await new Scheduler(s).init(); // adds elastic_runs.chat_id, as index.ts does at startup
+  const t = await tenant();
+  const m = new RuntimeManager(s, provider());
+  const sent = vi.spyOn(s.boss, "send").mockResolvedValue("job" as any);
+  const first = await m.greet(t.id, "oc_owner_chat");
+  expect(first).toMatchObject({ queued: true });
+  // A retried call from the orchestrator must not greet the owner twice.
+  expect(await m.greet(t.id, "oc_owner_chat")).toEqual({ queued: false, duplicate: true });
+  const { rows } = await s.pool.query("SELECT session_key, chat_id, channel, message_id, text FROM elastic_runs WHERE tenant_id=$1", [t.id]);
+  expect(rows).toEqual([{ session_key: `${t.id}:oc_owner_chat`, chat_id: "oc_owner_chat", channel: "feishu", message_id: null, text: GREETING_PROMPT }]);
+  expect(sent).toHaveBeenCalledTimes(1);
+  sent.mockRestore();
+});
+test("greet refuses anything that is not a Feishu chat id", async () => {
+  const t = await tenant();
+  const m = new RuntimeManager(s, provider());
+  for (const bad of ["", "ou_user", "oc_", "oc_x:scheduled:1", undefined])
+    await expect(m.greet(t.id, bad)).rejects.toThrow("GREET_CHAT_INVALID");
 });

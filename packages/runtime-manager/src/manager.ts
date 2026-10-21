@@ -4,6 +4,16 @@ import { randomUUID } from "node:crypto";
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
 
+/**
+ * The turn text for Manager.greet. It reaches the agent as the first message in
+ * the owner's chat; the payload's BOOTSTRAP.md decides what the agent actually
+ * says, so this only states the situation and points at it.
+ */
+export const GREETING_PROMPT =
+  "【平台消息，不是主人说的话】主人刚刚扫码创建了你，还没有开口。现在由你先说话：" +
+  "工作区里有 BOOTSTRAP.md 就严格按它的第一步开场；没有就用一两句话打个招呼，说明你能做什么。" +
+  "不要提到这条平台消息。";
+
 /** Failures the runtime reported after ending the turn itself (e.g. a model timeout). */
 export const RUNTIME_REPORTED_FAILURES = new Set([
   "OPENCLAW_RESPONSE_FAILED",
@@ -281,6 +291,27 @@ export class RuntimeManager {
     if (!inserted.rowCount) return { queued: false, duplicate: true };
     await this.store.boss.send("agent-turn", { runId: id }, { group: { id: tenant.id } });
     await this.store.event(tenant.id, "session-woken", { requestKey }, id);
+    return { queued: true, runId: id };
+  }
+  /**
+   * Let the agent speak first right after a scan: the owner has not written
+   * anything yet, so queue one turn in their chat with a platform prompt and let
+   * the reply go out like any other. Called once per tenant by the onboarding
+   * orchestrator after it has learned the chat id from its first message;
+   * idempotent by request key, so a retried call never greets twice.
+   */
+  async greet(tenantId: string, chatId: unknown) {
+    const tenant = await this.store.tenant(tenantId);
+    const chat = String(chatId ?? "");
+    if (!/^oc_[A-Za-z0-9_-]{1,128}$/.test(chat)) throw Error("GREET_CHAT_INVALID");
+    const id = randomUUID();
+    const inserted = await this.store.pool.query(
+      "INSERT INTO elastic_runs(id,tenant_id,request_key,session_key,text,channel,chat_id) VALUES($1,$2,$3,$4,$5,'feishu',$6) ON CONFLICT(tenant_id,request_key) DO NOTHING RETURNING id",
+      [id, tenant.id, `greet:${tenant.id}`, `${tenant.id}:${chat}`, GREETING_PROMPT, chat],
+    );
+    if (!inserted.rowCount) return { queued: false, duplicate: true };
+    await this.store.boss.send("agent-turn", { runId: id }, { group: { id: tenant.id } });
+    await this.store.event(tenant.id, "greeting-queued", { chatId: chat }, id);
     return { queued: true, runId: id };
   }
   async collect(tenantId?: string) {

@@ -294,6 +294,16 @@ app.post("/v1/tenants", async (req, res, next) => {
     next(e);
   }
 });
+// The agent speaks first after a scan. The orchestrator calls this once with the
+// chat id it got back from its own first message to the owner.
+app.post("/v1/tenants/:id/greet", async (req, res, next) => {
+  try {
+    res.json(await manager.greet(req.params.id, req.body?.chatId));
+  } catch (e: any) {
+    if (e?.message === "GREET_CHAT_INVALID") { res.status(400).json({ error: e.message }); return; }
+    next(e);
+  }
+});
 app.put("/v1/tenants/:id/credentials", async (req, res, next) => {
   try {
     const t = await store.tenant(req.params.id);

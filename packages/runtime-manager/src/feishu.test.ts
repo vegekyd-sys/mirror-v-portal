@@ -150,3 +150,24 @@ test('a successful attachment-only response gets a neutral caption instead of a 
  expect(JSON.parse(caption[0].data.content).text).toBe('附件已准备好。');
  expect(f.api.im.message.reply.mock.calls.some((args:any[])=>args[0].data.msg_type==='image')).toBe(true);
 });
+test("a turn the platform starts itself (no inbound message) posts its reply into the chat", async () => {
+  const f = await fixture(); f.run.message_id = null; f.run.chat_id = "oc_owner"; f.run.output = "你好，我是 Mirror V";
+  await f.edge.deliver(f.run, f.api);
+  const calls = f.api.im.message.create.mock.calls.map((args: any[]) => args[0]);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].params.receive_id_type).toBe("chat_id");
+  expect(calls[0].data.receive_id).toBe("oc_owner");
+  expect(JSON.parse(calls[0].data.content)).toEqual({ text: "你好，我是 Mirror V" });
+  expect(f.api.im.message.reply).not.toHaveBeenCalled();
+});
+test("a failed platform-started turn tells the owner in plain words instead of the scheduled-task notice", async () => {
+  const f = await fixture(); f.run.message_id = null; f.run.chat_id = "oc_owner"; f.run.status = "failed"; f.run.output = "";
+  await f.edge.deliver(f.run, f.api);
+  const text = JSON.parse(f.api.im.message.create.mock.calls[0][0].data.content).text;
+  expect(text).not.toContain("定时任务");
+  expect(text).toContain("回我一句话");
+});
+test("a run with neither a chat nor a message to reply to still refuses to guess a target", async () => {
+  const f = await fixture(); f.run.message_id = null; f.run.chat_id = null;
+  await expect(f.edge.deliver(f.run, f.api)).rejects.toThrow("FEISHU_DELIVERY_TARGET_MISSING");
+});

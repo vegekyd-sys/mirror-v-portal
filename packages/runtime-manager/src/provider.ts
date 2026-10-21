@@ -9,7 +9,8 @@ import { Sandbox } from "@vercel/sandbox";
 import { FinalMediaCollector, parseReply, resolveRef, mediaKind, type MediaDirective } from "./media-directive.js";
 import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
-import type { Tenant } from "./store.js";
+import { unsealWith, type Tenant } from "./store.js";
+import { templateUsesFeishuCli } from "./templates.js";
 
 export async function finishOutput(sink: Writable) {
   sink.end();
@@ -152,6 +153,27 @@ export function templatePublicPorts(template?: TemplateRecord): [string, number]
   if (entries.length > 15 || entries.some(([name, port]) => !/^[a-z][a-z0-9-]{0,31}$/.test(name) || !Number.isInteger(port) || port < 1024 || port > 65535))
     throw Error("TEMPLATE_PUBLIC_PORTS_INVALID");
   return entries;
+}
+
+/** Where lark-cli keeps its config and the owner's user token: agent-data survives sleep and backups, and is outside the git workspace. */
+export const FEISHU_CLI_CONFIG_DIR = "/vercel/sandbox/agent-data/lark-cli";
+
+/**
+ * lark-cli environment for a tenant whose template reads Feishu documents.
+ * Uses the app the owner bound when scanning, so authorizing the agent is one
+ * user-consent step on that app rather than a new app. Empty for other templates
+ * or tenants without a Feishu app.
+ */
+export function feishuCliEnv(tenant: Pick<Tenant, "template_id" | "app_id" | "secret">, encryptionKey: string): Record<string, string> {
+  if (!templateUsesFeishuCli(tenant.template_id) || !tenant.app_id || !tenant.secret) return {};
+  return {
+    LARKSUITE_CLI_APP_ID: tenant.app_id,
+    LARKSUITE_CLI_APP_SECRET: unsealWith(encryptionKey, tenant.secret),
+    LARKSUITE_CLI_BRAND: "feishu",
+    LARKSUITE_CLI_CONFIG_DIR: FEISHU_CLI_CONFIG_DIR,
+    LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
+    LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
+  };
 }
 
 /** Template-wide keys may never override NEXUS_* / OPENCLAW_* runtime variables. */
@@ -305,6 +327,7 @@ export class VercelProvider implements RuntimeProvider {
         // Template-wide service keys, then operator-bound tenant secrets; neither can shadow runtime variables.
         ...templateRuntimeEnv(this.config.templates?.[tenant.template_id]),
         ...tenant.runtime_env,
+        ...feishuCliEnv(tenant, this.config.encryptionKey),
         NEXUS_GATEWAY_TOKEN: this.token(tenant.id),
         NEXUS_MODEL_KEY: model.apiKey,
         NEXUS_MODEL_BASE_URL: model.baseUrl,

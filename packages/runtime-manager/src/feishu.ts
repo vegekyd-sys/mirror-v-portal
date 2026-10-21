@@ -112,9 +112,14 @@ export class FeishuEdge implements ChannelEdge {
     const manifest = await vault.load(run.tenant_id,run.id);
     const quiet = run.status === "succeeded" && isSilentReply(run.output,run.schedule_kind);
     if (!manifest?.textDelivered) {
-      if (run.schedule_id && run.chat_id) {
+      // Runs with no inbound message to reply to — scheduled tasks, and turns the
+      // platform starts itself (the greeting right after a scan, a takeover handing
+      // control back) — post a new message into their chat instead.
+      if (run.chat_id && (run.schedule_id || !run.message_id)) {
         if (!quiet) {
-          const text = run.status === "succeeded" ? run.output : "定时任务未能完成，请检查 Mirror V Portal 任务状态。";
+          const text = run.status === "succeeded" ? run.output
+            : run.schedule_id ? "定时任务未能完成，请检查 Mirror V Portal 任务状态。"
+            : "我这边刚才没能完成，你直接回我一句话，我接着来。";
           const chars = Array.from(text);
           for (let offset=0;offset<chars.length;offset+=5000) {
             const result = await api.im.message.create({params:{receive_id_type:"chat_id"},data:{receive_id:run.chat_id,msg_type:"text",content:JSON.stringify({text:chars.slice(offset,offset+5000).join("")}),uuid:createHash("sha256").update(`${run.id}:${offset}`).digest("hex").slice(0,40)}});

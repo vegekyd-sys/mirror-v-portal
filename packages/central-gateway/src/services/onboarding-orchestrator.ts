@@ -91,10 +91,17 @@ export async function orchestrateOnboarding(
       }
     }
 
-    // Step 4: Send welcome message
+    // Step 4: Say hello. Templates that onboard the owner themselves get a short
+    // "waking up" note now and their agent's own opening a moment later, in the
+    // same chat; the rest keep the static welcome.
     if (tenantAccessToken && session.userOpenId) {
-      const welcomeMessage = generateWelcome(session.templateName, tenantId, botWebhookUrl);
-      await sendWelcomeMessage(session.userOpenId, tenantAccessToken, welcomeMessage);
+      if (GREETS_FIRST.has(session.templateId)) {
+        const chatId = await sendWelcomeMessage(session.userOpenId, tenantAccessToken, wakingMessage(session.templateName));
+        if (chatId) await requestGreeting(config.provisioningServiceUrl, tenantId, chatId, config.provisioningApiToken);
+      } else {
+        const welcomeMessage = generateWelcome(session.templateName, tenantId, botWebhookUrl);
+        await sendWelcomeMessage(session.userOpenId, tenantAccessToken, welcomeMessage);
+      }
     }
 
     // Nexus-gateway Pod will auto-start WSClient on startup.
@@ -190,12 +197,38 @@ async function configureEventSubscription(
   }
 }
 
-/** Send welcome message via Bot API. */
+/**
+ * Templates whose agent opens the conversation itself. The owner has not written
+ * yet, so the only way to reach them is the chat this first message creates.
+ */
+const GREETS_FIRST: ReadonlySet<string> = new Set(['mirror-v-full']);
+
+/** Sent the instant the tenant exists; the agent's real opening follows once its sandbox is up. */
+export function wakingMessage(templateName: string): string {
+  return `我是 ${templateName}，正在醒来。大约半分钟后我来跟你打招呼，带你把我的记忆建起来。这段时间不用回我。`;
+}
+
+/** Ask the runtime manager to queue the agent's first turn in the owner's chat. Never fatal. */
+async function requestGreeting(provisioningServiceUrl: string, tenantId: string, chatId: string, token?: string): Promise<void> {
+  try {
+    const res = await fetch(`${provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(tenantId)}/greet`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ chatId }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) console.warn('[onboarding] greeting request failed:', res.status);
+  } catch (err: any) {
+    console.warn('[onboarding] greeting request error:', err.message);
+  }
+}
+
+/** Send welcome message via Bot API. Returns the chat it landed in, which later turns are addressed to. */
 async function sendWelcomeMessage(
   userOpenId: string,
   accessToken: string,
   message: string,
-): Promise<void> {
+): Promise<string | undefined> {
   try {
     // The registerApp result identifies the person who scanned this QR code.
     const res = await fetch(
@@ -218,11 +251,13 @@ async function sendWelcomeMessage(
     const respData = await res.json().catch(() => ({}));
     if (!res.ok || respData.code !== 0) {
       console.warn('Welcome message: HTTP', res.status, JSON.stringify(respData).slice(0, 200));
-    } else {
-      console.log('Welcome message sent');
+      return undefined;
     }
+    console.log('Welcome message sent');
+    return typeof respData.data?.chat_id === 'string' ? respData.data.chat_id : undefined;
   } catch (err: any) {
     console.warn('Welcome message error:', err.message);
+    return undefined;
   }
 }
 
