@@ -34,7 +34,8 @@ export function writePortalEnvironment({ workspace, data, config }) {
     workspace,
     execution: { ...config.tools.exec, npmPrefix: path.join(data, "npm"), installScripts: true },
     persistence: { sleepSnapshot: "VM filesystem", backup: data, processes: "restart after wake" },
-    messaging: { transport: "Portal channel edge", attachmentFormat: "MEDIA: <absolute file path>", capabilities: "current request channel and client-caps headers" },
+    messaging: { transport: "Portal channel edge", attachmentFormat: "MEDIA: <absolute file path>", capabilities: "current request channel and client-caps headers",
+      inboundVideo: { channel: "feishu", messageTypes: ["media", "file", "post"], delivery: "original file in workspace/inbound; absolute path, MIME, byte count and SHA-256 in request context", maxFileBytes: 64 * 1024 * 1024, maxAttachments: 4, followUp: "same-session previous attachments with explicit provenance" } },
     schedules: { tool: "portal_schedule", persistence: "Portal controller", acknowledgement: "durable: true", quietHeartbeatReply: "HEARTBEAT_OK" },
   };
   fs.mkdirSync(workspace, { recursive: true });
@@ -44,6 +45,7 @@ export function writePortalEnvironment({ workspace, data, config }) {
     `执行策略：\`${config.tools.exec.host}/${config.tools.exec.security}/${config.tools.exec.ask}\`。全局 npm：\`${facts.execution.npmPrefix}\`（bin 已在 PATH）；安装脚本已启用。`,
     "休眠快照保存 VM 文件系统；agent-data 有额外备份；进程在唤醒后重新启动。",
     "当前对话由 Portal 渠道网关收发。附件协议：回复正文中的独立行 `MEDIA: <文件绝对路径>`。当前渠道支持的消息类型来自请求的 channel/client-caps。",
+    "飞书原生视频、视频文件和富文本内视频按原始文件接收；本地绝对路径、MIME、字节数和 SHA-256 在请求上下文中提供。文件位于工作区 `inbound/`，可由 exec、ffprobe 和媒体工具读取；视频上限 64 MiB、每条消息最多 4 个附件。同一会话的后续引用会标记原始来源。",
     "`portal_schedule` 提供可跨休眠运行的定时任务和心跳，创建回执为 `durable: true`；静默心跳回执为 `HEARTBEAT_OK`。",
     `环境详情：\`${path.join(data, "portal-environment.json")}\`，也可用 \`portal_environment\` 查询。`, end].join("\n");
   const file = path.join(workspace, "TOOLS.md");

@@ -206,9 +206,8 @@ export class FeishuEdge implements ChannelEdge {
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
     if (!m?.message_id || data.sender?.sender_type === "app") return;
-    const videoEnabled=this.store.config.feishuInboundVideoTenantIds?.includes(tenant.id) === true;
-    if (!(videoEnabled ? ["text","image","post","media","file"] : ["text","image","post"]).includes(m.message_type)) return;
-    const videos=videoEnabled ? parseFeishuVideos(m.message_type,m.content) : [];
+    if (!["text","image","post","media","file"].includes(m.message_type)) return;
+    const videos=parseFeishuVideos(m.message_type,m.content);
     if (m.message_type === "file" && !videos.length) return;
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
     const content = parseFeishuContent(m.message_type,m.content);

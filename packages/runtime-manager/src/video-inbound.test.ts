@@ -33,10 +33,10 @@ test('responses receive the same real file path and inherited-video context, wit
   expect(prepareInboundInput({text:'用上个视频',files:[video],filesFromPreviousTurn:true},undefined,{workspace}).input).toContain('同一会话此前提供的视频');
   fs.writeFileSync(filename,Buffer.alloc(mp4.length));expect(()=>prepareInboundInput({files:[video]},undefined,{workspace})).toThrow('CHECKSUM_MISMATCH');
 });
-test('live receive is canary-scoped, enqueues video once, and failure clears inherited media',async()=>{
-  const directory=folder(),runs=new Map<string,any>();const store:any={config:{dataDir:directory,feishuInboundVideoTenantIds:['tenant']},pool:{query:async(_sql:string,args:any[])=>({rows:runs.has(args[1])?[runs.get(args[1])]:[]})},event:vi.fn(async()=>{}),enqueue:vi.fn(async(...args:any[])=>{const r={id:'run',delivery:'pending',attachments:args[6],inheritAttachments:args[7]?.inheritAttachments,text:args[3]};runs.set(args[1],r);return r;})};
+test('new tenants receive video by default, enqueue once, and failure clears inherited media',async()=>{
+  const directory=folder(),runs=new Map<string,any>();const store:any={config:{dataDir:directory},pool:{query:async(_sql:string,args:any[])=>({rows:runs.has(args[1])?[runs.get(args[1])]:[]})},event:vi.fn(async()=>{}),enqueue:vi.fn(async(...args:any[])=>{const r={id:'run',delivery:'pending',attachments:args[6],inheritAttachments:args[7]?.inheritAttachments,text:args[3]};runs.set(args[1],r);return r;})};
   const edge=new FeishuEdge(store);vi.spyOn(edge.typing,'start').mockImplementation(()=>{});const a=api(),event={sender:{sender_type:'user'},message:{message_id:'video-message',chat_id:'chat',message_type:'media',content:JSON.stringify({file_key:'video',image_key:'cover'})}};
-  expect(await edge.receive({id:'other'} as any,a,event)).toBeUndefined();const r=await edge.receive({id:'tenant'} as any,a,event);expect(r.attachments[0].kind).toBe('video');expect(r.text).toContain('只有用户视频');
+  const r=await edge.receive({id:'tenant'} as any,a,event);expect(r.attachments[0].kind).toBe('video');expect(r.text).toContain('只有用户视频');
   await edge.receive({id:'tenant'} as any,a,event);expect(a.im.messageResource.get).toHaveBeenCalledTimes(1);expect(store.enqueue).toHaveBeenCalledTimes(1);
   a.im.messageResource.get.mockRejectedValue(Error('private token'));const failed=await edge.receive({id:'tenant'} as any,a,{...event,message:{...event.message,message_id:'failed-video'}});expect(failed.attachments).toEqual([]);expect(failed.inheritAttachments).toBe(false);expect(JSON.stringify(store.event.mock.calls)).not.toContain('private token');
 });

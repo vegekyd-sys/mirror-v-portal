@@ -55,8 +55,6 @@ export interface SystemSchedule {
 }
 
 export interface Config {
-  /** Explicit canary allowlist for new Feishu video ingress. */
-  feishuInboundVideoTenantIds?: string[];
   /** Server-only account bootstrap after confirmed channel registration. */
   makaronProvisioning?: { endpoint: string; secret: string };
   databaseUrl: string;
@@ -85,7 +83,6 @@ export function loadConfig(): Config {
     process.env.NEXUS_CONFIG_PATH || "../../.elastic/config.json",
   );
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (saved.feishuInboundVideoTenantIds !== undefined && (!Array.isArray(saved.feishuInboundVideoTenantIds) || saved.feishuInboundVideoTenantIds.some((id: unknown) => typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)))) throw Error("Invalid video ingress canary allowlist");
   const authPath =
     process.env.NEXUS_VERCEL_AUTH_PATH ||
     path.join(

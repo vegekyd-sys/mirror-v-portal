@@ -26,6 +26,8 @@ describe("Portal environment facts", () => {
       expect(text.startsWith(owner)).toBe(true);
       expect(text.slice(text.indexOf("<!-- portal-environment:start -->"))).not.toMatch(/必须|禁止|不能|不要|只用|一律/);
       expect(facts.platform).toBe("Portal");
+      expect(facts.messaging.inboundVideo).toMatchObject({ channel: "feishu", messageTypes: ["media", "file", "post"], maxFileBytes: 67108864, maxAttachments: 4 });
+      expect(text).toContain("本地绝对路径、MIME、字节数和 SHA-256");
       expect(facts.execution.security).toBe("full");
       expect(JSON.stringify(config)).toBe(before);
       writePortalEnvironment({ ...f, config });
@@ -33,6 +35,15 @@ describe("Portal environment facts", () => {
       const changed = { tools: { exec: { host: "gateway", security: "deny", ask: "always" } } };
       expect(writePortalEnvironment({ ...f, config: changed }).execution.security).toBe("deny");
       expect(fs.readFileSync(file, "utf8").match(/<!-- portal-environment:start -->/g)).toHaveLength(1);
+    } finally { f.cleanup(); }
+  });
+
+  it("installs the video contract into a fresh public payload workspace without tenant overrides", () => {
+    const f = fixture();
+    try {
+      const facts = writePortalEnvironment({ ...f, config });
+      expect(fs.readFileSync(path.join(f.workspace, "TOOLS.md"), "utf8")).toContain("飞书原生视频、视频文件和富文本内视频");
+      expect(JSON.parse(fs.readFileSync(path.join(f.data, "portal-environment.json"), "utf8")).messaging.inboundVideo).toEqual(facts.messaging.inboundVideo);
     } finally { f.cleanup(); }
   });
 
