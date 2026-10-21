@@ -92,10 +92,13 @@ export function createApp() {
   app.use('/onboard/assets', express.static(fileURLToPath(new URL('../public/onboard/', import.meta.url)), {
     maxAge: '1d', index: false,
     setHeaders(res, filename) {
-      // Feishu's creation page can display this public artwork from another
-      // origin. Keep Helmet's default policy for every other static resource.
-      if (/(?:^|[\\/])(?:makaron-avatar-[a-f0-9]{12}|agent-(?:dealclaw|mirror-v|xingqing|makaron|mirror-v-full)-portrait-[a-f0-9]{12})\.png$/.test(filename))
+      // Feishu loads public avatars with crossOrigin=anonymous, draws them to
+      // a canvas, then uploads that result. CORP alone permits embedding but
+      // does not authorize that CORS read. Keep all other resources private.
+      if (/(?:^|[\\/])(?:makaron-avatar-[a-f0-9]{12}|agent-(?:dealclaw|mirror-v|xingqing|makaron|mirror-v-full)-portrait-[a-f0-9]{12})\.png$/.test(filename)) {
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
     },
   }));
   app.use(express.json({ limit: '1mb' }));

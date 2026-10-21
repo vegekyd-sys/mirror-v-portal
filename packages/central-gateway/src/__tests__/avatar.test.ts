@@ -20,13 +20,15 @@ describe('template avatar', () => {
   });
   it('serves the exact public avatar for the native creation page on another origin', async () => {
     const app = createApp();
-    const result = await request(app).get('/onboard/assets/makaron-avatar-5b2041a99122.png');
+    const result = await request(app).get('/onboard/assets/makaron-avatar-5b2041a99122.png').set('Origin', 'https://open.feishu.cn');
     expect(result.status).toBe(200);
     expect(result.headers['content-type']).toContain('image/png');
     expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(result.headers['access-control-allow-origin']).toBe('*');
     expect(createHash('sha256').update(result.body).digest('hex')).toBe('5b2041a991225001a3574c43377b028ae36f9bc1a61cffef96be3bc91e09d362');
     const other = await request(app).get('/onboard/assets/nexus-world-v2.webp');
     expect(other.headers['cross-origin-resource-policy']).toBe('same-origin');
+    expect(other.headers['access-control-allow-origin']).toBeUndefined();
   });
   it('allows the downloaded local video through the onboarding media policy', async () => {
     const result = await request(createApp()).get('/onboard');
@@ -36,9 +38,10 @@ describe('template avatar', () => {
   });
 
   it('serves refreshed portraits for native registration across origins', async () => {
-    const result = await request(createApp()).get('/onboard/assets/agent-dealclaw-portrait-b651b1783968.png');
+    const result = await request(createApp()).get('/onboard/assets/agent-dealclaw-portrait-b651b1783968.png').set('Origin', 'https://open.feishu.cn');
     expect(result.status).toBe(200);
     expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(result.headers['access-control-allow-origin']).toBe('*');
     expect(createHash('sha256').update(result.body).digest('hex')).toBe('b651b17839689ab2e4a2187b9213c56a87104cda041156466dbcc50b2f96cb74');
   });
 
