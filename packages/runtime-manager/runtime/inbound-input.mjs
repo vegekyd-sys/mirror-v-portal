@@ -63,6 +63,6 @@ export function prepareInboundInput(request,config,options={}) {
     const bytes=fs.readFileSync(filename);if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('SANDBOX_FILE_CHECKSUM_MISMATCH');
     total+=file.bytes;if(total>64*1024*1024)throw Error('SANDBOX_FILES_TOO_LARGE');
   }
-  const caption=[request.text||'',request.filesFromPreviousTurn?'【同一会话此前提供的视频】':'【本条消息的用户视频】','视频输入：真实本地文件',...files.map((file,index)=>`视频${index+1}: ${file.path}`)].join('\n');
+  const caption=[request.text||'',request.filesFromPreviousTurn?'【同一会话此前提供的视频】':'【本条消息的用户视频】','视频输入：真实本地文件',...files.map((file,index)=>`视频${index+1}: ${file.path} (MIME: ${file.mimeType}; bytes: ${file.bytes}; SHA-256: ${file.sha256})`)].join('\n');
   return prepareImageInput({...request,text:caption},config,options);
 }

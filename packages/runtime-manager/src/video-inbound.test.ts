@@ -29,7 +29,7 @@ test('video bytes cannot be replaced by an image, text or an unbounded stream',a
 });
 test('responses receive the same real file path and inherited-video context, with no base64 video payload',()=>{
   const workspace=folder();fs.mkdirSync(workspace+'/inbound');const filename=workspace+'/inbound/'+hash+'.mp4';fs.writeFileSync(filename,mp4);const video={kind:'video',path:filename,mimeType:'video/mp4',sha256:hash,bytes:mp4.length};
-  const r=prepareInboundInput({text:'把这个片子超分',files:[video]},undefined,{workspace});expect(typeof r.input).toBe('string');expect(r.input).toContain(filename);expect(r.input).toContain('本条消息的用户视频');expect(r.input).not.toContain(mp4.toString('base64'));
+  const r=prepareInboundInput({text:'把这个片子超分',files:[video]},undefined,{workspace});expect(typeof r.input).toBe('string');expect(r.input).toContain(filename);expect(r.input).toContain('本条消息的用户视频');expect(r.input).toContain('MIME: video/mp4');expect(r.input).toContain('bytes: '+mp4.length);expect(r.input).toContain('SHA-256: '+hash);expect(r.input).not.toContain(mp4.toString('base64'));
   expect(prepareInboundInput({text:'用上个视频',files:[video],filesFromPreviousTurn:true},undefined,{workspace}).input).toContain('同一会话此前提供的视频');
   fs.writeFileSync(filename,Buffer.alloc(mp4.length));expect(()=>prepareInboundInput({files:[video]},undefined,{workspace})).toThrow('CHECKSUM_MISMATCH');
 });
