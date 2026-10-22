@@ -7,7 +7,7 @@ import type { RuntimeProvider , MediaFile } from "./provider.js";
 /**
  * The turn text for Manager.greet. It only states the situation; what the agent
  * says comes from the payload (runtime/inbound-input.mjs puts the opening from
- * BOOTSTRAP.md in front of this turn).
+ * onboarding/GUIDE.md in front of this turn).
  */
 export const GREETING_PROMPT =
   "【平台消息：主人刚刚扫码创建了你，还没有开口。现在由你先说话。】";

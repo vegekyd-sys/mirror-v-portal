@@ -1,12 +1,11 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v9",
+ "version": "mirror-v-full.v10",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
  "files": [
   ".gitignore",
   "AGENTS.md",
-  "BOOTSTRAP.md",
   "HEARTBEAT.md",
   "IDENTITY.md",
   "MEMORY.md",
@@ -27,6 +26,7 @@
   "memory/projects/memory-librarian/main.md",
   "memory/reflections/.gitkeep",
   "memory/research/.gitkeep",
+  "onboarding/GUIDE.md",
   "onboarding/probes.json",
   "onboarding/templates/data-sovereignty.md",
   "scripts/compress-memory.py",

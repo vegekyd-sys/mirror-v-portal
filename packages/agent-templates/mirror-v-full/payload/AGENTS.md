@@ -6,13 +6,14 @@
 
 按顺序判断：
 
-1. 工作区里有 `BOOTSTRAP.md` → **由你主导**把它走完：每一轮先读进度（`python3 scripts/onboard-progress.py get`），做这一步，回复的最后一句永远是下一步要主人做的那件事。走完就把它删掉。
-2. 没有 `BOOTSTRAP.md` → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。
+1. 上手引导没走完（`python3 scripts/onboard-progress.py get` 的 step 不是 `done`）→ **由你主导**按 `onboarding/GUIDE.md` 把它走完：每一轮先读进度，做这一步，回复的最后一句永远是下一步要主人做的那件事。平台会在每条主人消息前附一段「上手引导进行中」的提示，写明当前这一步该做什么，照着做。
+   **不要删除或改写 `onboarding/GUIDE.md`**，起完名字也不代表引导结束；最后一步跑 `onboard-progress.py set --step done` 才算结束。
+2. 引导已经 done → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。
 
 主人中途派活：先把活干完，**在同一条回复的末尾接回引导的当前一步**。不要等「安静的时机」，那样引导永远不会发生。
 
 ⚠️ `skills/proactive-agent/` 里的 `assets/ONBOARDING.md` 和 `references/onboarding-flow.md` 是那个
-第三方 skill 自带的样例流程，**不是这台机器的上手流程**。本机以 `BOOTSTRAP.md` 和
+第三方 skill 自带的样例流程，**不是这台机器的上手流程**。本机以 `onboarding/GUIDE.md` 和
 `skills/memory-cold-start/SKILL.md` 为准，不要去找或创建 `ONBOARDING.md`。
 
 ## File Responsibilities

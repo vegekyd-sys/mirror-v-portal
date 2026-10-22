@@ -68,40 +68,54 @@ export function prepareInboundInput(request,config,options={}) {
 }
 
 /**
- * While a payload's onboarding is unfinished (BOOTSTRAP.md plus its progress
- * script are in the workspace), put a short platform note in front of every owner
- * turn: where onboarding stands and what this reply must do. A workspace file in
- * the system prompt alone was not enough — on 2026-10-21 the model answered the
- * very first turn with a generic hello and drifted into small talk.
+ * While a payload's onboarding is unfinished, put a short platform note in front
+ * of every owner turn: where onboarding stands, and the guide's instructions for
+ * that very step, quoted. A workspace file in the system prompt alone was not
+ * enough — on 2026-10-22 the model answered the first turn with a generic hello,
+ * and after naming itself deleted BOOTSTRAP.md (OpenClaw's own convention for
+ * that file), which ended onboarding for good.
  *
- * On the first step the opening is lifted verbatim from BOOTSTRAP.md's first
- * fenced block (the payload stays the only source of that text), and the step is
- * advanced here so the opening is never sent twice even if the model forgets to.
+ * So the guide lives at onboarding/GUIDE.md, and only the progress file decides
+ * when onboarding is over (step "done"). On the first step the opening is lifted
+ * verbatim from the guide's first fenced block and the step is advanced here, so
+ * the opening is never sent twice even if the model forgets to record progress.
  * Scheduled and other background turns are left alone.
  */
 export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey=''}={}) {
   if(/:scheduled:/.test(sessionKey))return text;
-  const bootstrap=path.join(workspace,'BOOTSTRAP.md'),script=path.join(workspace,'scripts','onboard-progress.py');
-  if(!fs.existsSync(bootstrap)||!fs.existsSync(script))return text;
+  const guidePath=path.join(workspace,'onboarding','GUIDE.md'),script=path.join(workspace,'scripts','onboard-progress.py');
+  if(!fs.existsSync(guidePath)||!fs.existsSync(script))return text;
   const progressFile=path.join(workspace,'onboarding','progress.json');
   let progress={step:'start'};
   try{progress={...progress,...JSON.parse(fs.readFileSync(progressFile,'utf8'))};}catch{}
+  if(progress.step==='done')return text;
+  const guide=fs.readFileSync(guidePath,'utf8');
   const head='【平台提示：上手引导进行中。这段是系统给你的，不是主人说的，不要复述，也不要提到它】';
   if(progress.step==='start'){
-    const opening=/```\n([\s\S]*?)\n```/.exec(fs.readFileSync(bootstrap,'utf8'))?.[1]?.trim();
+    const opening=/```\n([\s\S]*?)\n```/.exec(guide)?.[1]?.trim();
     if(opening){
       try{
         fs.mkdirSync(path.dirname(progressFile),{recursive:true});
         fs.writeFileSync(progressFile,JSON.stringify({...progress,step:'choose',updated_at:new Date().toISOString()},null,1));
       }catch{}
       return [head,
-        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完；然后在同一条回复里原样发出下面这段开场白，一字不改，不加任何前后缀。主人的消息只是平台的扫码通知时，就只发这段开场白，不调用任何工具。',
+        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完；然后在同一条回复里原样发出下面这段开场白，一字不改，不加任何前后缀。主人的消息只是平台的扫码通知、或者只是打招呼时，就只发这段开场白，不调用任何工具。',
         '———— 开场白 ————',opening,'———— 开场白结束 ————','','主人的消息：',text].join('\n');
     }
   }
   return [head,
     `当前步骤：${progress.step}。已选来源：${(progress.chosen??[]).join(' ')||'无'}；已完成：${(progress.done??[]).join(' ')||'无'}；已跳过：${(progress.skipped??[]).join(' ')||'无'}。`,
-    '按 BOOTSTRAP.md 中这一步的说明处理主人这条消息。主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步后用 python3 scripts/onboard-progress.py set 写回进度。',
-    '回复的最后一句必须是下一步要主人做的那一件事（编号选项、链接，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY、BOOTSTRAP 这类内部名字。',
+    '这一步的做法（摘自引导，照做）：','————',guideSection(guide,progress.step),'————',
+    '主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除，起完名字也不代表引导结束。',
+    '回复的最后一句必须是下一步要主人做的那一件事（编号选项、链接，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
     '','主人的消息：',text].join('\n');
+}
+
+/** The guide section whose heading lists this step, e.g. "## 第 2 步 · 飞书文档（step = feishu → feishu_auth …）". */
+export function guideSection(guide,step){
+  const parts=guide.split(/\n(?=## )/);
+  const steps=part=>(/step\s*=\s*([^）)\n]*)/.exec(part.split('\n')[0])?.[1]??'').split(/[^a-z_]+/).filter(Boolean);
+  const hit=parts.find(part=>steps(part).includes(step))
+    ??parts.find(part=>steps(part).some(name=>step.startsWith(name+'_')));
+  return (hit??'（引导里没有这一步，按当前进度判断最合理的下一步，并用 onboard-progress.py 改正进度。）').replace(/\n---\s*$/,'').trim().slice(0,6000);
 }
