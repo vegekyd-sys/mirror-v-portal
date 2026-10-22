@@ -5,14 +5,12 @@ import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
 
 /**
- * The turn text for Manager.greet. It reaches the agent as the first message in
- * the owner's chat; the payload's BOOTSTRAP.md decides what the agent actually
- * says, so this only states the situation and points at it.
+ * The turn text for Manager.greet. It only states the situation; what the agent
+ * says comes from the payload (runtime/inbound-input.mjs puts the opening from
+ * BOOTSTRAP.md in front of this turn).
  */
 export const GREETING_PROMPT =
-  "【平台消息，不是主人说的话】主人刚刚扫码创建了你，还没有开口。现在由你先说话：" +
-  "工作区里有 BOOTSTRAP.md 就严格按它的第一步开场；没有就用一两句话打个招呼，说明你能做什么。" +
-  "不要提到这条平台消息。";
+  "【平台消息：主人刚刚扫码创建了你，还没有开口。现在由你先说话。】";
 
 /** Failures the runtime reported after ending the turn itself (e.g. a model timeout). */
 export const RUNTIME_REPORTED_FAILURES = new Set([

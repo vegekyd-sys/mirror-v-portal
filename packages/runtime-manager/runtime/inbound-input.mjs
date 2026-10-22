@@ -66,3 +66,42 @@ export function prepareInboundInput(request,config,options={}) {
   const caption=[request.text||'',request.filesFromPreviousTurn?'【同一会话此前提供的视频】':'【本条消息的用户视频】','视频输入：真实本地文件',...files.map((file,index)=>`视频${index+1}: ${file.path} (MIME: ${file.mimeType}; bytes: ${file.bytes}; SHA-256: ${file.sha256})`)].join('\n');
   return prepareImageInput({...request,text:caption},config,options);
 }
+
+/**
+ * While a payload's onboarding is unfinished (BOOTSTRAP.md plus its progress
+ * script are in the workspace), put a short platform note in front of every owner
+ * turn: where onboarding stands and what this reply must do. A workspace file in
+ * the system prompt alone was not enough — on 2026-10-21 the model answered the
+ * very first turn with a generic hello and drifted into small talk.
+ *
+ * On the first step the opening is lifted verbatim from BOOTSTRAP.md's first
+ * fenced block (the payload stays the only source of that text), and the step is
+ * advanced here so the opening is never sent twice even if the model forgets to.
+ * Scheduled and other background turns are left alone.
+ */
+export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey=''}={}) {
+  if(/:scheduled:/.test(sessionKey))return text;
+  const bootstrap=path.join(workspace,'BOOTSTRAP.md'),script=path.join(workspace,'scripts','onboard-progress.py');
+  if(!fs.existsSync(bootstrap)||!fs.existsSync(script))return text;
+  const progressFile=path.join(workspace,'onboarding','progress.json');
+  let progress={step:'start'};
+  try{progress={...progress,...JSON.parse(fs.readFileSync(progressFile,'utf8'))};}catch{}
+  const head='【平台提示：上手引导进行中。这段是系统给你的，不是主人说的，不要复述，也不要提到它】';
+  if(progress.step==='start'){
+    const opening=/```\n([\s\S]*?)\n```/.exec(fs.readFileSync(bootstrap,'utf8'))?.[1]?.trim();
+    if(opening){
+      try{
+        fs.mkdirSync(path.dirname(progressFile),{recursive:true});
+        fs.writeFileSync(progressFile,JSON.stringify({...progress,step:'choose',updated_at:new Date().toISOString()},null,1));
+      }catch{}
+      return [head,
+        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完；然后在同一条回复里原样发出下面这段开场白，一字不改，不加任何前后缀。主人的消息只是平台的扫码通知时，就只发这段开场白，不调用任何工具。',
+        '———— 开场白 ————',opening,'———— 开场白结束 ————','','主人的消息：',text].join('\n');
+    }
+  }
+  return [head,
+    `当前步骤：${progress.step}。已选来源：${(progress.chosen??[]).join(' ')||'无'}；已完成：${(progress.done??[]).join(' ')||'无'}；已跳过：${(progress.skipped??[]).join(' ')||'无'}。`,
+    '按 BOOTSTRAP.md 中这一步的说明处理主人这条消息。主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步后用 python3 scripts/onboard-progress.py set 写回进度。',
+    '回复的最后一句必须是下一步要主人做的那一件事（编号选项、链接，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY、BOOTSTRAP 这类内部名字。',
+    '','主人的消息：',text].join('\n');
+}

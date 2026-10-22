@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { prepareInboundInput } from "./inbound-input.mjs";
+import { prepareInboundInput, onboardingPreamble } from "./inbound-input.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
@@ -44,6 +44,7 @@ try {
   let inbound;
   try {
     const config = request.images?.length ? JSON.parse(fs.readFileSync("/vercel/sandbox/agent-data/openclaw.json", "utf8")) : undefined;
+    try { request.text = onboardingPreamble(request.text ?? "", { sessionKey: request.sessionKey ?? "" }); } catch {}
     inbound = prepareInboundInput(request,config,{agentId:process.env.NEXUS_AGENT_ID || "dealclaw"});
   } catch (error) {
     const code = /^(?:INVALID_SANDBOX|SANDBOX_IMAGE|SANDBOX_FILE)[A-Z_]*$/.test(error?.message || "") ? error.message : "INBOUND_MEDIA_INPUT_REJECTED";
