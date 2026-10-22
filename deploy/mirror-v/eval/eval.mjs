@@ -233,8 +233,12 @@ async function gate() {
   const trigger = (s) => `${s.kind === "heartbeat" ? "[Nexus heartbeat] 无需创建新的定时任务。没有需提醒事项时只回复 HEARTBEAT_OK。" : "[Nexus 定时任务触发] 执行下面的任务，不要再次创建定时任务。"}\n${s.prompt}`;
   const shanghaiDate = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
   if (want("D4")) {
+    // Give it real work: an empty queue makes the Librarian answer NO_REPLY, which 9.1
+    // turns into a failed turn (fixed on V by #317/#324, not yet in this release).
+    const fact = `评测记录 ${nonce()}：今天测试了冷启动，首字约 17 秒。`;
+    await exec(tenant, `cd /vercel/sandbox/agent-data/workspace && printf '\\n- %s\\n' "${fact}" >> memory/${shanghaiDate}.md`);
     const before = Number((await exec(tenant, "cd /vercel/sandbox/agent-data/workspace && git rev-list --count HEAD")).stdout);
-    const r = await turn("librarian", trigger(official("Memory Librarian")), { session: `eval:sched-librarian`, timeoutMs: 900_000 });
+    const r = await turn("librarian", trigger(official("Memory Librarian")), { session: `eval:sched-librarian-${nonce()}`, timeoutMs: 900_000 });
     const ws = await exec(tenant, `cd /vercel/sandbox/agent-data/workspace && git rev-list --count HEAD; test -f memory/librarian/runs/${shanghaiDate}.json && echo RUN_FILE; grep -c "${shanghaiDate}" memory/log.md || true; git status --porcelain -- memory | wc -l`);
     const [after, ...rest] = ws.stdout.split("\n");
     const runFile = rest.includes("RUN_FILE"), logLines = Number(rest.find((l) => /^\d+$/.test(l)) ?? 0);
@@ -242,15 +246,15 @@ async function gate() {
       `${r.status} in ${Math.round(r.totalMs / 1000)} s; commits +${Number(after) - before}; runs/${shanghaiDate}.json ${runFile ? "written" : "missing"}; log.md entries today ${logLines}; ${r.tools.length} tools`);
   }
   if (want("D5")) {
-    const r = await turn("librarian-qc", trigger(official("Memory 质检")), { session: `eval:sched-qc`, timeoutMs: 900_000 });
+    const r = await turn("librarian-qc", trigger(official("Memory 质检")), { session: `eval:sched-qc-${nonce()}`, timeoutMs: 900_000 });
     check("D5", "P1", r.status === "succeeded" && r.output.trim().length > 40 && /21:00|Librarian|librarian/.test(r.output), `${r.status}; ${r.output.trim().length} chars; mentions tonight's Librarian: ${/21:00|Librarian|librarian/.test(r.output)}`);
   }
   if (want("D6")) {
-    const r = await turn("heartbeat", trigger(official("Heartbeat")), { session: `eval:sched-heartbeat`, timeoutMs: 900_000 });
+    const r = await turn("heartbeat", trigger(official("Heartbeat")), { session: `eval:sched-heartbeat-${nonce()}`, timeoutMs: 900_000 });
     check("D6", "P1", r.status === "succeeded" && r.tools.includes("exec"), `${r.status}; tools ${r.tools.join(",")}`);
   }
   if (want("D7")) {
-    const r = await turn("midnight-report", trigger(official("午夜报告")), { session: `eval:sched-report`, timeoutMs: 900_000 });
+    const r = await turn("midnight-report", trigger(official("午夜报告")), { session: `eval:sched-report-${nonce()}`, timeoutMs: 900_000 });
     check("D7", "P1", r.status === "succeeded" && /总结/.test(r.output) && cjkRatio(r.output) >= 0.3, `${r.status}; ${r.output.trim().length} chars`);
   }
   // Scheduled runs narrate too: they must speak Chinese like every other turn.

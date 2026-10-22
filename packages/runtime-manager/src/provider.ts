@@ -373,6 +373,7 @@ export class VercelProvider implements RuntimeProvider {
         openclawBootMs: boot.openclawBootMs ?? -1,
         bootScriptMs: boot.bootScriptMs ?? -1,
         processReused: !!boot.processReused,
+        ...(boot.bootPhases && typeof boot.bootPhases === "object" ? { bootPhases: boot.bootPhases } : {}),
       },
     };
   }

@@ -11,6 +11,23 @@ import { writePortalEnvironment } from "./portal-environment.mjs";
 import { availableFeatures, featureConfig, desktopEnv, OWNER_CHANNELS, startDesktop, startHandoff, startBroker, startVoice, startCuaNode, startNodeApprover } from "./v-features.mjs";
 
 const bootStart = Date.now();
+// A woken sandbox reads its disk lazily, block by block, and Node loads modules one after
+// another, so every cold file costs a round trip. Read the runtime's hot files with high
+// concurrency first: the Gateway and Workers then load from memory (v-release only).
+if (fs.existsSync("/vercel/sandbox/nexus/v-release.json")) {
+  const hot = [
+    "/usr/local/bin/node", "/vercel/sandbox/nexus/compile-cache",
+    "/vercel/sandbox/nexus/runtime/node_modules/openclaw/dist", "/vercel/sandbox/nexus/runtime/node_modules/@openclaw",
+    "/vercel/sandbox/nexus/v/worker", "/vercel/sandbox/agent-data/state/cache",
+    // The Gateway and every Worker open these databases on their first turn.
+    "/vercel/sandbox/agent-data/state/state/openclaw.sqlite",
+    ...(fs.existsSync("/vercel/sandbox/agent-data/state/agents") ? fs.readdirSync("/vercel/sandbox/agent-data/state/agents").map((id) => `/vercel/sandbox/agent-data/state/agents/${id}/agent/openclaw-agent.sqlite`) : []),
+  ].filter((p) => fs.existsSync(p)).join(" ");
+  spawn("sh", ["-c", `find ${hot} -type f -print0 2>/dev/null | xargs -0 -P 32 -n 16 cat >/dev/null 2>&1`], { detached: true, stdio: "ignore" }).unref();
+}
+// Milliseconds since boot start at each phase, reported with NEXUS_RUNTIME_READY (cold-start budget).
+const bootPhases = {};
+const mark = (name) => { bootPhases[name] = Date.now() - bootStart; };
 // /tmp survives sleep but processes do not. After a resume, PID files from the
 // previous life name PIDs the new boot reuses (boot order is deterministic), so a
 // daemon would look alive and never start, and quiesce would signal a stranger.
@@ -88,7 +105,9 @@ function initVReleaseWorkspace() {
   git("add", "-A");
   git("commit", "-qm", `seed: ${agentId} ${process.env.NEXUS_TEMPLATE_VERSION || "payload"} (${vRelease.release})`);
 }
+mark("prelude");
 initVReleaseWorkspace();
+mark("workspace");
 const toolsBin = `${base}/tools/bin`;
 const execEnv = sandboxExecEnv(data, [profile?.runtime.mediaBinaries || vRelease ? `${base}/runtime/bin` : undefined, fs.existsSync(toolsBin) ? toolsBin : undefined, process.env.PATH ?? ""].filter(Boolean).join(":"));
 const env = {
@@ -121,8 +140,10 @@ if (features.desktop) Object.assign(env, desktopEnv(data));
 if (features.vbrowser) Object.assign(env, { OPENCLAW_EXTENSION_COMMAND_TIMEOUT_MS: "180000", OPENCLAW_PERSISTENT_CDP_CONNECT_TIMEOUT_MS: "60000" });
 // No credentials in the filesystem snapshot. Values resolve from process env.
 installProgress(`${base}/runtime/node_modules/openclaw`);
+mark("progressPatch");
 // DeepSeek reasoning turns hold all visible text until the message ends; stream a provisional preview.
 if (vRelease) installStreamPreview({ openclawRoot: `${base}/runtime/node_modules/openclaw`, workerDist: `${V_RELEASE_ROOT}/worker/dist` });
+mark("streamPreviewPatch");
 const pluginDir = base + "/scheduler-plugin";
 fs.mkdirSync(pluginDir, { recursive: true });
 fs.copyFileSync(base + "/scheduler-plugin.mjs", pluginDir + "/index.mjs");
@@ -220,6 +241,7 @@ fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {
   ensureCodexHome(state, agentId);
   applyCodexCapture(state);
+  mark("codexCapture");
 }
 function indexMemory() {
   if (!memoryAgent) return;
@@ -237,7 +259,10 @@ function indexMemory() {
 // V's real-time memory indexer: watches memory/ and syncs outside the Gateway event loop.
 function startMemoryIndexer() {
   if (!vRelease || !fs.existsSync(`${V_RELEASE_ROOT}/v-memory-indexer.mjs`)) return;
-  const indexer = spawn("node", [`${V_RELEASE_ROOT}/v-memory-indexer.mjs`, agentId], {
+  // The indexer refuses a full reindex at startup, so `memory index` must finish first.
+  // Both run in the background: the first turn does not wait for the index (≈5 s cold).
+  // Wait out the first turn too: on a just-woken disk every reader slows the Worker down.
+  const indexer = spawn("nice", ["-n", "10", "sh", "-c", `sleep 15; node ${base}/runtime/node_modules/openclaw/openclaw.mjs memory index --agent "$1" >/dev/null 2>&1; exec node ${V_RELEASE_ROOT}/v-memory-indexer.mjs "$1"`, "sh", agentId], {
     // One owner, a small memory: index 5 s after the last write instead of V's 15 s.
     env: { ...env, OPENCLAW_DIST: `${base}/runtime/node_modules/openclaw/dist`, QUIET_SECONDS: "5" },
     detached: true, stdio: ["ignore", fs.openSync("/tmp/nexus-memory-indexer.log", "a"), fs.openSync("/tmp/nexus-memory-indexer.log", "a")],
@@ -279,7 +304,14 @@ try {
     }
   }
 }
-ensureSandboxExecApprovals(`${base}/runtime/node_modules/openclaw/openclaw.mjs`, env);
+// The policy lives in the state dir and survives sleep: set it once, not on every boot
+// (each check is a full CLI cold start, ≈3 s on a just-woken disk).
+const execApprovalsMarker = `${state}/.nexus-exec-approvals-v1`;
+if (!fs.existsSync(execApprovalsMarker)) {
+  ensureSandboxExecApprovals(`${base}/runtime/node_modules/openclaw/openclaw.mjs`, env);
+  fs.writeFileSync(execApprovalsMarker, new Date().toISOString());
+}
+mark("execApprovals");
 const log = fs.openSync("/tmp/nexus-gateway.log", "a");
 // V's runtime calls DeepSeek directly with V's own thinking settings.
 if (!vRelease) {
@@ -295,10 +327,14 @@ fs.writeFileSync("/tmp/nexus-runtime-fingerprint", fingerprint);
 fs.writeFileSync("/tmp/nexus-public-ports.json", process.env.NEXUS_PUBLIC_PORTS || "{}");
 fs.writeFileSync("/tmp/nexus-runtime-config-hash", configHash);
 const alive = (name) => { try { process.kill(Number(fs.readFileSync(`/tmp/nexus-${name}.pid`, "utf8")), 0); return true; } catch { return false; } };
+// The Gateway does not need X to start, only browser/computer tools do: bring the
+// desktop up alongside it (≈4 s) and confirm it before reporting ready.
+let desktopReady = Promise.resolve();
 if (features.desktop) {
-  if (!alive("desktop")) await startDesktop({ data, env });
+  if (!alive("desktop")) desktopReady = startDesktop({ data, env });
   if (!alive("desktop-handoff")) startHandoff({ data, env, publicUrl: publicUrls.desktop });
 }
+mark("desktop");
 const gatewayStart = Date.now();
 const startGateway = () => spawn(
   "node",
@@ -341,7 +377,9 @@ for (let i = 0; i < 360; i++) {
       signal: AbortSignal.timeout(1000),
     });
     if (r.ok) {
-      indexMemory();
+      mark("gatewayHealthy");
+      if (!vRelease) indexMemory();
+      mark("memoryIndex");
       startMemoryIndexer();
       // Feature daemons that connect to the Gateway start once it is serving.
       const featureState = {};
@@ -352,6 +390,9 @@ for (let i = 0; i < 360; i++) {
         if (!alive("cua-node")) startCuaNode({ data, env, base });
         if (!alive("node-approver")) startNodeApprover({ env, base });
       }
+      await desktopReady;
+      mark("daemons");
+      try { fs.writeFileSync("/tmp/nexus-boot-phases.json", JSON.stringify({ at: new Date().toISOString(), ...bootPhases })); } catch {}
       // Record the runtime's baseline process tree. Quiesce blocks on later background processes.
       fs.writeFileSync(
         "/tmp/nexus-baseline-pids",
@@ -362,6 +403,7 @@ for (let i = 0; i < 360; i++) {
           marker: "NEXUS_RUNTIME_READY",
           processReused: false,
           openclawBootMs: Date.now() - gatewayStart,
+          bootPhases: { ...bootPhases, ready: Date.now() - bootStart },
           ...(vRelease ? { vRelease: vRelease.release, convergeRestarts, features, ...featureState } : {}),
           bootScriptMs: Date.now() - bootStart,
         }),
