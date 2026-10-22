@@ -33,6 +33,31 @@ export function secretFile(file, bytes = 24) {
   return file;
 }
 
+/**
+ * xfwm4's compositor renders through Mesa's software llvmpipe: every desktop start loads
+ * libLLVM (52 MB) from a cold disk while the Gateway and Workers are loading too, and a
+ * VNC desktop gains nothing from shadows and transparency. Turn it off in the session's
+ * own xfconf (XDG_CONFIG_HOME = <state>/config), keeping any other xfwm4 settings.
+ */
+export function disableCompositing(stateDir) {
+  const dir = path.join(stateDir, "config", "xfce4", "xfconf", "xfce-perchannel-xml");
+  const file = path.join(dir, "xfwm4.xml");
+  const off = '<property name="use_compositing" type="bool" value="false"/>';
+  let xml = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  if (xml.includes(off)) return false;
+  if (/<property name="use_compositing"[^>]*\/>/.test(xml)) xml = xml.replace(/<property name="use_compositing"[^>]*\/>/, off);
+  else if (/<property name="general" type="empty">/.test(xml)) xml = xml.replace(/<property name="general" type="empty">/, `$&\n    ${off}`);
+  else xml = `<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfwm4" version="1.0">\n  <property name="general" type="empty">\n    ${off}\n  </property>\n</channel>\n`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, xml);
+  return true;
+}
+
+// Feature daemons start while the Gateway brings up its Worker pool on 4 vCPUs. Nobody waits
+// on them for the first reply, so they yield the CPU to it. nice execs the command: the PID
+// and command line (what quiesce matches) stay those of the daemon.
+const BACKGROUND = ["-n", "10"];
+
 export function desktopEnv(data) {
   return {
     DISPLAY: DESKTOP.display,
@@ -109,8 +134,10 @@ const logFd = (name) => fs.openSync(`/tmp/nexus-${name}.log`, "a");
 export async function startDesktop({ data, env }) {
   const stateDir = `${data}/desktop`;
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const child = spawn("bash", [path.join(V_RELEASE_ROOT, "desktop", "desktop", "start-desktop.sh")], {
-    env: { ...env, ...desktopEnv(data) }, detached: true, stdio: ["ignore", logFd("desktop"), logFd("desktop")],
+  disableCompositing(stateDir);
+  const child = spawn("nice", [...BACKGROUND, "bash", path.join(V_RELEASE_ROOT, "desktop", "desktop", "start-desktop.sh")], {
+    // GDK_GL=disable: GTK would otherwise load Mesa's llvmpipe (libLLVM, 50 MB) for nothing.
+    env: { ...env, ...desktopEnv(data), GDK_GL: "disable" }, detached: true, stdio: ["ignore", logFd("desktop"), logFd("desktop")],
   });
   started("desktop", child);
   for (let i = 0; i < 60; i++) {
@@ -138,7 +165,7 @@ export function startHandoff({ data, env, publicUrl }) {
     layout: { enabled: true, display: DESKTOP.display, base: "1280x800" },
   };
   fs.writeFileSync(`${dir}/config.json`, JSON.stringify(config, null, 1), { mode: 0o600 });
-  return started("desktop-handoff", spawn("node", [path.join(V_RELEASE_ROOT, "desktop", "service", "server.mjs"), `${dir}/config.json`], {
+  return started("desktop-handoff", spawn("nice", [...BACKGROUND, "node", path.join(V_RELEASE_ROOT, "desktop", "service", "server.mjs"), `${dir}/config.json`], {
     env: { ...env, ...desktopEnv(data) }, detached: true, stdio: ["ignore", logFd("desktop-handoff"), logFd("desktop-handoff")],
   }));
 }
@@ -150,7 +177,7 @@ export function startBroker({ data, env, base, publicUrl, gatewayPort = 18790 })
   const zip = fs.readdirSync(path.join(root, "dist")).find((name) => /^v-browser-extension-.*\.zip$/.test(name));
   const wsUrl = publicUrl ? publicUrl.replace(/^http/, "ws") : `ws://127.0.0.1:${VBROWSER.publicPort}`;
   fs.writeFileSync(`${dir}/broker-public-ws-url`, wsUrl + "\n");
-  return started("vbrowser-broker", spawn("node", [path.join(root, "broker", "main.mjs")], {
+  return started("vbrowser-broker", spawn("nice", [...BACKGROUND, "node", path.join(root, "broker", "main.mjs")], {
     cwd: root,
     env: {
       ...env,
@@ -175,7 +202,7 @@ export function startBroker({ data, env, base, publicUrl, gatewayPort = 18790 })
 }
 
 export function startVoice({ data, env, base, agentId, publicUrl, accessToken }) {
-  return started("voice", spawn("node", [path.join(V_RELEASE_ROOT, "voice", "lab", "gpt-live-h5", "server.mjs")], {
+  return started("voice", spawn("nice", [...BACKGROUND, "node", path.join(V_RELEASE_ROOT, "voice", "lab", "gpt-live-h5", "server.mjs")], {
     cwd: path.join(V_RELEASE_ROOT, "voice", "lab", "gpt-live-h5"),
     env: {
       ...env,
@@ -206,7 +233,7 @@ export function startCuaNode({ data, env, base, gatewayPort = 18790 }) {
     nodeHost: { browserProxy: { enabled: false } },
     plugins: { entries: { "cua-computer": { enabled: true } } },
   }, null, 1), { mode: 0o600 });
-  return started("cua-node", spawn("node", [`${base}/runtime/node_modules/openclaw/openclaw.mjs`, "node", "run", "--host", "127.0.0.1", "--port", String(gatewayPort), "--display-name", "Mirror desktop"], {
+  return started("cua-node", spawn("nice", [...BACKGROUND, "node", `${base}/runtime/node_modules/openclaw/openclaw.mjs`, "node", "run", "--host", "127.0.0.1", "--port", String(gatewayPort), "--display-name", "Mirror desktop"], {
     env: { ...env, ...desktopEnv(data), OPENCLAW_CONFIG_PATH: `${dir}/openclaw.json`, OPENCLAW_STATE_DIR: `${dir}/state` },
     detached: true, stdio: ["ignore", logFd("cua-node"), logFd("cua-node")],
   }));
@@ -237,7 +264,7 @@ export async function approveDesktopNode({ env, base, deadlineMs = 120000 }) {
 }
 
 export function startNodeApprover({ env, base }) {
-  return started("node-approver", spawn("node", [new URL(import.meta.url).pathname, "approve-node"], {
+  return started("node-approver", spawn("nice", [...BACKGROUND, "node", new URL(import.meta.url).pathname, "approve-node"], {
     env: { ...env, NEXUS_BASE: base }, detached: true, stdio: ["ignore", logFd("node-approver"), logFd("node-approver")],
   }));
 }

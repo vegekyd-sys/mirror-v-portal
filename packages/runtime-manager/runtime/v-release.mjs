@@ -15,6 +15,8 @@ export const V_RELEASE_MARKER = "/vercel/sandbox/nexus/v-release.json";
 export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/worker\/dist\/worker\.mjs(?:\s|$)/,
   /\/v-memory-indexer\.mjs(?:\s|$)/,
+  // The boot-time index pass that runs just before the indexer.
+  /\/openclaw\.mjs memory index --agent /,
   /\bcodex(?:-linux-x64)?\b.*\bapp-server\b/,
   // Virtual desktop, takeover page, V Browser broker, voice entry, desktop node.
   /\/start-desktop\.sh(?:\s|$)/,

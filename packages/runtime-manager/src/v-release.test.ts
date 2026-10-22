@@ -52,6 +52,9 @@ test("capture fails closed on drifted upstream bytes or a different base version
 test("only V's own daemons are ignored when deciding whether a VM may sleep", () => {
   expect(isVReleaseDaemon("/usr/local/bin/node /vercel/sandbox/nexus/v/worker/dist/worker.mjs")).toBe(true);
   expect(isVReleaseDaemon("node /vercel/sandbox/nexus/v/v-memory-indexer.mjs mirror-v-full")).toBe(true);
+  // The boot-time index pass and the shell that chains it into the indexer.
+  expect(isVReleaseDaemon("node /vercel/sandbox/nexus/runtime/node_modules/openclaw/openclaw.mjs memory index --agent mirror-v-full")).toBe(true);
+  expect(isVReleaseDaemon('sh -c nice -n 10 node /vercel/sandbox/nexus/runtime/node_modules/openclaw/openclaw.mjs memory index --agent "$1" >/dev/null 2>&1; exec node /vercel/sandbox/nexus/v/v-memory-indexer.mjs "$1" sh mirror-v-full')).toBe(true);
   expect(isVReleaseDaemon("/vercel/sandbox/nexus/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex app-server")).toBe(true);
   expect(isVReleaseDaemon("python3 long_job.py")).toBe(false);
   expect(isVReleaseDaemon("bash -c sleep 600")).toBe(false);
@@ -184,3 +187,19 @@ test("a deferred sleep records what quiesce found, without process arguments", a
   expect(quiesceDetail('{"ok":false,"reason":"desktop-handoff"}')).toEqual({ reason: "desktop-handoff" });
   expect(quiesceDetail("garbage")).toBeUndefined();
 });
+
+test("the desktop session starts without xfwm4's software compositor and keeps other settings", async () => {
+  const { disableCompositing } = await import("../runtime/v-features.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-"));
+  const file = path.join(dir, "config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml");
+  expect(disableCompositing(dir)).toBe(true);
+  expect(fs.readFileSync(file, "utf8")).toContain('<property name="use_compositing" type="bool" value="false"/>');
+  expect(disableCompositing(dir)).toBe(false);
+  fs.writeFileSync(file, '<channel name="xfwm4" version="1.0">\n  <property name="general" type="empty">\n    <property name="theme" type="string" value="Default"/>\n    <property name="use_compositing" type="bool" value="true"/>\n  </property>\n</channel>\n');
+  expect(disableCompositing(dir)).toBe(true);
+  const xml = fs.readFileSync(file, "utf8");
+  expect(xml).toContain('value="false"');
+  expect(xml).toContain('name="theme"');
+  expect(xml.match(/use_compositing/g)).toHaveLength(1);
+});
+
