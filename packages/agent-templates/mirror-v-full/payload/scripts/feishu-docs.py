@@ -71,8 +71,16 @@ QR = WS / "feishu-auth.png"
 APP_ENV_KEYS = ("LARKSUITE_CLI_APP_ID", "LARKSUITE_CLI_APP_SECRET")
 
 
+# 在 agent 里跑时环境带着 OPENCLAW_HOME 等变量，lark-cli 会认定自己在 OpenClaw 里，
+# 要求先 `config bind`，拒绝本地配置（实测：'openclaw context detected but lark-cli
+# is not bound to it'）。这里用的是主人绑定的应用、本地配置，按独立工具运行即可。
+AGENT_CONTEXT_PREFIXES = ("OPENCLAW_", "HERMES_")
+AGENT_CONTEXT_KEYS = ("LARK_CHANNEL",)
+
+
 def lark_env() -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in APP_ENV_KEYS}
+    env = {k: v for k, v in os.environ.items()
+           if k not in APP_ENV_KEYS and k not in AGENT_CONTEXT_KEYS and not k.startswith(AGENT_CONTEXT_PREFIXES)}
     env.setdefault("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1")
     env.setdefault("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1")
     return env
@@ -118,7 +126,7 @@ def lark(*args: str, timeout: int = 120) -> tuple[dict | None, str | None]:
         return None, f"超时（{timeout}s）"
     out = p.stdout.strip()
     if not out:
-        return None, (p.stderr.strip()[-300:] or f"rc={p.returncode}")
+        return None, (p.stderr.strip()[:400] or f"rc={p.returncode}")
     try:
         payload = json.loads(out[out.index("{"):])
     except (ValueError, json.JSONDecodeError):
@@ -207,7 +215,7 @@ def cmd_scopes(_a) -> None:
         say(status()); sys.exit(1)
     data, err = lark("auth", "scopes")
     if err:
-        say({"ok": False, "detail": err, "hint": "多半是网络抖动，过几秒重试一次"}); sys.exit(1)
+        say({"ok": False, "detail": err, "hint": "把 detail 用一句人话告诉主人，再重试一次"}); sys.exit(1)
     enabled = set(data.get("userScopes") or [])
     missing = [k for k in REQUIRED_SCOPES if k not in enabled]
     out = {
