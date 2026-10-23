@@ -72,6 +72,8 @@ python3 scripts/feishu-docs.py scopes
 
 `setup` 的状态里 `boundApp` 是空的：这台机器没拿到绑定的应用。如实说「我这边暂时接不上你的飞书」，把这一项标成跳过，告诉主人可以把重要文档的正文粘过来，然后进入下一个来源。**不要让主人去另建应用。**
 
+`setup` 或 `scopes` 报错（退出码 1）：把输出里的 `detail` 用一句人话告诉主人，再重试一次；还不行就说「飞书这边我这次接不上，原因是……」，然后跳过。**不要自己判断「走不通」就跳过**，也不要自己去改 lark-cli 的配置或换别的授权方式。
+
 **2b · 缺权限（scopes 退出码 2）。** 把输出里 `tellOwner` 的意思和 `grantLink` 发给主人，结尾「弄完回我『好了』」。step 记为 `feishu_scopes`。主人回「好了」，就再跑一次 `scopes`；还缺，就如实说缺哪一项，把链接再发一次。
 
 **2c · 权限齐了。** 跑 `python3 scripts/feishu-docs.py login`，把输出里的 `url` 发给主人。有 `qrcode` 的话，用 `MEDIA:` 行把二维码图片一起发出去。结尾「点完回我『好了』」。step 记为 `feishu_auth`。

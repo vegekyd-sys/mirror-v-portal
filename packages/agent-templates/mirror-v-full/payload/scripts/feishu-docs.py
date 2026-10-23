@@ -64,11 +64,47 @@ AUTH = STATE_DIR / "feishu-auth.json"
 QR = WS / "feishu-auth.png"
 
 
+# 平台把绑定应用的 id / secret 放在这两个环境变量里。lark-cli 只要看到它们就把
+# 凭据当成「外部提供」，禁用全部 auth 命令（实测：'"auth" is not supported:
+# credentials are provided externally'），主人就没法授权。所以 setup 时把它们
+# 写成 lark-cli 自己的配置，之后调用 lark-cli 一律不带这两个变量。
+APP_ENV_KEYS = ("LARKSUITE_CLI_APP_ID", "LARKSUITE_CLI_APP_SECRET")
+
+
 def lark_env() -> dict:
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k not in APP_ENV_KEYS}
     env.setdefault("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1")
     env.setdefault("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1")
     return env
+
+
+def config_file() -> Path:
+    return Path(os.environ.get("LARKSUITE_CLI_CONFIG_DIR") or Path.home() / ".lark-cli") / "config.json"
+
+
+def configured_app() -> str | None:
+    try:
+        data = json.loads(config_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    apps = data.get("apps") or [data]  # 1.0.89 写成 {"apps":[{"appId":...}]}
+    return next((a.get("appId") for a in apps if isinstance(a, dict) and a.get("appId")), None)
+
+
+def ensure_bound_config() -> str:
+    """把平台注入的绑定应用写成 lark-cli 的本地配置（secret 走 stdin，不进参数、不进日志）。"""
+    app, secret = os.environ.get("LARKSUITE_CLI_APP_ID"), os.environ.get("LARKSUITE_CLI_APP_SECRET")
+    if not app or not secret:
+        return "环境里没有绑定应用"
+    if configured_app() == app:
+        return "绑定应用已写入 lark-cli 配置"
+    p = subprocess.run(["lark-cli", "config", "init", "--app-id", app, "--app-secret-stdin",
+                        "--brand", "feishu", "--force-init"],
+                       input=secret, capture_output=True, text=True, timeout=60, env=lark_env())
+    if p.returncode != 0 or configured_app() != app:
+        raise SystemExit(json.dumps({"ok": False, "step": "config init",
+                                     "detail": (p.stderr or p.stdout)[-400:]}, ensure_ascii=False))
+    return "已把绑定应用写入 lark-cli 配置"
 
 
 def lark(*args: str, timeout: int = 120) -> tuple[dict | None, str | None]:
@@ -110,7 +146,7 @@ def ensure_config_dir() -> str:
 
 
 def bound_app() -> str | None:
-    return os.environ.get("LARKSUITE_CLI_APP_ID") or None
+    return os.environ.get("LARKSUITE_CLI_APP_ID") or configured_app()
 
 
 def status() -> dict:
@@ -147,6 +183,7 @@ def cmd_setup(_a) -> None:
             sys.exit(1)
         steps.append(f"已安装 @larksuite/cli@{LARK_VERSION}")
     steps.append(ensure_config_dir())
+    steps.append(ensure_bound_config())
     say({"ok": True, "steps": steps, "status": status()})
 
 
@@ -157,11 +194,14 @@ def cmd_status(_a) -> None:
 # ---------- scopes ----------
 
 def grant_link(app_id: str, scopes: list[str]) -> str:
-    """开放平台的权限申请页，带上要开的那几项，主人打开就是勾选好的状态。"""
-    return f"https://open.feishu.cn/app/{app_id}/auth?q={','.join(scopes)}&op_from=openapi&token_type=user"
+    """开放平台的权限申请页，带上要开的那几项。格式取自飞书 99991672 报错里官方给的链接（2026-10-23 实测）。"""
+    from urllib.parse import quote
+    return f"https://open.feishu.cn/page/scope-apply?clientID={app_id}&scopes={quote(','.join(scopes), safe='')}"
 
 
 def cmd_scopes(_a) -> None:
+    if shutil.which("lark-cli"):
+        ensure_bound_config()
     app_id = bound_app()
     if not app_id:
         say(status()); sys.exit(1)
@@ -204,6 +244,8 @@ def _find(obj, *keys):
 
 
 def cmd_login(a) -> None:
+    if shutil.which("lark-cli"):
+        ensure_bound_config()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     if a.finish:
         if not AUTH.exists():
