@@ -41,7 +41,7 @@ stage() {
     && git -C "$repo_root" diff --quiet "$current_full" "$full" -- "${build_inputs[@]}"; then
     reuse="$current"
   fi
-  echo "Staging $sha on $target (${reuse:+reusing build of $reuse}${reuse:-building on host})"
+  echo "Staging $sha on $target ($([[ -n "$reuse" ]] && echo "reusing build of $reuse" || echo "building on host"))"
   ssh "${ssh_args[@]}" "$target" bash -s -- "$full" "$sha" "$reuse" <<'REMOTE'
 set -euo pipefail
 export PATH=/root/.nvm/versions/node/v22.22.1/bin:$PATH
