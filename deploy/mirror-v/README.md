@@ -46,11 +46,25 @@ Lighthouse instance.
    reply. Then update the Vercel edge rewrite to Mirror V.
 6. Keep the VLab database dump and release until the new entry is accepted.
 
-For later releases, `scripts/deploy-mirror-v.sh deploy` stages the exact
-committed `dev` revision, installs production dependencies, switches the
-symlink, restarts all three services and restores the previous release if the
-health, template or admin checks fail. The GitHub `dev` workflow builds and
-tests the control plane and admin SPA before promotion.
+For later releases, `scripts/deploy-mirror-v.sh deploy [sha]` stages a
+revision that is already on GitHub `dev` with green CI, installs production
+dependencies, switches the symlink, restarts all three services and restores
+the previous release if the health, template or admin checks fail. The GitHub
+`dev` workflow builds and tests the control plane and admin SPA before
+promotion.
+
+- `stage` runs on the host: it downloads the commit from GitHub and builds it
+  there (heap capped, `nice`, swap-backed). When the commit leaves the build
+  inputs (root package files and the gateway, manager, ledger and admin
+  packages) unchanged from the running release, it reuses that release's build,
+  so a payload-only release stages in about a minute. `stage-local` is the old
+  path that builds locally and uploads; it needs a fast uplink.
+- `activate` first waits until no Agent run is queued or running (up to 20
+  minutes; `NEXUS_FORCE_ACTIVATE=1` skips the wait), since a restart drops an
+  in-flight turn's reply. After a healthy switch it keeps `current`,
+  `previous` and the four newest other releases and deletes older ones.
+- A new `mirror-v-full` payload still needs its snapshot built on the host
+  before activation (see the template section).
 
 The original GitLab admin SPA and credits-ledger are reused here. A ledger
 trigger provisions a zero-balance account for each Elastic instance. Original
