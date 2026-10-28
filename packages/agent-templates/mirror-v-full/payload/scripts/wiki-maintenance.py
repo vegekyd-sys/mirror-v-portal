@@ -474,8 +474,37 @@ def _update_index_for_promoted(results: list[dict]) -> None:
     INDEX.write_text(idx_text, encoding="utf-8")
 
 
+_MD_LINK = re.compile(r"\]\(([^)\s]+?\.md)(?:#[^)]*)?\)")
+
+
+def linked_from_other_pages() -> set[str]:
+    """Pages (relative to memory/) that some page other than index.md/log.md already links to.
+
+    2026-10-12 the owner approved (Librarian issue 22): the Librarian trims index entries for pages
+    already reachable from a project main.md; reindex used to add them straight back every night.
+    """
+    out: set[str] = set()
+    for src in MEMORY.rglob("*.md"):
+        if src in (INDEX, MEMORY / "log.md") or "archive" in src.parts:
+            continue
+        try:
+            text = src.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in _MD_LINK.finditer(text):
+            target = m.group(1).strip("<>")
+            if target.startswith(("http://", "https://")):
+                continue
+            try:
+                resolved = (src.parent / target).resolve().relative_to(MEMORY.resolve())
+            except (ValueError, OSError):
+                continue
+            out.add(str(resolved))
+    return out
+
+
 def reindex_all_wiki_pages() -> int:
-    """Scan all wiki page dirs and ensure every page is linked from index.md."""
+    """Scan all wiki page dirs and link from index.md every page that nothing else links to."""
     if not INDEX.exists():
         INDEX.write_text("# Memory Wiki Index\n\n> LLM-maintained structured wiki layer.\n\n", encoding="utf-8")
 
@@ -491,6 +520,7 @@ def reindex_all_wiki_pages() -> int:
     }
 
     # Collect all missing links grouped by kind
+    reachable_elsewhere = linked_from_other_pages()
     skip_names = {"TODO.md"}
     missing_by_kind: dict[str, list[str]] = {}
     for kind_dir_name in ["concepts", "decisions", "people", "projects", "research"]:
@@ -503,7 +533,7 @@ def reindex_all_wiki_pages() -> int:
             if "_TEMPLATE" in str(page):
                 continue
             link_target = f"{kind_dir_name}/{page.name}"
-            if link_target in existing_links_set:
+            if link_target in existing_links_set or link_target in reachable_elsewhere:
                 continue
             t = title_of(page)
             missing_by_kind.setdefault(kind_dir_name, []).append(

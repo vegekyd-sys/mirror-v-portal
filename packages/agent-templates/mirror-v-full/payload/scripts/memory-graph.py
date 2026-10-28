@@ -196,6 +196,28 @@ def expand_sources(sources: list[dict]) -> list[dict]:
     return out
 
 
+# Public-page normalisation. Family details stay visible on the public page (the owner
+# 2026-10-11: otherwise he cannot see them); only Companion-01 is reduced to counts
+# (REDLINES), and non-standard change kinds are folded into the four SCHEMA kinds.
+PRIVATE_PATH = "memory/projects/companion-01/"
+CHANGE_KINDS = {"rewrite", "strike", "move", "delete"}
+CHANGE_ALIAS = {"supersede": "strike", "merge": "rewrite", "caveat": "rewrite", "add-with-conflict": "rewrite"}
+
+
+def redact_run(run: dict) -> None:
+    for o in run.get("outputs", []):
+        if str(o.get("target", "")).startswith(PRIVATE_PATH):
+            o["title"] = "私密项目"
+            o["points"] = [f"更新 {len(o.get('points', []))} 条（私密，只记计数）"]
+    for c in run.get("changes", []):
+        kind = c.get("kind")
+        if kind not in CHANGE_KINDS:
+            c["kind"] = CHANGE_ALIAS.get(kind, "rewrite")
+        if str(c.get("target", "")).startswith(PRIVATE_PATH):
+            c["title"] = "私密项目"
+            c["before"] = c["after"] = c["reason"] = "（私密，不展示）"
+
+
 def load_runs() -> list[dict]:
     runs_dir = MEMORY / "librarian" / "runs"
     days = []
@@ -206,6 +228,7 @@ def load_runs() -> list[dict]:
             continue
         for run in day.get("runs", []):
             run["sources"] = expand_sources(run.get("sources", []))
+            redact_run(run)
         # newest run first (the owner 2026-09-28); same time -> the one written later first
         runs = list(enumerate(day.get("runs", [])))
         runs.sort(key=lambda ir: (str(ir[1].get("time", ""))[-8:].lstrip("T"), ir[0]), reverse=True)

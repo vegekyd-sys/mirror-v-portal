@@ -79,6 +79,18 @@ npx makaron-cli responses get $RUN_ID --wait --json
 
 Use `chat` for all creative tasks. Makaron Agent decides how to execute — it can edit images, generate videos, compose music, and create designs in a single conversation.
 
+For a new presenter or product video within the chosen model's single-call
+limit, pass the complete brief to `chat`: generate picture, speech, lip sync,
+music and ambience together. Naming Seedance 2.5 defaults to Eco. Do not split
+ordinary presenter work into a voice master, silent video and Studio recipe.
+Native subtitles can be generated in the same call. When exact or editable
+captions are required, retain the generated soundtrack and add only the text
+overlays through direct composition; subtitles do not require Studio. Inspect
+the final audible MP4 and caption spelling before delivery. ASR is fallible;
+a transcription typo alone is not a reason to regenerate speech. On moderation
+failure, inspect the actual inputs/error and recover with a revised prompt or
+compatible model when authorized; poll an accepted task instead of regenerating.
+
 For clearly adult, erotic, or NSFW requests, read `references/nsfw.md`
 ([public copy](https://www.makaron.app/.well-known/agent-skills/makaron/references/nsfw.md))
 before submitting the job. It adds per-job routing exceptions only; do not load
@@ -99,7 +111,7 @@ npx makaron-cli chat --project auto --image photo.jpg --json -b "make it cinemat
 npx makaron-cli chat --project auto --image img1.jpg --image img2.jpg --json -b "combine these"
 ```
 
-`chat` routes image and video models automatically. Use `--agent-model` only when the user explicitly asks to select or compare the reasoning/tool-calling Agent LLM. Accepted values are `auto`, the base model IDs (`gpt-6-luna`, `gpt-6-sol`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `grok-4.6`, `deepseek-v4-pro`, `deepseek-flash`), and the personal-plan routes (`gpt-6-luna-codex-subscription`, `gpt-6-sol-codex-subscription`, `gpt-5.6-terra-codex-subscription`, `gpt-5.6-sol-codex-subscription`, `gpt-5.6-luna-codex-subscription`). `auto` uses GPT-6 Luna through the Codex subscription for eligible accounts (including admins) and through Azure API otherwise; base GPT-5.6 and GPT-6 IDs select Azure API, while suffixed IDs explicitly request the personal plan where authorized. Never put an image or video model ID in `--agent-model`.
+`chat` routes image and video models automatically. Use `--agent-model` only when the user explicitly asks to select or compare the reasoning/tool-calling Agent LLM. Accepted values are `auto`, the base model IDs (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `grok-4.6`, `deepseek-v4-pro`, `deepseek-flash`), and the personal-plan routes (`gpt-6-luna-codex-subscription`, `gpt-6.1-sol-codex-subscription`, `gpt-6-sol-codex-subscription`, `gpt-5.6-terra-codex-subscription`, `gpt-5.6-sol-codex-subscription`, `gpt-5.6-luna-codex-subscription`). `auto` defaults to DeepSeek Flash with native vision, following the server-configured Agent model; eligible accounts can use the Codex subscription when that default is a GPT model; base GPT-5.6, GPT-6 and GPT-6.1 IDs select Azure API, while suffixed IDs explicitly request the personal plan where authorized. Never put an image or video model ID in `--agent-model`.
 
 ```bash
 npx makaron-cli chat --project auto --agent-model deepseek-v4-pro --json -b "make a 20s badminton video"
@@ -126,30 +138,37 @@ Returns immediately:
 
 ### Built-in production skills
 
-When the request names a production format or the correct workflow is unclear,
-discover the current built-in skills before starting. Do not guess a skill slug
-from memory: the server list is the source of truth.
+Pass the complete brief, source roles, budget and granted review authority to
+`makaron chat` in natural language; the internal Agent selects a matching Skill.
+Use `--skill <name>` when explicitly selecting an entry below.
+Makaron's internal Agent reads the selected Skill and its dependencies and owns
+the production/review workflow. Let that Skill own the detailed procedure.
 
-```bash
-# Short list of callable/discoverable production skills and their purpose
-npx makaron-cli skills list --built-in
+<!-- makaron:workflow-directory:start -->
+| Request | `--skill` entry |
+| --- | --- |
+| Ordinary image editing/generation, music or single-clip video | Omit `--skill` for automatic routing |
+| Multi-part narrative with consistent characters/scenes | `long-video-director` |
+| Faithfully recreate reference shot structure with replacement content | `video-edit`; request the replication profile in the brief |
+| Explain a topic, product or process | `explainer-video` |
+| Trailer, teaser, brand film or cinematic short | `cinematic-video` |
+| Speech-led cuts, captions and B-roll | `talking-head` |
+| Translate/dub/localize an existing video | `video-translate` |
+| Package existing source footage for TikTok/Douyin | `tiktok-video` |
+| Whole-take multi-angle re-shoot preserving the performance/timebase | `multi-angle-video` |
+| Explicitly create progressive story images before video | `photo-to-video` |
+<!-- makaron:workflow-directory:end -->
 
-# Search by task, format, or keyword
-npx makaron-cli skills search "talking head captions" --built-in
+For a low-cost planning check, include: "Select the matching Skill and give a
+short production plan; stop before generating any image, video or audio."
+Planning still uses Agent inference. Detailed production remains internal.
 
-# Inspect input requirements, workflow, keywords, and exact invocation
-npx makaron-cli skills show talking-head --built-in
-
-# Use the exact slug returned by list/show
-npx makaron-cli chat --project auto --video talk.mp4 \
-  --skill talking-head -b "remove false starts, add synced captions and useful B-roll"
-```
-
-Use `--all` only when debugging adapters or looking for an internal helper Skill.
-For ordinary creative work, choose from the default built-in list. A named
-destination takes priority over a generic source workflow: for example,
-explicit TikTok/Douyin work uses `tiktok-video`; ordinary speech-led cleanup
-uses `talking-head`; broader mixed-footage editing uses `source-video-studio`.
+When a name or scope is uncertain, use `makaron skills list --built-in`,
+`makaron skills search "<request>" --built-in`, or
+`makaron skills show <name> --built-in`; the live list is authoritative.
+Built-in Skills need no marketplace installation. Supporting anchor/storyboard
+Skills are internal dependencies rather than separate production entrypoints.
+For invocation/status diagnostics, see [internal workflows](references/internal-workflows.md).
 
 ### Marketplace skills
 
@@ -315,7 +334,17 @@ npx makaron-cli edit --image photo.jpg --out result.jpg "make it dramatic"
 npx makaron-cli edit --image-model gpt-image-2.5-flare --background transparent --out sticker.png "a magenta star sticker"
 ```
 
-Options: `--image`, `--image-model gemini|gemini-lite|qwen|qwen-spicy|openai|gpt-image-2.5-flare|gpt-image-2.5-sunburst|wan2.7-image|pony|wai`, `--ref <file>` (up to 3), `--aspect <ratio>`, `--background auto|opaque|transparent`, `--out <path>`. Qwen Spicy is an independent 1–3 image editor; `qwen` remains the existing self-hosted model. Transparent output routes strictly to GPT Image 2.5 Flare and fails instead of returning an opaque fallback. Wan 2.7 Image is an explicit fast ~1K route; do not automatically retry failures/timeouts, and do not promise exact face preservation.
+Options: `--image`, `--image-model gemini|gemini-2.1|gemini-lite|qwen-spicy|openai|gpt-image-2.5-flare|gpt-image-2.5-sunburst|wan2.7-image|mj-v8.2`, `--ref <file>` (model-specific limit), `--aspect <ratio>`, `--image-resolution 1K|2K|4K`, `--background auto|opaque|transparent`, `--nsfw`, `--out <path>`. Image Model Capability prefers matching requirements, then relaxes output conflicts to deliver an image: GPT Image 2.5 Flare → Nano Banana 2.1 → Qwen Spicy. Omit the model for Auto: an 8:1 banner or an explicit resolution tier selects Nano Banana 2.1. Native ratio presets do not promise exact mathematical ratios or user pixel dimensions. For Agent-assessed NSFW, pass `--nsfw` to route directly to Spicy; never probe another provider first. Unknown IDs use Flare-first Auto. Output conflicts relax before submission: transparent 8:1 normally keeps 8:1 with opaque output; NSFW always uses Spicy regardless of unsupported dimensions. Preserve input content first and explain actual adjustments. See current MCP tool descriptions for the generated capability table. Classic Nano Banana 2 (`gemini`), Lite, Sunburst and Wan are explicit routes; `openai` means Flare and legacy `qwen` means Spicy. Pony/WAI are retired. Transparent output prefers Flare or explicitly selected Sunburst, and may relax alpha when other requirements conflict. Supplier failures never trigger automatic image resubmission or model switching.
+
+Midjourney V8.2 (`mj-v8.2`) accepts natural-language briefs and prepares the English prompt automatically. Fast returns up to 4 images, Draft up to 24 smaller drafts, and HD regenerates up to 4 higher-resolution images. Every returned image is saved; `--out scene.png` produces `scene-1.png`, `scene-2.png`, etc. A single result keeps the requested filename. Provider filtering can reduce the batch size.
+
+```bash
+npx makaron-cli edit --image-model mj-v8.2 --aspect 16:9 --out scene.png "星空下被水淹没的宫殿走廊"
+npx makaron-cli edit --image-model mj-v8.2 --mj-quality hd --mj-stylize 400 --mj-chaos 10 --out hallway.png "A hallway flooded. A starry night sky with big puffy clouds above."
+npx makaron-cli edit --image-model mj-v8.2 --style-ref 2231018166 --style-ref 4162055066 --out city.png "A massive city skyline peeking through a sea of clouds."
+```
+
+Midjourney-only options: `--mj-speed fast|draft`, `--mj-quality standard|hd`, repeatable `--style-ref <public-HTTPS-url|numeric-sref-code>`, `--mj-style-weight 0..1000`, `--mj-stylize 0..1000`, `--mj-chaos 0..100`, `--mj-seed 0..4294967295`, and `--mj-raw`. Draft cannot be combined with HD. This is image generation: do not use `--image` for precise edits, promise identity preservation, request transparent output or 4K, or treat HD as lossless upscaling. Public URL content references use `--ref`; local/base64 references are unsupported for this route. Failures and unknown paid outcomes are not automatically retried or switched to another model; keep the returned task ID. One provider batch is billed once, not once per candidate.
 
 ### `video` — Standalone video tools (no project timeline)
 
@@ -341,7 +370,25 @@ npx makaron-cli video create --script "make it warmer and cinematic" --video htt
 
 # 4. Check status
 npx makaron-cli video status <taskId>
+
+# Retake only a selected interval; publish the complete video to a project.
+npx makaron-cli video retake --video input.mp4 --start 2 --end 4 --prompt "Make the book red" --model seedance-2.5 --project <id> --wait --json
 ```
+
+Video segment editing also works directly from natural-language chat, without a GUI selection:
+
+```bash
+npx makaron-cli chat --project <id> "把 @1 的 18–21 秒切成多机位，其余不变"
+npx makaron-cli chat --project <id> "把 @1 的最后三秒改成夜景"
+```
+
+Chat resolves the source/range, inspects the footage, expands the edit instruction, and delivers the complete video. It asks only when the source or scope remains ambiguous. Precise cuts, subtitles, dubbing and extension also start from chat. Local editing accepts a 0.1–15s range in a source up to 120s; longer scopes use the appropriate whole-video workflow rather than silently shortening the request.
+
+Segment edits have two intents: modify changes the inside of the existing sequence and preserves its opening/closing states; replace discards a shot and does not lock its original endpoints. A camera change alone does not mean replacement. A same-request model comparison reuses the original source and interval, not the last generated result.
+
+Chat segment inspection also reads source speech through ASR, reusing cached transcripts. It returns selected speech with source/output timecodes separately from adjacent speech, so the edit can follow the retained narration. Original audio is the default; Chat may select `audio_mode: generated` for requested new sound inside the selection. ASR does not guarantee music-beat or lip synchronization, and unavailable/untimed speech is reported rather than assigned invented timings. Direct `video retake` uses the caller's completed prompt and does not perform Agent interpretation or ASR planning.
+
+`video retake` uses original-source seconds, accepts a 0.1–15s range in a source up to 120s, and automatically replaces only that range while preserving duration. Audio defaults to original; `--audio-mode generated` uses synchronized new audio inside the selection and source audio outside. Models: `fal-h3-max` (default), `seedance-2.5-eco` (preferred Seedance option), and explicitly selected native `seedance-2.5`. For sources shorter than 2 seconds, explicitly use Seedance. Local files require `--project`. Keep the root taskId and request ID; resume polling or replay the same request ID instead of paying for another generation.
 
 `video create` returns a provider task id and does not create or update a Makaron project timeline. For project/timeline video editing, use:
 
@@ -355,7 +402,7 @@ Provider integration contract: every image passed to video generation is a featu
 
 fal H3 Turbo uses the `minimax-h3-max` selector, supports exactly 5/10/15 seconds at 480p/768p, and defaults to native 768p for faster-than-real-time T2V or one-start-image I2V.
 
-Seedance 2.5 uses `--video-model seedance-2.5` and supports 4-30s at 480p/720p, up to 30 images + 10 videos + 10 audios, repeatable local/URL references, `--video-operation generate|edit|extend`, `--extend-direction`, `--output-format mp4|mov`, and `--web-search`. The Evolink route does not currently expose 4K output.
+Seedance 2.5 uses `--video-model seedance-2.5` or `seedance-2.5-eco` for 4-30s videos: generate at 480p, then automatically upscale to 720p, 1080p (default), 2K or 4K in one task. This is upscaled output. Use `seedance-2.5-native` explicitly for unenhanced native output at 480p (default) or 720p; the native Evolink route does not expose 4K. All Seedance 2.5 routes accept up to 30 images + 10 videos + 10 audios, repeatable local/URL references, `--video-operation generate|edit|extend`, `--extend-direction`, and `--web-search`. Eco delivers MP4; native also supports `--output-format mov`. Use `makaron chat` to enhance an existing video without regeneration, or MCP `makaron_upscale_video` with one video URL and `resolution=720p|1080p|2k|4k` (up to 60s).
 
 Wan 3.0 exposes two model choices: `--video-model wan-3.0` and the faster `--video-model wan-3.0-prime`. Both support 2-30s generation, native audio, up to 10 images + 5 videos + 5 audios, and 480p/720p/1080p/2K/4K. Pass `--video-resolution 2k|4k` to select the matching FlashVSR/Pro endpoint automatically; Pro is not a separate model selector. Use generation mode with feature references; typed edit/extend and the relaxed content-filter flag are not supported.
 
@@ -452,7 +499,7 @@ npx makaron-cli materialize --project <projectId> --design-json composition.json
 npx makaron-cli responses get <runId> --materialize --wait --pick first_video_url
 ```
 
-`materialize` defaults to `--wait`, `--publish`, and `fast_720p`, so the completed MP4 is added back to the timeline like CUI. Use `--no-publish` only when you need a file URL without a new timeline video. The completed export reports `duration_seconds`, `render_seconds`, and `realtime_ratio`; use those metrics instead of provider-video ETA rules.
+`materialize` defaults to `--wait`, `--publish`, and `source`, preserving composition dimensions when the MP4 is added back to the timeline. Use `--no-publish` when you need only a file URL, or `--profile fast_720p` when a 720-short-side export is acceptable. The completed export reports `duration_seconds`, `render_seconds`, and `realtime_ratio`; use those metrics instead of provider-video ETA rules.
 
 For JSON-to-MP4, pass a Makaron/Remotion composition JSON with `--design-json`. This is the correct CLI path when another agent already has the composition JSON and only needs the exported video:
 
@@ -514,3 +561,5 @@ send_message "All done!"
 FAL video models: **fal H3 Turbo** uses `minimax-h3-max` for single-start-frame I2V/T2V. **FAL H3 Max** uses the new selector `fal-h3-max`: native T2V or image/video/audio reference-to-video, default 768p, optional 480p/1080p, integer 5–15s; at most 9 images / 3 videos / 3 audios / 12 total. Reference video/audio each 2–15s and each modality totals at most 15s. Source-video modifications use generation with feature references, not typed edit/extend. Reference input tokens are billed in addition to output video; query current pricing.
 
 The legacy `openai` image-model parameter now resolves to GPT Image 2.5 Flare.
+
+Naming Seedance 2.5 in chat defaults to Seedance 2.5 Eco. Use `seedance-2.5-native` only when explicitly requesting native generation; Eco supports 720p/1080p/2K/4K final delivery.

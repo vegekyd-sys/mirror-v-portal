@@ -192,7 +192,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 const days = DATA.runs || [];
 function dayTotals(d) {
   const t = { merged:0, archived:0, pages:0, points:0, rewrite:0, strike:0, move:0, delete:0 };
-  d.runs.forEach(r => { (r.sources||[]).forEach(s => s.action === 'merged' ? t.merged++ : s.action === 'archived' && t.archived++);
+  d.runs.filter(r=>r.phase!=='adoption').forEach(r => { (r.sources||[]).forEach(s => s.action === 'merged' ? t.merged++ : s.action === 'archived' && t.archived++);
     (r.changes||[]).forEach(c => { if (c.kind in t) t[c.kind]++; });
     (r.outputs||[]).forEach(o => { t.pages++; t.points += (o.points||[]).length; }); });
   return t;

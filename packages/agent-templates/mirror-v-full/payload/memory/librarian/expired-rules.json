@@ -1,0 +1,4 @@
+{
+ "_doc": "过期规则登记表。主人取消或改掉一条规则时登记在这里：id、decided（决定日期）、by（谁定的）、summary（现在的口径）、current_rule_page（现行口径所在页）、patterns（识别旧说法的关键词，只是线索不是判决）、allow_patterns（合法提到旧说法的写法，例如历史记录）。Librarian 从 skill 或旧文档往 memory 抄规则前先查这张表；librarian-corrections.py commit 和 librarian-move-check.py 会拦下没带过期标记的旧说法。格式与 V 相同。",
+ "rules": []
+}

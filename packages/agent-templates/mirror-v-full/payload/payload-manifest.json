@@ -1,6 +1,6 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v14",
+ "version": "mirror-v-full.v15",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
  "files": [
@@ -20,6 +20,7 @@
   "memory/concepts/.gitkeep",
   "memory/decisions/.gitkeep",
   "memory/index.md",
+  "memory/librarian/expired-rules.json",
   "memory/log.md",
   "memory/logs/.gitkeep",
   "memory/people/.gitkeep",
@@ -36,9 +37,13 @@
   "scripts/import-v001-sample.sh",
   "scripts/index-compact.py",
   "scripts/librarian-adopt-untracked.py",
+  "scripts/librarian-corrections.py",
   "scripts/librarian-daily-queue.py",
+  "scripts/librarian-move-check.py",
   "scripts/librarian-reachability.py",
+  "scripts/librarian-reconcile.py",
   "scripts/librarian-relations.py",
+  "scripts/librarian-rule-sources.py",
   "scripts/memory-auto-index.py",
   "scripts/memory-graph.py",
   "scripts/memory-graph.template.html",
@@ -49,6 +54,8 @@
   "scripts/reflection-analyzer.py",
   "scripts/reflection-capture.py",
   "scripts/skill-candidate-rollback.py",
+  "scripts/tests/test_librarian_corrections.py",
+  "scripts/tests/test_librarian_reconcile.py",
   "scripts/wiki-maintenance.py",
   "scripts/write-reflection.py",
   "scripts/write-skill-candidate.py",
@@ -60,11 +67,15 @@
   "skills/html-poster-design/references/playwright-poster-lessons.md",
   "skills/image-production-routing-qc/SKILL.md",
   "skills/image-search-apify-first/SKILL.md",
+  "skills/librarian-semantic-reconcile/SKILL.md",
+  "skills/librarian-semantic-reconcile/references/report-contract.md",
   "skills/long-term-memory-update/SKILL.md",
   "skills/makaron/COMPOSITE.json",
   "skills/makaron/SKILL.md",
   "skills/makaron/parts/official/SKILL.md",
+  "skills/makaron/parts/official/references/internal-workflows.md",
   "skills/makaron/parts/official/references/nsfw.md",
+  "skills/makaron/parts/official/references/workflow-catalog.json",
   "skills/makaron-remotion-materialize/SKILL.md",
   "skills/makaron-video/SKILL.md",
   "skills/makaron-video/references/prompt-rules.md",
@@ -116,7 +127,7 @@
     "expr": "0 21 * * *",
     "tz": "Asia/Shanghai"
    },
-   "prompt": "【Memory Librarian · 每晚 21:00 编译 + Lint】规则以 memory/SCHEMA.md 为准，开始前先读它和 memory/projects/memory-librarian/main.md。所有命令在工作区根目录 /vercel/sandbox/agent-data/workspace 执行。22:00 会有一轮独立质检抽查今晚的产出。\n\n时间预算：总共 8 分钟。做到 7 分钟时不管做到哪都停下，收尾第 4-6 步，没做完的留到下一晚。\n\n0. `git -c core.quotepath=off status --porcelain` 记下已有的未提交改动，那些不是你的，不要 stage 也不要改。\n0.2 收编未提交的页：`python3 scripts/librarian-adopt-untracked.py --stage`；有收编就马上单独提交 `chore(librarian): <日期> adopt N untracked pages`。flagged 的文件不提交，只把文件名写进 issues。\n1. 当日新记忆（kind=daily）：`python3 scripts/librarian-daily-queue.py list --kind daily`，每晚最多 30 段，按 SCHEMA 的 Compile 步骤执行：读完整段；纯事件记录 `mark '<id>' --status skipped --note '<原因>'`；有价值的合并进已有项目 main.md 或 concept 页，再 `mark '<id>' --status compiled --note '<目标页路径>'`。daily-queue.json 和改动一起提交。\n1b. **Onboarding 语料编译（kind=import）**：`python3 scripts/librarian-daily-queue.py list --kind import`。这是主人接进来的企业/个人语料（官网、飞书文档、从别的 AI 助手导出的记忆），原文在 memory-archive/imports/，**不参与 memory_search 索引**，只有你把它编译成 wiki 页，它才真正进入记忆。\n   每晚最多 20 片，按队列顺序来。每片：按 `file` + `lines` 读那一段原文 → 判断有没有持久价值 → 合并进已有的 `projects/<slug>/main.md` 或 concept 页（确实没有合适主题页才新建） → `mark '<id>' --status compiled --note '<目标页路径>'`；纯目录页、空白页、与主人无关的模板标 skipped 并写原因。\n   队列项的 `source` 是 `ai-memory` 的（主人从别的 AI 助手导出的记忆）：主人的身份和偏好进 USER.md（只写主人自己说过的，一条一行，先查重），人进 people/，项目进 projects/；别人的电话、住址、证件号不进记忆。\n   一份文档被切成多片时，**标完最后一片才会自动结账**（MANIFEST 的 disposition 翻成 compiled），不用你手动同步两边。\n   新建页按 SCHEMA 的「检索友好的首段规范」写：首段 ≤400 字、最后一行 `关键词：`，每条结论带（日期，来源），来源写 `memory-archive/imports/...` 的相对路径，主人才能下钻到原文。\n   **这一步优先于 1 和 1c**：onboarding 期间日志和 reflection 都很少，语料才是主要的米。\n1c. Reflection 编译（kind=reflection）：读 memory/librarian/reflections-cursor.json，处理 memory/reflections/*.jsonl 里时间晚于 new_since 的新条目（每晚最多 30 条），按 SCHEMA 分流到 ai-patterns / engineering-lessons / 项目页 / people 与 USER.md / 跳过。原文件只读。处理完更新 new_since 和 done_ids。\n2. 关联：运行 `python3 scripts/librarian-relations.py`，从 memory/librarian/relation-candidates.json 取最多 5 对确认，有实质关系就在两边 main.md 的 `## 相关` 各写一行。\n3. Lint：运行 `python3 scripts/librarian-reachability.py`，按 memory/librarian/unreachable.json 处理最多 20 页（挂进项目 main.md 的页面目录、并进主题页、或归档，三选一）；滚动复核最多 3 页；修死链。\n4. 运行记录：追加 memory/librarian/runs/<今天>.json（格式见 SCHEMA），在 memory/log.md 追加 compile / lint 条目。\n5. 提交：`git add -- <具体文件>` 后 `git commit -m \"chore(librarian): <日期> ...\"`；然后运行 `python3 scripts/memory-graph.py` 更新图谱指标。\n6. 最终回复（会发给主人），3-6 行：**如果 import 队列非空，第一行先报进度**（今晚编译了几片、还剩几片、按当前速度还要几晚）；然后：处理了多少段日志和 reflection、新建或更新了哪些页（最多 3 个，每个一句）、可达指标、遇到的问题。如果队列为空、什么都没变，只回复一句：今晚没有需要整理的新记忆。（不要回 NO_REPLY：当前运行时会把它当成没有总结，追问两次后发出英文兜底句并记为失败。）\n\n护栏：只写有来源的事实；AGENTS/SOUL/REDLINES/MEMORY.md 不直接改，建议写进 issues；所有 grep -r 必须带 --include；不要 sessions_yield，不要等待子任务；失败如实写进最终回复。"
+   "prompt": "【Memory Librarian · 每晚 21:00 编译 + Lint】规则以 memory/SCHEMA.md 为准，开始前先读它和 memory/projects/memory-librarian/main.md。所有命令在工作区根目录 /vercel/sandbox/agent-data/workspace 执行。22:00 会有一轮独立质检抽查今晚的产出。\n\n时间预算：总共 8 分钟。做到 7 分钟时不管做到哪都停下，收尾第 4-6 步，没做完的留到下一晚。\n\n0. `git -c core.quotepath=off status --porcelain` 记下已有的未提交改动，那些不是你的，不要 stage 也不要改。\n0.2 收编未提交的页：`python3 scripts/librarian-adopt-untracked.py --stage`。它收两类：没进 git 的新页（adoptable），以及别的会话改了没提交的已有 .md 页（adoptable_modified）。有收编就马上单独提交 `chore(librarian): <日期> adopt N pages (X new, Y edited)`，之后在这个基础上照常更新，不要绕开、不要把内容挪去新子页。recent（2 小时内还在改）的页当晚不动，要写进它们的日志段不 mark、留到第二晚。flagged 的不提交，只把文件名和行号写进 issues。\n0.5 规则源：如果 `.librarian-cache/rule-sources/` 不存在，只跑 `python3 scripts/librarian-rule-sources.py commit` 建基线，跳过本步。否则跑 `python3 scripts/librarian-rule-sources.py diff`，看主人相对上次改了哪些 skill：按有来源的改动更新 memory（旧说法标「【已过期、不执行 · 日期】」、写现行口径、登记 memory/librarian/expired-rules.json），处理完跑 `commit` 更新快照。没有变化就跳过。\n1. 当日新记忆（kind=daily）：`python3 scripts/librarian-daily-queue.py list --kind daily`，每晚最多 30 段，按 SCHEMA 的 Compile 步骤执行：读完整段；纯事件记录 `mark '<id>' --status skipped --note '<原因>'`；有价值的合并进已有项目 main.md 或 concept 页，再 `mark '<id>' --status compiled --note '<目标页路径>'`。整节改写已有内容时，旧段落里不是逐字重复的部分**原样**挪进该项目 history.md（不翻译、不概括、不合并，标题降一级并注明「已被…取代，日期」），changes[] 记 move。写入前查 memory/librarian/expired-rules.json，登记过的旧说法不许写回。daily-queue.json 和改动一起提交。\n1b. **Onboarding 语料编译（kind=import）**：`python3 scripts/librarian-daily-queue.py list --kind import`。这是主人接进来的企业/个人语料（官网、飞书文档、从别的 AI 助手导出的记忆），原文在 memory-archive/imports/，**不参与 memory_search 索引**，只有你把它编译成 wiki 页，它才真正进入记忆。\n   每晚最多 20 片，按队列顺序来。每片：按 `file` + `lines` 读那一段原文 → 判断有没有持久价值 → 合并进已有的 `projects/<slug>/main.md` 或 concept 页（确实没有合适主题页才新建） → `mark '<id>' --status compiled --note '<目标页路径>'`；纯目录页、空白页、与主人无关的模板标 skipped 并写原因。\n   队列项的 `source` 是 `ai-memory` 的（主人从别的 AI 助手导出的记忆）：主人的身份和偏好进 USER.md（只写主人自己说过的，一条一行，先查重），人进 people/，项目进 projects/；别人的电话、住址、证件号不进记忆。\n   一份文档被切成多片时，**标完最后一片才会自动结账**（MANIFEST 的 disposition 翻成 compiled），不用你手动同步两边。\n   新建页按 SCHEMA 的「检索友好的首段规范」写：首段 ≤400 字、最后一行 `关键词：`，每条结论带（日期，来源），来源写 `memory-archive/imports/...` 的相对路径，主人才能下钻到原文。\n   **这一步优先于 1 和 1c**：onboarding 期间日志和 reflection 都很少，语料才是主要的米。\n1c. Reflection 编译（kind=reflection）：读 memory/librarian/reflections-cursor.json，处理 memory/reflections/*.jsonl 里时间晚于 new_since 的新条目（每晚最多 30 条），按 SCHEMA 分流到 ai-patterns / engineering-lessons / 项目页 / people 与 USER.md / 跳过。原文件只读。处理完更新 new_since 和 done_ids。\n2. 关联：运行 `python3 scripts/librarian-relations.py`，从 memory/librarian/relation-candidates.json 取最多 5 对确认，有实质关系就在两边 main.md 的 `## 相关` 各写一行。\n3. Lint：运行 `python3 scripts/librarian-reachability.py`，按 memory/librarian/unreachable.json 处理最多 20 页（挂进项目 main.md 的页面目录、并进主题页、或归档，三选一）；滚动复核最多 3 页；修死链。\n4. 运行记录：追加 memory/librarian/runs/<今天>.json（格式见 SCHEMA），在 memory/log.md 追加 compile / lint 条目。sources[] 每段日志、每片导入、每条 reflection 单独一项，**不许写「其余 N 片」打包**。\n5. 提交：`git add -- <具体文件>` 后用 `python3 scripts/librarian-corrections.py commit -m \"chore(librarian): <日期> ...\"` 提交（不要直接 git commit）。它会先检查挪动有没有丢路径/提交号/链接/ID、过期规则有没有被写回，任一失败就不提交：按提示把丢掉的原文补进对应 history.md、给过期规则带上标记，再重试。然后运行 `python3 scripts/memory-graph.py` 更新图谱指标。\n6. 最终回复（会发给主人），3-6 行：**如果 import 队列非空，第一行先报进度**（今晚编译了几片、还剩几片、按当前速度还要几晚）；然后：处理了多少段日志和 reflection、新建或更新了哪些页（最多 3 个，每个一句）、可达指标、遇到的问题。如果队列为空、什么都没变，只回复一句：今晚没有需要整理的新记忆。（不要回 NO_REPLY：当前运行时会把它当成没有总结，追问两次后发出英文兜底句并记为失败。）\n\n不运行 `librarian-reconcile.py` 的 prepare/apply/finish，不生成纠错卡片（V 上 2026-10-22 起暂停的方案，这里不启用）。\n\n护栏：只写有来源的事实；AGENTS/SOUL/REDLINES/MEMORY.md 不直接改，建议写进 issues；所有 grep -r 必须带 --include；不要 sessions_yield，不要等待子任务；失败如实写进最终回复。"
   },
   {
    "name": "Memory 质检 · 每晚 22:00",
@@ -126,7 +137,7 @@
     "expr": "0 22 * * *",
     "tz": "Asia/Shanghai"
    },
-   "prompt": "【Memory 质检 · 每晚 22:00】作用是检查今晚 21:00 Librarian 的执行做得好不好。先读 memory/SCHEMA.md 和 memory/projects/memory-librarian/main.md。在工作区根目录执行，时间预算 6 分钟。\n1) 执行是否发生：`git log --since=midnight -- memory/`，看 21:00 的提交和 memory/log.md 里今天的 compile/lint 条目。没跑或跑失败，直接报出原因。如果今天本来就没有新日志和 reflection，说明这一点即可。\n2) 抽检质量：从今天运行记录（memory/librarian/runs/<今天>.json）的 sources 里随机抽 3 条，对照 daily log 原文检查：有没有丢关键信息、有没有合并到错误的目标页、被推翻的结论有没有标出来、有没有写入 secret、有没有碰核心文档。每条 ✓ 或 ✗ 加一句理由。\n2b) 抽检删改：从 changes[] 里抽 2 处，对照 git diff 核对 move / delete 是否属实。\n3) 指标：运行 `python3 scripts/memory-graph.py`，报告已编译页、孤儿页、index 行数、死链相对昨天的变化，把今天的指标追加到 memory/projects/memory-librarian/main.md 的指标记录表里并提交。\n4) 改进建议：给出 0-2 条具体可执行的建议。\n这一轮只做检查和汇报，不改 SCHEMA.md 和脚本。所有 grep -r 必须带 --include。最终回复简短（不超过 8 行）；如果今天没有任何整理活动，只回复一句：今天没有新的记忆整理，无需质检。"
+   "prompt": "【Memory 质检 · 每晚 22:00】作用是检查今晚 21:00 Librarian 的执行做得好不好。先读 memory/SCHEMA.md 和 memory/projects/memory-librarian/main.md。在工作区根目录执行，时间预算 7 分钟。\n1) 执行是否发生：`git log --since=midnight -- memory/`，看 21:00 的提交和 memory/log.md 里今天的 compile/lint 条目。没跑或跑失败，直接报出原因。如果今天本来就没有新日志和 reflection，说明这一点即可。\n2) 抽检质量：从今天运行记录（memory/librarian/runs/<今天>.json）的 sources 里随机抽 3 条，对照原文（daily log 或 memory-archive/imports 里的导入原文）检查：有没有丢关键信息、有没有合并到错误的目标页、被推翻的结论有没有标出来、有没有写入 secret、有没有碰核心文档。每条 ✓ 或 ✗ 加一句理由。\n2b) 抽检删改：从 changes[] 里抽 2 处（delete 和 move 优先），对照 git diff 核对：标为 move 的内容是否**原样**出现在对应 history.md；标为 delete 的是否确实逐字重复；main 里有没有丢掉仍然有效的结论。\n2c) 抽检 reflection 分流（今天有 kind=reflection 的 run 才做）：抽 2 条读原文，核对去处对不对（进 ai-patterns 的是不是真的跨场景、项目事实有没有进对项目页、跳过的是不是真噪音）。\n2d) 挪动复核：对今晚每个含 move 的提交跑 `python3 scripts/librarian-move-check.py --commit <该提交>`，有丢失的标识符写 ✗。\n2e) 记录规范：sources[] 有没有「其余 N 片」这类打包写法，有就写 ✗——打包会让去向和事实对不上。\n3) 指标：运行 `python3 scripts/memory-graph.py`，报告已编译页、孤儿页、index 行数、死链相对昨天的变化，把今天的指标追加到 memory/projects/memory-librarian/main.md 的指标记录表里并提交。\n4) 改进建议：给出 0-2 条具体可执行的建议。\n这一轮只做检查和汇报，不改 SCHEMA.md 和脚本。所有 grep -r 必须带 --include。最终回复简短（不超过 8 行）；如果今天没有任何整理活动，只回复一句：今天没有新的记忆整理，无需质检。"
   },
   {
    "name": "Heartbeat 反思",

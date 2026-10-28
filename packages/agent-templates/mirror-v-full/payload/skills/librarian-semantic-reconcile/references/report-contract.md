@@ -1,0 +1,10 @@
+# Report contract
+JSON object: reviews[], changes[]. Use exact field spellings; no topic patterns are needed.
+Each selected input requires one review:
+{source_id,source_sha256,disposition:"no_change|new|supersedes|historical|unresolved",reason}.
+For new/supersedes add retrieval:[{tool:"memory_search|locate",query,paths:[]}], verification:{status:"verified",method,comparison_with_old,evidence:[{kind:"user_decision|user_correction|observed_state|authoritative_source",ref,quote,file,sha256,actor,original_date}]}.
+file points to the actual checked local evidence; quote must occur exactly, sha256 covers its full UTF-8 bytes. Retrieve primary originals before creating any captured excerpt; a derivative page does not become primary by assigning a label.
+For every supersedes review add change:
+{source_id,record:{id,decided:"YYYY-MM-DD",by,summary,current_rule_page,correction:{claim_kind:"policy|fact|preference",scope,supersedes:[],evidence:[{kind,ref,original_date,actor,basis}]},patterns:[]},current_quote,annotations:[{path,before_sha256,quote,scope_reason,span_start?}],raw_relations?:[{path,quote,reason}]}.
+current_quote is a nonempty exact verified sentence already on current_rule_page. annotations.quote is a single-line exact obsolete span; span_start is the character offset if duplicate text needs disambiguation. Overlaps, already marked spans, raw rewrites and changed targets fail closed. correction evidence refs must be among the verified review evidence. policy/preference requires explicit user decision/correction. New-only reviews do not mark old content.
+Hash with hashlib.sha256(path.read_bytes()).hexdigest(); preserve CRLF. The script inserts strike markers around quote only, records targets in the existing expired-rules registry and seals exact source/target/evidence/audit hashes. finish compares committed snapshots, advances only reviewed versions and keeps unresolved/remaining input paths. --cache is a global argument before the subcommand for isolated rehearsals. --only PATH scopes discovery and does not advance the global baseline. Never use scoped rehearsal to claim full nightly coverage.

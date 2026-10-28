@@ -2,6 +2,8 @@
 
 > 规则层（Karpathy LLM Wiki 的 schema）：定义 memory/ 怎么分层、页面长什么样、Librarian 怎么维护。沿用 V 的记忆规则（2026-09-27 起在 V 上运行）。改这份文档要先给主人看 diff。
 
+> 当前运行方式与 V 2026-10-22 起的「原编译」一致：读日志 / reflection / 导入原料 → 合并主题页 → 保留历史 → 关联 → 滚动复核。V 上试过的「通用纠错」（语义对账、纠错卡片）已在 V 上暂停，这里也不启用；`librarian-reconcile.py` 等脚本随 payload 附带，启用前要主人同意。
+
 ## 一句话
 
 Daily log 记录"发生了什么"，wiki 保存"现在什么是真的"。新信息进来时要**改写已有页面**，而不是新建一页。
@@ -15,7 +17,9 @@ Daily log 记录"发生了什么"，wiki 保存"现在什么是真的"。新信�
 - **编译队列**：`scripts/librarian-daily-queue.py` 直接按 daily log 的 `## ` 段落出队列，进度记在 `librarian/daily-queue.json`。daily = 从 `since`（安装日）到昨天每份日志的每一段。
 
 **Wiki（Librarian 维护）**：保存当前有效的综合结论。
-- **memory/ 下的页都要进 git**：普通会话新建的页常常只写不提交。21:00 编译第一步用 `scripts/librarian-adopt-untracked.py` 收编：未跟踪、超过 2 小时没改、没扫出 secret 的新文件由 Librarian 提交；扫出 secret 的不提交，报给主人。别人改了没提交的已跟踪文件不碰。
+- **memory/ 下的页都要进 git**：普通会话新建或改过的页常常只写不提交。21:00 编译第一步用 `scripts/librarian-adopt-untracked.py --stage` 收编：
+  - 没进 git 的新文件（adoptable），以及别的会话改了但没提交的已有 .md 页（adoptable_modified，例如 ai-patterns.md、项目 main.md），只要超过 2 小时没改、新增内容没扫出 secret，就由 Librarian 先单独提交一次，再在这个基础上照常更新——不要绕开，也不要把本该写进去的内容挪去新子页。
+  - 2 小时内还在改的页当晚不动，要写进这些页的日志段留在队列里，第二晚再编译。扫出 secret 的不提交，只把文件名和行号报给主人。json/log 这类状态文件和删除操作不收编。
 - `projects/<slug>/main.md`：项目实体页，是主干。放项目状态、群 ID、关键决策、当前规则、未决事项。细节可以拆子页，但必须从 main.md 链过去。
 - `people/<slug>.md`：人物卡。只写观察到的事实和来源，不推断性格/观点。
 - `concepts/<slug>.md`：跨项目的规则、SOP、机制、教训。一个主题一页。
@@ -38,6 +42,10 @@ Daily log 记录"发生了什么"，wiki 保存"现在什么是真的"。新信�
 - 被推翻的结论先用 ~~删除线~~ 标出，写明被哪条取代、在哪一天。删除线在 main 里最多保留 30 天，之后连同推翻原因挪进 history.md。
 - **三层分工：结论放 main，过程放 history，原文在日志。** `main.md` 只回答"现在是什么情况"；`history.md` 回答"怎么走到这一步的"（只追加不删）；daily log 永远不动。唯一允许真删的是逐字重复的内容。
 - 可能随版本变化的内容（模型名、版本号）标明"以当下状态为准"。
+- 重复段落、碎片堆出来的冗长「汇编」段落，要压缩成干净的结论：wiki 不能只加不删。
+- **挪就是原文搬，不改写**：从 main 压掉的内容原样挪进 history.md，不翻译、不概括、不合并；搬过去的标题降一级，前面写「（已被 <现行版本或页面> 取代，YYYY-MM-DD）」。提交前 `scripts/librarian-move-check.py` 会检查：删掉的行里的路径、提交号、链接、ID 在整个 memory 里找不到就拦下，补回原文才能提交。（V 上两次因为复核时模型改写丢了单行事实。）
+- **过期标记跟着内容走**：带「【已过期、不执行 · 日期】」的条目，搬移、合并、引用时标记必须原样带上。主人取消一条规则时，同时登记进 `memory/librarian/expired-rules.json`（规则摘要、现行口径页、识别用的关键词）；从 skill 或旧文档往 memory 抄规则前先查这张表。`librarian-move-check.py` 会拦下没带标记的过期规则。
+- **规则源核验**：生产规则的源头常常是 `skills/`，主人可能直接改 skill 而不改 memory。每晚编译先跑 `python3 scripts/librarian-rule-sources.py diff` 看相对上次快照改了什么，按有来源的改动更新 memory（旧说法标过期、写现行口径、登记 expired-rules.json），处理完 `librarian-rule-sources.py commit` 更新快照。**第一次没有快照时只跑 `commit` 建基线，当晚不对账**，否则所有 skill 都会被当成新规则。
 - 页面之间用相对路径互相链接。每页至少要被 index 或某个项目 main.md 链到。
 - 不写 secrets。发现已有的明文 secret，报告主人，不要复制。
 
@@ -66,7 +74,7 @@ Daily log 记录"发生了什么"，wiki 保存"现在什么是真的"。新信�
 1. **读原文全文**：按队列给的 `file` 和 `lines` 读完整段。
 2. 判断：有持久价值的规则/事实/决策，还是纯事件记录？纯事件记录用 `librarian-daily-queue.py mark <id> --status skipped --note <原因>` 标掉。
 3. 找目标页：优先已有的项目 main.md 或 concept 页，确实没有合适主题页时才新建。
-4. **新证据优先**：写入前先查同一主题有没有更晚的证据。有更晚的纠正，以最新为准，旧说法用删除线标出。
+4. **有来源的纠正优先，不是文件日期优先**：写入前先查同一主题有没有更晚的证据。比较的是来源的权威和决定时间，不是文件改动时间或出现次数；较新的转述沿用了旧错误，记为事故事实，不能据此恢复旧规则。`expired-rules.json` 里登记过的旧说法不许写回。
 5. 改写合并：更新状态，标出被推翻的旧结论，补交叉链接。
 6. 更新 index 的一句话摘要，在 log.md 记一条 `compile`，`mark <id> --status compiled --note <目标页路径>`。
 每轮有处理上限，处理不完留到下一轮。
@@ -93,6 +101,11 @@ Librarian 只整理记忆，不制造记忆。新租户没有日志、没有 ref
 ### 关联
 每个项目 main.md 在页面目录之后有一节 `## 相关`，每条一行：`- [名称](相对路径) — 关系类型：一句话说明`。关系类型：同一件事的另一版本/阶段、平台/上下游、共享客户/人/组件、由…拆出/合并进。双向写；只写有证据的关系。候选来自 `scripts/librarian-relations.py`。
 
+关联的规则：
+1. **双向写**：A 写了和 B 的关系，B 的 `## 相关` 里也要有对应一行（从 B 的视角写）。
+2. **编译时顺手连**：往 A 写一条事实时提到另一个项目、客户或系统，就检查两边的 `## 相关`，缺了就补。
+3. **只写有证据的关系**：关系说明要有来源（日期或原话）。只是在同一段日志里一起出现、没有实质关系的，不连。
+
 ### Lint（每天，跟在 compile 后面）
 检查：页面之间的矛盾、main.md 落后于近期日志、重复主题页、孤儿页、index 死链、index 超长、明文 secret、提到了但没连上、单向关系、走不到的页（`scripts/librarian-reachability.py`，结果在 `librarian/unreachable.json`）。能修的直接修，改不了的写进运行记录的 issues。
 
@@ -102,10 +115,14 @@ Librarian 只整理记忆，不制造记忆。新租户没有日志、没有 ref
 ### Query 回写与当面纠正
 回答跨多页的综合问题后，如果答案有复用价值，写回对应页面。主人在对话里指出记忆有错，**当场改**，用删除线标出旧结论并写纠正日期。
 
+> **通用纠错（语义对账）**：V 在 2026-10-19 引入、2026-10-22 暂停。这里不执行 `librarian-reconcile.py prepare/apply/finish`，也不生成纠错卡片。仍然有效的是：既有过期标记、主人明确的决定、原文无损保留、秘密检查。所有 Librarian 提交统一用 `python3 scripts/librarian-corrections.py commit -m <说明>`（依次跑已知过期检查和 move-check，任一失败不提交）。
+
 ## 运行记录
 
 - 每一轮写 `librarian/runs/YYYY-MM-DD.json`，同一天追加到 `runs[]`。每条 run：`id, kind(daily|reflection|lint|import), label, time, stats, outputs[{target,title,action(create|update),points[]}], changes[{target,title,kind(rewrite|strike|move|delete),before,after,reason}], sources[{source,action(merged|archived|skipped),note}], issues[], commit`。
-- `sources[]` 每段日志、每条 reflection 单独一项。
+- `outputs[].points` 就是「今天整理出来的记忆」，一句话一条，写结论本身。
+- `changes[]`：这一轮对**已有内容**做的改写、划掉、挪走和删除，每处一项；move 表示挪进 history.md，delete 只用于逐字重复。before 和 after 各写一句概括，不贴大段原文。
+- `sources[]` **每段日志、每片导入、每条 reflection 单独一项**，写清去向（note 写目标页或跳过原因）。不许用「其余 N 片」打包——打包会让去向和事实对不上，质检也抽不到。
 - 不写 secrets、账号密码、联系方式。
 
 ## 护栏
