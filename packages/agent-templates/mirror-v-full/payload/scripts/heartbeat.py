@@ -1036,8 +1036,9 @@ def step_skill_dashboard(config, tracker: MemoryUsageTracker | None = None) -> s
     workspace = resolve_workspace(config)
     script = workspace / "scripts" / "skill-dashboard.py"
     if not script.exists():
-        log("  skill-dashboard.py not found, skipping")
-        return "Skill dashboard: script not found"
+        # Mirror V does not ship V's dashboard; say nothing rather than a daily "not found".
+        log("  skill-dashboard.py not in this payload, skipping")
+        return ""
 
     try:
         # Get compact output

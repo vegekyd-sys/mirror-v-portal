@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import re
+import json
 import subprocess
 from pathlib import Path
 
@@ -529,24 +530,40 @@ def reindex_all_wiki_pages() -> int:
 
 
 def run_lint() -> tuple[int, str]:
+    """Wiki lint with the checks this payload actually ships.
+
+    V's own lint lives in scripts/v-evolution.py, which Mirror V does not carry.
+    Use it when present; otherwise run the two structural checks that are here:
+    index format / dead links (index-compact.py --check) and reachability
+    (librarian-reachability.py). Returning "unavailable" every heartbeat only
+    produced a daily alarm nobody could act on (2026-10-23..28).
+    """
     script = ROOT / "scripts" / "v-evolution.py"
-    if not script.exists():
-        # 这个脚本不在 payload 的 files[] 里，所以 lint 其实一次都没跑过。
-        # 以前这里返回 0，heartbeat 据此恒报 lint=ok —— 批量导入最需要的
-        # 那道质量闸门是空的，而且没人看得见。返回非 0 让缺口浮出来。
-        return 2, (
-            "lint unavailable: scripts/v-evolution.py missing — "
-            "wiki lint has never actually run; treat `lint ok` from older reports as meaningless"
-        )
-    proc = subprocess.run(
-        ["python3", str(script), "lint-wiki"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
-    output = (proc.stdout + proc.stderr).strip()
-    return proc.returncode, output
+    if script.exists():
+        proc = subprocess.run(["python3", str(script), "lint-wiki"], cwd=ROOT, text=True, capture_output=True, timeout=60)
+        return proc.returncode, (proc.stdout + proc.stderr).strip()
+    problems, notes = [], []
+    index_check = ROOT / "scripts" / "index-compact.py"
+    if index_check.exists():
+        proc = subprocess.run(["python3", str(index_check), "--check"], cwd=ROOT, text=True, capture_output=True, timeout=60)
+        try:
+            data = json.loads(proc.stdout[proc.stdout.index("{"):])
+            if data.get("broken_links"): problems.append(f"index dead links: {len(data['broken_links'])}")
+            if data.get("malformed"): problems.append(f"index malformed lines: {len(data['malformed'])}")
+            notes.append(f"index {data.get('lines')} lines")
+        except (ValueError, json.JSONDecodeError):
+            problems.append("index check output unreadable")
+    reach = ROOT / "scripts" / "librarian-reachability.py"
+    if reach.exists():
+        proc = subprocess.run(["python3", str(reach), "--metric-only"], cwd=ROOT, text=True, capture_output=True, timeout=60)
+        try:
+            data = json.loads(proc.stdout[proc.stdout.index("{"):])
+            notes.append(f"reachable {data.get('reachable')}/{data.get('pages')}")
+            if data.get("pages") and data.get("reachable", 0) < data["pages"]:
+                problems.append(f"unreachable pages: {data['pages'] - data['reachable']}")
+        except (ValueError, json.JSONDecodeError):
+            problems.append("reachability output unreadable")
+    return (1 if problems else 0), "; ".join(problems + notes) or "no lint checks available"
 
 
 def main() -> None:

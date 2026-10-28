@@ -13,3 +13,5 @@ feishu-auth.png
 # 注意：.gitignore 只防新增，防不住已经进过历史的 blob（进去了只能 filter-repo 或重建工作区）。
 # 主要防线不在这里：产物目录放到工作区根的 artifacts-out/，根本不进 git。
 # 原因是备份把整个 workspace 连 .git 一起打包，删文件不会让备份变小。
+# heartbeat 的 reflection 游标：运行状态，不是记忆
+.knight-reflection-cursor

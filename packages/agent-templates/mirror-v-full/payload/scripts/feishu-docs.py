@@ -202,9 +202,13 @@ def cmd_status(_a) -> None:
 # ---------- scopes ----------
 
 def grant_link(app_id: str, scopes: list[str]) -> str:
-    """开放平台的权限申请页，带上要开的那几项。格式取自飞书 99991672 报错里官方给的链接（2026-10-23 实测）。"""
-    from urllib.parse import quote
-    return f"https://open.feishu.cn/page/scope-apply?clientID={app_id}&scopes={quote(','.join(scopes), safe='')}"
+    """开放平台里这个应用的「用户身份权限」申请页，带上要开的几项。
+
+    注意别用 page/scope-apply：那是飞书在「应用身份」报错（99991672）里给的链接，
+    打开默认开的是应用身份权限。2026-10-23 实测主人照那个链接开完，机器人能读、
+    主人身份仍然只有 offline_access。读主人能看到的文档要的是用户身份权限。
+    """
+    return f"https://open.feishu.cn/app/{app_id}/auth?q={','.join(scopes)}&op_from=openapi&token_type=user"
 
 
 def cmd_scopes(_a) -> None:
@@ -227,7 +231,7 @@ def cmd_scopes(_a) -> None:
     if missing:
         out["grantLink"] = grant_link(app_id, missing)
         out["tellOwner"] = (
-            "读你的文档，需要给 Mirror V 这个应用再开几项只读权限（就是你扫码时绑定的那个，不是新应用）。"
+            "读你的文档，需要给 Mirror V 这个应用再开几项只读的「用户身份权限」（就是你扫码时绑定的那个应用，不是新应用；注意是用户身份，不是应用身份）。"
             "打开下面的链接，要开的几项已经勾好了，点「开通」；然后在左边「版本管理与发布」里"
             "建一个新版本并发布。你是管理员的话一分钟就好，不是的话要等管理员审核。弄完回我「好了」。")
     else:

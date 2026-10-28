@@ -90,6 +90,13 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 IDENTIFIER_KEYS = re.compile(
     r"(?i)\b(obj|node|doc|file|folder|space|wiki|block|sheet|record|app|open|union|user|chat|"
     r"message|request|trace|page|csrf|idempotency)[_-]?(token|id)\s*[:=]")
+# 别人的私人信息（REDLINES：电话、证件号不进记忆）。2026-10-26 质检在真实飞书
+# 导入里抽出 3 份带甲方联系人手机号的原文，上面那几条只认凭据，一处都没挡住。
+# 号码两侧不能紧挨字母数字，免得把文档 token 里的数字段误当成号码。
+PERSONAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("cn-mobile", re.compile(r"()(?<![0-9A-Za-z])(?:\+?86[- ]?)?1[3-9]\d[- ]?\d{4}[- ]?\d{4}(?![0-9A-Za-z])")),
+    ("cn-id", re.compile(r"()(?<![0-9A-Za-z])[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?![0-9A-Za-z])")),
+]
 PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY")
 PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY")
 REDACTED = "<redacted>"
@@ -161,7 +168,7 @@ def redact(text: str) -> tuple[str, list[dict]]:
             in_pem = not PEM_END.search(line)
             out.append(REDACTED)
             continue
-        for name, pat in PATTERNS:
+        for name, pat in PATTERNS + PERSONAL_PATTERNS:
             if name == "key-value" and IDENTIFIER_KEYS.search(line):
                 continue  # obj_token / node_id 这类标识符，抹了就断了溯源
             line, n = pat.subn(lambda m: m.group(1) + REDACTED, line)
@@ -375,6 +382,36 @@ def cmd_mark(a: argparse.Namespace, ws: Path) -> int:
     return 0
 
 
+def cmd_rescan(a: argparse.Namespace, ws: Path) -> int:
+    """按当前规则把已经归档的原文重新脱敏一遍（规则更新之后用）。只改归档副本，不碰来源。"""
+    p = layout(ws)
+    manifest = load_manifest(p["manifest"])
+    changed: list[str] = []
+    for it in manifest["items"]:
+        rel = it.get("path")
+        if not rel or it.get("disposition") == "duplicate":
+            continue
+        f = ws / rel
+        if not f.exists():
+            continue
+        text = f.read_text(encoding="utf-8")
+        red, hits = redact(text)
+        if not hits:
+            continue
+        f.write_text(red, encoding="utf-8")
+        it["redactions"] = (it.get("redactions") or []) + [h for h in hits]
+        changed.append(rel)
+    if not changed:
+        print("没有需要补脱敏的归档原文")
+        return 0
+    save_manifest(p["manifest"], manifest)
+    append_log(p["log"], "rescan", {"files": len(changed)})
+    git(ws, "add", "--", str(p["manifest"].relative_to(ws)), *changed)
+    git(ws, "commit", "-qm", f"chore(onboard): 按新规则补脱敏 {len(changed)} 份归档原文")
+    print(f"补脱敏 {len(changed)} 份：" + "、".join(Path(c).name for c in changed[:10]))
+    return 0
+
+
 # ---------- 杂项 ----------
 
 class BudgetBlocked(Exception):
@@ -415,11 +452,13 @@ def main() -> int:
     mk.add_argument("--disposition", required=True, choices=DISPOSITIONS)
     mk.add_argument("--note", default=None)
 
+    sub.add_parser("rescan", help="按当前规则给已归档原文补脱敏")
+
     a = ap.parse_args()
     ws = Path(a.workspace).resolve()
     if not (ws / "AGENTS.md").exists():
         die(5, f"{ws} 看着不像工作区（没有 AGENTS.md）")
-    return {"add": cmd_add, "status": cmd_status, "mark": cmd_mark}[a.cmd](a, ws)
+    return {"add": cmd_add, "status": cmd_status, "mark": cmd_mark, "rescan": cmd_rescan}[a.cmd](a, ws)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,23 @@ export function nextDue(spec: any, from = new Date()): Date {
   }
   throw Error("INVALID_SCHEDULE");
 }
+/**
+ * The owning session key of a schedule row. tick() gives a scheduled run the
+ * session key `${schedule.session_key}:scheduled:${schedule.id}`, while the row
+ * itself stores the unsuffixed key. Without stripping, list/status (session_key=$2)
+ * and remove/update (session_key=$3) issued from inside a scheduled run match no
+ * row at all: a scheduled task can neither renew nor cancel itself, so a multi-day
+ * script has to be created once up front and can never be adjusted afterwards.
+ *
+ * Isolation change, accepted deliberately: once the suffix is stripped, a scheduled
+ * run can see and remove the other schedules of the same chat. That is exactly what
+ * self-renewal and self-cancellation need, and it crosses neither tenant (queries
+ * still carry tenant_id) nor chat (the key still carries the chat).
+ */
+const SCHEDULED_RUN_SUFFIX = /:scheduled:[0-9a-f-]{36}$/;
+export function baseSessionKey(sessionKey: string): string {
+  return sessionKey.replace(SCHEDULED_RUN_SUFFIX, "");
+}
 export class Scheduler {
   private timer?: ReturnType<typeof setInterval>;
   private active?: Promise<void>;
@@ -80,16 +97,24 @@ export class Scheduler {
         await db.query("COMMIT");
         return prior.rows[0].result;
       }
-      const chat = run.session_key.startsWith(run.tenant_id + ":oc_")
-        ? run.session_key.slice(run.tenant_id.length + 1)
-        : run.chat_id;
+      // The schedules this run owns; a scheduled run must drop its `:scheduled:<uuid>`
+      // suffix to find its own group.
+      const sessionKey = baseSessionKey(run.session_key);
+      // Prefer the run's own chat_id. A plain Feishu run goes through store.enqueue,
+      // which never writes that column (NULL), so it falls back to the chat sliced out
+      // of the session key; a scheduled run gets a correct chat_id from tick()'s INSERT.
+      // The slice must use the stripped key — slicing the raw one yields the broken
+      // `oc_xxx:scheduled:<uuid>`, and a schedule created with it would address a chat
+      // that does not exist.
+      const chat = run.chat_id
+        || (sessionKey.startsWith(run.tenant_id + ":oc_") ? sessionKey.slice(run.tenant_id.length + 1) : undefined);
       let result: any;
       if (args.action === "list" || args.action === "status")
         result = {
           jobs: (
             await db.query(
               "SELECT id,name,kind,spec,prompt,enabled,next_at FROM elastic_schedules WHERE tenant_id=$1 AND session_key=$2 ORDER BY created_at",
-              [run.tenant_id, run.session_key],
+              [run.tenant_id, sessionKey],
             )
           ).rows,
         };
@@ -124,7 +149,7 @@ export class Scheduler {
           [
             id,
             run.tenant_id,
-            run.session_key,
+            sessionKey,
             name,
             kind,
             spec,
@@ -138,7 +163,7 @@ export class Scheduler {
         const old = (
           await db.query(
             "SELECT * FROM elastic_schedules WHERE id=$1 AND tenant_id=$2 AND session_key=$3 FOR UPDATE",
-            [args.id, run.tenant_id, run.session_key],
+            [args.id, run.tenant_id, sessionKey],
           )
         ).rows[0];
         if (!old) throw Error("SCHEDULE_NOT_FOUND");
