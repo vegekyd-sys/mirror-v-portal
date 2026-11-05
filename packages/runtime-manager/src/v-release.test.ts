@@ -154,6 +154,25 @@ test("helpers of V's daemons are daemons; an agent's own background job is not",
   expect(isDaemon("32")).toBe(false);
 });
 
+test("the native memory KNN helper does not pin idle VMs or exempt user jobs", async () => {
+  const { daemonTree } = await import("../runtime/v-release.mjs");
+  const helper = "/vercel/sandbox/nexus/runtime/node_modules/openclaw/dist/extensions/memory-core/memory-search-knn.child.js";
+  expect(isVReleaseDaemon(`/usr/local/bin/node ${helper}`)).toBe(true);
+  expect(isVReleaseDaemon(`node ${helper}`)).toBe(true);
+  expect(isVReleaseDaemon("node /workspace/memory-search-knn.child.js")).toBe(false);
+  expect(isVReleaseDaemon(`bash -c node ${helper}`)).toBe(false);
+  expect(isVReleaseDaemon(`node ${helper}.user-job.js`)).toBe(false);
+  const isDaemon = daemonTree([
+    { pid: "10", ppid: "1", command: "openclaw-gateway" },
+    { pid: "11", ppid: "10", command: `/usr/local/bin/node ${helper}` },
+    { pid: "12", ppid: "10", command: "python3 long_job.py" },
+    { pid: "13", ppid: "11", command: "bash -c sleep 600" },
+  ]);
+  expect(isDaemon("11")).toBe(true);
+  expect(isDaemon("12")).toBe(false);
+  expect(isDaemon("13")).toBe(false);
+});
+
 test("agent DB backups drop the rebuildable memory index and keep everything else", async () => {
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-db-"));
