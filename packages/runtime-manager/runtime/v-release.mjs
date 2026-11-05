@@ -15,6 +15,9 @@ export const V_RELEASE_MARKER = "/vercel/sandbox/nexus/v-release.json";
 export const V_RELEASE_DAEMONS = Object.freeze([
   /\/v\/worker\/dist\/worker\.mjs(?:\s|$)/,
   /\/v-memory-indexer\.mjs(?:\s|$)/,
+  // The memory engine keeps this query helper warm after recall. It owns no
+  // user job; queued/running turns still hold the manager's tenant lock.
+  /^(?:\/\S+\/)?node\s+\/vercel\/sandbox\/nexus\/runtime\/node_modules\/openclaw\/dist\/extensions\/memory-core\/memory-search-knn\.child\.js(?:\s|$)/,
   // The boot-time index pass that runs just before the indexer.
   /\/openclaw\.mjs memory index --agent /,
   /\bcodex(?:-linux-x64)?\b.*\bapp-server\b/,
