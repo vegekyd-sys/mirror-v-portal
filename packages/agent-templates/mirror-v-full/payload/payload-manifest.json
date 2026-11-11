@@ -30,7 +30,6 @@
   "onboarding/GUIDE.md",
   "onboarding/probes.json",
   "onboarding/templates/data-sovereignty.md",
-  "scripts/__pycache__/feishu-docs.cpython-312.pyc",
   "scripts/compress-memory.py",
   "scripts/feishu-docs.py",
   "scripts/heartbeat-dispatch.py",

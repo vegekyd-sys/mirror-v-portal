@@ -12,7 +12,8 @@ if (!/^mirror-v-full\.[a-z0-9.-]+$/.test(version ?? "")) throw Error("usage: nod
 const files = [];
 const walk = (dir, prefix = "") => {
   for (const name of fs.readdirSync(dir).sort()) {
-    if (name === ".DS_Store") continue;
+    // Local tooling leftovers (python -m py_compile, Finder) are not payload.
+    if (name === ".DS_Store" || name === "__pycache__" || name.endsWith(".pyc")) continue;
     const rel = prefix ? `${prefix}/${name}` : name;
     const stat = fs.lstatSync(path.join(dir, name));
     if (stat.isSymbolicLink()) throw Error(`symlink not allowed in payload: ${rel}`);
