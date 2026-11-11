@@ -49,6 +49,26 @@ export function registrationAvatarPreset(template: { avatarUrl?: string }, fallb
   return avatar?.length ? { avatar } : {};
 }
 
+// Templates whose agent reads the owner's documents ask for those user-identity
+// scopes on the creation page itself. Otherwise the owner had to find the app in
+// the developer console, enable them and publish a version before the agent could
+// read anything (2026-10-23: that detour took a day). The owner still consents
+// once, with their own account, before any document is read. Keep in step with
+// REQUIRED_SCOPES / OPTIONAL_SCOPES in mirror-v-full's scripts/feishu-docs.py.
+const DOCUMENT_READING_USER_SCOPES = [
+  'wiki:space:retrieve', 'wiki:node:retrieve', 'docx:document:readonly', 'docs:document.content:read',
+  'drive:drive.metadata:readonly',
+];
+
+export function registrationScopes(templateId: string): { tenant: string[]; user: string[] } {
+  return {
+    // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录
+    // 基本信息只读（feishu 插件解析发送者姓名必需，缺失会报 41050）。
+    tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'],
+    user: templateId === 'mirror-v-full' ? DOCUMENT_READING_USER_SCOPES : [],
+  };
+}
+
 export async function startFeishuRegistration(
   onRegistered?: (session: RegistrationSession) => Promise<void>,
   template: { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string } = {
@@ -102,9 +122,7 @@ export async function startFeishuRegistration(
         },
         addons: {
           preset: true,
-          // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录
-          // 基本信息只读（feishu 插件解析发送者姓名必需，缺失会报 41050）。
-          scopes: { tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'], user: [] },
+          scopes: registrationScopes(template.id),
           events: { items: { tenant: ['im.message.receive_v1'] } },
         } as lark.AppAddons,
         createOnly: true,

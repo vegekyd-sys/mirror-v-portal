@@ -5,6 +5,7 @@ import { Sandbox } from "@vercel/sandbox";
 import { createAgentKitProfile } from "../runtime/agent-config.mjs";
 import { MEDIA_BINARY_PACKAGES } from "../runtime/media-binaries.mjs";
 import { loadConfig } from "../src/config.js";
+import { FEISHU_CLI_VERSION, templateUsesFeishuCli } from "../src/templates.js";
 import { resolveTemplatePayload, templateRecord, TEMPLATE_OPENCLAW_VERSION, TEMPLATE_SNAPSHOT_TTL_MS, type TemplatePayload } from "../src/template-payload.js";
 
 const config = loadConfig();
@@ -164,6 +165,11 @@ try {
     await run("v-release-unpack", "bash", ["-c", "mkdir -p /vercel/sandbox/nexus/v && tar -xzf /vercel/sandbox/v-release.tgz -C /vercel/sandbox/nexus/v && rm /vercel/sandbox/v-release.tgz"]);
     await run("v-release-codex", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/codex", "--omit=dev", "--no-audit", "--no-fund", `@openai/codex@${V_RELEASE_CODEX_VERSION}`]);
     await run("v-release-makaron", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund makaron-cli@${V_RELEASE_MAKARON_CLI_VERSION} && mkdir -p /vercel/sandbox/nexus/tools/bin && ln -sf /vercel/sandbox/nexus/tools-node/node_modules/makaron-cli/bin/makaron.mjs /vercel/sandbox/nexus/tools/bin/makaron && /vercel/sandbox/nexus/tools/bin/makaron --version`]);
+    // Preinstalled so the first onboarding turn can hand out the Feishu consent link
+    // within seconds instead of waiting on npm (feishu-docs.py installs it only as a fallback).
+    if (templateUsesFeishuCli(templateId)) {
+      await run("feishu-cli", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund @larksuite/cli@${FEISHU_CLI_VERSION} && mkdir -p /vercel/sandbox/nexus/tools/bin && ln -sf /vercel/sandbox/nexus/tools-node/node_modules/.bin/lark-cli /vercel/sandbox/nexus/tools/bin/lark-cli && /vercel/sandbox/nexus/tools/bin/lark-cli --version`]);
+    }
     if (seedArchive) {
       await run("v-release-seeds", "mkdir", ["-p", "/vercel/sandbox/nexus/seeds"]);
       await sbx.writeFiles([{ path: "/vercel/sandbox/nexus/seeds/v001.tar", content: fs.readFileSync(seedArchive) }]);

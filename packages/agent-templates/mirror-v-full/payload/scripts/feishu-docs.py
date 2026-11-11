@@ -7,6 +7,10 @@
 他本来就能看到的文档。用户 token 存在 agent-data/lark-cli，不进记忆、不进 git。
 
 子命令（都在工作区根目录跑）：
+  connect      上手引导用的一步到位：装好、对权限、发起授权，告诉你该对主人说什么
+  connect --finish  主人点完授权链接之后收尾
+  read         上手引导用：盘点 + 读所有建议读的空间（有时间上限），并挑出写初稿该先看的几份
+  picks        写初稿先看哪几份（已经读进来的资料里挑，官网和粘贴的也算）
   setup        装 lark-cli（已装就跳过），打印状态和下一步
   status       看状态：装没装、应用绑上没有、主人授权没有
   scopes       对照读文档要的用户身份权限，缺的给出一键开通链接（退出码 2）
@@ -178,6 +182,16 @@ def status() -> dict:
     return s
 
 
+def cmd_setup_quiet() -> None:
+    """connect 里用：没装就装，装不上直接带着原因退出。快照里通常已经预装。"""
+    p = subprocess.run(["npm", "install", "-g", f"@larksuite/cli@{LARK_VERSION}"],
+                       capture_output=True, text=True, timeout=400)
+    if p.returncode != 0 or not shutil.which("lark-cli"):
+        say({"ok": False, "do": "retry", "step": "npm install", "detail": (p.stderr or p.stdout)[-600:]})
+        sys.exit(1)
+    ensure_config_dir()
+
+
 def cmd_setup(_a) -> None:
     steps = []
     if shutil.which("lark-cli"):
@@ -211,15 +225,17 @@ def grant_link(app_id: str, scopes: list[str]) -> str:
     return f"https://open.feishu.cn/app/{app_id}/auth?q={','.join(scopes)}&op_from=openapi&token_type=user"
 
 
-def cmd_scopes(_a) -> None:
+def check_scopes() -> dict:
+    """对照 REQUIRED_SCOPES 看绑定应用开了哪些用户身份权限。扫码建应用时已经申请过，
+    正常是齐的；企业要管理员审批、或者老应用没申请过时才会缺。"""
     if shutil.which("lark-cli"):
         ensure_bound_config()
     app_id = bound_app()
     if not app_id:
-        say(status()); sys.exit(1)
+        return {**status(), "ok": False, "error": "no-app"}
     data, err = lark("auth", "scopes")
     if err:
-        say({"ok": False, "detail": err, "hint": "把 detail 用一句人话告诉主人，再重试一次"}); sys.exit(1)
+        return {"ok": False, "error": "lark", "detail": err, "hint": "把 detail 用一句人话告诉主人，再重试一次"}
     enabled = set(data.get("userScopes") or [])
     missing = [k for k in REQUIRED_SCOPES if k not in enabled]
     out = {
@@ -236,8 +252,13 @@ def cmd_scopes(_a) -> None:
             "建一个新版本并发布。你是管理员的话一分钟就好，不是的话要等管理员审核。弄完回我「好了」。")
     else:
         out["next"] = "python3 scripts/feishu-docs.py login"
+    return out
+
+
+def cmd_scopes(_a) -> None:
+    out = check_scopes()
     say(out)
-    sys.exit(0 if not missing else 2)
+    sys.exit(0 if out["ok"] else 2 if out.get("missing") else 1)
 
 
 # ---------- login (Device Flow) ----------
@@ -255,39 +276,81 @@ def _find(obj, *keys):
     return None
 
 
-def cmd_login(a) -> None:
-    if shutil.which("lark-cli"):
-        ensure_bound_config()
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if a.finish:
-        if not AUTH.exists():
-            raise SystemExit("还没有发起授权：先跑 login")
-        code = json.loads(AUTH.read_text(encoding="utf-8")).get("device_code")
-        data, err = lark("auth", "login", "--device-code", code, "--json", timeout=60)
-        if err:
-            say({"ok": False, "detail": err,
-                 "hint": "主人还没点完、或者链接过期了。过期就重新 login 发一个新链接。"}); sys.exit(1)
-        AUTH.unlink(missing_ok=True)
-        QR.unlink(missing_ok=True)
-        say({"ok": True, "status": status()})
-        return
+def finish_login() -> dict:
+    if not AUTH.exists():
+        return {"ok": False, "detail": "还没有发起授权", "hint": "先跑 login（或 connect）"}
+    code = json.loads(AUTH.read_text(encoding="utf-8")).get("device_code")
+    data, err = lark("auth", "login", "--device-code", code, "--json", timeout=60)
+    if err:
+        return {"ok": False, "detail": err,
+                "hint": "主人还没点完、或者链接过期了。过期就重新 login 发一个新链接。"}
+    AUTH.unlink(missing_ok=True)
+    QR.unlink(missing_ok=True)
+    return {"ok": True, "status": status()}
+
+
+def start_login() -> dict:
     scope = " ".join(REQUIRED_SCOPES)
     data, err = lark("auth", "login", "--no-wait", "--json", "--scope", scope, timeout=60)
     if err:
-        say({"ok": False, "detail": err, "hint": "权限没开全会在这一步报错：先跑 scopes"}); sys.exit(1)
+        return {"ok": False, "detail": err, "hint": "权限没开全会在这一步报错：先跑 scopes"}
     url = _find(data, "verification_uri_complete", "verification_url", "verification_uri", "url")
     code = _find(data, "device_code")
     if not url or not code:
-        say({"ok": False, "detail": "没认出授权链接或设备码，原样输出给你看", "raw": data}); sys.exit(1)
+        return {"ok": False, "detail": "没认出授权链接或设备码，原样输出给你看", "raw": data}
     AUTH.write_text(json.dumps({"device_code": code, "url": url, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                                 "expires_in": _find(data, "expires_in")}, ensure_ascii=False), encoding="utf-8")
     os.chmod(AUTH, 0o600)
     qr_ok = subprocess.run(["lark-cli", "auth", "qrcode", url, "-o", QR.name], cwd=WS,
                            capture_output=True, text=True, env=lark_env()).returncode == 0
-    say({"ok": True, "url": url, "qrcode": str(QR) if qr_ok and QR.exists() else None,
-         "expiresIn": _find(data, "expires_in"),
-         "tellOwner": "点这个链接（或者扫二维码），用你的飞书账号确认授权。我只申请了读文档的几项权限。点完回我「好了」。",
-         "next": "主人回「好了」之后：python3 scripts/feishu-docs.py login --finish"})
+    return {"ok": True, "url": url, "qrcode": str(QR) if qr_ok and QR.exists() else None,
+            "expiresIn": _find(data, "expires_in"),
+            "tellOwner": "点这个链接（或者扫二维码），用你的飞书账号确认授权。我只申请了读文档的几项权限。点完回我「好了」。",
+            "next": "主人回「好了」之后：python3 scripts/feishu-docs.py login --finish"}
+
+
+def cmd_login(a) -> None:
+    if shutil.which("lark-cli"):
+        ensure_bound_config()
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    out = finish_login() if a.finish else start_login()
+    say(out)
+    sys.exit(0 if out["ok"] else 1)
+
+
+def cmd_connect(a) -> None:
+    """上手引导的一步：能读了就说能读了，不能读就给出主人唯一要做的那件事。
+
+    输出的 `do` 是下一步：read（已经能读）/ login（发授权链接）/ grant（缺权限，发开通链接）/
+    skip（这台机器接不上飞书，改走官网和粘贴）/ retry（偶发错误，告诉主人原因后重试一次）。
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if a.finish:
+        if shutil.which("lark-cli"):
+            ensure_bound_config()
+        out = finish_login()
+        if out["ok"]:
+            out["do"] = "read"
+        else:
+            out["do"] = "login"
+        say(out)
+        sys.exit(0 if out["ok"] else 1)
+    if not shutil.which("lark-cli"):
+        cmd_setup_quiet()
+    st = status()
+    if not st.get("boundApp"):
+        say({**st, "do": "skip"}); sys.exit(3)
+    if st.get("authorized"):
+        say({"ok": True, "do": "read", "user": st.get("user")}); return
+    sc = check_scopes()
+    if sc.get("missing"):
+        say({**sc, "do": "grant"}); sys.exit(2)
+    if not sc["ok"]:
+        say({**sc, "do": "retry"}); sys.exit(1)
+    out = start_login()
+    out["do"] = "login" if out["ok"] else "retry"
+    say(out)
+    sys.exit(0 if out["ok"] else 1)
 
 
 # ---------- inventory ----------
@@ -321,7 +384,7 @@ def list_nodes(space_id: str, parent: str | None) -> tuple[list[dict], str | Non
     return data.get("nodes") or data.get("items") or [], None
 
 
-def cmd_inventory(a) -> None:
+def inventory() -> dict:
     started = time.time()
     spaces = list_spaces()
     spaces.append({"space_id": "my_library", "name": "我的文档库（个人）", "space_type": "personal"})
@@ -364,9 +427,13 @@ def cmd_inventory(a) -> None:
             "excluded": sum(1 for r in mine if r["excluded"]),
             "default": f"跳过（{space_exclusion(sp)}）" if space_exclusion(sp) else "建议读",
         })
-    say({"ok": True, "elapsed_s": round(time.time() - started, 1), "spaces": summary,
-         "total_nodes": len(rows), "errors": errors, "saved": str(INVENTORY.relative_to(WS)),
-         "next": "把空间清单给主人勾选，然后 pull --spaces <space_id,...>（或 --all）"})
+    return {"ok": True, "elapsed_s": round(time.time() - started, 1), "spaces": summary,
+            "total_nodes": len(rows), "errors": errors, "saved": str(INVENTORY.relative_to(WS)),
+            "next": "把空间清单给主人勾选，然后 pull --spaces <space_id,...>（或 --all）"}
+
+
+def cmd_inventory(_a) -> None:
+    say(inventory())
 
 
 # ---------- pull ----------
@@ -381,10 +448,16 @@ def fetch(node: dict) -> tuple[str | None, str | None]:
 
 
 def cmd_pull(a) -> None:
+    out = pull(a.all, a.spaces, a.limit, a.budget)
+    say(out)
+    sys.exit(4 if out.get("stopped") else 0)
+
+
+def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
     if not INVENTORY.exists():
         raise SystemExit("还没有盘点：先跑 inventory")
     inv = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    wanted = None if a.all else set((a.spaces or "").split(","))
+    wanted = None if all_spaces else set((spaces or "").split(","))
     if wanted is not None and not any(wanted):
         raise SystemExit("用 --spaces <space_id,...> 指定要读的空间，或者 --all")
     pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
@@ -394,7 +467,7 @@ def cmd_pull(a) -> None:
     started, done, failed, skipped_empty = time.time(), [], [], 0
     collector = WS / "scripts" / "onboard-collect.py"
     for n in todo:
-        if len(done) >= a.limit or time.time() - started > a.budget:
+        if len(done) >= limit or time.time() - started > budget:
             break
         content, err = fetch(n)
         if err or not (content or "").strip():
@@ -410,9 +483,8 @@ def cmd_pull(a) -> None:
              "--title", f"[{n['space']}] {n['path']}", "--stdin"],
             input=content, capture_output=True, text=True, cwd=WS)
         if p.returncode == 4:  # 体积闸门：停下来问主人，不要硬塞
-            say({"ok": False, "stopped": "体积闸门拦下", "detail": p.stdout[-400:], "pulled_this_run": len(done)})
             PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
-            sys.exit(4)
+            return {"ok": False, "stopped": "体积闸门拦下", "detail": p.stdout[-400:], "pulled_this_run": len(done)}
         if p.returncode != 0:
             failed.append({"title": n["title"], "error": (p.stdout or p.stderr)[-200:]})
             continue
@@ -420,15 +492,65 @@ def cmd_pull(a) -> None:
         done.append(n["title"])
     PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
     remaining = len(todo) - len(done) - len(failed) - skipped_empty
-    say({"ok": not failed, "imported": len(done), "failed": failed, "empty": skipped_empty,
-         "remaining": max(0, remaining), "elapsed_s": round(time.time() - started, 1),
-         "next": ("还有没拉完的，下一轮继续跑同一条 pull" if remaining > 0 else
-                  "拉完了。python3 scripts/librarian-daily-queue.py stats 看要整理几晚")})
+    return {"ok": not failed, "imported": len(done), "failed": failed, "empty": skipped_empty,
+            "remaining": max(0, remaining), "elapsed_s": round(time.time() - started, 1),
+            "next": ("还有没拉完的，下一轮继续跑同一条 pull" if remaining > 0 else
+                     "拉完了。python3 scripts/librarian-daily-queue.py stats 看要整理几晚")}
+
+
+# ---------- read（上手引导） ----------
+
+# 写初稿时先看的文档：讲公司、产品、团队、方向的那几份，比会议纪要和流水更能说明「你是谁」。
+DRAFT_HINT = re.compile(r"介绍|简介|关于|about|公司|产品|业务|战略|规划|愿景|使命|BP|商业计划|融资|团队|组织|手册|"
+                        r"onboarding|入职|OKR|年度|总结|定位|方案|官网|品牌", re.I)
+
+
+def draft_picks(n: int = 10) -> list[dict]:
+    """从已经读进来的原文里挑 n 份写初稿用：标题像总纲的、层级浅的、篇幅足的优先。
+    飞书跳过时官网和粘贴的资料一样能用。"""
+    manifest = WS / "memory-archive" / "imports" / "MANIFEST.json"
+    try:
+        items = json.loads(manifest.read_text(encoding="utf-8")).get("items", [])
+    except (OSError, ValueError):
+        return []
+    docs = [it for it in items if it.get("path") and not it.get("duplicate_of")]
+
+    def score(it: dict) -> float:
+        title = it.get("title", "")
+        depth = title.count(" / ")
+        chars = int(it.get("chars") or 0)
+        return (3 if DRAFT_HINT.search(title) else 0) - depth + min(chars, 8000) / 4000
+
+    docs.sort(key=score, reverse=True)
+    return [{"title": it["title"], "file": it["path"], "chars": it.get("chars")} for it in docs[:n]]
+
+
+def cmd_read(a) -> None:
+    """盘点 + 读所有建议读的空间，有时间上限；没读完就告诉调用方后台接着读。"""
+    started = time.time()
+    inv = inventory() if (a.reinventory or not INVENTORY.exists()) else None
+    out = pull(True, None, a.limit, max(30, a.budget - int(time.time() - started)))
+    if inv:
+        out["spaces"] = [{"name": s["name"], "docs": s["fetchable"], "default": s["default"]} for s in inv["spaces"]]
+        out["inventory_errors"] = inv["errors"][:5]
+    out["forDraft"] = draft_picks()
+    out["next"] = ("还没读完：加一次性任务在后台接着跑 read" if out.get("remaining") else
+                   "读完了：照引导写初稿")
+    say(out)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    cn = sub.add_parser("connect")
+    cn.add_argument("--finish", action="store_true", help="主人点完授权链接之后收尾")
+    cn.set_defaults(fn=cmd_connect)
+    rd = sub.add_parser("read")
+    rd.add_argument("--limit", type=int, default=120, help="这一轮最多读几份（默认 120）")
+    rd.add_argument("--budget", type=int, default=200, help="这一轮最多花多少秒，含盘点（默认 200）")
+    rd.add_argument("--reinventory", action="store_true", help="重新盘点空间（默认只在第一次盘点）")
+    rd.set_defaults(fn=cmd_read)
+    sub.add_parser("picks").set_defaults(fn=lambda _a: say({"forDraft": draft_picks()}))
     sub.add_parser("setup").set_defaults(fn=cmd_setup)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("scopes").set_defaults(fn=cmd_scopes)

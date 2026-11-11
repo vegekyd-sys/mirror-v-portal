@@ -1,6 +1,9 @@
 import { randomBytes, createCipheriv } from "node:crypto";
 import { expect, test } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { feishuCliEnv, FEISHU_CLI_CONFIG_DIR } from "./provider.js";
+import { FEISHU_CLI_VERSION } from "./templates.js";
 
 const key = randomBytes(32).toString("hex");
 function seal(value: string) {
@@ -30,4 +33,9 @@ test("other templates and tenants without a Feishu app get nothing", () => {
 test("no variable can shadow the runtime's own NEXUS_* / OPENCLAW_* settings", () => {
   const env = feishuCliEnv({ template_id: "mirror-v-full", app_id: "cli_bound", secret: seal("s") }, key);
   expect(Object.keys(env).every((k) => k.startsWith("LARKSUITE_CLI_"))).toBe(true);
+});
+
+test("the snapshot's preinstalled lark-cli is the version the payload expects", () => {
+  const script = fs.readFileSync(path.resolve(__dirname, "../../agent-templates/mirror-v-full/payload/scripts/feishu-docs.py"), "utf8");
+  expect(script).toContain(`LARK_VERSION = "${FEISHU_CLI_VERSION}"`);
 });

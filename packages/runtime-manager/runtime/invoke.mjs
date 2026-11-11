@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { prepareInboundInput, onboardingPreamble } from "./inbound-input.mjs";
+import { prepareInboundInput, onboardingPreamble, librarianAskPreamble } from "./inbound-input.mjs";
 import { randomUUID } from "node:crypto";
 const rpc = "/tmp/nexus-schedule-rpc";
 fs.mkdirSync(rpc, { recursive: true });
@@ -44,6 +44,7 @@ try {
   let inbound;
   try {
     const config = request.images?.length ? JSON.parse(fs.readFileSync("/vercel/sandbox/agent-data/openclaw.json", "utf8")) : undefined;
+    try { request.text = librarianAskPreamble(request.text ?? "", { sessionKey: request.sessionKey ?? "" }); } catch {}
     try { request.text = onboardingPreamble(request.text ?? "", { sessionKey: request.sessionKey ?? "" }); } catch {}
     inbound = prepareInboundInput(request,config,{agentId:process.env.NEXUS_AGENT_ID || "dealclaw"});
   } catch (error) {

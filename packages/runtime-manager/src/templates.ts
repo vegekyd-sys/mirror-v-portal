@@ -50,6 +50,9 @@ function avatarMetadata(value: string | undefined): { avatarUrl?: string } {
  */
 const FEISHU_CLI_TEMPLATES: ReadonlySet<string> = new Set(["mirror-v-full"]);
 
+/** lark-cli baked into those templates' snapshots; keep in step with LARK_VERSION in the payload's scripts/feishu-docs.py. */
+export const FEISHU_CLI_VERSION = "1.0.89";
+
 export function templateUsesFeishuCli(templateId: string | null | undefined): boolean {
   return FEISHU_CLI_TEMPLATES.has(templateId ?? "");
 }

@@ -30,11 +30,12 @@ description: 记忆冷启动：主人的记忆是空的时候，把他已有的�
 
 **用主人扫码时绑定的那个 Mirror V 应用读，不新建应用。** 平台在启动时已经把这个应用交给 lark-cli（`LARKSUITE_CLI_APP_ID` 等环境变量）。缺权限就在这个应用上补；主人授权一次，就能用他的身份读他本来就能看到的文档。用户 token 存在 `agent-data/lark-cli`，不进记忆、不进 git、不出现在回复里。
 
-1. `python3 scripts/feishu-docs.py setup`：装 lark-cli。`boundApp` 为空说明没拿到绑定的应用，如实告诉主人，改走粘正文，**不要让他另建应用**
-2. `python3 scripts/feishu-docs.py scopes`：缺权限时退出码 2，输出里有已经勾好权限的 `grantLink` 和要跟主人说的话 `tellOwner`。主人开通、发布新版本后回「好了」，再跑一次确认
-3. `python3 scripts/feishu-docs.py login`：把 `url`（和 `qrcode` 二维码图片）发给主人，**结束这一轮**；主人回「好了」再跑 `login --finish`
-4. `python3 scripts/feishu-docs.py inventory`：只盘点目录（百来页约 40 秒），把空间清单编号发给主人选。默认跳过示例库和像凭据库的空间
-5. `python3 scripts/feishu-docs.py pull --spaces <id,...>`：每轮最多 40 份、240 秒。没读完，用 `portal_schedule` 加一条 1 分钟后的一次性任务接着读，不让主人等
+上手引导里用两条合并好的命令（`onboarding/GUIDE.md` 第 0–2 步）：
+
+1. `python3 scripts/feishu-docs.py connect`：装好、对权限、发起授权，按输出的 `do` 行事——`login` 发授权链接，`grant` 发开通权限的链接（扫码建应用时已经申请过，一般只有企业要管理员审批时才会出现），`read` 已经能读，`skip` 这台机器接不上飞书，`retry` 偶发错误。主人点完回「好了」，跑 `connect --finish`
+2. `python3 scripts/feishu-docs.py read`：盘点 + 读所有建议读的空间（默认跳过示例库和像凭据库的空间），最多约 3 分钟，并给出写初稿先看哪几份（`forDraft`；之后随时 `picks` 再看）。没读完，用 `portal_schedule` 加一条一次性任务接着跑 `read`，不让主人等
+
+引导以外、主人只想读某几个空间时，用拆开的命令：`setup` / `scopes` / `login`（`--finish`）/ `inventory` / `pull --spaces <id,...>`（每轮最多 40 份、240 秒）。
 
 每一步的细节、过期了怎么办、权限审核卡住了怎么跟主人说：`references/feishu-lark-cli.md`。
 

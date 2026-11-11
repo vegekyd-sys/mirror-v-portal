@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 const mimes={'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'};
 const maxBytes=10*1024*1024,totalBytes=12*1024*1024;
 
@@ -75,11 +76,15 @@ export function prepareInboundInput(request,config,options={}) {
  * and after naming itself deleted BOOTSTRAP.md (OpenClaw's own convention for
  * that file), which ended onboarding for good.
  *
- * So the guide lives at onboarding/GUIDE.md, and only the progress file decides
- * when onboarding is over (step "done"). On the first step the opening is lifted
- * verbatim from the guide's first fenced block and the step is advanced here, so
- * the opening is never sent twice even if the model forgets to record progress.
- * Scheduled and other background turns are left alone.
+ * So the guide lives at onboarding/GUIDE.md, and only the progress decides when
+ * onboarding is over (step "done"). The progress script corrects the step from
+ * what actually happened before each turn (on 2026-10-23 a tenant had all its
+ * Feishu documents read while the step still said "choose"). On the first step
+ * the opening is lifted verbatim from the guide's first fenced block and the
+ * step is advanced here, so the opening is never sent twice. The draft is
+ * written by a background turn, so the owner's reply to it arrives in a session
+ * that never saw it: the draft as sent is quoted back. Scheduled and other
+ * background turns are left alone.
  */
 export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey=''}={}) {
   if(/:scheduled:/.test(sessionKey))return text;
@@ -87,7 +92,8 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
   if(!fs.existsSync(guidePath)||!fs.existsSync(script))return text;
   const progressFile=path.join(workspace,'onboarding','progress.json');
   let progress={step:'start'};
-  try{progress={...progress,...JSON.parse(fs.readFileSync(progressFile,'utf8'))};}catch{}
+  try{progress={...progress,...JSON.parse(execFileSync('python3',[script,'get'],{cwd:workspace,encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore']}))};}
+  catch{try{progress={...progress,...JSON.parse(fs.readFileSync(progressFile,'utf8'))};}catch{}}
   if(progress.step==='done')return text;
   const guide=fs.readFileSync(guidePath,'utf8');
   const head='【平台提示：上手引导进行中。这段是系统给你的，不是主人说的，不要复述，也不要提到它】';
@@ -96,18 +102,46 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
     if(opening){
       try{
         fs.mkdirSync(path.dirname(progressFile),{recursive:true});
-        fs.writeFileSync(progressFile,JSON.stringify({...progress,step:'choose',updated_at:new Date().toISOString()},null,1));
+        fs.writeFileSync(progressFile,JSON.stringify({...progress,step:'feishu_auth',updated_at:new Date().toISOString()},null,1));
       }catch{}
       return [head,
-        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完；然后在同一条回复里原样发出下面这段开场白，一字不改，不加任何前后缀。主人的消息只是平台的扫码通知、或者只是打招呼时，就只发这段开场白，不调用任何工具。',
-        '———— 开场白 ————',opening,'———— 开场白结束 ————','','主人的消息：',text].join('\n');
+        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完；然后在同一条回复里原样发出下面这段开场白，一字不改，不加任何前后缀。发完开场白再调用工具，接着照「第 0 步」后半段做：跑 connect，按结果把授权链接发给主人。',
+        '———— 开场白 ————',opening,'———— 开场白结束 ————','',
+        '第 0 步（摘自引导，照做）：','————',guideSection(guide,'start'),'————','','主人的消息：',text].join('\n');
     }
   }
+  let draft='';
+  if(progress.step==='draft'){
+    try{draft=fs.readFileSync(path.join(workspace,'onboarding','draft.md'),'utf8').trim().slice(0,3000);}catch{}
+  }
   return [head,
-    `当前步骤：${progress.step}。已选来源：${(progress.chosen??[]).join(' ')||'无'}；已完成：${(progress.done??[]).join(' ')||'无'}；已跳过：${(progress.skipped??[]).join(' ')||'无'}。`,
+    `当前步骤：${progress.step}。已完成：${(progress.done??[]).join(' ')||'无'}；已跳过：${(progress.skipped??[]).join(' ')||'无'}；补充来源已选：${(progress.chosen??[]).join(' ')||'无'}。`,
+    ...(draft?['你在后台发给主人的初稿（主人这条消息多半是在回它）：','————',draft,'————']:[]),
     '这一步的做法（摘自引导，照做）：','————',guideSection(guide,progress.step),'————',
     '主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除，起完名字也不代表引导结束。',
-    '回复的最后一句必须是下一步要主人做的那一件事（编号选项、链接，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
+    '回复的最后一句必须是下一步要主人做的那一件事（链接、编号选项，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
+    '','主人的消息：',text].join('\n');
+}
+
+/**
+ * The nightly Librarian may leave the owner one question only the owner can
+ * settle (two sources disagree on a founding date, say), recorded in
+ * memory/librarian/ask.json by scripts/librarian-ask.py. The owner answers the
+ * next day in a session that never saw the report, so the open question rides
+ * along with each owner turn for a week until it is marked answered.
+ */
+export function librarianAskPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey='',now=Date.now()}={}) {
+  if(/:scheduled:/.test(sessionKey))return text;
+  let ask;
+  try{ask=JSON.parse(fs.readFileSync(path.join(workspace,'memory','librarian','ask.json'),'utf8'));}catch{return text;}
+  const asked=Date.parse(String(ask?.asked_at??'').replace(/([+-]\d\d)(\d\d)$/,'$1:$2'));
+  if(!ask?.question||ask.answered_at||!(asked>now-7*86400000))return text;
+  return ['【平台提示：这段是系统给你的，不是主人说的，不要复述】',
+    `你在夜间整理的汇报里问过主人一个问题：${ask.question}`,
+    ...(ask.options?.length?[`选项：${ask.options.map((o,i)=>`${i+1}. ${o}`).join('  ')}`]:[]),
+    ...(ask.pages?.length?[`相关页面：${ask.pages.join('、')}`]:[]),
+    ...(ask.context?[`背景：${ask.context}`]:[]),
+    '如果主人这条消息是在回答它：按回答改正相关页面（写成现在为真的说法，标「主人确认，日期」，旧说法原样挪进 history.md），提交，再跑 python3 scripts/librarian-ask.py answered --note "<主人怎么说的、改了哪几页>"，回复一句改好了什么。不是在回答它，就照常处理，不要主动再提这个问题。',
     '','主人的消息：',text].join('\n');
 }
 

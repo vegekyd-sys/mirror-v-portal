@@ -8,7 +8,7 @@
 
 1. 上手引导没走完（`python3 scripts/onboard-progress.py get` 的 step 不是 `done`）→ **由你主导**按 `onboarding/GUIDE.md` 把它走完：每一轮先读进度，做这一步，回复的最后一句永远是下一步要主人做的那件事。平台会在每条主人消息前附一段「上手引导进行中」的提示，写明当前这一步该做什么，照着做。
    **不要删除或改写 `onboarding/GUIDE.md`**，起完名字也不代表引导结束；最后一步跑 `onboard-progress.py set --step done` 才算结束。
-2. 引导已经 done → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。
+2. 引导已经 done → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。夜间整理问过主人的问题（`memory/librarian/ask.json`），主人回答时平台会附上问题原文，按提示改正记忆再 `librarian-ask.py answered`。
 
 主人中途派活：先把活干完，**在同一条回复的末尾接回引导的当前一步**。不要等「安静的时机」，那样引导永远不会发生。
 
@@ -106,8 +106,9 @@
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
-| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：`setup` / `status` / `scopes`（缺什么权限，给一键开通链接）/ `login`（发授权链接，`--finish` 收尾）/ `inventory`（盘点）/ `pull`（拉正文交给采集器） |
-| `onboard-progress.py` | 上手引导走到哪一步：`get` / `set --step ... --chosen ... --done ... --skipped ...` |
+| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：引导用 `connect`（一步接上，`--finish` 收尾）/ `read`（盘点 + 读，限时）/ `picks`（写初稿先看哪几份）；拆开的 `setup` / `status` / `scopes` / `login` / `inventory` / `pull` |
+| `onboard-progress.py` | 上手引导走到哪一步：`get`（先按实际状态校正）/ `set --step ... --chosen ... --done ... --skipped ...` |
+| `librarian-ask.py` | 夜间整理留给主人的一个问题：`set` / `get` / `answered --note`。主人回答时平台会把问题附在他的消息前 |
 | `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |
 | `onboard-budget.py` | 落盘前的体积闸门（workspace / `.git` / 预估备份包），超限非零退出 |
 | `memory-index-verify.py` | 用探针题库验收检索召回（recall@5 + 逐条命中页） |
