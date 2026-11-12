@@ -118,6 +118,8 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
     `当前步骤：${progress.step}。已完成：${(progress.done??[]).join(' ')||'无'}；已跳过：${(progress.skipped??[]).join(' ')||'无'}；补充来源已选：${(progress.chosen??[]).join(' ')||'无'}。`,
     ...(draft?['你在后台发给主人的初稿（主人这条消息多半是在回它）：','————',draft,'————']:[]),
     '这一步的做法（摘自引导，照做）：','————',guideSection(guide,progress.step),'————',
+    // Authorizing, reading and the website step usually run on into the draft in the same turn.
+    ...(['feishu_auth','reading','website'].includes(progress.step)?['读完资料后接着写初稿时的做法：','————',draftSection(guide),'————']:[]),
     '主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除，起完名字也不代表引导结束。',
     '回复的最后一句必须是下一步要主人做的那一件事（链接、编号选项，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
     '','主人的消息：',text].join('\n');
@@ -143,6 +145,11 @@ export function librarianAskPreamble(text,{workspace='/vercel/sandbox/agent-data
     ...(ask.context?[`背景：${ask.context}`]:[]),
     '如果主人这条消息是在回答它：按回答改正相关页面（写成现在为真的说法，标「主人确认，日期」，旧说法原样挪进 history.md），提交，再跑 python3 scripts/librarian-ask.py answered --note "<主人怎么说的、改了哪几页>"，回复一句改好了什么——用人话说记住了什么，不提文件名、路径和提交。不是在回答它，就照常处理，不要主动再提这个问题。',
     '','主人的消息：',text].join('\n');
+}
+
+/** The guide's "write the draft" section, which has no step of its own. */
+export function draftSection(guide){
+  return (guide.split(/\n(?=## )/).find(part=>/^## 第 3 步/.test(part))??'').replace(/\n---\s*$/,'').trim().slice(0,6000);
 }
 
 /** The guide section whose heading lists this step, e.g. "## 第 2 步 · 飞书文档（step = feishu → feishu_auth …）". */

@@ -33,6 +33,8 @@ test("first turn carries the guide's opening verbatim, then connects Feishu, and
   expect(second).not.toContain("开场白");
   expect(second).toContain("当前步骤：feishu_auth");
   expect(second).toContain("connect --finish");
+  expect(second).toContain("写初稿"); // authorizing usually runs on into reading and the draft
+  expect(second).toContain("feishu-docs.py picks");
 });
 
 test("onboarding survives a deleted BOOTSTRAP.md: only the progress ends it", () => {
