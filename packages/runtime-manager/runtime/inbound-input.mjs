@@ -105,7 +105,7 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
         fs.writeFileSync(progressFile,JSON.stringify({...progress,step:'feishu_auth',updated_at:new Date().toISOString()},null,1));
       }catch{}
       return [head,
-        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完。然后照「第 0 步」做：工具调用前只说一句「稍等，我准备一下。」，跑 connect；最终回复先原样写下面这段开场白（一字不改），再按 connect 的结果接上授权链接或下一步。',
+        '这是你和主人的第一轮。如果下面主人的消息是在派活，先把活干完。然后照「第 0 步」做：跑 connect（下面是平台的扫码通知时，工具调用前什么都不说；是主人自己开口时，只说一句「稍等，我准备一下。」）；最终回复先原样写下面这段开场白（一字不改），再按 connect 的结果接上授权链接或下一步。',
         '———— 开场白 ————',opening,'———— 开场白结束 ————','',
         '第 0 步（摘自引导，照做）：','————',guideSection(guide,'start'),'————','','主人的消息：',text].join('\n');
     }
