@@ -541,8 +541,10 @@ def cmd_read(a) -> None:
         out["spaces"] = [{"name": s["name"], "docs": s["fetchable"], "default": s["default"]} for s in inv["spaces"]]
         out["inventory_errors"] = inv["errors"][:5]
     out["forDraft"] = draft_picks()
-    out["next"] = ("还没读完：加一次性任务在后台接着跑 read" if out.get("remaining") else
-                   "读完了：照引导写初稿")
+    # 单轮硬上限 10 分钟，写初稿要两三分钟：读得快才在这一轮接着写，否则交给一次性任务。
+    out["draftNow"] = not out.get("remaining") and time.time() - started <= 150
+    out["next"] = ("这一轮接着写初稿" if out["draftNow"] else
+                   "加一次性任务写初稿" + ("，再加一条接着跑 read" if out.get("remaining") else ""))
     say(out)
 
 
