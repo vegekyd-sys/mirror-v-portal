@@ -141,7 +141,7 @@ export function librarianAskPreamble(text,{workspace='/vercel/sandbox/agent-data
     ...(ask.options?.length?[`选项：${ask.options.map((o,i)=>`${i+1}. ${o}`).join('  ')}`]:[]),
     ...(ask.pages?.length?[`相关页面：${ask.pages.join('、')}`]:[]),
     ...(ask.context?[`背景：${ask.context}`]:[]),
-    '如果主人这条消息是在回答它：按回答改正相关页面（写成现在为真的说法，标「主人确认，日期」，旧说法原样挪进 history.md），提交，再跑 python3 scripts/librarian-ask.py answered --note "<主人怎么说的、改了哪几页>"，回复一句改好了什么。不是在回答它，就照常处理，不要主动再提这个问题。',
+    '如果主人这条消息是在回答它：按回答改正相关页面（写成现在为真的说法，标「主人确认，日期」，旧说法原样挪进 history.md），提交，再跑 python3 scripts/librarian-ask.py answered --note "<主人怎么说的、改了哪几页>"，回复一句改好了什么——用人话说记住了什么，不提文件名、路径和提交。不是在回答它，就照常处理，不要主动再提这个问题。',
     '','主人的消息：',text].join('\n');
 }
 
