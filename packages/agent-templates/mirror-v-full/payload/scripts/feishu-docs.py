@@ -44,7 +44,10 @@ REQUIRED_SCOPES = {
     "docx:document:readonly": "读新版文档",
     "docs:document.content:read": "读老版文档（企业知识库里常常占一大半）",
 }
-OPTIONAL_SCOPES = {"drive:drive.metadata:readonly": "盘点个人云空间"}
+# 可选的两项：应用开了就一起申请授权，没开也不挡路。个人文档库（my_library）的页面树
+# 要 wiki:wiki:readonly（2026-11-12 实测只开 node:retrieve 时报 99991679），扫码建应用时会一并申请。
+OPTIONAL_SCOPES = {"drive:drive.metadata:readonly": "盘点个人云空间",
+                   "wiki:wiki:readonly": "读个人文档库的页面树"}
 # 默认不读的东西：飞书自带样例，以及标题一看就是凭据的页面。
 EXCLUDE_SPACE = re.compile(r"示例知识库|Wiki samples", re.I)
 EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|身份证|银行卡|secret|token|api[_ -]?key|私钥", re.I)
@@ -241,6 +244,7 @@ def check_scopes() -> dict:
     out = {
         "ok": not missing,
         "appId": app_id,
+        "optionalEnabled": [k for k in OPTIONAL_SCOPES if k in enabled],
         "missing": {k: REQUIRED_SCOPES[k] for k in missing},
         "optionalMissing": {k: v for k, v in OPTIONAL_SCOPES.items() if k not in enabled},
     }
@@ -289,8 +293,11 @@ def finish_login() -> dict:
     return {"ok": True, "status": status()}
 
 
-def start_login() -> dict:
-    scope = " ".join(REQUIRED_SCOPES)
+def start_login(optional: list[str] | None = None) -> dict:
+    """optional：应用已经开通的可选权限，一起申请；不传就先查一次。"""
+    if optional is None:
+        optional = check_scopes().get("optionalEnabled", [])
+    scope = " ".join([*REQUIRED_SCOPES, *optional])
     data, err = lark("auth", "login", "--no-wait", "--json", "--scope", scope, timeout=60)
     if err:
         return {"ok": False, "detail": err, "hint": "权限没开全会在这一步报错：先跑 scopes"}
@@ -347,7 +354,7 @@ def cmd_connect(a) -> None:
         say({**sc, "do": "grant"}); sys.exit(2)
     if not sc["ok"]:
         say({**sc, "do": "retry"}); sys.exit(1)
-    out = start_login()
+    out = start_login(sc.get("optionalEnabled", []))
     out["do"] = "login" if out["ok"] else "retry"
     say(out)
     sys.exit(0 if out["ok"] else 1)

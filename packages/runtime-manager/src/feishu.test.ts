@@ -89,6 +89,18 @@ test("a video receipt sends cover plus file_key as media, audio receipt uses aud
   expect(JSON.parse(calls[1].data.content)).toEqual({file_key:"file-uploaded",image_key:"image-uploaded"});
   expect(calls.every((params:any)=>params.data.receive_id==="chat")).toBe(true);
 });
+test("a turn the platform starts itself keeps what the agent said before its tools; scheduled reports do not",async()=>{
+  const f=await fixture();f.run.message_id=null;f.run.chat_id="chat";f.run.output="点这个链接确认授权：https://example.com/verify";
+  const narration=["稍等，我准备一下。","点这个链接确认授权：https://example.com/verify"];
+  f.store.pool.query=vi.fn(async(sql:string)=>sql.includes("kind='commentary'") ? {rows:narration.map(text=>({text}))} : {rows:[]});
+  await f.edge.deliver(f.run,f.api);
+  const sent=JSON.parse(f.api.im.message.create.mock.calls[0][0].data.content).text;
+  // The narration comes first; a note the answer already contains is not repeated.
+  expect(sent).toBe("稍等，我准备一下。\n\n点这个链接确认授权：https://example.com/verify");
+  f.api.im.message.create.mockClear();f.run.id="run-2";f.run.schedule_id="schedule";f.run.output="今晚整理了 20 片。";
+  await f.edge.deliver(f.run,f.api);
+  expect(JSON.parse(f.api.im.message.create.mock.calls[0][0].data.content).text).toBe("今晚整理了 20 片。");
+});
 test("image-only ingress enqueues a real typed attachment and duplicate message does not redownload",async()=>{
   const f=await fixture(), data={sender:{sender_type:"user"},message:{message_id:"incoming-image",chat_id:"chat",message_type:"image",content:JSON.stringify({image_key:"original-image"}),create_time:"123"}};
   const run=await f.edge.receive(f.tenant,f.api,data);

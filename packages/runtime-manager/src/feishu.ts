@@ -107,6 +107,22 @@ export class FeishuEdge implements ChannelEdge {
     if (failure) throw Error(failure);
   }
   /** Final text and native attachments must both finish before delivery is marked sent. */
+  /**
+   * A turn the platform starts itself has no message to stream a reply card under,
+   * so only its final text is posted, and anything the agent said before its tool
+   * calls would be lost. For the greeting that is the opening itself (2026-11-12:
+   * the owner would have received a bare consent link). Keep that narration above
+   * the answer, as the streaming card does. Scheduled reports stay as they are:
+   * their narration is working notes, not part of the report.
+   */
+  async withNarration(run: Run): Promise<string> {
+    if (run.schedule_id) return run.output;
+    const { rows } = await this.store.pool.query<{ text: string }>(
+      "SELECT data->>'text' AS text FROM elastic_events WHERE run_id=$1 AND kind='commentary' ORDER BY seq", [run.id]);
+    const notes = rows.map((r) => (r.text ?? "").trim()).filter((t, i, all) => t && all.indexOf(t) === i && !run.output.includes(t));
+    return [...notes, run.output].filter(Boolean).join("\n\n");
+  }
+
   async deliver(run: Run, api: lark.Client) {
     const vault = this.vault;
     const manifest = await vault.load(run.tenant_id,run.id);
@@ -117,7 +133,7 @@ export class FeishuEdge implements ChannelEdge {
       // control back) — post a new message into their chat instead.
       if (run.chat_id && (run.schedule_id || !run.message_id)) {
         if (!quiet) {
-          const text = run.status === "succeeded" ? run.output
+          const text = run.status === "succeeded" ? await this.withNarration(run)
             : run.schedule_id ? "定时任务未能完成，请检查 Mirror V Portal 任务状态。"
             : "我这边刚才没能完成，你直接回我一句话，我接着来。";
           const chars = Array.from(text);

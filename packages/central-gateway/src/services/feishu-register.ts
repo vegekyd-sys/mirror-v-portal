@@ -57,7 +57,7 @@ export function registrationAvatarPreset(template: { avatarUrl?: string }, fallb
 // REQUIRED_SCOPES / OPTIONAL_SCOPES in mirror-v-full's scripts/feishu-docs.py.
 const DOCUMENT_READING_USER_SCOPES = [
   'wiki:space:retrieve', 'wiki:node:retrieve', 'docx:document:readonly', 'docs:document.content:read',
-  'drive:drive.metadata:readonly',
+  'drive:drive.metadata:readonly', 'wiki:wiki:readonly',
 ];
 
 export function registrationScopes(templateId: string): { tenant: string[]; user: string[] } {
