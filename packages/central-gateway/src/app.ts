@@ -216,7 +216,7 @@ export function createApp() {
   app.get(/^\/onboard\/memory\/([A-Za-z0-9_.:-]{1,128})\/([a-f0-9]{32})(\/.*)?$/, async (req, res) => {
     const params = req.params as Record<string, string>;
     const [tenant, sig, rest] = [params[0], params[1], params[2]];
-    if (!rest) { res.redirect(301, `/onboard/memory/${tenant}/${sig}/`); return; }
+    if (!rest || rest === '/') { res.redirect(302, `/onboard/memory/${tenant}/${sig}/index.html`); return; }
     try {
       const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(tenant)}/memory/${sig}${rest}`, {
         headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},

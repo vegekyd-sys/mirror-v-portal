@@ -44,7 +44,7 @@ test("serves only the memory page from the latest backup, refreshed when the bac
 test("owners of templates with a memory page get a signed link to it", () => {
   const provider = new VercelProvider({ encryptionKey: "ab".repeat(32), publicBaseUrl: "https://portal.example", templates: {} } as any);
   const link = provider.openLinks({ id: "t1", template_id: "mirror-v-full" } as any).memory;
-  expect(link).toMatch(/^https:\/\/portal\.example\/onboard\/memory\/t1\/[a-f0-9]{32}\/$/);
+  expect(link).toMatch(/^https:\/\/portal\.example\/onboard\/memory\/t1\/[a-f0-9]{32}\/index\.html$/);
   expect(provider.openSignatureValid({ id: "t1" } as any, "memory", link.split("/").at(-2)!)).toBe(true);
   expect(provider.openSignatureValid({ id: "t2" } as any, "memory", link.split("/").at(-2)!)).toBe(false);
   expect(provider.openLinks({ id: "t1", template_id: "makaron" } as any).memory).toBeUndefined();

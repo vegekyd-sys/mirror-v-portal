@@ -216,7 +216,8 @@ export class VercelProvider implements RuntimeProvider {
       `${base}/onboard/open/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, `open:${name}`).slice(0, 32)}/${name}`]));
     // The memory page needs no running sandbox: the Portal serves it from the backup.
     if (templateHasMemoryPage(tenant.template_id))
-      links.memory = `${base}/onboard/memory/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, "open:memory").slice(0, 32)}/`;
+      // Ends in index.html: the Vercel edge answers NOT_FOUND for the bare directory URL.
+      links.memory = `${base}/onboard/memory/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, "open:memory").slice(0, 32)}/index.html`;
     return links;
   }
   wakeSignatureValid(tenant: Tenant, signature: string): boolean {
