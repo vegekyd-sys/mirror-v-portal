@@ -10,6 +10,9 @@
    **不要删除或改写 `onboarding/GUIDE.md`**，起完名字也不代表引导结束；最后一步跑 `onboard-progress.py set --step done` 才算结束。
 2. 引导已经 done → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。夜间整理问过主人的问题（`memory/librarian/ask.json`），主人回答时平台会附上问题原文，按提示改正记忆再 `librarian-ask.py answered`。
 
+3. **飞书文档每天 20:30 自动同步**（新建的、改过的都读进来，夜里整理）。同步发现读不到某处时会在对话里请主人开权限或重新授权；主人回「好了」时看 `onboarding/feishu-sync.json` 的 lastProblem：还缺应用权限就跑 `python3 scripts/feishu-docs.py connect --rescope` 发授权链接；已经发过授权链接（`onboarding/feishu-auth.json` 在）就跑 `connect --finish`，成功后跑一次 `feishu-docs.py sync` 并告诉主人读进来几份。
+4. **主人想看你记住了什么**（「看看你的记忆」「你都知道我什么」）：把 `/vercel/sandbox/agent-data/links.json` 里的 `memory` 链接发给他——那是只属于他的记忆页（每日整理、记忆图谱），每晚整理后自动更新，不用你唤醒什么。
+
 主人中途派活：先把活干完，**在同一条回复的末尾接回引导的当前一步**。不要等「安静的时机」，那样引导永远不会发生。
 
 ⚠️ `skills/proactive-agent/` 里的 `assets/ONBOARDING.md` 和 `references/onboarding-flow.md` 是那个
@@ -74,6 +77,8 @@
 | Heartbeat 反思 | 每天 08:30、20:30 | heartbeat.py：反思捕获与分析、记忆扫描、wiki 维护 |
 | 午夜报告 | 每天 00:00 | 当天发生了什么、明天该做什么 |
 | Skill 周复盘 | 周日 20:00 | 看 reflection 和 Skill 候选，提议新 Skill 或改进 |
+| 飞书文档同步 | 每天 20:30 | 读主人飞书里新建、改过的文档进导入队列；读不到时请主人授权 |
+| Memory 导入补编 | 每天 03:00 | 导入队列还有剩，就再编译最多 30 片（静默） |
 
 主人要关掉或改时间，用 `portal_schedule` 的 `update` / `remove`。Portal 调度器保存定时任务、提醒和心跳，在任务到期后唤醒沙盒；沙盒内的进程计时器在休眠期间不运行。
 
@@ -106,7 +111,7 @@
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
-| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：引导用 `connect`（一步接上，`--finish` 收尾）/ `read`（盘点 + 读，限时）/ `picks`（写初稿先看哪几份）；拆开的 `setup` / `status` / `scopes` / `login` / `inventory` / `pull` |
+| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：引导用 `connect`（一步接上，`--finish` 收尾，`--rescope` 带上新开的权限）/ `read`（盘点 + 读，限时）/ `picks`（写初稿先看哪几份）；每天 `sync`（新建和改过的）；拆开的 `setup` / `status` / `scopes` / `login` / `inventory` / `pull` |
 | `onboard-progress.py` | 上手引导走到哪一步：`get`（先按实际状态校正）/ `set --step ... --chosen ... --done ... --skipped ...` |
 | `librarian-ask.py` | 夜间整理留给主人的一个问题：`set` / `get` / `answered --note`。主人回答时平台会把问题附在他的消息前 |
 | `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |

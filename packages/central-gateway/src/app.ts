@@ -211,6 +211,30 @@ export function createApp() {
     } catch { res.status(503).json({ error: 'OPEN_FAILED' }); }
   });
 
+  // The owner's memory page: the runtime manager checks the signature and serves it
+  // from the latest backup, so the sandbox stays asleep.
+  app.get(/^\/onboard\/memory\/([A-Za-z0-9_.:-]{1,128})\/([a-f0-9]{32})(\/.*)?$/, async (req, res) => {
+    const params = req.params as Record<string, string>;
+    const [tenant, sig, rest] = [params[0], params[1], params[2]];
+    if (!rest) { res.redirect(301, `/onboard/memory/${tenant}/${sig}/`); return; }
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/tenants/${encodeURIComponent(tenant)}/memory/${sig}${rest}`, {
+        headers: config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {},
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!response.ok) {
+        const notReady = response.status === 404 && (await response.json().catch(() => ({})) as { error?: string }).error === 'MEMORY_PAGE_NOT_READY';
+        res.status(404).set('cache-control', 'no-store').type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>记忆</title><p style="font:16px/1.6 -apple-system,'PingFang SC',sans-serif;padding:24px">${notReady ? '记忆页还没生成：今晚 9 点整理完之后就能看到。' : '链接无效。'}</p>`);
+        return;
+      }
+      res.status(200).set({
+        'content-type': response.headers.get('content-type') ?? 'application/octet-stream',
+        'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+      }).send(Buffer.from(await response.arrayBuffer()));
+    } catch { res.status(503).type('html').send('<!doctype html><meta charset="utf-8"><title>记忆</title><p>暂时打不开，请稍后再试。</p>'); }
+  });
+
   // A component inside a Mirror sandbox (the takeover page's 交还给 V) continues its conversation.
   app.post('/onboard/wake/:tenant/:sig', async (req, res) => {
     const { tenant, sig } = req.params as Record<string, string>;

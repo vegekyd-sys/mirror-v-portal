@@ -10,7 +10,7 @@ import { FinalMediaCollector, parseReply, resolveRef, mediaKind, type MediaDirec
 import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
 import { unsealWith, type Tenant } from "./store.js";
-import { templateUsesFeishuCli } from "./templates.js";
+import { templateHasMemoryPage, templateUsesFeishuCli } from "./templates.js";
 
 export async function finishOutput(sink: Writable) {
   sink.end();
@@ -212,8 +212,12 @@ export class VercelProvider implements RuntimeProvider {
   openLinks(tenant: Tenant): Record<string, string> {
     const ports = templatePublicPorts(this.config.templates?.[tenant.template_id]).map(([name]) => name);
     const base = (this.config.publicBaseUrl || "https://mirror-v-portal.vercel.app").replace(/\/$/, "");
-    return Object.fromEntries(ports.filter((name) => name === "voice").map((name) => [name,
+    const links: Record<string, string> = Object.fromEntries(ports.filter((name) => name === "voice").map((name) => [name,
       `${base}/onboard/open/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, `open:${name}`).slice(0, 32)}/${name}`]));
+    // The memory page needs no running sandbox: the Portal serves it from the backup.
+    if (templateHasMemoryPage(tenant.template_id))
+      links.memory = `${base}/onboard/memory/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, "open:memory").slice(0, 32)}/`;
+    return links;
   }
   wakeSignatureValid(tenant: Tenant, signature: string): boolean {
     const expected = Buffer.from(this.tenantSecret(tenant.id, "wake").slice(0, 32));

@@ -50,6 +50,16 @@ function avatarMetadata(value: string | undefined): { avatarUrl?: string } {
  */
 const FEISHU_CLI_TEMPLATES: ReadonlySet<string> = new Set(["mirror-v-full"]);
 
+/**
+ * Templates whose agent builds the memory page (scripts/memory-graph.py). Their
+ * owners get a signed link to it, served by the Portal from the latest backup.
+ */
+const MEMORY_PAGE_TEMPLATES: ReadonlySet<string> = new Set(["mirror-v-full"]);
+
+export function templateHasMemoryPage(templateId: string | null | undefined): boolean {
+  return MEMORY_PAGE_TEMPLATES.has(templateId ?? "");
+}
+
 /** lark-cli baked into those templates' snapshots; keep in step with LARK_VERSION in the payload's scripts/feishu-docs.py. */
 export const FEISHU_CLI_VERSION = "1.0.89";
 

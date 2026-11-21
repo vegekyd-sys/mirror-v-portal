@@ -11,6 +11,7 @@
   connect --finish  主人点完授权链接之后收尾
   read         上手引导用：盘点 + 读所有建议读的空间（有时间上限），并挑出写初稿该先看的几份
   picks        写初稿先看哪几份（已经读进来的资料里挑，官网和粘贴的也算）
+  sync         每天一次：重新盘点，读新建的和改过的文档（最近改的先读）
   setup        装 lark-cli（已装就跳过），打印状态和下一步
   status       看状态：装没装、应用绑上没有、主人授权没有
   scopes       对照读文档要的用户身份权限，缺的给出一键开通链接（退出码 2）
@@ -44,14 +45,17 @@ REQUIRED_SCOPES = {
     "docx:document:readonly": "读新版文档",
     "docs:document.content:read": "读老版文档（企业知识库里常常占一大半）",
 }
-# 可选的两项：应用开了就一起申请授权，没开也不挡路。个人文档库（my_library）的页面树
+# 可选的几项：应用开了就一起申请授权，没开也不挡路（只是那一处读不到）。
+# 2026-11-21：多数人的个人文档在云空间「我的空间」，列目录要 space:document:retrieve。个人文档库（my_library）的页面树
 # 要 wiki:wiki:readonly（2026-11-12 实测只开 node:retrieve 时报 99991679），扫码建应用时会一并申请。
 OPTIONAL_SCOPES = {"drive:drive.metadata:readonly": "盘点个人云空间",
+                   "space:document:retrieve": "列出云空间「我的空间」里的文档",
                    "wiki:wiki:readonly": "读个人文档库的页面树"}
 # 默认不读的东西：飞书自带样例，以及标题一看就是凭据的页面。
 EXCLUDE_SPACE = re.compile(r"示例知识库|Wiki samples", re.I)
 EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|身份证|银行卡|secret|token|api[_ -]?key|私钥", re.I)
 FETCHABLE = {"docx", "doc"}
+DRIVE = {"space_id": "my_drive", "name": "我的云空间", "space_type": "drive"}
 MAX_DEPTH = 6
 
 
@@ -248,6 +252,9 @@ def check_scopes() -> dict:
         "missing": {k: REQUIRED_SCOPES[k] for k in missing},
         "optionalMissing": {k: v for k, v in OPTIONAL_SCOPES.items() if k not in enabled},
     }
+    if missing or out["optionalMissing"]:
+        # 连可选的一起开：主人点一次就把三处都打通。
+        out["grantLinkAll"] = grant_link(app_id, [*missing, *out["optionalMissing"]])
     if missing:
         out["grantLink"] = grant_link(app_id, missing)
         out["tellOwner"] = (
@@ -347,7 +354,7 @@ def cmd_connect(a) -> None:
     st = status()
     if not st.get("boundApp"):
         say({**st, "do": "skip"}); sys.exit(3)
-    if st.get("authorized"):
+    if st.get("authorized") and not a.rescope:
         say({"ok": True, "do": "read", "user": st.get("user")}); return
     sc = check_scopes()
     if sc.get("missing"):
@@ -380,30 +387,56 @@ def list_spaces() -> list[dict]:
 
 
 def list_nodes(space_id: str, parent: str | None) -> tuple[list[dict], str | None]:
-    args = ["wiki", "+node-list", "--space-id", space_id, "--page-all", "--page-size", "50", "--format", "json"]
-    if space_id == "my_library":
-        args += ["--as", "user"]
-    if parent:
-        args += ["--parent-node-token", parent]
-    data, err = lark(*args)
-    if err:
-        return [], err
-    return data.get("nodes") or data.get("items") or [], None
+    """一层页面。走原始接口：它带 obj_edit_time（+node-list 快捷命令把这个字段丢了），
+    同步时靠它判断哪些页面改过。"""
+    items, page = [], None
+    while True:
+        params = {"page_size": 50, **({"parent_node_token": parent} if parent else {}),
+                  **({"page_token": page} if page else {})}
+        data, err = lark("api", "GET", f"/open-apis/wiki/v2/spaces/{space_id}/nodes",
+                         "--params", json.dumps(params), "--as", "user")
+        if err:
+            return items, err
+        items += data.get("items") or []
+        page = data.get("page_token")
+        if not data.get("has_more") or not page:
+            return items, None
 
 
-def inventory() -> dict:
+def list_drive(folder: str | None) -> tuple[list[dict], str | None]:
+    """云空间「我的空间」里一个文件夹的内容（不传就是根目录）。要 space:document:retrieve。"""
+    items, page = [], None
+    while True:
+        params = {"page_size": 200, **({"folder_token": folder} if folder else {}),
+                  **({"page_token": page} if page else {})}
+        data, err = lark("drive", "files", "list", "--params", json.dumps(params), "--as", "user")
+        if err:
+            return items, err
+        items += data.get("files") or []
+        page = data.get("next_page_token")
+        if not data.get("has_more") or not page:
+            return items, None
+
+
+def inventory(budget: int = 150) -> dict:
+    """盘点主人能读的三处：所有知识空间、个人文档库、云空间「我的空间」。只读目录不读正文。
+    每个页面记下最后编辑时间，同步时只读新的和改过的。超过 budget 秒就停，下次接着盘。"""
     started = time.time()
     spaces = list_spaces()
     spaces.append({"space_id": "my_library", "name": "我的文档库（个人）", "space_type": "personal"})
-    rows, errors = [], []
+    rows, errors, partial = [], [], False
+
+    def over() -> bool:
+        nonlocal partial
+        partial = partial or time.time() - started > budget
+        return partial
 
     def walk(space, parent=None, path=(), depth=0):
-        if depth >= MAX_DEPTH:
+        if depth >= MAX_DEPTH or over():
             return
         nodes, err = list_nodes(space["space_id"], parent)
         if err:
             errors.append({"space": space["name"], "error": err})
-            return
         for n in nodes:
             title = (n.get("title") or "").strip() or "(无标题)"
             here = (*path, title)
@@ -412,17 +445,43 @@ def inventory() -> dict:
                 "space_id": space["space_id"], "space": space["name"], "path": " / ".join(here),
                 "depth": depth, "title": title, "node_token": n.get("node_token"),
                 "obj_token": n.get("obj_token"), "obj_type": n.get("obj_type"),
+                "edit": str(n.get("obj_edit_time") or ""),
+                "url": f"https://feishu.cn/wiki/{n.get('node_token')}",
                 "fetchable": n.get("obj_type") in FETCHABLE, "excluded": excluded,
             })
             if n.get("has_child"):
                 walk(space, n.get("node_token"), here, depth + 1)
 
+    def walk_drive(folder=None, path=(), depth=0):
+        if depth >= MAX_DEPTH or over():
+            return
+        files, err = list_drive(folder)
+        if err:
+            errors.append({"space": DRIVE["name"], "error": err})
+        for f in files:
+            name = (f.get("name") or "").strip() or "(无标题)"
+            here = (*path, name)
+            if f.get("type") == "folder":
+                walk_drive(f.get("token"), here, depth + 1)
+                continue
+            rows.append({
+                "space_id": DRIVE["space_id"], "space": DRIVE["name"], "path": " / ".join(here),
+                "depth": depth, "title": name, "node_token": f.get("token"),
+                "obj_token": f.get("token"), "obj_type": f.get("type"),
+                "edit": str(f.get("modified_time") or ""),
+                "url": f.get("url") or f"https://feishu.cn/docx/{f.get('token')}",
+                "fetchable": f.get("type") in FETCHABLE,
+                "excluded": "标题像是凭据" if EXCLUDE_TITLE.search(name) else None,
+            })
+
     for sp in spaces:
         walk(sp)
+    walk_drive()
+    spaces.append(DRIVE)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     INVENTORY.write_text(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "spaces": spaces,
-                                     "nodes": rows, "errors": errors}, ensure_ascii=False, indent=1),
-                         encoding="utf-8")
+                                     "nodes": rows, "errors": errors, "partial": partial},
+                                    ensure_ascii=False, indent=1), encoding="utf-8")
     summary = []
     for sp in spaces:
         mine = [r for r in rows if r["space_id"] == sp["space_id"]]
@@ -435,7 +494,8 @@ def inventory() -> dict:
             "default": f"跳过（{space_exclusion(sp)}）" if space_exclusion(sp) else "建议读",
         })
     return {"ok": True, "elapsed_s": round(time.time() - started, 1), "spaces": summary,
-            "total_nodes": len(rows), "errors": errors, "saved": str(INVENTORY.relative_to(WS)),
+            "total_nodes": len(rows), "errors": errors, "partial": partial,
+            "saved": str(INVENTORY.relative_to(WS)),
             "next": "把空间清单给主人勾选，然后 pull --spaces <space_id,...>（或 --all）"}
 
 
@@ -468,10 +528,17 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
     if wanted is not None and not any(wanted):
         raise SystemExit("用 --spaces <space_id,...> 指定要读的空间，或者 --all")
     pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
+    def changed(n: dict) -> bool:
+        seen = pulled.get(n["node_token"])
+        # 读过之后又改过的再读一遍；旧记录没有编辑时间，当作没改过。
+        return not seen or bool(n.get("edit") and seen.get("edit") and n["edit"] > seen["edit"])
+
     todo = [n for n in inv["nodes"]
-            if n["fetchable"] and not n["excluded"] and n["node_token"] not in pulled
+            if n["fetchable"] and not n["excluded"] and changed(n)
             and (wanted is None or n["space_id"] in wanted)]
-    started, done, failed, skipped_empty = time.time(), [], [], 0
+    # 最近改过的先读：主人眼下在忙的事比三年前的制度更值得先进记忆。
+    todo.sort(key=lambda n: n.get("edit") or "", reverse=True)
+    started, done, failed, skipped_empty, updated = time.time(), [], [], 0, 0
     collector = WS / "scripts" / "onboard-collect.py"
     for n in todo:
         if len(done) >= limit or time.time() - started > budget:
@@ -480,14 +547,16 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
         if err or not (content or "").strip():
             if not err:
                 skipped_empty += 1
-                pulled[n["node_token"]] = {"status": "empty", "at": time.strftime("%F")}
+                pulled[n["node_token"]] = {"status": "empty", "at": time.strftime("%F"), "edit": n.get("edit", "")}
                 continue
             failed.append({"title": n["title"], "error": err})
             continue
+        again = n["node_token"] in pulled
+        title = f"[{n['space']}] {n['path']}" + (f"（更新版 {time.strftime('%F')}）" if again else "")
         p = subprocess.run(
             [sys.executable, str(collector), "add", "--source", "feishu",
-             "--url", f"https://feishu.cn/wiki/{n['node_token']}",
-             "--title", f"[{n['space']}] {n['path']}", "--stdin"],
+             "--url", n.get("url") or f"https://feishu.cn/wiki/{n['node_token']}",
+             "--title", title, "--stdin"],
             input=content, capture_output=True, text=True, cwd=WS)
         if p.returncode == 4:  # 体积闸门：停下来问主人，不要硬塞
             PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -495,14 +564,70 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
         if p.returncode != 0:
             failed.append({"title": n["title"], "error": (p.stdout or p.stderr)[-200:]})
             continue
-        pulled[n["node_token"]] = {"status": "imported", "at": time.strftime("%F")}
+        pulled[n["node_token"]] = {"status": "imported", "at": time.strftime("%F"), "edit": n.get("edit", "")}
+        updated += again
         done.append(n["title"])
     PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
     remaining = len(todo) - len(done) - len(failed) - skipped_empty
-    return {"ok": not failed, "imported": len(done), "failed": failed, "empty": skipped_empty,
+    return {"ok": not failed, "imported": len(done), "updated": updated, "titles": done[:8],
+            "failed": failed, "empty": skipped_empty,
             "remaining": max(0, remaining), "elapsed_s": round(time.time() - started, 1),
             "next": ("还有没拉完的，下一轮继续跑同一条 pull" if remaining > 0 else
                      "拉完了。python3 scripts/librarian-daily-queue.py stats 看要整理几晚")}
+
+
+# ---------- sync（每天一次） ----------
+
+SYNC = STATE_DIR / "feishu-sync.json"
+
+
+def cmd_sync(a) -> None:
+    """重新盘点三处，把新建的和改过的文档读进来，交给夜里的整理。
+
+    第一次同步时，之前读过、但没记编辑时间的页面只补记时间，不重读。
+    缺权限、没授权这类问题只在第一次出现时报给主人，不天天念。"""
+    started = time.time()
+    st = status()
+    state = json.loads(SYNC.read_text(encoding="utf-8")) if SYNC.exists() else {}
+    def tell(problem: str | None) -> bool:
+        # 新问题马上说；同一个问题一周最多提醒一次。
+        if not problem:
+            return False
+        if problem != state.get("lastProblem"):
+            return True
+        return time.time() - float(state.get("lastToldAt") or 0) > 7 * 86400
+
+    if not st.get("authorized"):
+        problem = "飞书还没授权，或者授权过期了"
+        out = {"ok": False, "problem": problem, "tellOwner": tell(problem),
+               "next": "python3 scripts/feishu-docs.py connect，把授权链接发给主人"}
+        state.update(lastProblem=problem, at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                     **({"lastToldAt": time.time()} if out["tellOwner"] else {}))
+        SYNC.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+        say(out); sys.exit(2)
+    inv = inventory(budget=max(60, a.budget // 2))
+    nodes = json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"]
+    pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
+    stamped = 0
+    for n in nodes:
+        seen = pulled.get(n["node_token"])
+        if seen and not seen.get("edit") and n.get("edit"):
+            seen["edit"] = n["edit"]; stamped += 1
+    PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
+    out = pull(True, None, a.limit, max(30, a.budget - int(time.time() - started)))
+    scope_gaps = sorted({e["space"] for e in inv["errors"] if "scope" in str(e.get("error", ""))})
+    problem = f"读不到：{'、'.join(scope_gaps)}（缺权限）" if scope_gaps else None
+    out.update(spaces=len(inv["spaces"]), stamped=stamped, partialInventory=inv["partial"],
+               problem=problem, tellOwner=tell(problem))
+    if problem:
+        sc = check_scopes()
+        # 应用上已经开了、只是主人的授权里还没有：重新授权一次就行，不用再去开放平台。
+        out["ownerAction"] = "开通权限" if sc.get("optionalMissing") or sc.get("missing") else "重新授权"
+        out["grantLinkAll"] = sc.get("grantLinkAll")
+    state.update(lastProblem=problem, at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                 lastImported=out.get("imported", 0), **({"lastToldAt": time.time()} if out["tellOwner"] else {}))
+    SYNC.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    say(out)
 
 
 # ---------- read（上手引导） ----------
@@ -553,6 +678,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     cn = sub.add_parser("connect")
     cn.add_argument("--finish", action="store_true", help="主人点完授权链接之后收尾")
+    cn.add_argument("--rescope", action="store_true", help="已经授权过、应用又开了新权限时，重新发授权链接把新权限带上")
     cn.set_defaults(fn=cmd_connect)
     rd = sub.add_parser("read")
     rd.add_argument("--limit", type=int, default=120, help="这一轮最多读几份（默认 120）")
@@ -560,6 +686,10 @@ def main() -> None:
     rd.add_argument("--reinventory", action="store_true", help="重新盘点空间（默认只在第一次盘点）")
     rd.set_defaults(fn=cmd_read)
     sub.add_parser("picks").set_defaults(fn=lambda _a: say({"forDraft": draft_picks()}))
+    sy = sub.add_parser("sync")
+    sy.add_argument("--limit", type=int, default=80, help="这一次最多读几份（默认 80）")
+    sy.add_argument("--budget", type=int, default=360, help="这一次最多花多少秒，含盘点（默认 360）")
+    sy.set_defaults(fn=cmd_sync)
     sub.add_parser("setup").set_defaults(fn=cmd_setup)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("scopes").set_defaults(fn=cmd_scopes)

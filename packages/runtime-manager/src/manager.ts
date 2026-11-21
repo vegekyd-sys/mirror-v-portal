@@ -3,6 +3,8 @@ import { Scheduler } from './scheduler.js';
 import { randomUUID } from "node:crypto";
 import type { Store, Run } from "./store.js";
 import type { RuntimeProvider , MediaFile } from "./provider.js";
+import { memorySiteFile } from "./memory-site.js";
+import { templateHasMemoryPage } from "./templates.js";
 
 /**
  * The turn text for Manager.greet. It only states the situation; what the agent
@@ -229,6 +231,14 @@ export class RuntimeManager {
       return true;
     });
     if (!processed) throw new Error("AGENT_BUSY");
+  }
+  /** A file of the owner's memory page (signed link), read from the latest backup without waking the sandbox. */
+  async memoryFile(tenantId: string, signature: string, rel: string): Promise<{ file: string; type: string }> {
+    const tenant = await this.store.tenant(tenantId);
+    if (!templateHasMemoryPage(tenant.template_id) || !this.provider.openSignatureValid?.(tenant, "memory", signature)) throw Error("MEMORY_LINK_INVALID");
+    const found = memorySiteFile(this.store.config.dataDir, tenant.id, rel);
+    if (!found) throw Error("MEMORY_PAGE_NOT_READY");
+    return found;
   }
   /**
    * An owner opened a signed link to a public service (the voice page): wake the

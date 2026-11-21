@@ -391,6 +391,18 @@ app.get("/v1/tenants/:id/open/:service", async (req, res) => {
     res.status(code === "OPEN_LINK_INVALID" || code === "TENANT_NOT_FOUND" ? 404 : code === "AGENT_BUSY" ? 409 : 503).json({ error: /^[A-Z_]+$/.test(code) ? code : "OPEN_FAILED" });
   }
 });
+// The owner's memory page (signed link, proxied from the public Portal), served from the latest backup.
+app.get(/^\/v1\/tenants\/([^/]+)\/memory\/([a-f0-9]{32})\/(.*)$/, async (req, res) => {
+  try {
+    const params = req.params as Record<string, string>;
+    const { file, type } = await manager.memoryFile(decodeURIComponent(params[0]), params[1], params[2]);
+    res.set({ "content-type": type, "cache-control": "private, no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" });
+    res.sendFile(file);
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "MEMORY_FAILED";
+    res.status(code === "MEMORY_PAGE_NOT_READY" ? 404 : code === "MEMORY_LINK_INVALID" || code === "TENANT_NOT_FOUND" ? 404 : 503).json({ error: /^[A-Z_]+$/.test(code) ? code : "MEMORY_FAILED" });
+  }
+});
 app.post("/api/messages", async (req, res, next) => {
   try {
     const run = await store.enqueue(
