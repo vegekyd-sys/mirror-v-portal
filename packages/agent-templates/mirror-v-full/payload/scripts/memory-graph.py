@@ -226,6 +226,10 @@ def load_runs() -> list[dict]:
             day = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(day, dict):
+            continue
+        # Runs files written by the nightly prompt carry no top-level date; the file name is the date.
+        day.setdefault("date", f.stem)
         for run in day.get("runs", []):
             run["sources"] = expand_sources(run.get("sources", []))
             redact_run(run)
