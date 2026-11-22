@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
  * paraphrased the prompt it was told to copy, dropped a condition, and the chain
  * stopped with 380 pieces left.
  */
-export type RepeatSpec = { while: "imports-pending"; afterSeconds: number; untilHour: number; last?: number | null };
+export type RepeatSpec = { while: "imports-pending"; afterSeconds: number; untilHour: number; last?: number | null; fails?: number };
 
 /** Imported documents still waiting to be compiled, per the latest backup; null when unknown. */
 export function pendingImports(dataDir: string, tenantId: string): number | null {
@@ -24,11 +24,15 @@ export function pendingImports(dataDir: string, tenantId: string): number | null
   } catch { return null; }
 }
 
-/** When to run again, or null to wait for the regular time. Stops outside the window and when a round made no progress. */
-export function repeatAt(repeat: RepeatSpec | undefined, pending: number | null, now = new Date(), tz = "Asia/Shanghai"): Date | null {
+/** Consecutive failed rounds tolerated before waiting for the regular time (the model drops about one turn in seven). */
+const MAX_FAILS = 2;
+
+/** When to run again, or null to wait for the regular time. Stops outside the window, after repeated failures, and when a round made no progress. */
+export function repeatAt(repeat: RepeatSpec | undefined, pending: number | null, now = new Date(), tz = "Asia/Shanghai", failed = false): Date | null {
   if (!repeat || repeat.while !== "imports-pending" || !pending) return null;
   const hour = Number(new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hourCycle: "h23", timeZone: tz }).format(now));
   if (hour >= repeat.untilHour) return null;
-  if (typeof repeat.last === "number" && pending >= repeat.last) return null;
+  if (failed) { if ((repeat.fails ?? 0) >= MAX_FAILS) return null; }
+  else if (typeof repeat.last === "number" && pending >= repeat.last) return null;
   return new Date(+now + Math.max(60, repeat.afterSeconds) * 1000);
 }

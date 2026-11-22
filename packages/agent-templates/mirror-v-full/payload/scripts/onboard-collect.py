@@ -97,6 +97,10 @@ PERSONAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("cn-mobile", re.compile(r"()(?<![0-9A-Za-z])(?:\+?86[- ]?)?1[3-9]\d[- ]?\d{4}[- ]?\d{4}(?![0-9A-Za-z])")),
     ("cn-id", re.compile(r"()(?<![0-9A-Za-z])[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?![0-9A-Za-z])")),
 ]
+# 表头是「密码」的那一列整列抹掉。2026-11-22：一份客户账号表，密码一格一格写在表格里，
+# 没有「密码：」这样的前缀，上面的规则一处都没挡住，原文进了归档。
+SECRET_HEADER = re.compile(r"密码|口令|密钥|秘钥|恢复码|备用码|验证码|password|passwd|pwd|secret|\b2fa\b|totp", re.I)
+EMPTY_CELL = re.compile(r"^[\s`—–\-/无]*$")
 PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY")
 PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY")
 REDACTED = "<redacted>"
@@ -157,7 +161,21 @@ def redact(text: str) -> tuple[str, list[dict]]:
     out: list[str] = []
     hits: list[dict] = []
     in_pem = False
+    secret_cols: list[int] | None = None   # None：不在表格里
     for no, line in enumerate(text.split("\n"), 1):
+        row = line.strip()
+        if row.startswith("|") and row.count("|") >= 2:
+            cells = re.split(r"(?<!\\)\|", line)
+            if secret_cols is None:
+                secret_cols = [i for i, c in enumerate(cells) if len(c.strip()) <= 20 and SECRET_HEADER.search(c)]
+            elif secret_cols and not re.fullmatch(r"[|\s:\-]+", row):
+                for i in secret_cols:
+                    if i < len(cells) and not EMPTY_CELL.match(cells[i]) and REDACTED not in cells[i]:
+                        cells[i] = f" {REDACTED} "
+                        hits.append({"line": no, "pattern": "table-secret"})
+                line = "|".join(cells)
+        else:
+            secret_cols = None
         if in_pem:  # PEM 块整块吞掉，只留一行 <redacted>
             hits.append({"line": no, "pattern": "private-key"})
             if PEM_END.search(line):

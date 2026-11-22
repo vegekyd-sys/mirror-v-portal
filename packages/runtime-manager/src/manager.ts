@@ -222,7 +222,11 @@ export class RuntimeManager {
           [tenant.id, sent && !RUNTIME_REPORTED_FAILURES.has(message) ? "blocked" : "ready", message],
         );
         await this.store.event(tenant.id, status, { error: message }, runId);
-        if (current.channel === "feishu") {
+        // A background round the platform is about to retry is not news for the owner.
+        const retry = RUNTIME_REPORTED_FAILURES.has(message)
+          ? await new Scheduler(this.store).repeatAfter(current, this.store.config.dataDir, true).catch(() => null) : null;
+        if (retry) await this.store.event(tenant.id, "schedule-repeats", { at: retry.toISOString(), afterFailure: true }, runId);
+        if (current.channel === "feishu" && !retry) {
           await db.query(
             "UPDATE elastic_runs SET delivery='pending' WHERE id=$1",
             [runId],

@@ -212,15 +212,16 @@ export class Scheduler {
     }
   }
   /** After a run of a schedule that repeats while a backlog lasts: bring its next run forward, or reset it for the next night. */
-  async repeatAfter(run: Run, dataDir: string): Promise<Date | null> {
+  async repeatAfter(run: Run, dataDir: string, failed = false): Promise<Date | null> {
     if (!run.schedule_id) return null;
     const { rows } = await this.store.pool.query("SELECT spec FROM elastic_schedules WHERE id=$1 AND enabled", [run.schedule_id]);
     const repeat = rows[0]?.spec?.repeat as RepeatSpec | undefined;
     if (!repeat) return null;
     const pending = pendingImports(dataDir, run.tenant_id);
-    const at = repeatAt(repeat, pending, new Date(), rows[0].spec.tz);
+    const at = repeatAt(repeat, pending, new Date(), rows[0].spec.tz, failed);
+    const next = { ...repeat, last: at ? (failed ? repeat.last ?? null : pending) : null, fails: at && failed ? (repeat.fails ?? 0) + 1 : 0 };
     await this.store.pool.query("UPDATE elastic_schedules SET spec=$2,next_at=coalesce($3,next_at),updated_at=now() WHERE id=$1",
-      [run.schedule_id, { ...rows[0].spec, repeat: { ...repeat, last: at ? pending : null } }, at]);
+      [run.schedule_id, { ...rows[0].spec, repeat: next }, at]);
     return at;
   }
   /**

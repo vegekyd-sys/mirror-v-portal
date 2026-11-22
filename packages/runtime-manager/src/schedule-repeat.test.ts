@@ -35,4 +35,7 @@ test("runs again while there is a backlog, progress, and night left", () => {
   expect(repeatAt(spec, null, night)).toBeNull();
   expect(repeatAt(spec, 10, new Date("2026-11-23T08:00:00+08:00"))).toBeNull();
   expect(repeatAt(undefined, 10, night)).toBeNull();
+  // A dropped round is retried even though nothing moved, but not for ever.
+  expect(repeatAt({ ...spec, last: 150 }, 150, night, undefined, true)).not.toBeNull();
+  expect(repeatAt({ ...spec, last: 150, fails: 2 }, 150, night, undefined, true)).toBeNull();
 });

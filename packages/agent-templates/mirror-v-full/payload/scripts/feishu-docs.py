@@ -59,7 +59,7 @@ OPTIONAL_SCOPES = {"drive:drive.metadata:readonly": "盘点个人云空间",
                    "wiki:wiki:readonly": "读个人文档库的页面树"}
 # 默认不读的东西：飞书自带样例，以及标题一看就是凭据的页面。
 EXCLUDE_SPACE = re.compile(r"示例知识库|Wiki samples", re.I)
-EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|身份证|银行卡|secret|token|api[_ -]?key|私钥", re.I)
+EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|账号.{0,2}邮箱|邮箱.{0,2}账号|登[录陆]信息|账号信息表|身份证|银行卡|secret|token|api[_ -]?key|私钥", re.I)
 FETCHABLE = {"docx", "doc"}
 DRIVE = {"space_id": "my_drive", "name": "我的云空间", "space_type": "drive"}
 MAX_DEPTH = 6
