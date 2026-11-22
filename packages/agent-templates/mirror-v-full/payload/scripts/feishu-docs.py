@@ -558,6 +558,8 @@ def inventory(budget: int = 60) -> dict:
 # 所以：全部进目录（知道有、能当场去读原文），只精读下面挑出来的。
 DEEP_LIMIT = 300        # 精读上限
 SERIES_KEEP = 4         # 同一系列（标题去掉日期数字后相同）只精读最近几份
+STALE_DAYS = 365        # 整个空间这么久没人改过，当旧资料：排在最后读，每个空间只精读几份
+STALE_KEEP = 5
 BATCH_DAY = 40          # 同一处同一天改动超过这么多份，视为批量生成
 HANDED_OVER = re.compile(r"的(个人)?文档$")   # 同事离职交接过来的文件夹，飞书自动起名「XX的个人文档」
 NOISE_TITLE = re.compile(r"^\(无标题\)$|^untitled|^未命名|快速启用，属于你的任务管理系统|^近期会议速递", re.I)
@@ -583,8 +585,14 @@ def rank(rows: list[dict]) -> None:
     minutes = {r["title"].split("智能纪要", 1)[1] for r in live if r["title"].startswith("智能纪要")}
     per_day = collections.Counter((r["space_id"], edit(r) // 86400) for r in live)
     series: dict = collections.defaultdict(list)
-    candidates = []
+    # 2026-11-22 的新号首批 100 份里有 13 份是 2021 年的 OKR 教程：知识库加分没看新旧。
+    newest: dict = collections.defaultdict(int)
+    for r in live:
+        newest[r["space_id"]] = max(newest[r["space_id"]], edit(r))
+    stale = {s for s, at in newest.items() if s != DRIVE["space_id"] and at and (now - at) / 86400 > STALE_DAYS}
+    candidates, old = [], collections.defaultdict(list)
     for r in sorted(live, key=edit, reverse=True):
+        r["stale"] = r["space_id"] in stale
         age = (now - edit(r)) / 86400 if edit(r) else 9999
         if NOISE_TITLE.search(r["title"]):
             r["why"] = "空白或飞书自带模板"
@@ -602,12 +610,23 @@ def rank(rows: list[dict]) -> None:
             r["score"] = ((6 if r["space_id"] != DRIVE["space_id"] else 0)
                           + (3 if age <= 90 else 1 if age <= 180 else 0 if age <= 365 else -1)
                           + (1 if DRAFT_HINT.search(r["title"]) else 0) - min(r["depth"], 3) * 0.2)
-            candidates.append(r)
-    candidates.sort(key=lambda r: (r["score"], edit(r)), reverse=True)
-    for i, r in enumerate(candidates):
-        if i < DEEP_LIMIT:
-            r["tier"] = "deep"
-        else:
+            (old[r["space_id"]] if r["stale"] else candidates).append(r)
+    order = lambda r: (r["score"], edit(r))  # noqa: E731
+    kept = []
+    for rows_old in old.values():
+        rows_old.sort(key=order, reverse=True)
+        kept += rows_old[:STALE_KEEP]
+        for r in rows_old[STALE_KEEP:]:
+            r["why"] = f"一年没人改过的空间只精读 {STALE_KEEP} 份"
+    kept = sorted(kept, key=order, reverse=True)[:DEEP_LIMIT // 5]
+    candidates.sort(key=order, reverse=True)
+    spare = [r for v in old.values() for r in v[STALE_KEEP:]]
+    # 资料不多的人，旧知识库可能就是他的全部：名额没用完就接着读旧的。
+    deep = (candidates[:DEEP_LIMIT - len(kept)] + kept + sorted(spare, key=order, reverse=True))[:DEEP_LIMIT]
+    for r in deep:
+        r["tier"], r["why"] = "deep", ""
+    for r in candidates + [x for v in old.values() for x in v]:
+        if r["tier"] != "deep" and not r["why"]:
             r["why"] = f"超出精读名额（{DEEP_LIMIT} 份）"
 
 
@@ -665,19 +684,20 @@ def write_overview() -> dict:
 
 
 def drop_pending_transcripts() -> int:
-    """早先读进来、还没编译的会议逐字稿，同场已有智能纪要的就不编了（原文留着）。"""
+    """早先读进来、还没编译、现在看不值得编的（同场已有智能纪要的逐字稿、旧空间名额外的），不编了，原文留着。"""
     manifest = WS / "memory-archive" / "imports" / "MANIFEST.json"
     if not manifest.exists():
         return 0
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    drop = {r["url"] for r in json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"] if r.get("why", "").startswith("同一场会议")}
+    drop = {r["url"]: r["why"] for r in json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"]
+            if r.get("why", "").startswith(("同一场会议", "一年没人改过"))}
     hit = [it for it in data.get("items", []) if it.get("disposition") == "pending" and it.get("url") in drop]
     for it in hit:
-        it["disposition"], it["note"] = "skipped", "会议逐字稿，同场已有智能纪要"
+        it["disposition"], it["note"] = "skipped", drop[it["url"]]
     if hit:
         save_json(manifest, data)
         subprocess.run(["git", "add", "--", str(manifest.relative_to(WS))], cwd=WS, capture_output=True)
-        subprocess.run(["git", "commit", "-qm", f"chore(onboard): 跳过 {len(hit)} 份会议逐字稿", "--", str(manifest.relative_to(WS))], cwd=WS, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", f"chore(onboard): 跳过 {len(hit)} 份不值得编译的", "--", str(manifest.relative_to(WS))], cwd=WS, capture_output=True)
     return len(hit)
 
 
@@ -728,9 +748,11 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
     # 分高的先读，同分的先读最近改的：主人眼下在忙的事比三年前的制度更值得先进记忆。
     todo.sort(key=lambda n: (n.get("score") or 0, n.get("edit") or ""), reverse=True)
     # 公司整理过的和主人手上正在写的交替着读：先读哪一类写出来的初稿都会偏。
-    a_side = [n for n in todo if n["space_id"] != DRIVE["space_id"]]
+    # 一年没人改过的空间放最后。
+    a_side = [n for n in todo if n["space_id"] != DRIVE["space_id"] and not n.get("stale")]
     b_side = [n for n in todo if n["space_id"] == DRIVE["space_id"]]
-    todo = [n for pair in itertools.zip_longest(a_side, b_side) for n in pair if n]
+    todo = ([n for pair in itertools.zip_longest(a_side, b_side) for n in pair if n]
+            + [n for n in todo if n.get("stale")])
     started, done, failed, empty, updated, dup = time.time(), [], [], 0, 0, 0
     collector = WS / "scripts" / "onboard-collect.py"
     queue, stopped = todo[:limit], None
@@ -892,8 +914,11 @@ def cmd_read(a) -> None:
     out = pull(True, None, a.limit, max(20, a.budget - int(time.time() - started)))
     out["library"] = write_overview()
     if inv:
-        out["spaces"] = [{"name": x["name"], "docs": x["fetchable"], "deep": x["deep"], "default": x["default"]} for x in inv["spaces"]]
-        out["tiers"], out["inventory_errors"] = inv["tiers"], inv["errors"][:5]
+        out["inventory_errors"] = inv["errors"][:5]
+    # 报数的话由这里写好，原样发：只给一堆数字，模型会抄错（把「只进目录」的 1691 当成了总数 1991）。
+    later = out.get("remaining") or 0
+    out["headline"] = (f"你飞书里我能看到 {out['library']['total']} 份文档，先读了最近最相关的 {out['library']['imported']} 份，"
+                       + (f"另外 {later} 份今晚接着读，" if later else "") + "其余的你问到我会当场去读。")
     out["forDraft"] = draft_picks()
     # 单轮硬上限 10 分钟，写初稿要两三分钟。资料多的时候不等读完：先读的就是最能说明主人的那些，
     # 够写初稿；剩下的后台接着读。

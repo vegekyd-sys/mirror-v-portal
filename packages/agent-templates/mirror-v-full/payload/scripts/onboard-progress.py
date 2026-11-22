@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -71,6 +72,20 @@ def feishu_docs() -> int:
     return sum(1 for it in items if it.get("source") == "feishu" and not it.get("duplicate_of"))
 
 
+def wrong_total() -> str | None:
+    """初稿里报的总份数和清单对不上，就不让进 draft（2026-11-22 把 1991 报成了 1691）。"""
+    try:
+        text = DRAFT.read_text(encoding="utf-8")
+        nodes = json.loads((WS / "onboarding" / "feishu-inventory.json").read_text(encoding="utf-8"))["nodes"]
+    except (OSError, ValueError, KeyError):
+        return None
+    total = sum(1 for n in nodes if n.get("tier") != "skip")
+    said = re.search(r"看到\s*([\d,]+)\s*份", text)
+    if said and int(said[1].replace(",", "")) != total:
+        return f"onboarding/draft.md 里写能看到 {said[1]} 份，实际是 {total} 份。改对 draft.md 再 set，发给主人的也用改过的"
+    return None
+
+
 def wrapped_up() -> bool:
     p = subprocess.run(["git", "log", "-1", "--format=%h", "--grep=^onboarding:"],
                        cwd=WS, capture_output=True, text=True)
@@ -113,6 +128,8 @@ def main() -> None:
             state["reconciled"] = why
             save(state)
     else:
+        if a.step == "draft" and (wrong := wrong_total()):
+            raise SystemExit(wrong)
         if a.step:
             state["step"] = a.step
         if a.chosen is not None:
