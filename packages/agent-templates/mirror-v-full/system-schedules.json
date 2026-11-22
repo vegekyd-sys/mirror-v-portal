@@ -65,8 +65,13 @@
     "schedule": {
       "kind": "cron",
       "expr": "0 3 * * *",
-      "tz": "Asia/Shanghai"
+      "tz": "Asia/Shanghai",
+      "repeat": {
+        "while": "imports-pending",
+        "afterSeconds": 60,
+        "untilHour": 8
+      }
     },
-    "prompt": "【Memory 导入补编】按 skills/memory-cold-start/references/import-catchup.md 做一轮：先看队列，空的就只回复 HEARTBEAT_OK；不空就编译最多 30 片并提交，凌晨时段还有剩就按文档里的方式接力。"
+    "prompt": "【Memory 导入补编】按 skills/memory-cold-start/references/import-catchup.md 做一轮：先看队列，空的就只回复 HEARTBEAT_OK；不空就编译最多 30 片并提交。还有剩的话平台会自动再跑一轮，不用你安排。"
   }
 ]

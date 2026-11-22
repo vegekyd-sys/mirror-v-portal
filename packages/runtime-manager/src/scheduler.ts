@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import type { Store, Run } from "./store.js";
 import type { SystemSchedule } from "./config.js";
+import { pendingImports, repeatAt, type RepeatSpec } from "./schedule-repeat.js";
 export function nextDue(spec: any, from = new Date()): Date {
   if (spec.kind === "at") {
     const d = new Date(spec.at);
@@ -209,6 +210,18 @@ export class Scheduler {
     } finally {
       db.release();
     }
+  }
+  /** After a run of a schedule that repeats while a backlog lasts: bring its next run forward, or reset it for the next night. */
+  async repeatAfter(run: Run, dataDir: string): Promise<Date | null> {
+    if (!run.schedule_id) return null;
+    const { rows } = await this.store.pool.query("SELECT spec FROM elastic_schedules WHERE id=$1 AND enabled", [run.schedule_id]);
+    const repeat = rows[0]?.spec?.repeat as RepeatSpec | undefined;
+    if (!repeat) return null;
+    const pending = pendingImports(dataDir, run.tenant_id);
+    const at = repeatAt(repeat, pending, new Date(), rows[0].spec.tz);
+    await this.store.pool.query("UPDATE elastic_schedules SET spec=$2,next_at=coalesce($3,next_at),updated_at=now() WHERE id=$1",
+      [run.schedule_id, { ...rows[0].spec, repeat: { ...repeat, last: at ? pending : null } }, at]);
+    return at;
   }
   /**
    * Register a template's background loops into the chat of a successful user

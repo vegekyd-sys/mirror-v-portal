@@ -195,6 +195,12 @@ export class RuntimeManager {
         }
         await this.store.event(tenant.id, "completed", { output }, runId);
         try {
+          const again = await new Scheduler(this.store).repeatAfter(current, this.store.config.dataDir);
+          if (again) await this.store.event(tenant.id, "schedule-repeats", { at: again.toISOString() }, runId);
+        } catch (e) {
+          await this.store.event(tenant.id, "schedule-repeat-failed", { error: e instanceof Error ? e.message : "REPEAT_ERROR" }, runId);
+        }
+        try {
           const added = await new Scheduler(this.store).ensureSystemSchedules(current, this.store.config.templates?.[tenant.template_id]?.systemSchedules);
           if (added.length) await this.store.event(tenant.id, "system-schedules", { added }, runId);
         } catch (e) {

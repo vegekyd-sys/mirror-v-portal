@@ -50,7 +50,8 @@ export interface TemplateRecord {
 export interface SystemSchedule {
   name: string;
   kind?: "cron" | "heartbeat";
-  schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "every"; everySeconds: number };
+  /** `repeat` brings the next run forward while a backlog lasts (schedule-repeat.ts). */
+  schedule: ({ kind: "cron"; expr: string; tz?: string } | { kind: "every"; everySeconds: number }) & { repeat?: { while: "imports-pending"; afterSeconds: number; untilHour: number } };
   prompt: string;
 }
 

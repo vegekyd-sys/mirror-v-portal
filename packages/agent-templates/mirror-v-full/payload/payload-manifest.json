@@ -1,6 +1,6 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v18",
+ "version": "mirror-v-full.v18.1",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
  "files": [
@@ -187,9 +187,14 @@
    "schedule": {
     "kind": "cron",
     "expr": "0 3 * * *",
-    "tz": "Asia/Shanghai"
+    "tz": "Asia/Shanghai",
+    "repeat": {
+     "while": "imports-pending",
+     "afterSeconds": 60,
+     "untilHour": 8
+    }
    },
-   "prompt": "【Memory 导入补编】按 skills/memory-cold-start/references/import-catchup.md 做一轮：先看队列，空的就只回复 HEARTBEAT_OK；不空就编译最多 30 片并提交，凌晨时段还有剩就按文档里的方式接力。"
+   "prompt": "【Memory 导入补编】按 skills/memory-cold-start/references/import-catchup.md 做一轮：先看队列，空的就只回复 HEARTBEAT_OK；不空就编译最多 30 片并提交。还有剩的话平台会自动再跑一轮，不用你安排。"
   }
  ]
 }
