@@ -362,6 +362,74 @@ def cmd_status(a: argparse.Namespace, ws: Path) -> int:
     return 0
 
 
+def cmd_add_batch(a: argparse.Namespace, ws: Path) -> int:
+    """一批原文一次落盘：stdin 每行一个 JSON {key, title, url, content}，输出 JSON 汇总。
+
+    和 add 同样的清洗、脱敏、查重、闸门，但一批只过一次闸门、只提交一次、不重建索引
+    （原文本来就不进 memory_search）。2026-11-22 逐份 add 只有 17 份/分钟，
+    1400 份的云空间在一轮对话里读不完。"""
+    p = layout(ws)
+    ensure_layout(ws)
+    manifest = load_manifest(p["manifest"])
+    before = len(manifest["items"])
+    seen = {it.get("sha256"): it for it in manifest["items"] if it.get("disposition") != "duplicate"}
+    day = now().strftime("%Y-%m-%d")
+    batch = p["entity"] / a.source / day
+    batch.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    done, failed = [], []
+    for raw_line in sys.stdin:
+        if not raw_line.strip():
+            continue
+        doc = json.loads(raw_line)
+        key, title = doc.get("key"), " ".join(str(doc["title"]).split())
+        url = " ".join(str(doc.get("url") or "").split())
+        try:
+            text = clean(str(doc["content"]).encode("utf-8"), title)
+        except SystemExit:
+            failed.append({"key": key, "title": title, "error": "不是可收的纯文本"})
+            continue
+        sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        sha8 = sha256[:8]
+        if sha256 in seen:  # 内容一样：不重复落盘，也不给账本添一条
+            done.append({"key": key, "sha8": sha8, "duplicate": True})
+            continue
+        body, hits = redact(text)
+        target = batch / f"{sha8}.md"
+        fetched_at = now().isoformat(timespec="seconds")
+        front = [f"title: {yaml_str(title)}", f"url: {yaml_str(url)}", f"source: {a.source}",
+                 f"fetched_at: {yaml_str(fetched_at)}", f"sha256: {sha256}", f"redactions: {len(hits)}"]
+        target.write_text("---\n" + "\n".join(front) + "\n---\n\n" + body.strip() + "\n", encoding="utf-8")
+        written.append(target)
+        rel = str(target.relative_to(ws))
+        entry = {"sha8": sha8, "title": title, "url": url, "source": a.source, "chars": len(body),
+                 "bytes": len(body.encode("utf-8")), "sha256": sha256, "fetched_at": fetched_at,
+                 "disposition": "pending", "note": None, "path": rel, "redactions": hits}
+        manifest["items"].append(entry)
+        seen[sha256] = entry
+        done.append({"key": key, "sha8": sha8, "duplicate": False})
+    if written:
+        save_manifest(p["manifest"], manifest)
+        try:
+            budget_gate(ws, batch)
+        except BudgetBlocked as e:
+            for t in written:
+                t.unlink(missing_ok=True)
+            manifest["items"] = manifest["items"][:before]
+            save_manifest(p["manifest"], manifest)
+            append_log(p["log"], "budget-block", {"source": a.source, "rolled_back": len(written)})
+            print(json.dumps({"ok": False, "blocked": str(e), "done": [], "failed": failed}, ensure_ascii=False))
+            return 4
+        append_log(p["log"], "add-batch", {"source": a.source, "count": len(written)})
+        staged = [str(t.relative_to(ws)) for t in written] + [str(p["manifest"].relative_to(ws))]
+        if p["link"].is_symlink():
+            staged.append(str(p["link"].relative_to(ws)))
+        git(ws, "add", "--", *staged)
+        git(ws, "commit", "-qm", f"chore(onboard): import {a.source} {day} 一批 {len(written)} 份")
+    print(json.dumps({"ok": True, "done": done, "failed": failed}, ensure_ascii=False))
+    return 0
+
+
 def cmd_mark(a: argparse.Namespace, ws: Path) -> int:
     p = layout(ws)
     manifest = load_manifest(p["manifest"])
@@ -444,6 +512,9 @@ def main() -> int:
     g.add_argument("--stdin", action="store_true", help="正文从标准输入读")
     g.add_argument("--file", help="正文从本地纯文本文件读")
 
+    ab = sub.add_parser("add-batch", help="一批原文一次落盘（stdin 每行一个 JSON）")
+    ab.add_argument("--source", required=True, choices=SOURCES)
+
     st = sub.add_parser("status", help="打印 MANIFEST 统计")
     st.add_argument("--json", action="store_true")
 
@@ -458,7 +529,7 @@ def main() -> int:
     ws = Path(a.workspace).resolve()
     if not (ws / "AGENTS.md").exists():
         die(5, f"{ws} 看着不像工作区（没有 AGENTS.md）")
-    return {"add": cmd_add, "status": cmd_status, "mark": cmd_mark, "rescan": cmd_rescan}[a.cmd](a, ws)
+    return {"add": cmd_add, "add-batch": cmd_add_batch, "status": cmd_status, "mark": cmd_mark, "rescan": cmd_rescan}[a.cmd](a, ws)
 
 
 if __name__ == "__main__":

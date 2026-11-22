@@ -57,7 +57,7 @@
       "expr": "30 20 * * *",
       "tz": "Asia/Shanghai"
     },
-    "prompt": "【飞书文档同步】在工作区根目录 /vercel/sandbox/agent-data/workspace 跑 `python3 scripts/feishu-docs.py sync`。它会重新盘点主人的知识空间、个人文档库和云空间「我的空间」，把新建的和改过的文档读进导入队列（最近改的先读），21:00 的整理会接着编译。\n看输出：\n- 退出码 2（没授权或授权过期）：tellOwner 为 true 时，跑 `python3 scripts/feishu-docs.py connect`，用两三句纯文本告诉主人：读不到他的飞书文档了，点链接重新授权一下（附 url；有 qrcode 就用 MEDIA: 行发二维码），点完回我「好了」。tellOwner 为 false 就只回复 HEARTBEAT_OK。\n- problem 不为空且 tellOwner 为 true（有地方缺权限读不到，比如云空间）：用两三句纯文本说读不到哪里、为什么要读（那里多半是他自己的文档）。ownerAction 是「开通权限」：附上 grantLinkAll，请他打开链接点「开通」、在「版本管理与发布」里发布新版本，弄完回我「好了」，我再发授权链接。ownerAction 是「重新授权」：跑 `python3 scripts/feishu-docs.py connect --rescope`，把 url（和二维码）发给他，点完回我「好了」。\n- 其它情况：只回复 HEARTBEAT_OK（读进来多少由今晚 21:00 的整理汇报）。\n不要用 markdown，不提脚本名和文件名。"
+    "prompt": "【飞书文档同步】在工作区根目录 /vercel/sandbox/agent-data/workspace 跑一次 `python3 scripts/feishu-docs.py sync`（两分半内一定结束，不要重跑，输出 remaining 大于 0 也留给明天）。它会重新盘点主人的知识空间、个人文档库和云空间「我的空间」，把值得精读的新文档、改过的文档读进导入队列，其余记进清单（随时能 get 原文），夜里的整理会接着编译。\n看输出：\n- 退出码 2（没授权或授权过期）：tellOwner 为 true 时，跑 `python3 scripts/feishu-docs.py connect`，用两三句纯文本告诉主人：读不到他的飞书文档了，点链接重新授权一下（附 url；有 qrcode 就用 MEDIA: 行发二维码），点完回我「好了」。tellOwner 为 false 就只回复 HEARTBEAT_OK。\n- problem 不为空且 tellOwner 为 true（有地方缺权限读不到，比如云空间）：用两三句纯文本说读不到哪里、为什么要读（那里多半是他自己的文档）。ownerAction 是「开通权限」：附上 grantLinkAll，请他打开链接点「开通」、在「版本管理与发布」里发布新版本，弄完回我「好了」，我再发授权链接。ownerAction 是「重新授权」：跑 `python3 scripts/feishu-docs.py connect --rescope`，把 url（和二维码）发给他，点完回我「好了」。\n- 其它情况：只回复 HEARTBEAT_OK（读进来多少由今晚 21:00 的整理汇报）。\n不要用 markdown，不提脚本名和文件名。"
   },
   {
     "name": "Memory 导入补编 · 每天 03:00",
@@ -67,6 +67,6 @@
       "expr": "0 3 * * *",
       "tz": "Asia/Shanghai"
     },
-    "prompt": "【Memory 导入补编】规则以 memory/SCHEMA.md 为准，所有命令在工作区根目录 /vercel/sandbox/agent-data/workspace 执行。时间预算 7 分钟。\n1. `python3 scripts/librarian-daily-queue.py stats`。import_pending 为 0 就只回复 HEARTBEAT_OK，结束。\n2. `python3 scripts/librarian-daily-queue.py list --kind import`，最多 30 片，按 21:00 Memory Librarian 第 1b 步的做法编译：读原文 → 合并进已有项目 main.md 或 concept 页（没有才新建，首段按检索友好规范）→ `mark '<id>' --status compiled --note '<目标页路径>'`；没价值的标 skipped 写原因。标题带「更新版」的是主人改过的文档：按新版改写对应页面，旧说法原样挪进 history.md。写入前查 memory/librarian/expired-rules.json。\n3. 在 memory/log.md 追加一条 compile，`git add -- <具体文件>` 后用 `python3 scripts/librarian-corrections.py commit -m \"chore(librarian): <日期> 凌晨补编 N 片\"` 提交，再跑 `python3 scripts/memory-graph.py`。\n不运行 reconcile，不做 lint 和关联（留给 21:00）。最终回复只写 HEARTBEAT_OK：进度由 21:00 的整理汇报。失败就如实写一句失败原因。"
+    "prompt": "【Memory 导入补编】按 skills/memory-cold-start/references/import-catchup.md 做一轮：先看队列，空的就只回复 HEARTBEAT_OK；不空就编译最多 30 片并提交，凌晨时段还有剩就按文档里的方式接力。"
   }
 ]

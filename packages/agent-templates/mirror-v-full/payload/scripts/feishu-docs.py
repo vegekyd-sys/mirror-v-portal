@@ -11,7 +11,8 @@
   connect --finish  主人点完授权链接之后收尾
   read         上手引导用：盘点 + 读所有建议读的空间（有时间上限），并挑出写初稿该先看的几份
   picks        写初稿先看哪几份（已经读进来的资料里挑，官网和粘贴的也算）
-  sync         每天一次：重新盘点，读新建的和改过的文档（最近改的先读）
+  sync         每天一次：重新盘点，读新建的和改过的文档，重写概览页
+  get          当场读一份原文（没精读的也能读），不落盘
   setup        装 lark-cli（已装就跳过），打印状态和下一步
   status       看状态：装没装、应用绑上没有、主人授权没有
   scopes       对照读文档要的用户身份权限，缺的给出一键开通链接（退出码 2）
@@ -27,13 +28,18 @@
 from __future__ import annotations
 
 import argparse
+import collections
+import importlib.util
+import itertools
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 LARK_VERSION = "1.0.89"
@@ -57,6 +63,9 @@ EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|身�
 FETCHABLE = {"docx", "doc"}
 DRIVE = {"space_id": "my_drive", "name": "我的云空间", "space_type": "drive"}
 MAX_DEPTH = 6
+# 写初稿时先看的文档：讲公司、产品、团队、方向的那几份，比会议纪要和流水更能说明「你是谁」。
+DRAFT_HINT = re.compile(r"介绍|简介|关于|about|公司|产品|业务|战略|规划|愿景|使命|BP|商业计划|融资|团队|组织|手册|"
+                        r"onboarding|入职|OKR|年度|总结|定位|方案|官网|品牌", re.I)
 
 
 def workspace() -> Path:
@@ -146,6 +155,38 @@ def lark(*args: str, timeout: int = 120) -> tuple[dict | None, str | None]:
         err = payload.get("error") or {}
         return None, f"{err.get('code', '')} {err.get('subtype', '')} {err.get('message', '')}".strip()
     return payload.get("data", payload), None
+
+
+RATE_LIMITED = re.compile(r"99991400|frequency limit|rate.?limit|too many request", re.I)
+
+
+def lark_retry(*args: str, timeout: int = 30) -> tuple[dict | None, str | None]:
+    """并发读的时候飞书会限频：退避重试，别的错误原样返回。"""
+    for pause in (1, 3, 0):
+        data, err = lark(*args, timeout=timeout)
+        if not err or not RATE_LIMITED.search(err) or not pause:
+            return data, err
+        time.sleep(pause)
+    return data, err
+
+
+def save_json(path: Path, obj) -> None:
+    """先写临时文件再换上去：命令随时可能被平台切断，不能留半截文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def hard_stop(seconds: int) -> None:
+    """到点一定结束。对话里的一轮只有 10 分钟，命令挂住就是整轮作废（2026-11-22 发生过）。"""
+    def stop() -> None:
+        print(json.dumps({"ok": False, "timedOut": True, "remaining": 1,
+                          "next": "到时间了，已读的都存下了；剩下的下次接着，不要马上重跑"}, ensure_ascii=False), flush=True)
+        os._exit(3)
+    t = threading.Timer(seconds, stop)
+    t.daemon = True
+    t.start()
 
 
 def say(obj) -> None:
@@ -393,8 +434,8 @@ def list_nodes(space_id: str, parent: str | None) -> tuple[list[dict], str | Non
     while True:
         params = {"page_size": 50, **({"parent_node_token": parent} if parent else {}),
                   **({"page_token": page} if page else {})}
-        data, err = lark("api", "GET", f"/open-apis/wiki/v2/spaces/{space_id}/nodes",
-                         "--params", json.dumps(params), "--as", "user")
+        data, err = lark_retry("api", "GET", f"/open-apis/wiki/v2/spaces/{space_id}/nodes",
+                               "--params", json.dumps(params), "--as", "user")
         if err:
             return items, err
         items += data.get("items") or []
@@ -409,7 +450,7 @@ def list_drive(folder: str | None) -> tuple[list[dict], str | None]:
     while True:
         params = {"page_size": 200, **({"folder_token": folder} if folder else {}),
                   **({"page_token": page} if page else {})}
-        data, err = lark("drive", "files", "list", "--params", json.dumps(params), "--as", "user")
+        data, err = lark_retry("drive", "files", "list", "--params", json.dumps(params), "--as", "user")
         if err:
             return items, err
         items += data.get("files") or []
@@ -418,54 +459,48 @@ def list_drive(folder: str | None) -> tuple[list[dict], str | None]:
             return items, None
 
 
-def inventory(budget: int = 150) -> dict:
+WORKERS = 8
+
+
+def inventory(budget: int = 60) -> dict:
     """盘点主人能读的三处：所有知识空间、个人文档库、云空间「我的空间」。只读目录不读正文。
-    每个页面记下最后编辑时间，同步时只读新的和改过的。超过 budget 秒就停，下次接着盘。"""
+    并发盘，超过 budget 秒就停，没盘到的沿用上一次的结果。"""
     started = time.time()
     spaces = list_spaces()
     spaces.append({"space_id": "my_library", "name": "我的文档库（个人）", "space_type": "personal"})
     rows, errors, partial = [], [], False
 
-    def over() -> bool:
-        nonlocal partial
-        partial = partial or time.time() - started > budget
-        return partial
-
-    def walk(space, parent=None, path=(), depth=0):
-        if depth >= MAX_DEPTH or over():
-            return
+    def wiki_level(space, parent, path, depth):
         nodes, err = list_nodes(space["space_id"], parent)
-        if err:
-            errors.append({"space": space["name"], "error": err})
+        out, more = [], []
         for n in nodes:
             title = (n.get("title") or "").strip() or "(无标题)"
             here = (*path, title)
-            excluded = space_exclusion(space) or ("标题像是凭据" if EXCLUDE_TITLE.search(title) else None)
-            rows.append({
+            out.append({
                 "space_id": space["space_id"], "space": space["name"], "path": " / ".join(here),
                 "depth": depth, "title": title, "node_token": n.get("node_token"),
                 "obj_token": n.get("obj_token"), "obj_type": n.get("obj_type"),
                 "edit": str(n.get("obj_edit_time") or ""),
-                "url": f"https://feishu.cn/wiki/{n.get('node_token')}",
-                "fetchable": n.get("obj_type") in FETCHABLE, "excluded": excluded,
+                "url": n.get("url") or f"https://feishu.cn/wiki/{n.get('node_token')}",
+                "fetchable": n.get("obj_type") in FETCHABLE,
+                "excluded": space_exclusion(space) or ("标题像是凭据" if EXCLUDE_TITLE.search(title) else None),
             })
-            if n.get("has_child"):
-                walk(space, n.get("node_token"), here, depth + 1)
+            if n.get("has_child") and depth + 1 < MAX_DEPTH:
+                more.append((wiki_level, space, n.get("node_token"), here, depth + 1))
+        return out, more, {"space": space["name"], "error": err} if err else None
 
-    def walk_drive(folder=None, path=(), depth=0):
-        if depth >= MAX_DEPTH or over():
-            return
+    def drive_level(space, folder, path, depth):
         files, err = list_drive(folder)
-        if err:
-            errors.append({"space": DRIVE["name"], "error": err})
+        out, more = [], []
         for f in files:
             name = (f.get("name") or "").strip() or "(无标题)"
             here = (*path, name)
             if f.get("type") == "folder":
-                walk_drive(f.get("token"), here, depth + 1)
+                if depth + 1 < MAX_DEPTH:
+                    more.append((drive_level, space, f.get("token"), here, depth + 1))
                 continue
-            rows.append({
-                "space_id": DRIVE["space_id"], "space": DRIVE["name"], "path": " / ".join(here),
+            out.append({
+                "space_id": space["space_id"], "space": space["name"], "path": " / ".join(here),
                 "depth": depth, "title": name, "node_token": f.get("token"),
                 "obj_token": f.get("token"), "obj_type": f.get("type"),
                 "edit": str(f.get("modified_time") or ""),
@@ -473,15 +508,31 @@ def inventory(budget: int = 150) -> dict:
                 "fetchable": f.get("type") in FETCHABLE,
                 "excluded": "标题像是凭据" if EXCLUDE_TITLE.search(name) else None,
             })
+        return out, more, {"space": space["name"], "error": err} if err else None
 
-    for sp in spaces:
-        walk(sp)
-    walk_drive()
+    pool = ThreadPoolExecutor(WORKERS)
+    pending = {pool.submit(drive_level, DRIVE, None, (), 0)}
+    pending |= {pool.submit(wiki_level, sp, None, (), 0) for sp in spaces}
+    while pending:
+        left = budget - (time.time() - started)
+        if left <= 0:
+            partial = True
+            break
+        finished, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
+        for fut in finished:
+            out, more, err = fut.result()
+            rows += out
+            if err:
+                errors.append(err)
+            pending |= {pool.submit(*job) for job in more}
+    pool.shutdown(wait=False, cancel_futures=True)
     spaces.append(DRIVE)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    INVENTORY.write_text(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "spaces": spaces,
-                                     "nodes": rows, "errors": errors, "partial": partial},
-                                    ensure_ascii=False, indent=1), encoding="utf-8")
+    if partial and INVENTORY.exists():  # 没盘完：上次盘到的别丢
+        known = {r["node_token"] for r in rows}
+        rows += [r for r in json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"] if r["node_token"] not in known]
+    rank(rows)
+    save_json(INVENTORY, {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "spaces": spaces,
+                          "nodes": rows, "errors": errors, "partial": partial})
     summary = []
     for sp in spaces:
         mine = [r for r in rows if r["space_id"] == sp["space_id"]]
@@ -490,13 +541,144 @@ def inventory(budget: int = 150) -> dict:
         summary.append({
             "space_id": sp["space_id"], "name": sp["name"], "nodes": len(mine),
             "fetchable": sum(1 for r in mine if r["fetchable"] and not r["excluded"]),
+            "deep": sum(1 for r in mine if r["tier"] == "deep"),
             "excluded": sum(1 for r in mine if r["excluded"]),
             "default": f"跳过（{space_exclusion(sp)}）" if space_exclusion(sp) else "建议读",
         })
     return {"ok": True, "elapsed_s": round(time.time() - started, 1), "spaces": summary,
-            "total_nodes": len(rows), "errors": errors, "partial": partial,
-            "saved": str(INVENTORY.relative_to(WS)),
+            "total_nodes": len(rows), "tiers": dict(collections.Counter(r["tier"] for r in rows)),
+            "errors": errors, "partial": partial, "saved": str(INVENTORY.relative_to(WS)),
             "next": "把空间清单给主人勾选，然后 pull --spaces <space_id,...>（或 --all）"}
+
+
+# ---------- 分层：哪些精读，哪些只进目录 ----------
+
+# 一个用了几年的飞书账号有上千份文档（2026-11-22 实测 1414 份可读），其中大量是会议逐字稿、
+# 一天批量生成的同类方案、系列周报的旧期。全部逐片编译要几个月，还会把真正重要的淹没。
+# 所以：全部进目录（知道有、能当场去读原文），只精读下面挑出来的。
+DEEP_LIMIT = 300        # 精读上限
+SERIES_KEEP = 4         # 同一系列（标题去掉日期数字后相同）只精读最近几份
+BATCH_DAY = 40          # 同一处同一天改动超过这么多份，视为批量生成
+HANDED_OVER = re.compile(r"的(个人)?文档$")   # 同事离职交接过来的文件夹，飞书自动起名「XX的个人文档」
+NOISE_TITLE = re.compile(r"^\(无标题\)$|^untitled|^未命名|快速启用，属于你的任务管理系统|^近期会议速递", re.I)
+
+
+def stem(title: str) -> str:
+    t = re.sub(r"\d{4}\s*[-./年]\s*\d{1,2}\s*[-./月]\s*\d{1,2}\s*日?", "", title)
+    t = re.sub(r"[\d\W_]+", "", t)
+    return re.sub(r"副本|copy", "", t, flags=re.I).lower()
+
+
+def rank(rows: list[dict]) -> None:
+    """给每一行定层：deep 精读 / catalog 只进目录 / skip 不碰，写明理由和排序分。"""
+    now = time.time()
+    edit = lambda r: int(r["edit"]) if r.get("edit", "").isdigit() else 0  # noqa: E731
+    for r in rows:
+        r["tier"], r["why"], r["score"] = "catalog", "", 0.0
+        if r["excluded"]:
+            r["tier"], r["why"] = "skip", r["excluded"]
+        elif not r["fetchable"]:
+            r["why"] = "表格、幻灯片、附件暂不读正文"
+    live = [r for r in rows if r["fetchable"] and not r["excluded"]]
+    minutes = {r["title"].split("智能纪要", 1)[1] for r in live if r["title"].startswith("智能纪要")}
+    per_day = collections.Counter((r["space_id"], edit(r) // 86400) for r in live)
+    series: dict = collections.defaultdict(list)
+    candidates = []
+    for r in sorted(live, key=edit, reverse=True):
+        age = (now - edit(r)) / 86400 if edit(r) else 9999
+        if NOISE_TITLE.search(r["title"]):
+            r["why"] = "空白或飞书自带模板"
+        elif r["space_id"] == DRIVE["space_id"] and HANDED_OVER.search(r["path"].split(" / ")[0]):
+            r["why"] = "别人交接过来的个人文档"
+        elif r["title"].startswith("文字记录") and r["title"].split("文字记录", 1)[1] in minutes:
+            r["why"] = "同一场会议已有智能纪要"
+        elif r["space_id"] == DRIVE["space_id"] and per_day[(r["space_id"], edit(r) // 86400)] >= BATCH_DAY:
+            r["why"] = f"同一天批量产生 {per_day[(r['space_id'], edit(r) // 86400)]} 份"
+        elif len(series[stem(r["title"]) or r["title"]]) >= SERIES_KEEP:
+            r["why"] = f"同系列只精读最近 {SERIES_KEEP} 份"
+        else:
+            series[stem(r["title"]) or r["title"]].append(r)
+            # 知识库是公司自己整理过的，再旧也比云空间的散文档更能说明公司。
+            r["score"] = ((6 if r["space_id"] != DRIVE["space_id"] else 0)
+                          + (3 if age <= 90 else 1 if age <= 180 else 0 if age <= 365 else -1)
+                          + (1 if DRAFT_HINT.search(r["title"]) else 0) - min(r["depth"], 3) * 0.2)
+            candidates.append(r)
+    candidates.sort(key=lambda r: (r["score"], edit(r)), reverse=True)
+    for i, r in enumerate(candidates):
+        if i < DEEP_LIMIT:
+            r["tier"] = "deep"
+        else:
+            r["why"] = f"超出精读名额（{DEEP_LIMIT} 份）"
+
+
+OVERVIEW = WS / "memory" / "research" / "feishu-overview.md"
+
+
+def write_overview() -> dict:
+    """概览页：主人的飞书里有哪些空间、哪些系列、各多少份，怎么找到具体一份。
+
+    只写概览，不列两千行标题：全列进 memory_search 会把精编的页面挤掉。
+    具体某一份用 get 在清单（onboarding/feishu-inventory.json）里找。"""
+    inv = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
+    rows = [r for r in inv["nodes"] if r.get("tier") != "skip"]
+    read = sum(1 for r in rows if pulled.get(r["node_token"], {}).get("status") == "imported")
+    out = ["# 飞书文档概览", "",
+           f"主人飞书里能看到的文档共 {len(rows)} 份，其中 {read} 份已读进记忆，其余没精读但随时能读原文。"
+           "主人问到某份文档、客户或会议而记忆里没有细节时，跑 `python3 scripts/feishu-docs.py get <标题里的词>` 找到并读原文，不要说没有。",
+           "关键词：飞书文档概览、文档清单、云空间、知识库、会议纪要、客户方案", "",
+           "> `scripts/feishu-docs.py sync` 自动重写这一页，不要手改。", "", "## 各处有多少", ""]
+    spaces = collections.Counter(r["space"] for r in rows)
+    for name, n in sorted(spaces.items(), key=lambda x: (-x[1], x[0])):
+        out.append(f"- {name}：{n} 份")
+    folders = collections.Counter(r["path"].split(" / ")[0] for r in rows if r["space_id"] == DRIVE["space_id"] and r["depth"])
+    if folders:
+        out += ["", "## 云空间里的文件夹", ""]
+        out += [f"- {f}：{n} 份" for f, n in sorted(folders.items(), key=lambda x: (-x[1], x[0]))[:30]]
+    series: dict = collections.defaultdict(list)
+    for r in rows:
+        if r["fetchable"] and len(stem(r["title"])) >= 4:
+            series[stem(r["title"])].append(r)
+    top = sorted((v for v in series.values() if len(v) >= 4), key=lambda v: (-len(v), v[0]["title"]))[:30]
+    if top:
+        out += ["", "## 反复出现的系列", ""]
+        for v in top:
+            newest = max(v, key=lambda r: (r.get("edit") or "", r["title"]))
+            out.append(f"- {newest['title']}（这一类 {len(v)} 份，最近改于 "
+                       + (time.strftime("%Y-%m-%d", time.gmtime(int(newest["edit"]))) if newest.get("edit", "").isdigit() else "未知") + "）")
+    why = collections.Counter(re.sub(r"\d+", "N", r["why"]) for r in rows if r["tier"] == "catalog" and r["why"])
+    out += ["", "## 没精读的是哪些", ""] + [f"- {k}：{n} 份" for k, n in sorted(why.items(), key=lambda x: (-x[1], x[0]))] + [""]
+    text = "\n".join(out)
+    changed = not OVERVIEW.exists() or OVERVIEW.read_text(encoding="utf-8") != text
+    if changed:
+        OVERVIEW.parent.mkdir(parents=True, exist_ok=True)
+        OVERVIEW.write_text(text, encoding="utf-8")
+        index = WS / "memory" / "index.md"
+        paths = [str(OVERVIEW.relative_to(WS))]
+        if index.exists() and "research/feishu-overview.md" not in index.read_text(encoding="utf-8"):
+            with index.open("a", encoding="utf-8") as fh:
+                fh.write("\n## 资料\n\n- [飞书文档概览](research/feishu-overview.md) — 主人飞书里有什么、各多少份、怎么找到某一份\n")
+            paths.append(str(index.relative_to(WS)))
+        subprocess.run(["git", "add", "--", *paths], cwd=WS, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", f"chore(onboard): 飞书文档概览 {len(rows)} 份", "--", *paths], cwd=WS, capture_output=True)
+    return {"total": len(rows), "imported": read, "changed": changed}
+
+
+def drop_pending_transcripts() -> int:
+    """早先读进来、还没编译的会议逐字稿，同场已有智能纪要的就不编了（原文留着）。"""
+    manifest = WS / "memory-archive" / "imports" / "MANIFEST.json"
+    if not manifest.exists():
+        return 0
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    drop = {r["url"] for r in json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"] if r.get("why", "").startswith("同一场会议")}
+    hit = [it for it in data.get("items", []) if it.get("disposition") == "pending" and it.get("url") in drop]
+    for it in hit:
+        it["disposition"], it["note"] = "skipped", "会议逐字稿，同场已有智能纪要"
+    if hit:
+        save_json(manifest, data)
+        subprocess.run(["git", "add", "--", str(manifest.relative_to(WS))], cwd=WS, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", f"chore(onboard): 跳过 {len(hit)} 份会议逐字稿", "--", str(manifest.relative_to(WS))], cwd=WS, capture_output=True)
+    return len(hit)
 
 
 def cmd_inventory(_a) -> None:
@@ -508,9 +690,9 @@ def cmd_inventory(_a) -> None:
 def fetch(node: dict) -> tuple[str | None, str | None]:
     token = node["obj_token"]
     if node["obj_type"] == "docx":
-        data, err = lark("docs", "+fetch", "--doc", token, "--doc-format", "markdown", "--detail", "simple")
+        data, err = lark_retry("docs", "+fetch", "--doc", token, "--doc-format", "markdown", "--detail", "simple")
         return ((data or {}).get("document") or {}).get("content"), err
-    data, err = lark("api", "GET", f"/open-apis/doc/v2/{token}/raw_content")
+    data, err = lark_retry("api", "GET", f"/open-apis/doc/v2/{token}/raw_content")
     return (data or {}).get("content"), err
 
 
@@ -520,7 +702,13 @@ def cmd_pull(a) -> None:
     sys.exit(4 if out.get("stopped") else 0)
 
 
+MAX_CHARS = 30_000   # 单份最多收这么多字，再长的尾巴留在飞书里，要用时 get
+BATCH = 20
+
+
 def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
+    """读正文，交给采集器。并发读、每 20 份落一次盘并存进度，随时被切断都能接着来。
+    整读（--all、sync、read）只读精读那一层；主人点名空间（--spaces）就全读。"""
     if not INVENTORY.exists():
         raise SystemExit("还没有盘点：先跑 inventory")
     inv = json.loads(INVENTORY.read_text(encoding="utf-8"))
@@ -528,6 +716,7 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
     if wanted is not None and not any(wanted):
         raise SystemExit("用 --spaces <space_id,...> 指定要读的空间，或者 --all")
     pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
+
     def changed(n: dict) -> bool:
         seen = pulled.get(n["node_token"])
         # 读过之后又改过的再读一遍；旧记录没有编辑时间，当作没改过。
@@ -535,45 +724,63 @@ def pull(all_spaces: bool, spaces: str | None, limit: int, budget: int) -> dict:
 
     todo = [n for n in inv["nodes"]
             if n["fetchable"] and not n["excluded"] and changed(n)
-            and (wanted is None or n["space_id"] in wanted)]
-    # 最近改过的先读：主人眼下在忙的事比三年前的制度更值得先进记忆。
-    todo.sort(key=lambda n: n.get("edit") or "", reverse=True)
-    started, done, failed, skipped_empty, updated = time.time(), [], [], 0, 0
+            and (n.get("tier") == "deep" if wanted is None else n["space_id"] in wanted)]
+    # 分高的先读，同分的先读最近改的：主人眼下在忙的事比三年前的制度更值得先进记忆。
+    todo.sort(key=lambda n: (n.get("score") or 0, n.get("edit") or ""), reverse=True)
+    # 公司整理过的和主人手上正在写的交替着读：先读哪一类写出来的初稿都会偏。
+    a_side = [n for n in todo if n["space_id"] != DRIVE["space_id"]]
+    b_side = [n for n in todo if n["space_id"] == DRIVE["space_id"]]
+    todo = [n for pair in itertools.zip_longest(a_side, b_side) for n in pair if n]
+    started, done, failed, empty, updated, dup = time.time(), [], [], 0, 0, 0
     collector = WS / "scripts" / "onboard-collect.py"
-    for n in todo:
-        if len(done) >= limit or time.time() - started > budget:
+    queue, stopped = todo[:limit], None
+    pool = ThreadPoolExecutor(WORKERS - 2)
+    for at in range(0, len(queue), BATCH):
+        if time.time() - started > budget:
             break
-        content, err = fetch(n)
-        if err or not (content or "").strip():
-            if not err:
-                skipped_empty += 1
+        chunk = queue[at:at + BATCH]
+        lines = []
+        for n, (content, err) in zip(chunk, pool.map(fetch, chunk)):
+            if err:
+                failed.append({"title": n["title"], "error": err[:160]})
+            elif not (content or "").strip():
+                empty += 1
                 pulled[n["node_token"]] = {"status": "empty", "at": time.strftime("%F"), "edit": n.get("edit", "")}
-                continue
-            failed.append({"title": n["title"], "error": err})
-            continue
-        again = n["node_token"] in pulled
-        title = f"[{n['space']}] {n['path']}" + (f"（更新版 {time.strftime('%F')}）" if again else "")
-        p = subprocess.run(
-            [sys.executable, str(collector), "add", "--source", "feishu",
-             "--url", n.get("url") or f"https://feishu.cn/wiki/{n['node_token']}",
-             "--title", title, "--stdin"],
-            input=content, capture_output=True, text=True, cwd=WS)
-        if p.returncode == 4:  # 体积闸门：停下来问主人，不要硬塞
-            PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
-            return {"ok": False, "stopped": "体积闸门拦下", "detail": p.stdout[-400:], "pulled_this_run": len(done)}
-        if p.returncode != 0:
-            failed.append({"title": n["title"], "error": (p.stdout or p.stderr)[-200:]})
-            continue
-        pulled[n["node_token"]] = {"status": "imported", "at": time.strftime("%F"), "edit": n.get("edit", "")}
-        updated += again
-        done.append(n["title"])
-    PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
-    remaining = len(todo) - len(done) - len(failed) - skipped_empty
-    return {"ok": not failed, "imported": len(done), "updated": updated, "titles": done[:8],
-            "failed": failed, "empty": skipped_empty,
-            "remaining": max(0, remaining), "elapsed_s": round(time.time() - started, 1),
-            "next": ("还有没拉完的，下一轮继续跑同一条 pull" if remaining > 0 else
-                     "拉完了。python3 scripts/librarian-daily-queue.py stats 看要整理几晚")}
+            else:
+                again = n["node_token"] in pulled
+                if len(content) > MAX_CHARS:
+                    content = content[:MAX_CHARS] + "\n\n（原文更长，这里只收了前面的部分，全文在上面的链接里）"
+                lines.append(json.dumps({
+                    "key": n["node_token"], "url": n.get("url"), "content": content,
+                    "title": f"[{n['space']}] {n['path']}" + (f"（更新版 {time.strftime('%F')}）" if again else ""),
+                }, ensure_ascii=False))
+        if lines:
+            p = subprocess.run([sys.executable, str(collector), "add-batch", "--source", "feishu"],
+                               input="\n".join(lines) + "\n", capture_output=True, text=True, cwd=WS)
+            try:
+                res = json.loads(p.stdout.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                failed += [{"title": n["title"], "error": (p.stderr or p.stdout)[-160:]} for n in chunk[:1]]
+                break
+            if res.get("blocked"):  # 体积闸门：停下来问主人，不要硬塞
+                stopped = res["blocked"]
+                save_json(PULLED, pulled)
+                break
+            by = {n["node_token"]: n for n in chunk}
+            for d in res["done"]:
+                n = by[d["key"]]
+                updated += n["node_token"] in pulled
+                dup += bool(d["duplicate"])
+                pulled[n["node_token"]] = {"status": "imported", "at": time.strftime("%F"), "edit": n.get("edit", "")}
+                done.append(n["title"])
+            failed += res["failed"]
+        save_json(PULLED, pulled)
+    pool.shutdown(wait=False, cancel_futures=True)
+    remaining = max(0, len(todo) - len(done) - len(failed) - empty)
+    return {"ok": not failed and not stopped, "imported": len(done), "duplicate": dup, "updated": updated,
+            "titles": done[:8], "failed": failed[:5], "failedCount": len(failed), "empty": empty,
+            "remaining": remaining, "stopped": stopped, "elapsed_s": round(time.time() - started, 1),
+            "next": ("还有没读完的，下一次接着" if remaining > 0 else "该精读的都读完了")}
 
 
 # ---------- sync（每天一次） ----------
@@ -605,7 +812,8 @@ def cmd_sync(a) -> None:
                      **({"lastToldAt": time.time()} if out["tellOwner"] else {}))
         SYNC.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
         say(out); sys.exit(2)
-    inv = inventory(budget=max(60, a.budget // 2))
+    hard_stop(a.budget + 30)
+    inv = inventory(budget=min(75, a.budget // 2))
     nodes = json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"]
     pulled = json.loads(PULLED.read_text(encoding="utf-8")) if PULLED.exists() else {}
     stamped = 0
@@ -613,8 +821,11 @@ def cmd_sync(a) -> None:
         seen = pulled.get(n["node_token"])
         if seen and not seen.get("edit") and n.get("edit"):
             seen["edit"] = n["edit"]; stamped += 1
-    PULLED.write_text(json.dumps(pulled, ensure_ascii=False, indent=1), encoding="utf-8")
-    out = pull(True, None, a.limit, max(30, a.budget - int(time.time() - started)))
+    save_json(PULLED, pulled)
+    out = pull(True, None, a.limit, max(20, a.budget - int(time.time() - started)))
+    out["skippedTranscripts"] = drop_pending_transcripts()
+    out["library"] = write_overview()
+    out["tiers"] = inv["tiers"]
     scope_gaps = sorted({e["space"] for e in inv["errors"] if "scope" in str(e.get("error", ""))})
     problem = f"读不到：{'、'.join(scope_gaps)}（缺权限）" if scope_gaps else None
     out.update(spaces=len(inv["spaces"]), stamped=stamped, partialInventory=inv["partial"],
@@ -632,45 +843,100 @@ def cmd_sync(a) -> None:
 
 # ---------- read（上手引导） ----------
 
-# 写初稿时先看的文档：讲公司、产品、团队、方向的那几份，比会议纪要和流水更能说明「你是谁」。
-DRAFT_HINT = re.compile(r"介绍|简介|关于|about|公司|产品|业务|战略|规划|愿景|使命|BP|商业计划|融资|团队|组织|手册|"
-                        r"onboarding|入职|OKR|年度|总结|定位|方案|官网|品牌", re.I)
+# 正在发生的事：会议纪要、周计划、OKR。只看公司介绍写不出「你手上有哪些事」。
+ONGOING = re.compile(r"智能纪要|会议纪要|周报|周会|周.{0,4}(规划|计划|总结)|月报|复盘", re.I)
+ABOUT_OTHERS = re.compile(r"有限公司|股份公司|集团公司")   # 多半是写给客户、关于客户的
 
 
 def draft_picks(n: int = 10) -> list[dict]:
-    """从已经读进来的原文里挑 n 份写初稿用：标题像总纲的、层级浅的、篇幅足的优先。
-    飞书跳过时官网和粘贴的资料一样能用。"""
+    """从已经读进来的原文里挑 n 份写初稿用，三类都要有：公司自己整理的（知识库、官网，
+    每个空间最多两份）、正在发生的（纪要、周计划，最近的）、其余最近改过的。
+    2026-11-22 只按标题关键词挑，十份全是写给客户的方案，初稿会把客户当成主人。"""
     manifest = WS / "memory-archive" / "imports" / "MANIFEST.json"
     try:
         items = json.loads(manifest.read_text(encoding="utf-8")).get("items", [])
     except (OSError, ValueError):
         return []
-    docs = [it for it in items if it.get("path") and not it.get("duplicate_of")]
+    docs = [it for it in items if it.get("path") and not it.get("duplicate_of")
+            and not ABOUT_OTHERS.search(it.get("title", "")) and int(it.get("chars") or 0) >= 200]
+    space = lambda it: (re.match(r"\[([^\]]*)\]", it.get("title", "")) or [None, it.get("source", "")])[1]  # noqa: E731
+    hint = lambda it: (1 if DRAFT_HINT.search(it["title"]) else 0, min(int(it.get("chars") or 0), 8000))  # noqa: E731
+    picked, per_space = [], collections.Counter()
 
-    def score(it: dict) -> float:
-        title = it.get("title", "")
-        depth = title.count(" / ")
-        chars = int(it.get("chars") or 0)
-        return (3 if DRAFT_HINT.search(title) else 0) - depth + min(chars, 8000) / 4000
+    def take(pool, limit, cap=99):
+        got = 0
+        for it in pool:
+            if got >= limit or len(picked) >= n:
+                return
+            if it in picked or per_space[space(it)] >= cap:
+                continue
+            picked.append(it)
+            per_space[space(it)] += 1
+            got += 1
 
-    docs.sort(key=score, reverse=True)
-    return [{"title": it["title"], "file": it["path"], "chars": it.get("chars")} for it in docs[:n]]
+    drive = [it for it in docs if space(it) == DRIVE["name"]]
+    take(sorted((it for it in docs if space(it) != DRIVE["name"]), key=hint, reverse=True), 4, cap=1)
+    take([it for it in drive if ONGOING.search(it["title"])], 3)    # 账本顺序就是读的顺序：最相关最近的在前
+    take(drive, 2)
+    take([it for it in docs if ONGOING.search(it["title"])], 1, cap=2)
+    take(sorted(docs, key=hint, reverse=True), n, cap=2)
+    take(drive, n)
+    return [{"title": it["title"], "file": it["path"], "chars": it.get("chars")} for it in picked]
 
 
 def cmd_read(a) -> None:
     """盘点 + 读所有建议读的空间，有时间上限；没读完就告诉调用方后台接着读。"""
     started = time.time()
+    hard_stop(a.budget + 30)
     inv = inventory() if (a.reinventory or not INVENTORY.exists()) else None
-    out = pull(True, None, a.limit, max(30, a.budget - int(time.time() - started)))
+    out = pull(True, None, a.limit, max(20, a.budget - int(time.time() - started)))
+    out["library"] = write_overview()
     if inv:
-        out["spaces"] = [{"name": s["name"], "docs": s["fetchable"], "default": s["default"]} for s in inv["spaces"]]
-        out["inventory_errors"] = inv["errors"][:5]
+        out["spaces"] = [{"name": x["name"], "docs": x["fetchable"], "deep": x["deep"], "default": x["default"]} for x in inv["spaces"]]
+        out["tiers"], out["inventory_errors"] = inv["tiers"], inv["errors"][:5]
     out["forDraft"] = draft_picks()
-    # 单轮硬上限 10 分钟，写初稿要两三分钟：读得快才在这一轮接着写，否则交给一次性任务。
-    out["draftNow"] = not out.get("remaining") and time.time() - started <= 150
-    out["next"] = ("这一轮接着写初稿" if out["draftNow"] else
-                   "加一次性任务写初稿" + ("，再加一条接着跑 read" if out.get("remaining") else ""))
+    # 单轮硬上限 10 分钟，写初稿要两三分钟。资料多的时候不等读完：先读的就是最能说明主人的那些，
+    # 够写初稿；剩下的后台接着读。
+    out["draftNow"] = bool(out["forDraft"]) and time.time() - started <= 170
+    out["next"] = (("这一轮接着写初稿" if out["draftNow"] else "加一次性任务写初稿")
+                   + ("，再加一条一次性任务接着跑 read" if out.get("remaining") else ""))
     say(out)
+
+
+def cmd_get(a) -> None:
+    """当场读一份原文（不落盘）：给标题、标题里的词、链接或 token。"""
+    if not INVENTORY.exists():
+        say({"ok": False, "detail": "还没有盘点过飞书：先跑 sync"}); sys.exit(1)
+    q = a.what.strip().strip("<>「」")
+    nodes = json.loads(INVENTORY.read_text(encoding="utf-8"))["nodes"]
+    hits = [n for n in nodes if q in (n["node_token"], n["obj_token"]) or (n.get("url") and q.split("?")[0] == n["url"].split("?")[0])
+            or (len(q) >= 20 and n["node_token"] and n["node_token"] in q)]
+    hits = hits or [n for n in nodes if n["title"] == q or n["path"] == q]
+    if not hits:
+        words = [w for w in re.split(r"\s+", q.lower()) if w]
+        hits = [n for n in nodes if all(w in n["path"].lower() for w in words)]
+    hits = [n for n in hits if not n["excluded"]]
+    hits.sort(key=lambda n: n.get("edit") or "", reverse=True)
+    if not hits:
+        say({"ok": False, "detail": "飞书清单里没有这份文档（或标题像凭据，不读）"}); sys.exit(1)
+    readable = [n for n in hits if n["fetchable"]]
+    exact = readable and (len(readable) == 1 or readable[0]["title"] == q and sum(n["title"] == q for n in readable) == 1)
+    if not exact and not a.first:
+        say({"ok": True, "choose": [{"title": n["path"], "url": n["url"], "edit": n["edit"], "type": n["obj_type"]} for n in hits[:12]],
+             "matches": len(hits), "next": "挑一份，用它的 url 再 get 一次（或 --first 读最近改过的那份）"}); return
+    if not readable:
+        say({"ok": False, "detail": f"这是{hits[0]['obj_type']}，暂时读不了正文", "url": hits[0]["url"]}); sys.exit(1)
+    n = readable[0]
+    content, err = fetch(n)
+    if err:
+        say({"ok": False, "title": n["path"], "detail": err}); sys.exit(1)
+    spec = importlib.util.spec_from_file_location("onboard_collect", WS / "scripts" / "onboard-collect.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    body = mod.redact(content or "")[0]
+    part = body[a.offset:a.offset + a.chars]
+    print(f"标题：{n['path']}\n链接：{n['url']}\n第 {a.offset}–{a.offset + len(part)} 字，共 {len(body)} 字"
+          + ("（后面还有，加 --offset 接着读）" if a.offset + len(part) < len(body) else "") + "\n\n" + part)
 
 
 def main() -> None:
@@ -681,14 +947,20 @@ def main() -> None:
     cn.add_argument("--rescope", action="store_true", help="已经授权过、应用又开了新权限时，重新发授权链接把新权限带上")
     cn.set_defaults(fn=cmd_connect)
     rd = sub.add_parser("read")
-    rd.add_argument("--limit", type=int, default=120, help="这一轮最多读几份（默认 120）")
-    rd.add_argument("--budget", type=int, default=200, help="这一轮最多花多少秒，含盘点（默认 200）")
+    rd.add_argument("--limit", type=int, default=100, help="这一轮最多读几份（默认 100）")
+    rd.add_argument("--budget", type=int, default=120, help="这一轮最多花多少秒，含盘点（默认 120，到点一定结束）")
     rd.add_argument("--reinventory", action="store_true", help="重新盘点空间（默认只在第一次盘点）")
     rd.set_defaults(fn=cmd_read)
     sub.add_parser("picks").set_defaults(fn=lambda _a: say({"forDraft": draft_picks()}))
+    gt = sub.add_parser("get")
+    gt.add_argument("what", help="标题、标题里的词（空格分开）、链接或 token")
+    gt.add_argument("--first", action="store_true", help="有多份匹配时直接读最近改过的那份")
+    gt.add_argument("--offset", type=int, default=0)
+    gt.add_argument("--chars", type=int, default=12000)
+    gt.set_defaults(fn=cmd_get)
     sy = sub.add_parser("sync")
-    sy.add_argument("--limit", type=int, default=80, help="这一次最多读几份（默认 80）")
-    sy.add_argument("--budget", type=int, default=360, help="这一次最多花多少秒，含盘点（默认 360）")
+    sy.add_argument("--limit", type=int, default=DEEP_LIMIT, help=f"这一次最多读几份（默认 {DEEP_LIMIT}）")
+    sy.add_argument("--budget", type=int, default=150, help="这一次最多花多少秒，含盘点（默认 150，到点一定结束）")
     sy.set_defaults(fn=cmd_sync)
     sub.add_parser("setup").set_defaults(fn=cmd_setup)
     sub.add_parser("status").set_defaults(fn=cmd_status)

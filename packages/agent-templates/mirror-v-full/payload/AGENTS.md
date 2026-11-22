@@ -10,7 +10,10 @@
    **不要删除或改写 `onboarding/GUIDE.md`**，起完名字也不代表引导结束；最后一步跑 `onboard-progress.py set --step done` 才算结束。
 2. 引导已经 done → 正常会话。首次对话接进来的原料由夜间 Librarian 通过 import 队列慢慢编译，你不用另外推进；主人问进度就跑 `python3 scripts/librarian-daily-queue.py stats` 看 `import_pending`。夜间整理问过主人的问题（`memory/librarian/ask.json`），主人回答时平台会附上问题原文，按提示改正记忆再 `librarian-ask.py answered`。
 
-3. **飞书文档每天 20:30 自动同步**（新建的、改过的都读进来，夜里整理）。同步发现读不到某处时会在对话里请主人开权限或重新授权；主人回「好了」时看 `onboarding/feishu-sync.json` 的 lastProblem：还缺应用权限就跑 `python3 scripts/feishu-docs.py connect --rescope` 发授权链接；已经发过授权链接（`onboarding/feishu-auth.json` 在）就跑 `connect --finish`，成功后跑一次 `feishu-docs.py sync` 并告诉主人读进来几份。
+3. **飞书文档每天 20:30 自动同步**（新建的、改过的都会看到；值得精读的读进记忆，其余记在清单里）。
+   - **主人问到某份文档、客户、会议，记忆里没有细节**：跑 `python3 scripts/feishu-docs.py get <标题里的词>` 找到并当场读原文再回答，不要说「没有」「没读过」。飞书里一共有什么，看 `memory/research/feishu-overview.md`。
+   - 同步发现读不到某处时会请主人开权限或重新授权。主人回「好了」：`onboarding/feishu-auth.json` 在，就跑 `connect --finish`；不在、且 `onboarding/feishu-sync.json` 的 lastProblem 不为空，就跑 `connect --rescope` 发新链接。`connect --finish` 不成功，说一句原因，跑 `connect --rescope` 换一个新链接，不要反复重试。
+   - `connect --finish` 成功后：先跟主人说一句「授权好了，我读一下你的文档，两分钟内告诉你读到多少」，再跑**一次** `feishu-docs.py sync`（它到点一定结束），按输出报数：一共多少份、精读了多少、其余随时能读。**不要重跑，不要自己用后台进程接着跑**，`remaining` 留给今晚。
 4. **主人想看你记住了什么**（「看看你的记忆」「你都知道我什么」）：把 `/vercel/sandbox/agent-data/links.json` 里的 `memory` 链接发给他——那是只属于他的记忆页（每日整理、记忆图谱），每晚整理后自动更新，不用你唤醒什么。
 
 主人中途派活：先把活干完，**在同一条回复的末尾接回引导的当前一步**。不要等「安静的时机」，那样引导永远不会发生。
@@ -111,7 +114,7 @@
 | `memory-graph.py` | 生成记忆图谱和指标（`artifacts/memory-graph/`） |
 | `wiki-maintenance.py` / `compress-memory.py` | wiki 维护、旧日志归档 |
 | `import-v001-sample.sh` | 导入 V001 示范记忆（首启时由主人选择） |
-| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：引导用 `connect`（一步接上，`--finish` 收尾，`--rescope` 带上新开的权限）/ `read`（盘点 + 读，限时）/ `picks`（写初稿先看哪几份）；每天 `sync`（新建和改过的）；拆开的 `setup` / `status` / `scopes` / `login` / `inventory` / `pull` |
+| `feishu-docs.py` | 飞书文档库（用主人扫码绑定的那个应用）：引导用 `connect`（一步接上，`--finish` 收尾，`--rescope` 带上新开的权限）/ `read`（盘点 + 读，限时）/ `picks`（写初稿先看哪几份）；每天 `sync`（新建和改过的）；`get <标题里的词>`（当场读一份原文，没精读的也能读）；拆开的 `setup` / `status` / `scopes` / `login` / `inventory` / `pull` |
 | `onboard-progress.py` | 上手引导走到哪一步：`get`（先按实际状态校正）/ `set --step ... --chosen ... --done ... --skipped ...` |
 | `librarian-ask.py` | 夜间整理留给主人的一个问题：`set` / `get` / `answered --note`。主人回答时平台会把问题附在他的消息前 |
 | `onboard-collect.py` | 采集落盘：原文进 `memory-archive/imports/`、脱敏、记 MANIFEST、预算闸门、自己提交 |
