@@ -219,13 +219,21 @@ function initDayStrip() {
   if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   dayFades();
 }
+// 第一天还没有整理记录：先把已经写下的几页摆出来，别让主人打开是空的。
+function renderFirst(body) {
+  const pages = DATA.nodes.filter(n => n.s && n.p !== 'memory-librarian');
+  if (!pages.length) { body.innerHTML = '<div class="empty">还没有记下什么，今晚 9 点整理完再来看</div>'; return; }
+  body.innerHTML = `<div class="chips"><div class="kpi"><b>${pages.length}</b><span>页，第一版</span></div></div>
+    <div class="grid">${pages.map(n => `<div class="card"><h3>${esc(n.t)}</h3><p style="margin:6px 0 0">${esc(n.s)}</p></div>`).join('')}</div>
+    <p style="color:var(--mute);margin-top:18px">每晚 9 点整理一次，之后这里会按天列出新记下了什么。</p>`;
+}
 function renderDays(sel) {
   document.getElementById('days').innerHTML = days.map((d,i) => { const t = dayTotals(d);
     return `<div class="day ${i===sel?'on':''}" data-i="${i}"><b>${d.date.slice(5)}</b><small>${t.points} 条记忆 · ${t.merged + t.archived} 碎片</small></div>`; }).join('');
   document.querySelectorAll('.day').forEach(el => el.onclick = () => renderDays(+el.dataset.i));
   initDayStrip();
   const body = document.getElementById('dayBody');
-  if (!days.length) { body.innerHTML = '<div class="empty">还没有运行记录</div>'; return; }
+  if (!days.length) { renderFirst(body); return; }
   const d = days[sel], t = dayTotals(d);
   body.innerHTML = `<div class="chips">
       <div class="kpi"><b style="color:var(--green)">${t.points}</b><span>条整理出的记忆</span></div>

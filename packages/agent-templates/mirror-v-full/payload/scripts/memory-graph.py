@@ -74,6 +74,16 @@ def title_of(text: str, path: Path) -> str:
     return path.stem[:90]
 
 
+def lead_of(text: str) -> str:
+    """首段的一句话现状，给第一天还没有整理记录时的卡片用。"""
+    for line in text.splitlines()[:12]:
+        line = line.strip()
+        if line and not line.startswith(("#", ">", "-", "---", "关键词")):
+            line = re.split(r"\s*关键词[：:]", re.sub(r"^现状[：:]\s*", "", line))[0]
+            return re.sub(r"[*`]", "", line)[:200]
+    return ""
+
+
 def resolve(target: str, src: Path) -> str | None:
     target = target.strip().lstrip("<").rstrip(">")
     if target.startswith(("http://", "https://", "mailto:")):
@@ -143,6 +153,7 @@ def build() -> dict:
             "in": indeg.get(rel, 0),
             "in2": indeg_no_index.get(rel, 0),
             "idx": ("memory/index.md", rel) in links,
+            **({"s": lead_of(text)} if kind_of(rel, text) in ("project", "person", "concept", "decision") else {}),
         })
 
     counts: dict[str, int] = {}
@@ -152,7 +163,7 @@ def build() -> dict:
     archived = sum(1 for p in (MEMORY / "archive" / "fragments").rglob("*.md") if not p.name.startswith("MANIFEST")) if (MEMORY / "archive" / "fragments").exists() else 0
     index_lines = len(texts.get("memory/index.md", "").splitlines())
     stats = {
-        "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated": dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
         "pages": len(nodes), "links": len(links), "counts": counts,
         "orphans": orphans, "archived": archived, "index_lines": index_lines,
         "index_broken": broken,
