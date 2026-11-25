@@ -1,6 +1,6 @@
 ---
-name: makaron
-description: Use Makaron CLI for creative image, video, music, and motion work. In Feishu/Lark, the same Skill also owns V's visible task card, detached Worker, scoped account, progress, revision, and delivery lifecycle.
+name: "makaron"
+description: "Create or edit images, video, music and motion via Makaron CLI; Feishu task cards, scoped accounts, revisions and delivery."
 ---
 
 # Makaron — Official CLI + V Feishu Service
@@ -14,6 +14,16 @@ This is the effective Makaron Skill loaded by OpenClaw. It is composed from two 
 3. Outside Feishu/Lark, the official part is sufficient unless the request explicitly needs V's service-card behavior.
 
 The official part owns CLI syntax. The Feishu part owns cards, detached execution, account routing, progress, exact reply anchoring, same-card continuation, and delivery. Both parts are required for a Feishu Makaron task.
+
+## V brief / Makaron production boundary
+
+V conveys the user goal, audience, verified facts, available media, deliverable specifications and explicitly required content or dialogue. Write the desired result, not a construction recipe: Makaron chooses the production route as well as scripts, shot design, pacing, music and composition. Leave integrated picture, speech, lip sync, music, ambience and subtitle generation available; do not prescribe per-shot generation, silent video followed by TTS/music/captions, or another implementation sequence by default. Pass a method constraint only when the user explicitly requires it or a verified technical obstacle in this task necessitates it, and state that source. Preserve explicit customer/planner content requirements without turning V's preferred implementation into a hard constraint. A complete 30-second submission does not imply a continuous take; multiple shots do not imply separate generation submissions; accurate subtitles do not imply post-generated speech. Before submission, check each added production step against those exceptions and remove unsupported method constraints; assess the final result against the requested outcomes rather than V's imagined workflow. Preserve the selected specialist Skill's essential template mechanism and technical contracts; its example timings and camera choices remain adaptable defaults unless the user explicitly requires exact replication. Trace each hard requirement to user intent, selected template core or actual tool constraints, and label V-added creative suggestions as optional. Discover available Makaron Skills server-side and use --skill when supported; a local Skill path does not mean the remote Agent has read it. For local-only specialists, pass the necessary core rather than expanding all historical instructions into the brief. Review unmet user outcomes, factual accuracy and required template fidelity; do not overwrite Makaron's design solely because V imagined another approach. For replication, use Makaron's dedicated replication Skill rather than the retired local makaron-viral-replicate procedure.
+
+## Delivery specification at brief preparation
+
+During Default Feishu flow step 3, include one delivery-specification block in the actual Makaron brief: duration (and any stated tolerance), aspect/orientation, resolution, audio, and subtitles/language. Carry forward explicit user requirements and applicable selected-template contracts with their source. For unspecified fields write “Makaron decides” or a clearly labelled adjustable default; do not impose 1080×1920, 9:16, 15s, music or subtitles on every request, and do not ask the user merely to fill optional fields. Keep the card summary and submitted prompt consistent with this same block, including on revisions; the latest user instruction supersedes the earlier value. Check the final asset against the explicit result requirements before claiming compliance; distinguish delivered from specification-verified and disclose unsupported/unverified requirements without silently changing them.
+
+Treat V's proposed “5–6 shots × 2.5–3.0s” or similar shot plans as adjustable suggestions unless the user or selected template explicitly requires them. The manifest is available material, not a mandatory shot list: do not equate shot count with asset count, force every asset into the edit, or divide time equally by N. Makaron chooses shots, timing, transitions and pacing. Check only whether genuine hard constraints can be jointly satisfied; relax V-added suggestions before asking to change the user's requirements. Text-to-image and text-to-video remain valid without reference media.
 
 ## Feishu execution invariant
 

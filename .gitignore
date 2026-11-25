@@ -56,3 +56,6 @@ packages/dealclaw-agent/payload/data/
 
 # Generated Portal homepage; copied into the release by the deploy script.
 /packages/central-gateway/public/onboard/index.html
+
+# unfinished V → Mirror V sync (sync-from-v.sh)
+packages/agent-templates/mirror-v-full/.v-sync-pending

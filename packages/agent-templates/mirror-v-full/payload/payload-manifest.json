@@ -1,8 +1,8 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v18.4",
+ "version": "mirror-v-full.v19",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
- "vWorkspaceCommit": "67d00d25360de0674496b427144e6b3d2c9f3e75",
+ "vWorkspaceCommit": "185eb6e64dbe9805481aaf92464b4df22218dc73",
  "files": [
   ".gitignore",
   "AGENTS.md",
@@ -113,6 +113,8 @@
   "skills/skill-creation-coach/SKILL.md",
   "skills/skill-gate/SKILL.md",
   "skills/social-search-apify-first/SKILL.md",
+  "skills/social-search-apify-first/references/apify-runtime.md",
+  "skills/social-search-apify-first/references/platform-workflows.md",
   "skills/social-search-apify-first/references/tiktok-download-to-feishu.md",
   "skills/technical-project-research/SKILL.md",
   "skills/tiktok-publish-copy/SKILL.md",

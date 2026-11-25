@@ -3,9 +3,10 @@
 
 Obsidian-style graph view equivalent for the Librarian (see memory/SCHEMA.md).
 Nodes are wiki-layer markdown pages; edges are markdown links and backtick
-path references between them. Output is one offline HTML file (library and
-data inlined). Only titles/paths/stats are embedded — never page bodies — so
-secrets inside pages cannot leak through the graph.
+path references between them. Output is index.html (stats and the latest days
+inlined) plus graph.json, graph-lib.js and days/<date>.json, fetched on demand;
+serve the directory over HTTP. Only titles/paths/stats are embedded — never
+page bodies — so secrets inside pages cannot leak through the graph.
 
 Usage: python3 scripts/memory-graph.py [--out artifacts/memory-graph/index.html]
 """
@@ -269,19 +270,52 @@ def load_plan() -> list[dict]:
     return rows
 
 
+INLINE_DAYS = 2  # full records embedded in index.html; older days load on click
+
+
+def day_totals(day: dict) -> dict:
+    """Same counts as the page's dayTotals(), for the day strip of lazy days."""
+    t = {"points": 0, "merged": 0, "archived": 0}
+    for r in day.get("runs", []):
+        if r.get("phase") == "adoption":
+            continue
+        for s in r.get("sources", []):
+            if s.get("action") in ("merged", "archived"):
+                t[s["action"]] += 1
+        for o in r.get("outputs", []):
+            t["points"] += len(o.get("points", []))
+    return t
+
+
+def dump(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "artifacts" / "memory-graph" / "index.html"))
     args = ap.parse_args()
+    out = Path(args.out)
+    site = out.parent
+    site.mkdir(parents=True, exist_ok=True)
     data = build()
     data["history"] = append_history(data["stats"])
-    data["runs"] = load_runs()
     data["plan"] = load_plan()
+    # Keep index.html small (V 2026-11-18: slow from mainland broadband):
+    # the graph data, its library and older days are separate files fetched on demand.
+    (site / "graph.json").write_text(dump({"nodes": data.pop("nodes"), "links": data.pop("links")}), encoding="utf-8")
+    (site / "graph-lib.js").write_text(VENDOR.read_text(encoding="utf-8"), encoding="utf-8")
+    days_dir = site / "days"
+    days_dir.mkdir(exist_ok=True)
+    for stale in days_dir.glob("*.json"):
+        stale.unlink()
+    runs = load_runs()
+    for day in runs[INLINE_DAYS:]:
+        (days_dir / f"{day['date']}.json").write_text(dump(day), encoding="utf-8")
+    data["runs"] = runs[:INLINE_DAYS] + [
+        {"date": d["date"], "lazy": True, "totals": day_totals(d)} for d in runs[INLINE_DAYS:]]
     tpl = (Path(__file__).with_name("memory-graph.template.html")).read_text(encoding="utf-8")
-    lib = VENDOR.read_text(encoding="utf-8")
-    html = tpl.replace("/*__LIB__*/", lib).replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    html = tpl.replace("/*__DATA__*/null", dump(data).replace("</", "<\\/"))
     out.write_text(html, encoding="utf-8")
     s = data["stats"]
     print(f"memory-graph: {s['pages']} pages, {s['links']} links, counts={s['counts']}, orphans={s['orphans']}, archived={s['archived']} -> {out}")

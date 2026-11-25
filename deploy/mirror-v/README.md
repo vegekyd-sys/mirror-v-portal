@@ -65,6 +65,9 @@ promotion.
   `previous` and the four newest other releases and deletes older ones.
 - A new `mirror-v-full` payload still needs its snapshot built on the host
   before activation (see the template section).
+- Bringing V's latest Librarian / heartbeat / skills into `mirror-v-full`
+  (sync → test → version → deploy → snapshot → acceptance) follows
+  [docs/mirror-v-sync-from-v.md](../../docs/mirror-v-sync-from-v.md).
 
 The original GitLab admin SPA and credits-ledger are reused here. A ledger
 trigger provisions a zero-balance account for each Elastic instance. Original

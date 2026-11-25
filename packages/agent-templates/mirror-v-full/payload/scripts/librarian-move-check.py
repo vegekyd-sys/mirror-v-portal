@@ -87,7 +87,7 @@ def expired_check(removed: dict[str, list[str]], added: list[tuple[str, str]]) -
                           [re.compile(x, re.I) for x in r.get("allow_patterns", [])]))
     bad = 0
     for path, line in added:
-        if MARK.search(line) or path.startswith("memory/librarian/") or re.search(r"memory/20\d\d-\d\d-\d\d", path):
+        if MARK.search(line) or path.startswith("memory/librarian/"):
             continue
         for rid, pats, allow in rules:
             if any(pt.search(line) for pt in pats) and not any(a.search(line) for a in allow):

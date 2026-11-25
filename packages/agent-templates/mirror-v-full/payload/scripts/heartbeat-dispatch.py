@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import hashlib
 import os
@@ -113,7 +114,33 @@ def feishu_uuid(value: str, limit: int = 40) -> str:
     return f"hb-{digest}"[:limit]
 
 
-def send_dispatch_report(event: str, task: dict, note: str = "", blocked: bool = False, todo_path: Path | None = None, no_report: bool = False) -> dict:
+def read_llm_message(path: str | None, task: dict) -> str | None:
+    if not path:
+        return None
+    p = Path(path).resolve()
+    if p.parent != (ROOT / "memory/heartbeat-messages").resolve() or p.stat().st_size > 10000:
+        raise ValueError("LLM presentation must stay in heartbeat-messages and within budget")
+    d = json.loads(p.read_text())
+    if d.get("origin") != "V LLM" or d.get("task_id") != task.get("task_id") or not isinstance(d.get("should_notify"), bool):
+        raise ValueError("Presentation requires the executing V's decision and matching task")
+    if not d["should_notify"]:
+        return ""
+    message = d.get("message")
+    if not isinstance(message, str) or not message.strip() or len(message) > 1200:
+        raise ValueError("Expected a concise LLM-authored message")
+    return message.strip()
+
+
+def send_dispatch_report(event: str, task: dict, note: str = "", blocked: bool = False, todo_path: Path | None = None, no_report: bool = False, user_message_file: str | None = None) -> dict:
+    directory = ROOT / "memory/heartbeat-messages"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (directory / "delivery.lock").open("a") as lock:
+        os.chmod(directory / "delivery.lock", 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _send_dispatch_report(event, task, note, blocked, todo_path, no_report, user_message_file)
+
+
+def _send_dispatch_report(event: str, task: dict, note: str = "", blocked: bool = False, todo_path: Path | None = None, no_report: bool = False, user_message_file: str | None = None) -> dict:
     cfg = report_config()
     if no_report or cfg.get("enabled", True) is False:
         return {"sent": False, "reason": "disabled" if not no_report else "no_report"}
@@ -129,9 +156,22 @@ def send_dispatch_report(event: str, task: dict, note: str = "", blocked: bool =
     transport = os.environ.get("HEARTBEAT_DISPATCH_REPORT_TRANSPORT") or cfg.get("transport") or "openclaw_message"
     as_identity = cfg.get("as", "bot")
     marker = latest_marker_info(str(task.get("task_id") or ""), todo_path)
-    text = format_dispatch_report(event, task, note=note, blocked=blocked, marker=marker)
+    text = read_llm_message(user_message_file, task)
+    if text == "":
+        return {"sent": False, "reason": "V_decided_no_new_value"}
+    if text is None:
+        if cfg.get("llm_presentation_required"):
+            pending = ROOT / "memory/heartbeat-messages" / (feishu_uuid(str(task.get("task_id")) + event + note) + ".pending.json")
+            pending.write_text(json.dumps({"event": event, "task": task, "note": note, "blocked": blocked, "at": now_iso()}, ensure_ascii=False))
+            pending.chmod(0o600)
+            return {"sent": False, "reason": "missing_V_presentation", "error": "Detailed findings recorded; missing V-authored user message, no mechanical fallback sent"}
+        text = format_dispatch_report(event, task, note=note, blocked=blocked, marker=marker)
     dedupe = marker.get("run_id") or marker.get("claimed_at") or "no-claim"
-    idempotency_key = feishu_uuid(f"heartbeat-dispatch-{event}-{task.get('task_id')}-{dedupe}")
+    idempotency_key = feishu_uuid(f"heartbeat-dispatch-{event}-{task.get('task_id')}-{text if user_message_file else dedupe}")
+    receipts_path = ROOT / "memory/heartbeat-messages/delivered.json"
+    receipts = json.loads(receipts_path.read_text()) if receipts_path.exists() else {}
+    if user_message_file and idempotency_key in receipts:
+        return {"sent": False, "reason": "same_result_already_delivered"}
     if os.environ.get("HEARTBEAT_DISPATCH_REPORT_DRY_RUN") == "1" or cfg.get("dry_run") is True:
         return {"sent": False, "dry_run": True, "target_chat": chat_id, "target_user": user_id, "transport": transport, "text": text, "idempotency_key": idempotency_key}
     if transport == "openclaw_message":
@@ -162,6 +202,11 @@ def send_dispatch_report(event: str, task: dict, note: str = "", blocked: bool =
         result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=int(cfg.get("timeout_seconds", 30)))
         if result.returncode != 0:
             return {"sent": False, "error": (result.stderr or result.stdout or f"exit {result.returncode}").strip()[:800]}
+        if user_message_file:
+            receipts_path.parent.mkdir(parents=True, exist_ok=True)
+            receipts[idempotency_key] = {"at": now_iso(), "task_id": task.get("task_id"), "message": text, "target": chat_id or user_id}
+            receipts_path.write_text(json.dumps(receipts, ensure_ascii=False, indent=2))
+            receipts_path.chmod(0o600)
         return {"sent": True, "target_chat": chat_id, "target_user": user_id, "transport": transport, "idempotency_key": idempotency_key}
     except Exception as e:
         return {"sent": False, "error": str(e)[:800]}
@@ -309,7 +354,7 @@ def cmd_complete(args: argparse.Namespace) -> int:
     # done directly in TODO.md. Reporting those again creates noisy duplicate
     # pushes, so suppress already-done reports unless explicitly forced.
     effective_no_report = args.no_report or (already_done and not args.force_report)
-    report = send_dispatch_report("complete", task, note=args.note, todo_path=todo_path, no_report=effective_no_report)
+    report = send_dispatch_report("complete", task, note=args.note, todo_path=todo_path, no_report=effective_no_report, user_message_file=args.user_message_file)
     if already_done and not args.no_report and not args.force_report:
         report = {"sent": False, "reason": "already_done_no_report"}
     log_event({"event": "complete", "task_id": args.task_id, "project": task.get("project"), "note": args.note, "already_done": already_done, "report": report})
@@ -330,7 +375,7 @@ def cmd_fail(args: argparse.Namespace) -> int:
     if args.note:
         lines.insert(idx + 1, f"  - heartbeat note {now_iso()}: {args.note}")
     write_todo(todo_path, lines)
-    report = send_dispatch_report("fail", task, note=args.note, blocked=args.blocked, todo_path=todo_path, no_report=args.no_report)
+    report = send_dispatch_report("fail", task, note=args.note, blocked=args.blocked, todo_path=todo_path, no_report=args.no_report, user_message_file=args.user_message_file)
     log_event({"event": "fail", "task_id": args.task_id, "project": task.get("project"), "blocked": args.blocked, "note": args.note, "report": report})
     print(f"marked {args.task_id} as {status} -> {todo_path}:{idx+1}")
     if report.get("sent"):
@@ -374,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     p_complete = sub.add_parser("complete")
     p_complete.add_argument("task_id")
     p_complete.add_argument("--note", default="")
+    p_complete.add_argument("--user-message-file", help="V's concise message and notify decision, separate from detailed evidence")
     p_complete.add_argument("--no-report", action="store_true", help="do not send completion report")
     p_complete.add_argument("--force-report", action="store_true", help="send report even when the TODO is already done")
     p_complete.add_argument("--update-done-note", action="store_true", help="append note even if task is already marked done")
@@ -382,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     p_fail = sub.add_parser("fail")
     p_fail.add_argument("task_id")
     p_fail.add_argument("--note", default="")
+    p_fail.add_argument("--user-message-file", help="V's concise message and notify decision, separate from detailed evidence")
     p_fail.add_argument("--blocked", action="store_true")
     p_fail.add_argument("--no-report", action="store_true", help="do not send failure/blocker report")
     p_fail.set_defaults(func=cmd_fail)

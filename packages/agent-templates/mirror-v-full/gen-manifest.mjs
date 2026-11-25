@@ -9,6 +9,8 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const payload = path.join(here, "payload");
 const version = process.argv[2];
 if (!/^mirror-v-full\.[a-z0-9.-]+$/.test(version ?? "")) throw Error("usage: node gen-manifest.mjs mirror-v-full.<version>");
+// A sync from V that stopped on conflicts is not a releasable payload.
+if (fs.existsSync(path.join(here, ".v-sync-pending"))) throw Error("sync-from-v.sh is unfinished: resolve conflicts, then run sync-from-v.sh --resolved");
 const files = [];
 const walk = (dir, prefix = "") => {
   for (const name of fs.readdirSync(dir).sort()) {
@@ -18,7 +20,10 @@ const walk = (dir, prefix = "") => {
     const stat = fs.lstatSync(path.join(dir, name));
     if (stat.isSymbolicLink()) throw Error(`symlink not allowed in payload: ${rel}`);
     if (stat.isDirectory()) walk(path.join(dir, name), rel);
-    else if (rel !== "payload-manifest.json") files.push(rel);
+    else if (rel !== "payload-manifest.json") {
+      if (/^(<<<<<<< mirror|>>>>>>> v@)/m.test(fs.readFileSync(path.join(dir, name), "latin1"))) throw Error(`merge conflict markers left in ${rel}`);
+      files.push(rel);
+    }
   }
 };
 walk(payload);

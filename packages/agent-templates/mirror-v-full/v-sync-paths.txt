@@ -1,0 +1,60 @@
+# V-owned paths that sync-from-v.sh merges into payload/ (one per line, file or directory).
+# Everything else in payload/ is Mirror's (identity docs, BOOTSTRAP/onboarding,
+# memory skeleton, feishu-docs.py, onboard-*.py, memory-cold-start, …) and is never synced.
+# Adding a path here is a product decision: check it does not need V's private
+# hosts, accounts, owner details or customer projects (see v-sync-skip.txt).
+
+# Librarian / memory system
+memory/SCHEMA.md
+scripts/librarian-adopt-untracked.py
+scripts/librarian-reachability.py
+scripts/librarian-relations.py
+scripts/librarian-daily-queue.py
+scripts/librarian-corrections.py
+scripts/librarian-move-check.py
+scripts/librarian-reconcile.py
+scripts/librarian-rule-sources.py
+scripts/memory-graph.py
+scripts/memory-graph.template.html
+scripts/memory-auto-index.py
+scripts/compress-memory.py
+scripts/wiki-maintenance.py
+scripts/tests/test_librarian_corrections.py
+scripts/tests/test_librarian_reconcile.py
+skills/librarian-semantic-reconcile
+skills/long-term-memory-update
+skills/memory-promotion-audit
+
+# Heartbeat / self-evolution
+scripts/heartbeat.py
+scripts/heartbeat-dispatch.py
+scripts/write-reflection.py
+scripts/reflection-analyzer.py
+scripts/reflection-capture.py
+scripts/write-skill-candidate.py
+scripts/skill-candidate-rollback.py
+skills/proactive-agent
+skills/skill-creation-coach
+skills/skill-gate
+skills/openclaw-harness-evaluation
+
+# Creative / research skills
+skills/auto-travel-vlog
+skills/corporate-video-script
+skills/creative-production-orchestrator
+skills/html-executive-pitch-deck-iteration
+skills/html-poster-design
+skills/image-production-routing-qc
+skills/image-search-apify-first
+skills/makaron-video
+skills/makaron-remotion-materialize
+skills/meshy-3d-agent
+skills/social-search-apify-first
+skills/technical-project-research
+skills/tiktok-publish-copy
+skills/viral-absurd-demo-video
+skills/viral-extreme-product-demo
+skills/viral-impossible-test-video
+skills/makaron/SKILL.md
+skills/makaron/COMPOSITE.json
+skills/makaron/parts/official

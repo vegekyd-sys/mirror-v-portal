@@ -1,33 +1,17 @@
 ---
 name: "image-search-apify-first"
-description: "Apify-first social visual discovery; DDG remains first for general image search."
+description: "找图片、产品照片、视觉参考；网页图片搜索，社媒案例转交社媒检索入口。"
 alwaysActive: false
 ---
 
-# Image Search — Apify First Overlay
+# 网页图片与视觉参考检索
 
-Use when the user asks for image search, reference images, product photos, social visual references, TikTok/Instagram/XHS visual discovery, or downloading public images/videos for analysis.
+## 1. 按来源分流
+通用图片、产品照片、公开电商主图先搜索引擎；社媒图文案例、账号/关键词内容、小红书/TikTok/Instagram/B 站参考转交 [社媒检索入口](../social-search-apify-first/SKILL.md)，Actor/凭据/故障规则只在其 runtime 参考维护。
+不要求用户说 Apify 或指定平台；口碑、真实使用场景、图文案例优先考虑社媒，官方产品参数用官方来源。纯生成且不缺参考不检索。
+完成判据：所选来源回答的是用户需要的图片/案例，而不是工具名匹配。
 
-## Routing priority
-
-1. General image search → DDG images first (`ddgs.images`) because it is fastest and not a platform crawler.
-2. Network crawling / social-platform discovery / TikTok / Instagram / XHS / Bilibili / video references → Apify first when a suitable Actor exists.
-3. Browser/Playwright/direct scraping/yt-dlp are fallbacks only after Apify fails, lacks coverage, or login/private content is explicitly required.
-4. Apify actor id format is `username~actor-name`, not `username/actor-name`.
-5. Load credentials from `APIFY_TOKEN` first, then `APIFY_API_KEY`; token is in `~/.openclaw/.env`. Never expose it.
-
-## Quick Reference
-
-| Need | First choice | Fallback |
-|---|---|---|
-| General web images | `ddgs.images()` | browser screenshot/download |
-| General video search | `ddgs.videos()` | platform Apify Actor |
-| TikTok/TT visual/video refs | `clockworks~tiktok-scraper` or script | yt-dlp / browser |
-| Instagram/Reels refs | `apify~instagram-reel-scraper`, `apify~instagram-post-scraper` | `easyapi~instagram-reels-downloader`, browser |
-| Xiaohongshu/XHS refs | `zen-studio~rednote-search-scraper` | existing XHS scripts/browser |
-| Bilibili video refs | `ahmed_jasarevic~bilibili-video-downloader` | browser `__playinfo__`, yt-dlp |
-| Product CDN images | search engine → public CDN URL | browser if blocked |
-
+## 2. 检索网页图片
 ## General Image Search (DDG)
 
 ```python
@@ -56,63 +40,8 @@ for r in results:
 
 Returns mostly YouTube URLs with view counts, durations, thumbnails.
 
-## Apify social visual discovery
 
-### TikTok / TT
-
-Primary Actor:
-
-- `clockworks~tiktok-scraper`
-
-Preferred script:
-
-```bash
-node scripts/apify-search.mjs tiktok "query" --limit 20 --json
-```
-
-Use returned thumbnails/video URLs/media metadata as references. For music sourcing, aggregate `musicMeta`.
-
-### Instagram / IG / Reels
-
-Primary Actors:
-
-- `apify~instagram-reel-scraper` — reels by profile/reel URL, can scrape/download reels and metadata.
-- `apify~instagram-post-scraper` — posts/reels by URLs or usernames.
-- `apify~instagram-hashtag-scraper` — hashtag discovery.
-- `apify~instagram-profile-scraper` — profile metadata.
-
-Downloader fallback:
-
-- `easyapi~instagram-reels-downloader`
-
-### Xiaohongshu / Rednote / XHS
-
-Primary Actor:
-
-- `zen-studio~rednote-search-scraper`
-
-Input shape:
-
-```json
-{"keywords":["AI绘画"],"sortBy":"general","limit":15}
-```
-
-`keywords` must be an array. Use returned `images[]`, title/desc, author, and engagement fields.
-
-### Bilibili
-
-Primary Actor:
-
-- `ahmed_jasarevic~bilibili-video-downloader`
-
-Input:
-
-```json
-{"links":["https://www.bilibili.com/video/BV..."]}
-```
-
-Use `result.best.video`, `result.best.audio`, and `mergeHint` to download/merge references.
-
+## 3. 下载并检查
 ## Download Images
 
 ### Direct hotlink
@@ -149,12 +78,8 @@ Rules:
 - JD/Tmall CDN image URLs are usually directly accessible.
 - Analyze downloaded images before using them as generation constraints.
 
-## Important rules
 
-1. General images: DDG first.
-2. Social/platform crawling: Apify first.
-3. Check downloaded file size and MIME before trusting assets.
-4. Present source URLs alongside images when useful.
-5. Respect copyright and platform terms; use references appropriately.
-6. the owner's platform cookies are read-only; do not post/comment/write.
-7. If Apify returns expired media URLs, rerun Actor instead of reusing stale links.
+## 4. 交付与边界
+下载后验证实际图片解码、内容和尺寸，识别 HTML/占位/截图；截图明确标注，不当作原图。给出公共来源页链接和检索范围；获取参考不等于已授权商业复用。
+公开资料只读，不替用户发帖/评论。少量检索可同步；批量、长等待交给后台执行，报告失败和清理状态。
+社媒媒体验证、签名 URL 处置、账号隔离和费用界限遵从社媒入口的 runtime，不在此复制规则。

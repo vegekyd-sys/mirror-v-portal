@@ -160,7 +160,6 @@
   <div id="gright" class="panel"><span id="close">✕</span><div id="detail"></div></div>
 </div></section>
 
-<script>/*__LIB__*/</script>
 <script>
 const DATA = /*__DATA__*/null;
 const S = DATA.stats;
@@ -184,13 +183,32 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + b.dataset.v));
   document.body.classList.toggle('g', b.dataset.v === 'graph');
   layout();
-  if (b.dataset.v === 'graph' && !graphReady) { graphReady = true; initGraph(); }
+  if (b.dataset.v === 'graph' && !graphReady) { graphReady = true; openGraph(); }
   history.replaceState(null, '', '#' + b.dataset.v);
 });
 
+// Graph data and its library are separate files, fetched the first time the graph opens.
+let graphLoad = null, graphData = null;
+function loadGraphData() {
+  return graphData ||= fetch('graph.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(g => { DATA.nodes = g.nodes; DATA.links = g.links; });
+}
+function loadGraph() {
+  return graphLoad ||= Promise.all([
+    loadGraphData(),
+    new Promise((ok, no) => { const s = document.createElement('script'); s.src = 'graph-lib.js'; s.onload = ok; s.onerror = no; document.head.appendChild(s); })
+  ]);
+}
+function openGraph() {
+  loadGraph().then(initGraph).catch(() => { graphLoad = null; graphData = null; graphReady = false;
+    document.getElementById('detail').innerHTML = '<div class="empty">图谱数据加载失败，请刷新重试</div>'; });
+}
+
 // ---------- daily ----------
+// Only the latest days are inlined; older days are stubs {date, lazy, totals} loaded on click.
 const days = DATA.runs || [];
 function dayTotals(d) {
+  if (d.lazy) return d.totals;
   const t = { merged:0, archived:0, pages:0, points:0, rewrite:0, strike:0, move:0, delete:0 };
   d.runs.filter(r=>r.phase!=='adoption').forEach(r => { (r.sources||[]).forEach(s => s.action === 'merged' ? t.merged++ : s.action === 'archived' && t.archived++);
     (r.changes||[]).forEach(c => { if (c.kind in t) t[c.kind]++; });
@@ -221,19 +239,31 @@ function initDayStrip() {
 }
 // 第一天还没有整理记录：先把已经写下的几页摆出来，别让主人打开是空的。
 function renderFirst(body) {
-  const pages = DATA.nodes.filter(n => n.s && n.p !== 'memory-librarian');
-  if (!pages.length) { body.innerHTML = '<div class="empty">还没有记下什么，今晚 9 点整理完再来看</div>'; return; }
-  body.innerHTML = `<div class="chips"><div class="kpi"><b>${pages.length}</b><span>页，第一版</span></div></div>
-    <div class="grid">${pages.map(n => `<div class="card"><h3>${esc(n.t)}</h3><p style="margin:6px 0 0">${esc(n.s)}</p></div>`).join('')}</div>
-    <p style="color:var(--mute);margin-top:18px">每晚 9 点整理一次，之后这里会按天列出新记下了什么。</p>`;
+  body.innerHTML = '<div class="empty">正在加载…</div>';
+  loadGraphData().then(() => {
+    const pages = DATA.nodes.filter(n => n.s && n.p !== 'memory-librarian');
+    if (!pages.length) { body.innerHTML = '<div class="empty">还没有记下什么，今晚 9 点整理完再来看</div>'; return; }
+    body.innerHTML = `<div class="chips"><div class="kpi"><b>${pages.length}</b><span>页，第一版</span></div></div>
+      <div class="grid">${pages.map(n => `<div class="card"><h3>${esc(n.t)}</h3><p style="margin:6px 0 0">${esc(n.s)}</p></div>`).join('')}</div>
+      <p style="color:var(--mute);margin-top:18px">每晚 9 点整理一次，之后这里会按天列出新记下了什么。</p>`;
+  }).catch(() => { graphData = null; body.innerHTML = '<div class="empty">加载失败，请刷新重试</div>'; });
 }
+let curDay = 0;
 function renderDays(sel) {
+  curDay = sel;
   document.getElementById('days').innerHTML = days.map((d,i) => { const t = dayTotals(d);
     return `<div class="day ${i===sel?'on':''}" data-i="${i}"><b>${d.date.slice(5)}</b><small>${t.points} 条记忆 · ${t.merged + t.archived} 碎片</small></div>`; }).join('');
   document.querySelectorAll('.day').forEach(el => el.onclick = () => renderDays(+el.dataset.i));
   initDayStrip();
   const body = document.getElementById('dayBody');
   if (!days.length) { renderFirst(body); return; }
+  if (days[sel].lazy) {
+    body.innerHTML = '<div class="empty">正在加载这一天的记录…</div>';
+    fetch(`days/${days[sel].date}.json`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(full => { days[sel] = full; if (curDay === sel) renderDays(sel); })
+      .catch(() => { body.innerHTML = '<div class="empty">这一天的记录加载失败，请刷新重试</div>'; });
+    return;
+  }
   const d = days[sel], t = dayTotals(d);
   body.innerHTML = `<div class="chips">
       <div class="kpi"><b style="color:var(--green)">${t.points}</b><span>条整理出的记忆</span></div>
