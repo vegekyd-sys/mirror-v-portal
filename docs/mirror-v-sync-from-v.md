@@ -155,7 +155,7 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 **验收中发现的问题**
 
 - 本次同步引起、已修（v19.1）：记忆页拆成多个文件后，`.gitignore` 只忽略了 `index.html`，其余在租户工作区是未跟踪文件，随手全量提交会进 git 历史和备份。改为忽略整个 `artifacts/memory-graph/`（保留 `vendor/`）。备份不看 `.gitignore`，记忆页照样能提供。
-- 以前就有、本次不修：沙盒时区是 UTC，Agent 在上海 0–8 点写的日志文件名是前一天（例：上海 11-26 01:51 写成 `memory/2026-11-25.md`），而 daily 队列的 `since` 按上海日期，凌晨开号的租户第一天日志永远进不了编译队列（这次因为初稿已写了同样的事实，没丢东西）。
+- 以前就有，**已在 v19.2 修复**（见文末）：沙盒时区是 UTC，Agent 在上海 0–8 点写的日志文件名是前一天（例：上海 11-26 01:51 写成 `memory/2026-11-25.md`），而 daily 队列的 `since` 按上海日期，凌晨开号的租户第一天日志永远进不了编译队列（这次因为初稿已写了同样的事实，没丢东西）。
 - 以前就有：Librarian 处理了队列段（标 skipped）时仍回复「今晚没有需要整理的新记忆」，汇报措辞不准。
 - 以前就有：运行记录里的时间是 agent 写的 UTC 字符串（`…T08:47:00Z`），页头时间已是上海时间。
 
@@ -174,3 +174,16 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 - 新租户 `v19.1`；开场一条消息（这次冷启动首字 128 秒，上一个租户 46 秒）；7 个定时任务；跑 `memory-graph.py` 后 `artifacts/memory-graph/` 不再出现在 `git status`，`vendor/force-graph.min.js` 仍被跟踪。
 - 两个合成租户的定时任务已全部关掉（`enabled=false`），租户保留在休眠状态，与之前的 `mvfull-accept-*`、`mvfull-onb-*` 一致。
 - 验收工具 `/opt/nexus/data/onb-accept.mjs` 新增 `fire <id> <任务名片段>`（只对没有 `app_id` 的合成租户），`say` 的会话名以 `=` 开头时按原样使用（`=<id>:oc_<任意>` 是带飞书会话的轮次，才会注册系统定时任务）。改前备份在 `onb-accept.mjs.bak-20261126`。注意远端 shell 是 zsh，`=` 开头的参数要加引号。
+
+### 2026-11-27 · payload `mirror-v-full.v19.2`（时区）
+
+| 项 | 值 |
+|---|---|
+| 源码提交 / release | `79de4083` / `79de40833f21`（CI 通过） |
+| 快照 | `snap_pB5cmOJyD9wCUSabUgTPsqgcwBav`（2026-12-26 过期）；回滚到 v19.1：release `d818860b2cad`、快照 `snap_Sq4PpGFE…`（`config.json.before-mirror-v-full-2026-11-26T16-09-17-015Z`） |
+
+- 原因：沙盒系统时区 UTC，Agent 按本地日期给 `memory/YYYY-MM-DD.md` 命名，夜间队列按上海日期算 `since`。上海 0–8 点开号时第一份日志落在 UTC 前一天，永远进不了编译队列。
+- `runtime/boot.mjs`：V 运行时的 Gateway 默认 `TZ=Asia/Shanghai`（模板 `runtimeEnv` 可覆盖）。属于控制面，老租户下次启动也生效；切换当天日志按上海日期继续，不跳日。
+- `librarian-daily-queue.py`：没有日志时 `since` 取上海与 UTC 日期中较早的一天，兜底。
+- 验收（合成租户 `mvfull-tz-01`，上海 11-27 00:09 开号，此时 UTC 仍是 11-26）：新租户 `v19.2` / `snap_pB5c…`；Gateway 进程 `TZ=Asia/Shanghai`；Agent 的 `date` 返回上海时间；日志写成 `memory/2026-11-27.md`，队列 `since` 同为 `2026-11-27`。之后定时任务已关闭。0.3、0.4 都是白天开号，第一天日志没有漏（只读核对）。
+
