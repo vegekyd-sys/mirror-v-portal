@@ -123,6 +123,11 @@ const env = {
   OPENCLAW_SKIP_CHANNELS: "1",
   // The codex harness reads DeepSeek's key under its own name (codex-home config.toml).
   ...(vRelease ? { DEEPSEEK_API_KEY: process.env.NEXUS_MODEL_KEY } : {}),
+  // The sandbox clock is UTC, but V's payload expects its host's Shanghai time: the agent names
+  // memory/YYYY-MM-DD.md by the local date while the nightly queue counts Shanghai days, so a log
+  // written 00:00-08:00 Shanghai landed on the day before and was never compiled. A template can
+  // still set TZ through runtimeEnv.
+  ...(vRelease ? { TZ: process.env.TZ || "Asia/Shanghai" } : {}),
   ...(process.env.NEXUS_OPTIMIZE === "1"
     ? {
         NODE_COMPILE_CACHE: `${base}/compile-cache`,

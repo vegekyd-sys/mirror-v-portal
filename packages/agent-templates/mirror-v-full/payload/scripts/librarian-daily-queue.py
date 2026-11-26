@@ -69,7 +69,13 @@ def first_log_day() -> str:
     keeps a fresh workspace at zero and an inherited one at its real first day.
     """
     days = sorted(p.stem for p in MEMORY.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md"))
-    return days[0] if days else dt.datetime.now(TZ).date().isoformat()
+    if days:
+        return days[0]
+    # No log yet (a fresh tenant): start from the earlier of the Shanghai and UTC dates. A process
+    # running on the sandbox's UTC clock names a log written 00:00-08:00 Shanghai by the day before,
+    # and a `since` one day later would skip that first log for good.
+    now = dt.datetime.now(dt.timezone.utc)
+    return min(now.date(), now.astimezone(TZ).date()).isoformat()
 
 
 def default_state() -> dict:
