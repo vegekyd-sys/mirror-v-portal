@@ -187,3 +187,29 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 - `librarian-daily-queue.py`：没有日志时 `since` 取上海与 UTC 日期中较早的一天，兜底。
 - 验收（合成租户 `mvfull-tz-01`，上海 11-27 00:09 开号，此时 UTC 仍是 11-26）：新租户 `v19.2` / `snap_pB5c…`；Gateway 进程 `TZ=Asia/Shanghai`；Agent 的 `date` 返回上海时间；日志写成 `memory/2026-11-27.md`，队列 `since` 同为 `2026-11-27`。之后定时任务已关闭。0.3、0.4 都是白天开号，第一天日志没有漏（只读核对）。
 
+### 2026-11-27 · 分场景验收与 V 对照，payload `mirror-v-full.v19.3`
+
+| 项 | 值 |
+|---|---|
+| 源码提交 / release | `d05c7396` / `d05c7396dece`（CI 通过） |
+| 快照 | `snap_RZBNbLcuFSkY0hiOR4WqVUCAEX60`（2026-12-27 过期）；回滚到 v19.2：release `79de40833f21`、快照 `snap_pB5c…`（`config.json.before-mirror-v-full-2026-11-26T18-30-59-097Z`） |
+| 合成租户 | `mvfull-scn-01`（新用户，v19.2）、`mvfull-tz-01`（已有身份「阿青 / 杭州茶叶电商」），验完定时任务已关 |
+
+对照 V 只读 V 的配置和真实记录（`/home/openclaw/makaron-openclaw/.openclaw-local/openclaw.json`、`~/.openclaw/agents/makaron` 的转录），不给 V 发测试消息。
+
+| 场景 | Mirror 表现 | 与 V 对照 | 结论 |
+|---|---|---|---|
+| 扫码开场 | 首字 26 秒、一条消息 | — | 通过（v19.1 那次 128 秒是冷启动个例） |
+| 自述 → 更正 → 追问 | 22 秒写进 USER.md；更正后旧值划线带日期；追问答「只做独立站、12 人」 | 同 V 的划线纠正规则 | 通过 |
+| Heartbeat | 19 秒 `HEARTBEAT_OK`，不发给主人 | V 开着 `dispatch_report`，发到主人群；Mirror 默认关 | 差异，待 Tianyi 定 |
+| 21:00 Librarian | 40 秒编译 2 片（自述 + 更正），新建项目页、提交、给记忆页链接 | 同 V | 通过 |
+| 记忆页 | 每日整理、图谱经签名链接加载；手机 375 宽无横向溢出 | 同 V（图谱里系统页节点偏大，V 也一样） | 通过 |
+| 技术调研（快递100 vs 快递鸟） | 62 秒，先说不确定的、给结论和验证办法 | 同一 skill | 通过 |
+| TikTok 文案 | 24 秒，按画面写、不编造「明前」、标签 5 个 | 同一 skill | 通过 |
+| 社媒搜索（小红书） | 80 秒，如实说拿不到数据，给接管电脑扫码的路 | V 有 Apify 账号与脚本，Mirror 没有 | 能力差异，待 Tianyi 定 |
+| 图片搜索 | 108 秒，7 张参考 + 共同手法 + 水印提醒 | 同一 skill | 通过 |
+| 出图（v19.2） | **失败**：用了自带 `image_generate`，转后台后本轮以 "No response from OpenClaw" 结束，图 20 秒后才出、送不到 | V 没配出图模型，最近三天 0 次 `image_generate`，出图全部走 makaron | v19.3 修复 |
+| 出图（v19.3） | 66 秒，makaron 出 2K 图，随本轮送达（`media-ready`） | 一致 | 通过 |
+| 引导追问（v19.2） | 每个回答底下都挂同一份「还想让我多了解你一点」 | V 没有引导，不追问 | v19.3 修复 |
+| 引导追问（v19.3） | 同一步提过一次没人接，之后两条派活回复都不再追问 | 一致 | 通过 |
+
