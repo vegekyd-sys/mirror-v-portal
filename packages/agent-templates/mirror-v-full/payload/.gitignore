@@ -1,7 +1,9 @@
 tmp/
 *.log
 __pycache__/
-artifacts/memory-graph/index.html
+# 记忆页是每晚重建的产物（index.html、graph.json、graph-lib.js、days/、history.jsonl），不进 git；只有随模板带的图谱库原件进
+artifacts/memory-graph/*
+!artifacts/memory-graph/vendor/
 artifacts/onboarding/
 artifacts-out/
 # 飞书授权进度、盘点结果、授权二维码和 lark-cli 日志：运行状态，不是记忆
