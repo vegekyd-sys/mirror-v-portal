@@ -101,8 +101,9 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 |---|---|
 | V 提交 | `5ccf8618`（10-28，v15 实际同步到的点）→ `185eb6e6`（11-25 21:21），298 个提交 |
 | payload | `mirror-v-full.v18.4` → `mirror-v-full.v19` |
-| 源码提交 / release | 见下方验收段 |
-| 快照 | 见下方验收段 |
+| 源码提交 / release | `335647ea`（v19）→ `d818860b`（v19.1，只改 payload 的 `.gitignore`） |
+| 快照 | v19 `snap_J7FtrtZlntprhlsH5vReedG3PHJU` → v19.1 `snap_Sq4PpGFEO8TrRQvbFwkAGF9cTOSa`（30 天后 2026-12-26 过期） |
+| 回滚依据 | 到 v19：release `335647ea4775`、快照 `snap_J7Ftrt…`（`config.json.before-mirror-v-full-2026-11-26T09-08-49-797Z`）；到 v18.4：release `ec85f78e0f1d`、快照 `snap_gH0qcjALgiGUoG4GaL4CIsag57bu`（`config.json.before-mirror-v-full-2026-11-25T17-47-48-109Z`） |
 
 **修了同步机制本身**
 
@@ -132,3 +133,44 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 - `social-search-apify-first` 依赖 `scripts/apify-search.mjs` / `apify-client.mjs`：在 V 上没进 git，payload 里没有，Mirror 也没有 Apify 凭据——这个 skill 在 Mirror 上跑不起来。
 - `makaron/SKILL.md` 要求飞书里先读 `parts/feishu/SKILL.md` 并用 `visible-parent-flow.cjs`，这两样是 V 私有的、payload 里没有；Mirror 上实际走官方 CLI 部分。
 - 记忆页分类标签里有 V 的 `versa-business`（只是一个分类名）。
+
+**验收（2026-11-26，合成租户 `mvfull-sync19-01`，v19 快照，不设 `app_id`）**
+
+| 项 | 结果 |
+|---|---|
+| 上线核对 | release `335647ea4775`，`config.json` 里 `mirror-v-full` = `v19` / `snap_J7Ftrt…`，公开目录 `?template=mirror-v-full` 返回 `mirror-v-full.v19`，`/healthz` 200，activate 的头像门禁通过 |
+| 新租户版本 | `create` → `mirror-v-full.v19`、`snap_J7Ftrt…` |
+| 扫码开场 | 平台开场提示（`GREETING_PROMPT`）→ 52 秒一条消息（冷启动，首字 46 秒）：开场白 + 说明接不上飞书、改要官网。没有授权链接是因为合成租户第一轮前没有沙盒、绑不了应用；随后 `bindapp`（只把 0.3 的应用配置读进合成沙盒，不碰 0.3 本身、不开长连接）后 `feishu-docs.py connect` 能生成设备码授权链接。这一段本次同步没改 |
+| 主人自述 → 初稿 | 写了 USER.md 和项目页，`memory: 上手初稿（主人自述）` 提交，回复里给了记忆页链接 |
+| 7 个系统定时任务 | 都在（Librarian 21:00、质检 22:00、Heartbeat 8:30/20:30、午夜报告、Skill 周复盘、飞书同步 20:30、导入补编 03:00）。注意：系统任务只在**带飞书会话**的轮次后注册，`say` 默认会话不会触发，要用 `say <id> '=<id>:oc_<任意>' …` |
+| Heartbeat（手动触发） | 23 秒，`HEARTBEAT_OK`；`heartbeat.py` 跑了（写了 `heartbeat-dispatch.json`、`heartbeat-analyzer-candidates.json`） |
+| 21:00 Librarian（手动触发两次） | 第一次 48 秒：队列空，做 lint + 滚动复核 + 规则源建基线（53 个来源），提交 `chore(librarian): … lint + 滚动复核`。把 `since` 拨回一天后第二次：读到当天日志那一段，判断事实已在初稿里、标 skipped 并提交（走 `librarian-corrections.py commit`） |
+| 记忆页（Portal 签名链接） | 第一天视图有内容（从 `graph.json` 取页面）；Librarian 后按天显示运行记录；图谱：`graph.json`、`graph-lib.js` 经签名路由 200，canvas 出图；没有 V 专属的 UM / 证书 / Living 手册段 |
+| heartbeat-dispatch 新路径 | Mirror 默认关闭汇报（`knight.config.json`），行为不变；打开配置（dry-run）验证：agent 写的话原样作为汇报、`should_notify:false` 不发、要求 agent 写而没写时不发机械兜底 |
+| technical-project-research | 问 force-graph 维护情况：26 秒，GitHub API 取星数、最近提交、issue 状态与作者活动，每条带出处 |
+| tiktok-publish-copy | 葡语文案：按画面写、标签 5 个单独一行并注明自生成、不编造认证产能、提醒同账号去重 |
+| makaron | 沙盒里 `npx makaron-cli --version` = 0.17.30（新于 skill 文档的 0.17.16）。没有实际生成（花额度），未验 |
+| 私有内容 | 租户工作区 grep 主人名、V 路径、V 的飞书 id 与文档链接、客户名：命中的只有 Mirror 自己的身份声明（「不是 Tianyi 的 V」）、飞书 URL 模板、memory-cold-start 里以前就有的 versa-ai 采集示例；没有来自这次同步的 |
+
+**验收中发现的问题**
+
+- 本次同步引起、已修（v19.1）：记忆页拆成多个文件后，`.gitignore` 只忽略了 `index.html`，其余在租户工作区是未跟踪文件，随手全量提交会进 git 历史和备份。改为忽略整个 `artifacts/memory-graph/`（保留 `vendor/`）。备份不看 `.gitignore`，记忆页照样能提供。
+- 以前就有、本次不修：沙盒时区是 UTC，Agent 在上海 0–8 点写的日志文件名是前一天（例：上海 11-26 01:51 写成 `memory/2026-11-25.md`），而 daily 队列的 `since` 按上海日期，凌晨开号的租户第一天日志永远进不了编译队列（这次因为初稿已写了同样的事实，没丢东西）。
+- 以前就有：Librarian 处理了队列段（标 skipped）时仍回复「今晚没有需要整理的新记忆」，汇报措辞不准。
+- 以前就有：运行记录里的时间是 agent 写的 UTC 字符串（`…T08:47:00Z`），页头时间已是上海时间。
+
+**没验到的**
+
+- 真实飞书里的呈现（开场一条消息、卡片、二维码图片）：合成租户不经飞书。
+- 真人扫码授权后读文档、写初稿的全流程：这段没改，沿用 v16–v18.4 的验收。
+- Makaron 实际出图 / 出视频、social-search（Mirror 没有 Apify 脚本和凭据，见上）。
+- 22:00 质检、午夜报告、Skill 周复盘、20:30 飞书同步、03:00 导入补编：本次同步没改它们的提示词和脚本，未单独触发。
+- 老租户：不随发布升级（见「老租户」一节），本次没有动任何真实租户。
+
+**v19.1 复验（合成租户 `mvfull-sync19-02`）**
+
+- 上线核对：release `d818860b2cad`，`config.json` = `v19.1` / `snap_Sq4PpGFE…`，公开目录返回 `mirror-v-full.v19.1`，`/healthz` 200，头像门禁通过。
+- v19.1 快照第一次构建在 `v-release-converge`（构建沙盒里启动运行时、装插件）失败，按规矩没有 activate，线上保持 v19；原样重跑一次成功。与本次改动无关，看起来是偶发，下次再遇到先重跑。
+- 新租户 `v19.1`；开场一条消息（这次冷启动首字 128 秒，上一个租户 46 秒）；7 个定时任务；跑 `memory-graph.py` 后 `artifacts/memory-graph/` 不再出现在 `git status`，`vendor/force-graph.min.js` 仍被跟踪。
+- 两个合成租户的定时任务已全部关掉（`enabled=false`），租户保留在休眠状态，与之前的 `mvfull-accept-*`、`mvfull-onb-*` 一致。
+- 验收工具 `/opt/nexus/data/onb-accept.mjs` 新增 `fire <id> <任务名片段>`（只对没有 `app_id` 的合成租户），`say` 的会话名以 `=` 开头时按原样使用（`=<id>:oc_<任意>` 是带飞书会话的轮次，才会注册系统定时任务）。改前备份在 `onb-accept.mjs.bak-20261126`。注意远端 shell 是 zsh，`=` 开头的参数要加引号。
