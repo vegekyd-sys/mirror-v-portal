@@ -87,3 +87,24 @@ test("no guide, scheduled turns: untouched", () => {
   expect(onboardingPreamble("夜间整理", { workspace: ws, sessionKey: "t:oc_x:scheduled:abc" })).toBe("夜间整理");
   expect(fs.existsSync(path.join(ws, "onboarding/progress.json"))).toBe(false);
 });
+
+test("a step the owner keeps passing over is asked once more, then rests for the day", () => {
+  // 2026-11-27: every answer about couriers, TikTok copy and packaging ended with the same menu.
+  const ws = workspace({ step: "more", chosen: [], done: [], skipped: ["feishu"] });
+  const at = (iso: string) => Date.parse(iso);
+  const ask = "回复的最后一句必须是下一步要主人做的那一件事";
+  const first = onboardingPreamble("快递100 和快递鸟哪个好", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-27T02:00:00+08:00") });
+  expect(first).toContain(ask);
+  const second = onboardingPreamble("帮我写个 TikTok 文案", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-27T02:05:00+08:00") });
+  expect(second).not.toContain(ask);
+  expect(second).toContain("今天不再提这一步");
+  expect(second).toContain("再多了解一点"); // the step's instructions stay, in case this message does answer it
+  // The owner took it up: the step moved, so the next step is asked normally.
+  fs.writeFileSync(path.join(ws, "onboarding/progress.json"), JSON.stringify({ step: "website", chosen: ["1"], done: [], skipped: ["feishu"] }));
+  expect(onboardingPreamble("没有官网", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-27T02:10:00+08:00") })).toContain(ask);
+  // A new day in Shanghai asks again.
+  fs.writeFileSync(path.join(ws, "onboarding/progress.json"), JSON.stringify({ step: "more", chosen: [], done: [], skipped: ["feishu"] }));
+  onboardingPreamble("a", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-27T23:00:00+08:00") });
+  expect(onboardingPreamble("b", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-27T23:30:00+08:00") })).not.toContain(ask);
+  expect(onboardingPreamble("c", { workspace: ws, sessionKey: "t:oc_x", now: at("2026-11-28T00:30:00+08:00") })).toContain(ask);
+});

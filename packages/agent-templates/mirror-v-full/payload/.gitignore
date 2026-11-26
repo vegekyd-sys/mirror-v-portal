@@ -9,6 +9,7 @@ artifacts-out/
 # 飞书授权进度、盘点结果、授权二维码和 lark-cli 日志：运行状态，不是记忆
 onboarding/feishu-*.json
 onboarding/progress.json
+onboarding/.nudge.json
 onboarding/lark-init.log
 feishu-auth.png
 

@@ -86,7 +86,7 @@ export function prepareInboundInput(request,config,options={}) {
  * that never saw it: the draft as sent is quoted back. Scheduled and other
  * background turns are left alone.
  */
-export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey=''}={}) {
+export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/workspace',sessionKey='',now=Date.now()}={}) {
   if(/:scheduled:/.test(sessionKey))return text;
   const guidePath=path.join(workspace,'onboarding','GUIDE.md'),script=path.join(workspace,'scripts','onboard-progress.py');
   if(!fs.existsSync(guidePath)||!fs.existsSync(script))return text;
@@ -110,6 +110,18 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
         '第 0 步（摘自引导，照做）：','————',guideSection(guide,'start'),'————','','主人的消息：',text].join('\n');
     }
   }
+  // Owner turns in a row at this step, today. The step only moves when the owner takes it up,
+  // so a count that keeps climbing means they are busy with other work. V has no onboarding and
+  // never tails a task with a menu; 2026-11-27 a tenant asking about couriers, TikTok copy and
+  // packaging got the same "还想让我多了解你一点" menu under every answer. Ask once more, then
+  // let it rest for the day; the owner picking it up (the step moves) or a new day asks again.
+  const nudgePath=path.join(workspace,'onboarding','.nudge.json');
+  const day=new Date(now).toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});
+  let nudge={};
+  try{nudge=JSON.parse(fs.readFileSync(nudgePath,'utf8'));}catch{}
+  const turns=nudge.step===progress.step&&nudge.day===day?(Number(nudge.turns)||0)+1:1;
+  try{fs.writeFileSync(nudgePath,JSON.stringify({step:progress.step,day,turns}));}catch{}
+  const resting=turns>=2;
   let draft='';
   if(progress.step==='draft'){
     try{draft=fs.readFileSync(path.join(workspace,'onboarding','draft.md'),'utf8').trim().slice(0,3000);}catch{}
@@ -120,8 +132,13 @@ export function onboardingPreamble(text,{workspace='/vercel/sandbox/agent-data/w
     '这一步的做法（摘自引导，照做）：','————',guideSection(guide,progress.step),'————',
     // Authorizing, reading and the website step usually run on into the draft in the same turn.
     ...(['feishu_auth','reading','website'].includes(progress.step)?['读完资料后接着写初稿时的做法：','————',draftSection(guide),'————']:[]),
-    '主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除，起完名字也不代表引导结束。',
-    '回复的最后一句必须是下一步要主人做的那一件事（链接、编号选项，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
+    ...(resting?[
+      '这一步已经问过主人，他在忙别的，没有接。主人这条消息如果是在回这一步，就照上面做完并写回进度；如果是在派活，只把活干好，回复末尾不要再附引导的问题、选项或链接，今天不再提这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除。',
+      '不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
+    ]:[
+      '主人在派活就先干完，再在同一条回复的最后接回这一步。做完这一步用 python3 scripts/onboard-progress.py set 写回进度。引导文件不要删除，起完名字也不代表引导结束。',
+      '回复的最后一句必须是下一步要主人做的那一件事（链接、编号选项，或者「回我『好了』」）。不要问「你想让我做什么」，不要提文件名、脚本名、IDENTITY 这类内部名字，不用 markdown 粗体和标题。',
+    ]),
     '','主人的消息：',text].join('\n');
 }
 
