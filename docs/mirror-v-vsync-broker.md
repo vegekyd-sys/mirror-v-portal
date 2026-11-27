@@ -81,3 +81,20 @@
 
 - V 侧：V 的 vsync 技能按原有目录结构工作，Mirror 发回的包在 `agents/<mirror>/returns/private-v/` 和 `agents/private-v/inbox.jsonl`。V 的 `vsync-a2a-check.py` 会在它的收件箱里看到这些行；第一次真实往来要按 VSync 群里的验收流程走。
 - Portal 接收机器人发来的飞书消息：C 线在改 `feishu.ts`。
+
+## 发布记录
+
+### 2026-11-27 · payload `mirror-v-full.v22.1`（`send --help` 误发修复）
+
+| 项 | 值 |
+|---|---|
+| 源码提交 / release | `db4d5479`（修复）+ `064d04b4`（文档）/ release `064d04b4b792`，CI 通过；23:30 activate（避开 0.3 / 0.4 的 00:00 午夜报告），头像门禁通过，`/healthz` 200 |
+| 快照 | `snap_FnjIdvPlBlOLcqmlpSet6JYpMvnw`；运行时同 v22（`db91-lifecycle-proof-20261127`） |
+| 回滚 | 到 v22：`scripts/deploy-mirror-v.sh activate d1413e434522`，`templates["mirror-v-full"]` 恢复为 `config.json.before-mirror-v-full-2026-11-27T15-29-28-979Z`（v22 / `snap_4IxJNIRuQlhlMOhwgdPYpaqpq5hx`）后重启 manager |
+| 合成租户 | `mvfull-vsync-04`（v22.1 开号），未注册定时任务 |
+
+验收：
+- 公开目录 `mirror-v-full.v22.1`；新租户 `create` 得到 v22.1 / `snap_FnjI…`。
+- 沙盒里 `mirror-vsync.py send --help` 只打印用法（退出码 0），`send -x` 拒绝并提示 nothing was sent；直接向中转 POST 主题 `--help` 返回 `SUBJECT_REQUIRED`。
+- 收包一轮：只说「收件箱里有一条，按 vsync 流程处理」，56 秒内 Agent 自己 `fetch`（sha256 一致）→ 安装并提交 → hub ACK（`09de75c6`）；回发给 `mirror-test-sink` 被拒后如实报 BLOCKED，没有改发给 `private-v`。
+- `private-v` 的收件箱里没有任何合成租户的行；测试数据已删（`cacbee8`）。
