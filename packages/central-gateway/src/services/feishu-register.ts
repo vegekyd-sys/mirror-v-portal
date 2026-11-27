@@ -6,6 +6,7 @@
  */
 
 import * as lark from '@larksuiteoapi/node-sdk';
+import { MIRROR_V_EVENTS, MIRROR_V_TENANT_SCOPES, MIRROR_V_USER_SCOPES } from './feishu-scopes.js';
 
 export type RegistrationStatus =
   | 'pending' | 'provisioning'
@@ -28,6 +29,8 @@ export interface RegistrationSession {
   webhookUrl?: string;
   error?: string;
   progress: number;
+  /** Set when the QR holds a short Portal link instead of the (too long) Feishu URL. */
+  scanId?: string;
   _abortController: AbortController;
   _completionPromise?: Promise<void>;
 }
@@ -49,24 +52,20 @@ export function registrationAvatarPreset(template: { avatarUrl?: string }, fallb
   return avatar?.length ? { avatar } : {};
 }
 
-// Templates whose agent reads the owner's documents ask for those user-identity
-// scopes on the creation page itself. Otherwise the owner had to find the app in
-// the developer console, enable them and publish a version before the agent could
-// read anything (2026-10-23: that detour took a day). The owner still consents
-// once, with their own account, before any document is read. Keep in step with
-// REQUIRED_SCOPES / OPTIONAL_SCOPES in mirror-v-full's scripts/feishu-docs.py.
-const DOCUMENT_READING_USER_SCOPES = [
-  'wiki:space:retrieve', 'wiki:node:retrieve', 'docx:document:readonly', 'docs:document.content:read',
-  'drive:drive.metadata:readonly', 'space:document:retrieve', 'wiki:wiki:readonly',
-];
+// Mirror V asks for its whole scope set on the creation page (services/feishu-scopes.ts), the
+// set V's own app holds minus what no Mirror V skill uses, so the owner grants it once instead of
+// finding the app in the developer console later (2026-10-23 that detour took a day). User-identity
+// scopes still need the owner's own consent before anything is read or written as them.
+// Other templates keep the minimum: send messages and resolve the sender's name (41050 otherwise).
+const BASIC_TENANT_SCOPES = ['im:message:send_as_bot', 'contact:user.base:readonly'];
 
 export function registrationScopes(templateId: string): { tenant: string[]; user: string[] } {
-  return {
-    // im:message:send_as_bot — 发消息；contact:user.base:readonly — 通讯录
-    // 基本信息只读（feishu 插件解析发送者姓名必需，缺失会报 41050）。
-    tenant: ['im:message:send_as_bot', 'contact:user.base:readonly'],
-    user: templateId === 'mirror-v-full' ? DOCUMENT_READING_USER_SCOPES : [],
-  };
+  if (templateId === 'mirror-v-full') return { tenant: [...MIRROR_V_TENANT_SCOPES], user: [...MIRROR_V_USER_SCOPES] };
+  return { tenant: [...BASIC_TENANT_SCOPES], user: [] };
+}
+
+export function registrationEvents(templateId: string): string[] {
+  return templateId === 'mirror-v-full' ? [...MIRROR_V_EVENTS] : ['im.message.receive_v1'];
 }
 
 export async function startFeishuRegistration(
@@ -123,7 +122,7 @@ export async function startFeishuRegistration(
         addons: {
           preset: true,
           scopes: registrationScopes(template.id),
-          events: { items: { tenant: ['im.message.receive_v1'] } },
+          events: { items: { tenant: registrationEvents(template.id) } },
         } as lark.AppAddons,
         createOnly: true,
         signal: abortController.signal,

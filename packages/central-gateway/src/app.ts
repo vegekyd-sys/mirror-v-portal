@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import QRCode from 'qrcode';
@@ -19,6 +19,11 @@ import { ONBOARD_HTML } from './services/onboard-page.js';
 import { PORTAL_SCAN_HTML } from './services/portal-scan-page.js';
 import { MakaronAccountError, signupAccountSecrets } from './services/makaron-account.js';
 import { isPublicAvatarFile, nativeAvatarUrl } from './services/avatar-policy.js';
+
+// Longest Feishu creation URL put straight into the QR (today's links are ~600 characters, QR
+// version 18); longer ones go through /onboard/feishu/go/:scanId.
+export const DIRECT_QR_MAX_CHARS = 1000;
+const FEISHU_AUTH_HOSTS = ['open.feishu.cn', 'open.larksuite.com', 'accounts.feishu.cn', 'accounts.larksuite.com'];
 
 // listed=false: selectable by explicit id (acceptance tests) but not shown on the signup page.
 interface SignupTemplate { id: string; version: string; name: string; appName?: string; description: string; avatarUrl?: string; listed?: boolean; accountProvisioning?: 'automatic' }
@@ -340,7 +345,7 @@ export function createApp() {
       host = url.hostname;
     }
     catch { res.status(503).json({ code: 'AUTH_URL_INVALID' }); return; }
-    const allowed = channel === 'feishu' ? ['open.feishu.cn', 'open.larksuite.com', 'accounts.feishu.cn', 'accounts.larksuite.com'] : ['liteapp.weixin.qq.com'];
+    const allowed = channel === 'feishu' ? FEISHU_AUTH_HOSTS : ['liteapp.weixin.qq.com'];
     if (!allowed.includes(host)) { res.status(503).json({ code: 'AUTH_URL_INVALID' }); return; }
     entry.channel = channel;
     entry.deviceCode = deviceCode;
@@ -578,7 +583,7 @@ export function createApp() {
       let qrDataUri = '';
       if (session.qrUrl) {
         try {
-          qrDataUri = await QRCode.toDataURL(session.qrUrl, { width: 300, margin: 1 });
+          qrDataUri = await QRCode.toDataURL(scanTarget(session), { width: 300, margin: 1 });
         } catch (e) {
           console.error('QR generation failed:', e);
         }
@@ -606,6 +611,26 @@ export function createApp() {
   // 飞书设备授权 — 轮询入驻状态
   // GET /onboard/feishu/status/:deviceCode
   // ═══════════════════════════════════════════════════════════
+  // Mirror V's creation link carries its whole scope set and is too long for a QR a phone can read
+  // (QR version 37 at 300 px). The QR then holds a short Portal link that sends Feishu's in-app
+  // browser on to the same creation page; the link lives as long as the registration session.
+  function scanTarget(session: RegistrationSession): string {
+    if (session.qrUrl.length <= DIRECT_QR_MAX_CHARS) return session.qrUrl;
+    session.scanId ??= randomBytes(16).toString('base64url');
+    return new URL(`/onboard/feishu/go/${session.scanId}`, config.portalBaseUrl).toString();
+  }
+  app.get('/onboard/feishu/go/:scanId', (req: Request, res: Response) => {
+    const scanId = String(req.params.scanId);
+    const session = /^[A-Za-z0-9_-]{22}$/.test(scanId) ? [...sessions.values()].find((s) => s.scanId === scanId) : undefined;
+    let target: URL | undefined;
+    try { target = session && session.status === 'pending' && Date.now() - session.startedAt.getTime() < session.expireIn * 1000 ? new URL(session.qrUrl) : undefined; } catch { target = undefined; }
+    if (!target || target.protocol !== 'https:' || !FEISHU_AUTH_HOSTS.includes(target.hostname)) {
+      res.status(410).type('html').send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>二维码已过期</title><p>二维码已过期，请回到电脑上重新生成。</p>');
+      return;
+    }
+    res.set('Cache-Control', 'no-store').set('Referrer-Policy', 'no-referrer').redirect(302, target.toString());
+  });
+
   app.get('/onboard/feishu/status/:deviceCode', (req: Request, res: Response) => {
     const { deviceCode } = req.params;
     const session = sessions.get(deviceCode);

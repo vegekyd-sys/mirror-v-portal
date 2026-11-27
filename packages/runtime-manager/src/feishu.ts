@@ -10,6 +10,7 @@ import { prepareFeishuMedia, uploadKey } from "./feishu-media.js";
 import { FeishuOutboundVault } from "./feishu-outbound.js";
 import { downloadFeishuVideo, persistFeishuVideo, parseFeishuVideos, downloadFeishuImage, parseFeishuContent, persistFeishuImage, parseFeishuFile, parseFeishuAudio, downloadFeishuResource, persistFeishuFile, persistFeishuAudio, fetchFeishuMessages, mergedTranscript } from "./feishu-inbound.js";
 import { transcribeAudio } from "./audio-transcribe.js";
+import { BotLoopGuard, judgeSender } from "./feishu-senders.js";
 import { MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 // Preserve the SDK's response-unwrapping and $return_headers interceptor; a fresh axios instance loses both.
@@ -220,12 +221,25 @@ export class FeishuEdge implements ChannelEdge {
       },
     );
   }
+  private botIds = new Map<string,{id?:string;at:number}>();
+  private loopGuard = new BotLoopGuard();
+  /** This app's own bot open_id (cached; a failed lookup is retried after five minutes). */
+  async botOpenId(tenant: Tenant, api: lark.Client): Promise<string | undefined> {
+    const cached=this.botIds.get(tenant.id);
+    if (cached && (cached.id || Date.now()-cached.at < 300_000)) return cached.id;
+    let id: string | undefined;
+    try {
+      const response:any=await (api as any).request?.({method:"GET",url:"/open-apis/bot/v3/info"});
+      id=typeof response?.bot?.open_id === "string" && response.bot.open_id ? response.bot.open_id : undefined;
+    } catch {}
+    this.botIds.set(tenant.id,{id,at:Date.now()});
+    return id;
+  }
   /** Transcript of a voice message, or undefined (no key, or the service failed: the file still goes through). */
   async transcribe(tenant: Tenant, audio: Buffer): Promise<string | undefined> {
-    const template=this.store.config.templates?.[tenant.template_id ?? ""];
-    const apiKey=template?.runtimeEnv?.GOOGLE_API_KEY;
-    if (!apiKey) return undefined;
-    try {return await transcribeAudio(audio,"audio/ogg",{apiKey,model:this.store.config.audioTranscribeModel});}
+    const asr=this.store.config.volcengineAsr;
+    if (!asr?.apiKey) return undefined;
+    try {return await transcribeAudio(audio,"audio/ogg",{apiKey:asr.apiKey,resourceId:asr.resourceId});}
     catch (error:any) {
       await this.store.event(tenant.id,"feishu-audio-transcribe-failed",{code:/^TRANSCRIBE_[A-Z0-9_]+$/.test(error?.message) ? error.message : "TRANSCRIBE_FAILED"});
       return undefined;
@@ -233,8 +247,15 @@ export class FeishuEdge implements ChannelEdge {
   }
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
-    if (!m?.message_id || data.sender?.sender_type === "app") return;
+    if (!m?.message_id) return;
     if (!["text","image","post","media","file","audio","merge_forward"].includes(m.message_type)) return;
+    const fromBot=data.sender?.sender_type === "app";
+    if (fromBot || m.chat_type === "group") {
+      const verdict=judgeSender({tenantId:tenant.id,chatId:String(m.chat_id ?? ""),chatType:m.chat_type,senderType:data.sender?.sender_type,
+        senderOpenId:data.sender?.sender_id?.open_id,mentions:m.mentions,botOpenId:await this.botOpenId(tenant,api)},this.loopGuard);
+      if (verdict === "bot-loop" || verdict === "bot-unknown") await this.store.event(tenant.id,"feishu-bot-message-dropped",{reason:verdict}).catch(()=>{});
+      if (verdict !== "accept") return;
+    }
     const videos=parseFeishuVideos(m.message_type,m.content);
     const document=parseFeishuFile(m.message_type,m.content), voice=parseFeishuAudio(m.message_type,m.content);
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
@@ -348,6 +369,7 @@ export class FeishuEdge implements ChannelEdge {
         text=`【主人回复了一条更早的消息，平台没能读到它的内容】\n${text}`;
       }
     }
+    if (fromBot) text=`【这条消息来自群里的另一个机器人，不是主人本人；它 @ 了你。回答它时注意别和它无休止地来回】\n${text}`;
     const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage ? {inheritAttachments:false} : {});
     if (run.delivery !== "sent") this.typing.start(run,api);
     const createdAt=Number(m.create_time);

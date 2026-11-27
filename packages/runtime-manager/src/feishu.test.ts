@@ -234,3 +234,14 @@ test("a run with neither a chat nor a message to reply to still refuses to guess
   const f = await fixture(); f.run.message_id = null; f.run.chat_id = null;
   await expect(f.edge.deliver(f.run, f.api)).rejects.toThrow("FEISHU_DELIVERY_TARGET_MISSING");
 });
+
+test("a bot that @s us in a group gets a turn, marked as not the owner; group chatter without an @ does not",async()=>{
+  const f=await fixture();f.api.request=vi.fn(async()=>({code:0,bot:{open_id:"ou_me"}}));
+  const said=(id:string)=>f.store.enqueue.mock.calls.find((c:any[])=>c[1]===id);
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"app",sender_id:{open_id:"ou_v"}},message:{message_id:"b1",chat_id:"oc_g",chat_type:"group",message_type:"text",content:JSON.stringify({text:"@_user_1 你好"}),mentions:[{key:"@_user_1",id:{open_id:"ou_me"}}]}});
+  expect(said("b1")[3]).toMatch(/^【这条消息来自群里的另一个机器人/);
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user",sender_id:{open_id:"ou_owner"}},message:{message_id:"g1",chat_id:"oc_g",chat_type:"group",message_type:"text",content:JSON.stringify({text:"大家好"})}});
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"app",sender_id:{open_id:"ou_me"}},message:{message_id:"self",chat_id:"oc_g",chat_type:"group",message_type:"text",content:JSON.stringify({text:"@_user_1 hi"}),mentions:[{key:"@_user_1",id:{open_id:"ou_me"}}]}});
+  expect(said("g1")).toBeUndefined();expect(said("self")).toBeUndefined();
+  expect(f.api.request).toHaveBeenCalledTimes(1);
+});
