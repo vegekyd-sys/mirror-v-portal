@@ -1,21 +1,12 @@
 # Paths of the distro workspace (distro/workspace/payload) the sandbox does not ship, one reason each.
 # A listed path that disappears from the workspace stops the import (remove the line then).
 #
-# Feishu writes and native cards. Mirror V reads the owner's Feishu and writes nothing there (the
-# Portal's product scope; the owner's app is granted read scopes at scan time), and its replies are
-# delivered by the Portal's channel edge, which does not render agent-made cards.
-skills/feishu-base-schedule-write/            # writes Bitable records as the owner
-skills/feishu-bitable-deliver/                # creates Bitables as the owner
-skills/feishu-channel-cards/                  # native Feishu channel cards; the Portal renders one markdown card per reply
-skills/feishu-doc-append-batch/               # edits documents
-skills/feishu-doc-permissions/                # creates documents and grants access
-skills/feishu-doc-rewrite-audit/              # audits documents it rewrote
-skills/feishu-send-image/                     # sends messages with lark-cli; replies carry media as MEDIA: lines
-skills/feishu-sheet-deliver/                  # creates spreadsheets as the owner
-skills/feishu-sheet-to-doc/                   # creates documents
-skills/lark-cli-permission-issue-troubleshooting/  # troubleshooting for the write and share commands above
+# Feishu writes ship as on V (Tianyi 2026-11-27: "要能写不能只是读"); only presentation the Portal
+# cannot render stays out: replies are delivered by the Portal's channel edge as one markdown card.
+skills/feishu-channel-cards/                  # native Feishu channel cards through the message tool (denied); the Portal renders one markdown card per reply
 # Scheduling. A sleeping sandbox runs no timers and the cron tool is denied; the Portal registers
-# schedules.json itself (gen-manifest.mjs) and the agent uses portal_schedule.
+# schedules.json itself (gen-manifest.mjs) and the agent uses portal_schedule. Shipping this script
+# would let `install` register the same jobs a second time in the sandbox's own Gateway.
 scripts/v-schedule.py                         # registers schedules with `openclaw cron`, records the owner's open_id
 # Presentation the Portal does not have.
 skills/makaron-long-video-production/        # supervises through one Feishu task card updated in place; behind the Portal each turn has one reply (skills/makaron covers video)

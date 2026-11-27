@@ -13,8 +13,10 @@
   "STATE_DIR",
   "TIMEZONE"
  ],
- "skipped": 12,
- "sandboxFiles": [],
+ "skipped": 3,
+ "sandboxFiles": [
+  "scripts/mirror-vsync.py"
+ ],
  "patches": [
   "01-portal-sandbox.patch"
  ]

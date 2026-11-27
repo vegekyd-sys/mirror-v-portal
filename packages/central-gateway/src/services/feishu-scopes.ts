@@ -58,7 +58,11 @@ export const MIRROR_V_TENANT_SCOPES = [
   "wiki:member:retrieve", "wiki:member:update", "wiki:node:copy", "wiki:node:create", "wiki:node:move",
   "wiki:node:read", "wiki:node:retrieve", "wiki:space:read", "wiki:space:retrieve", "wiki:space:write_only",
 ];
+// Plus what the payload's scripts/feishu-docs.py asks the owner for that V's app does not list
+// (WRITE_SCOPES there): its owner grant link must not point at scopes the app never requested.
+const PAYLOAD_EXTRA_USER_SCOPES = ['bitable:app', 'sheets:spreadsheet'];
 export const MIRROR_V_USER_SCOPES = [
+  ...PAYLOAD_EXTRA_USER_SCOPES,
   "base:app:copy", "base:app:create", "base:app:read", "base:app:update", "base:appmode:create",
   "base:appmode:read", "base:appmode_block:create", "base:appmode_block:read", "base:appmode_block:update",
   "base:appmode_page:create", "base:appmode_page:delete", "base:appmode_page:read",

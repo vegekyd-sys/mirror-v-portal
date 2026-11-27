@@ -57,6 +57,18 @@ REQUIRED_SCOPES = {
 OPTIONAL_SCOPES = {"drive:drive.metadata:readonly": "盘点个人云空间",
                    "space:document:retrieve": "列出云空间「我的空间」里的文档",
                    "wiki:wiki:readonly": "读个人文档库的页面树"}
+# 替主人写飞书（文档、日程、任务、多维表、表格、云空间）用的用户身份权限。和上面一样是可选的：
+# 安装时在应用上开通了，主人点同一次授权就一起拿到；没开通不挡上手引导，只是之后那一类写不了。
+# 名字以 `lark-cli auth scopes` 在真实租户上的结果为准。
+WRITE_SCOPES = {"docx:document": "创建和编辑文档",
+                "calendar:calendar": "查看和管理日程",
+                "task:task:write": "创建和更新任务",
+                "task:tasklist:write": "管理任务清单",
+                "bitable:app": "读写多维表格",
+                "sheets:spreadsheet": "读写电子表格",
+                "drive:drive": "管理云空间文件",
+                "wiki:node:create": "在知识库里建页面"}
+OPTIONAL_SCOPES.update(WRITE_SCOPES)
 # 默认不读的东西：飞书自带样例，以及标题一看就是凭据的页面。
 EXCLUDE_SPACE = re.compile(r"示例知识库|Wiki samples", re.I)
 EXCLUDE_TITLE = re.compile(r"凭证|密码|口令|账号清单|账号密码|账号.{0,2}邮箱|邮箱.{0,2}账号|登[录陆]信息|账号信息表|身份证|银行卡|secret|token|api[_ -]?key|私钥", re.I)
@@ -299,7 +311,7 @@ def check_scopes() -> dict:
     if missing:
         out["grantLink"] = grant_link(app_id, missing)
         out["tellOwner"] = (
-            "读你的文档，需要给 Mirror V 这个应用再开几项只读的「用户身份权限」（就是你扫码时绑定的那个应用，不是新应用；注意是用户身份，不是应用身份）。"
+            "读你的文档，需要给我这个机器人的飞书应用再开几项「用户身份权限」（就是你扫码时绑定的那个应用，不是新应用；注意是用户身份，不是应用身份）。"
             "打开下面的链接，要开的几项已经勾好了，点「开通」；然后在左边「版本管理与发布」里"
             "建一个新版本并发布。你是管理员的话一分钟就好，不是的话要等管理员审核。弄完回我「好了」。")
     else:

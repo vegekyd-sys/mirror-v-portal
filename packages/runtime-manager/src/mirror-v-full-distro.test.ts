@@ -60,4 +60,18 @@ describe("Mirror V payload from the distro workspace", () => {
     expect(offenders).toEqual([]);
     expect(fs.existsSync(path.join(payload, "artifacts/memory-graph/vendor/force-graph.min.js"))).toBe(true);
   });
+  it("writes Feishu like V and pushes proactively by default (Tianyi 2026-11-27)", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(payload, "payload-manifest.json"), "utf8"));
+    const proactive = manifest.systemSchedules.find((s: { name: string }) => s.name.startsWith("主动推进 · 每 6 小时"));
+    expect(proactive).toBeTruthy();
+    expect(proactive.enabled).not.toBe(false);
+    for (const skill of ["feishu-doc-permissions", "feishu-doc-append-batch", "feishu-sheet-deliver", "feishu-bitable-deliver", "feishu-base-schedule-write"])
+      expect(fs.existsSync(path.join(payload, "skills", skill, "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(payload, "skills/feishu-channel-cards"))).toBe(false);
+    const redlines = fs.readFileSync(path.join(payload, "REDLINES.md"), "utf8"), tools = fs.readFileSync(path.join(payload, "TOOLS.md"), "utf8");
+    expect(redlines).toContain("读写他的文档、日程、任务、多维表");
+    expect(`${redlines}${tools}`).not.toMatch(/只给 lark-cli 读|只用来读文档/);
+    expect(tools).toContain("## 飞书（读和写都和 V 一样）");
+    expect(fs.readFileSync(path.join(payload, "scripts/feishu-docs.py"), "utf8")).toContain("OPTIONAL_SCOPES.update(WRITE_SCOPES)");
+  });
 });

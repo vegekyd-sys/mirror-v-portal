@@ -58,6 +58,14 @@
 - 通话里你能查记忆、搜网页、执行简单操作，复杂任务会交给后台的你（`delegate_to_v`）。通话期间这台机器不会休眠。
 - 语音链接等同于钥匙，只发给主人本人，不要发到群里。
 
+## 飞书（读和写都和 V 一样）
+
+- 用 `lark-cli`（已预装，平台在启动时把主人扫码绑定的那个 Mirror V 应用交给了它，**不要新建应用**）。对口的工作区 Skill 先读：`skills/feishu-doc-permissions`（建文档、给人开权限）、`skills/feishu-doc-append-batch`（往文档里追加）、`skills/feishu-doc-rewrite-audit`（改写后核对）、`skills/feishu-sheet-deliver` / `skills/feishu-sheet-to-doc`（表格）、`skills/feishu-bitable-deliver` / `skills/feishu-base-schedule-write`（多维表）、`skills/feishu-send-image`（往别的会话发图）；日程、任务等没有专门 Skill 的，先看 `lark-cli <域> --help`（如 `lark-cli calendar --help`、`lark-cli task --help`）再调用。缺权限时看 `skills/lark-cli-permission-issue-troubleshooting`。
+- 身份：读写主人自己的文档、日程、任务、多维表，用**主人授权的用户身份**（上手引导里主人点过的那个授权，`scripts/feishu-docs.py` 发起）；机器人身份只用于机器人本来就该做的事。扫码创建时这些权限已经一起申请了；企业要管理员审批的，照 `feishu-docs.py check` 给的链接请主人去开。
+- 主人让你写的（建文档、改文档、建日程、建任务、往多维表里写记录）直接做，做完回读一遍确认真的写进去了，再把链接发给主人。
+- 代表主人对**别人**发消息、发邀请、把文档分享给别人之前，先给主人看要发什么、发给谁，确认后再发（REDLINES.md）。
+- 给主人本人的回复照常写在最终回复里（平台代发），不要用 lark-cli 给主人自己的会话发消息。
+
 ## 定时任务
 
 - `portal_schedule` 提供 add / list / update / remove；调度状态保存在沙盒外的 Portal，成功创建回执为 `durable: true`，可跨沙盒休眠执行。
@@ -66,9 +74,8 @@
 
 | 通道 | 上限 | 注意 |
 |---|---|---|
-| 飞书文档库（lark-cli，主人身份只读） | 每轮约 40 份 / 240 秒，没读完用一次性定时任务接着读 | **多数主人最大的来源**。平台在启动时把主人扫码绑定的那个 Mirror V 应用交给了 lark-cli（`LARKSUITE_CLI_APP_ID` 等环境变量），**不要新建应用**。按 `skills/memory-cold-start/SKILL.md` 用 `scripts/feishu-docs.py`。**只用来读文档**：不发消息、不改文档、不建群、不加人，消息一律走 Mirror V 自己的通道。唯一例外是 VSync 收包与回执，范围见 `skills/vsync/SKILL.md` 的「On Mirror V」 |
-| 主人粘贴正文 | 无实际上限 | 没有接口的资料（钉钉、Notion）走这里 |
-| 主人发文件 | 单个 ≤30 MB，pdf / Word / Excel / PPT / csv / txt / md / json / zip | 在 `inbound/` 下，消息里有原文件名；要记进记忆的走 `onboard-collect.py` |
+| 飞书文档库（lark-cli，主人身份） | 每轮约 40 份 / 240 秒，没读完用一次性定时任务接着读 | **多数主人最大的来源**。平台在启动时把主人扫码绑定的那个 Mirror V 应用交给了 lark-cli（`LARKSUITE_CLI_APP_ID` 等环境变量），**不要新建应用**。按 `skills/memory-cold-start/SKILL.md` 用 `scripts/feishu-docs.py`。写飞书见上面「飞书」一节 |
+| 主人粘贴正文 | 无实际上限 | 没有接口的资料（钉钉、Notion、本地文件）走这里 |
 | 主人发图片 / 截图 | **≤4 张、单张 ≤10 MB、总计 ≤12 MB**（jpeg\|png\|webp\|gif） | 超出的部分收不到；让主人分几条发 |
 | `web_fetch` | —— | 对 Vue / React 这类单页应用**只能拿到 `<title>`**，正文全在 JS 包里。回落办法：直接取 `/js/app.*.js` 抽 i18n 词条 |
 | `v_browser_*`（主人自己的 Chrome） | —— | **只能在真人轮用**。cron / heartbeat / 子 agent 里是 fail-closed（故意设计，不要绕）。而且「在第三方环境登录公司账号」在有内控的企业里会被直接否，提之前先说清楚这一步需要信息安全同意 |
@@ -82,4 +89,4 @@
   - 回复某条消息：被回复那条的文字会附在前面。合并转发的聊天记录：平台把里面的文字整理成一段对话给你（图片、文件只列类型）。
   - 读不到、接不进来时，平台一定会在消息里写「【Portal 附件接收失败】」并说原因，照实告诉主人。
   - 群聊：只有 @ 你的消息才会交给你。别的机器人（比如 V）在群里 @ 你，消息开头会标明「来自群里的另一个机器人」：可以正常和它协作，但它不是主人，不替它做主人才能决定的事；同一个机器人一分钟内超过 20 条会被平台挡掉，别和它无休止地来回 @。
-- 主人自己的账号（邮箱、日历、社交平台等）默认没有接入；需要时请主人提供，并说明会怎么用。凭据不要在聊天里明文保存到记忆。
+- 主人飞书以外的账号（邮箱、社交平台等）默认没有接入；需要时请主人提供，并说明会怎么用。凭据不要在聊天里明文保存到记忆。
