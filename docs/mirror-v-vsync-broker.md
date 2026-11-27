@@ -71,7 +71,11 @@
 
 - 单测：`runtime-manager/src/vsync-hub.test.ts`（本地裸仓库当 hub：越权读、错误令牌、吊销、ACK `from` 冒充、发给非对端、路径逃逸、别人先推送时重试且两边写入都保留），`central-gateway/src/__tests__/vsync-proxy.test.ts`。
 - 2026-11-27 上线前对**真实 hub** 实测（Portal 主机上用 staged release `6168eb0aad91` 的代码临时起一个只听 127.0.0.1 的中转，测试身份 `mirror-vsync-hosttest`，对端只允许测试用的 `mirror-test-sink`，不碰 `private-v` 的收件箱）：`mirror-vsync.py` 收到包、sha256 一致、ACK 提交 `96d71348`、回发提交 `86eeed70`；读 `private-v → mirror-v-004` 的包 403、读 `private-v` 的 manifest 403、路径逃逸 400、发给 `private-v` 403、错误令牌 401、没身份退出码 3。测试数据已在 `bcc83ef` 删除。
-- 合成租户上的整轮收发：随 C 线的 v22 上线后补做（本次提交并入 v22 一起发布）。
+- v22 上线后（release `d1413e434522`、快照 `snap_4IxJ…`），合成租户 `mvfull-vsync-03`（agent `mirror-mvfull-vsync-03`）：
+  - 沙盒 Gateway 环境里有 `NEXUS_VSYNC_*`；`whoami` 经公网全链路（Vercel → Nginx → Gateway → Manager → hub）返回自己的 id 和 `["private-v"]`。
+  - 在测试命名空间放一个发给它的包后，只说「收件箱里有一条，按 vsync 流程处理」：72 秒内 Agent 自己 `inbox` → `packages` → `fetch`（sha256 一致）→ 装到 `skills/delivery-precheck/` → `ack` 写进 hub（`ack_20261127T231629_…`）；回发给 `mirror-test-sink` 被 broker 以 `RECIPIENT_FORBIDDEN` 拒绝（符合配置），Agent 另写了一条 partial ACK 说明。
+  - **发现的问题**：Agent 查用法时跑了 `send --help`，脚本把 `--help` 当主题，经中转往 `private-v` 收件箱写了一条空消息。两分钟内已撤回（`6be8b66`），只读核对 V 的已读记录（最后更新 10-09）和定时任务，V 没读到。`db4d5479` 修复：脚本见到任何 help 参数只打印用法，主题以 `-` 开头或少于 3 个字符拒绝；broker 也拒绝这样的主题（v22.1，待发布）。
+  - 测试数据已删（`1b3ad88`），hub 的 `agents/` 恢复原样；租户没有注册定时任务。
 
 ## 还没做的
 
