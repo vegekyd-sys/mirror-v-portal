@@ -105,9 +105,11 @@ def fetch(package_id: str, dest: str) -> None:
 
 
 def send(args: list[str]) -> None:
-    if not args:
-        die("usage: send <subject> [--body text] [--dir package-dir] [--to private-v]")
+    if not args or args[0].startswith("-"):
+        die("usage: send <subject> [--body text] [--dir package-dir] [--to private-v]  (nothing was sent)")
     subject, rest = args[0], args[1:]
+    if len(subject.strip()) < 3:
+        die("send: subject too short (nothing was sent)")
     opts = {"--body": "", "--dir": "", "--to": "private-v", "--note": ""}
     while rest:
         k = rest.pop(0)
@@ -124,7 +126,8 @@ def send(args: list[str]) -> None:
 
 
 def main(argv: list[str]) -> None:
-    if not argv or argv[0] in ("-h", "--help"):
+    # Any help flag only prints usage: an agent exploring the CLI must never write to the hub by accident.
+    if not argv or any(a in ("-h", "--help", "help") for a in argv):
         print(__doc__)
         return
     cmd, args = argv[0], argv[1:]

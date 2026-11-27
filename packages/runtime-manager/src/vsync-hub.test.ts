@@ -77,6 +77,7 @@ describe("vsync broker against a git hub", () => {
     expect(ack.row.to).toBe("private-v");
     expect(show("agents/mirror-a/ack.jsonl")).toContain('"in_reply_to":"m1"');
     await expect(broker.send(a, { to: "mirror-b", subject: "x", files: [] })).rejects.toThrow("RECIPIENT_FORBIDDEN");
+    for (const subject of ["--help", "-h", "", "x"]) await expect(broker.send(a, { to: "private-v", subject, files: [] })).rejects.toThrow("SUBJECT_REQUIRED");
     const sent = await broker.send(a, { to: "private-v", subject: "A skill back", body: "please review", files: [{ path: "skills/demo/SKILL.md", contentBase64: Buffer.from("demo\n").toString("base64") }] });
     expect(sent.packageId).toMatch(/^mirror-a_to_private-v_\d{8}T\d{6}\+0800_a-skill-back$/);
     expect(show(`agents/mirror-a/returns/private-v/${sent.packageId}/skills/demo/SKILL.md`)).toBe("demo\n");

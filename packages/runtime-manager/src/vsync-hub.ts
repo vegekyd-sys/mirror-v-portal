@@ -315,7 +315,8 @@ export class VsyncBroker {
     if (!this.counterparts.includes(to)) throw new VsyncError("RECIPIENT_FORBIDDEN", 403);
     const subject = typeof input?.subject === "string" ? input.subject.slice(0, 300) : "";
     const body = typeof input?.body === "string" ? input.body.slice(0, 8000) : "";
-    if (!subject) throw new VsyncError("SUBJECT_REQUIRED");
+    // A CLI flag mistaken for a subject ("--help") must not reach a counterpart's inbox.
+    if (subject.trim().length < 3 || subject.startsWith("-")) throw new VsyncError("SUBJECT_REQUIRED");
     const now = stamp();
     const slug = (typeof input?.packageId === "string" && input.packageId ? input.packageId : subject).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "message";
     const files: { path: string; content: Buffer }[] = [];
