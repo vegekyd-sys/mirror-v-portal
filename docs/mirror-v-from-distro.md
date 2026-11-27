@@ -1,6 +1,6 @@
 # Mirror V 吃可安装 V 的发行包（C 线第二步）
 
-2026-11-27 CST 起草。**状态：候选（`mirror-v-full.v22-rc1`），在分支 `claude/sandbox-latest-v-44e8eb`，没进 `dev`、没上线。**
+2026-11-27 CST 起草。**状态：候选（`mirror-v-full.v22-rc2`，B 的工作区 `59bf9d55`），在分支 `claude/sandbox-latest-v-44e8eb`，没进 `dev`、没上线。**
 上线前要协调会话确认，并等 A、B 两条线的 PR（vegekyd-sys/v-openclaw-platform#661、#660）合并。
 
 沙盒版 Mirror V 和客户单独部署版用同一个发行包：A 线产运行时和安装器（`distro/`，契约 `distro/CONTRACT.md`），
@@ -12,7 +12,7 @@ B 线产工作区（`distro/workspace/`）。Mirror 这边只补「沙盒 / Port
 |---|---|---|
 | 运行时字节（core / worker / codex / 记忆索引器 / 工具版本） | v-distro 包的 `runtime/` | `scripts/package-v-release.sh <platform> <v-distro.tgz> <out>`：按包清单逐文件核对后取用；codex 整包换算成对 npm 的覆盖层；V 主机专属的胶水按哈希换掉（`core-mirror.mjs`）；`@openclaw/ai` 覆盖层包里没有时用 `deploy/v-release/ai-<release>` |
 | `openclaw.json` | 仍是 `runtime/v-config.mjs` | `src/v-config-distro.test.ts` 逐路径比对包里 `config/openclaw-config.mjs` 的 sandbox profile：每一处不同都写明原因，多一处少一处都失败。打包时核对 vendored 的生成器和包里的逐字节相同 |
-| 工作区（payload） | `distro/workspace/payload`（B 线） | `packages/agent-templates/mirror-v-full/distro/import-workspace.mjs`：渲染占位符 → 去掉 `sandbox-skip.txt` → 补 `sandbox-files/` → 打 `sandbox-patches/` → 写进 `payload/`，来源记在 `DISTRO_WORKSPACE.json` |
+| 工作区（payload） | `distro/workspace/payload`（B 线） | `packages/agent-templates/mirror-v-full/distro/import-workspace.mjs`：渲染占位符 → 去掉 `sandbox-skip.txt` → 补 `sandbox-files/`（现在为空）→ 打 `sandbox-patches/` → 写进 `payload/`，来源记在 `DISTRO_WORKSPACE.json` |
 | 定时任务 | payload 的 `schedules.json`（9 条） | `gen-manifest.mjs` 经 `distro/schedules.mjs` 映射成 Portal 系统任务（cron / heartbeat，`enabled:false` 照样登记成关闭） |
 
 直接从 V 同步的 `sync-from-v.sh` 一套在这个分支上退役：V → v-core → `distro/workspace`（B 的 `sync.mjs` 和审阅门）→ Mirror。
@@ -38,7 +38,7 @@ VBROWSER_REPO=~/v-browser scripts/package-v-release.sh ~/v-openclaw-platform <v-
 **不带**（`sandbox-skip.txt`）：替主人写飞书的 skill（多维表、表格、文档、权限、发图）、飞书原生卡片、`v-schedule.py`、
 长视频任务卡 skill。
 
-**补回**（`sandbox-files/`）：记忆图谱库 `artifacts/memory-graph/vendor/force-graph.min.js`（B 导入时漏了，B 自己的安装也没有图谱）。
+**补回**：现在不需要。rc1 补过记忆图谱库；B 在 `59bf9d55` 把它纳入了 git（平台仓库根 `.gitignore` 忽略 `artifacts/` 导致的），字节相同。
 
 **补丁**（`sandbox-patches/01-portal-sandbox.patch`）：
 
@@ -61,7 +61,7 @@ B 的去身份化（客户名、versa-ai 换成示例，不再出现主人名字
 | 自述 → 更正 | 40 / 10 秒；初稿带 Portal 签名记忆页链接；按 B 的新规则建了项目 `TODO.md`（下周三的报价） |
 | **主动推进**（新） | 61 秒一条消息：从 TODO 里挑了 5 天后的德国报价，查了欧盟森林法规对木制猫爬架的影响，问两件具体的事，给了报价单骨架 |
 | Heartbeat 维护 | 26 秒，`NO_REPLY`（静默） |
-| 21:00 Librarian | 43 秒，队列空、规则源基线、提交；lint 报 `TODO.md` 没从项目页链过去（B 的新约定和 Librarian 的可达性检查要对一下，告诉 B） |
+| 21:00 Librarian | 43 秒，队列空、规则源基线、提交；lint 报 `TODO.md` 没从项目页链过去（rc1；B 已用 `_TEMPLATE` 修，rc2 带上了） |
 | 导入补编 | 12 秒，`NO_REPLY` |
 | 出图 | 64 秒，`MEDIA:` 送达（`media-ready`） |
 
@@ -78,4 +78,4 @@ B 的去身份化（客户名、versa-ai 换成示例，不再出现主人名字
 
 - A：包的 `workspace/` 打进了 B 的整个 `distro/workspace/`（含 tests），触发自己的密钥扫描；B 的说法是只放 `payload/**`。
 - A：sandbox profile 缺 `gateway.reload.mode: off`（V 2026-09-20 热重载把 Worker 池关死）、缺禁用 `message`；V 的 4 个 `@openclaw/ai` 改动文件不在 captured-store。
-- B：`artifacts/memory-graph/vendor/force-graph.min.js` 没导入；项目 `TODO.md` 与 Librarian 可达性检查。
+- B：图谱库、项目 `TODO.md` 两处已在 `59bf9d55` 修。rc2 的沙盒补丁用三方合并带上了 B 在上手引导里加的 `_TEMPLATE` 那一行。
