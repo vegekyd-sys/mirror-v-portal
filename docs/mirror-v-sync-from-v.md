@@ -247,8 +247,9 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 
 | 项 | 值 |
 |---|---|
-| 源码提交 / release | 见本节提交 |
-| 合成租户 | `mvfull-vds-02` |
+| 源码提交 / release | `5285940d` / `5285940de0a8`（CI 通过） |
+| 快照 | `snap_lYMGFbuD1H8q9gzFuPAZgNEVgZco`（2026-12-27 过期）；回滚到 v19.4：release `c8043187ec1d`、快照 `snap_t5U9…`（`config.json.before-mirror-v-full-2026-11-27T08-31-36-851Z`） |
+| 合成租户 | `mvfull-vds-02`（v19.4 开号，上线后下一轮自动升到 v5 补丁，回复正常），验完定时任务已关 |
 
 - 现象：vds 下出图那轮回复里「这几样」变成「这几��」。过去 6 小时全部租户只有这一轮。Codex 的 rollout、OpenClaw 的会话记录里都是完整的「这几样」，坏的只有 OpenResponses 的 `output_text.delta`：Codex harness 把一个汉字的 UTF-8 字节拆进两个片段，各自解码成 U+FFFD。Mirror 的最终回复是 delta 拼出来的，所以带进了飞书卡片；V 的飞书渠道发的是会话里的最终消息，不受影响。
 - `runtime/progress-patch.mjs` 升到 `nexus-public-progress-v5`：在结果处理里，若已拼出的文本含 U+FFFD 而 `result.payloads` 的文本完整，就补发一个 `nexus.final_text`（结果处理先于收尾，`finalUsage` 赋值后收尾走 `setImmediate`）。已装 v4 的沙盒原样还原锚点再打 v5；在 `mvfull-vds-02` 真实 bundle 上验证过迁移、幂等和语法。`boot.mjs` 的 `RUNTIME_PATCHES` 同步改名，运行中的 Gateway 下一轮重启一次以加载补丁。
