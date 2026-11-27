@@ -74,7 +74,7 @@ describe("vsync broker against a git hub", () => {
     await expect(broker.ack(a, { in_reply_to: "m1", from: "mirror-b" })).rejects.toThrow("ACK_FROM_MISMATCH");
     const ack = await broker.ack(a, { in_reply_to: "m1", status: "applied", summary: "installed" });
     expect(ack.row.from).toBe("mirror-a");
-    expect(ack.row.to).toBe("private-v");
+    expect(ack.row.to).toBe("private-v"); // m1 has no sender: falls back to the counterpart
     expect(show("agents/mirror-a/ack.jsonl")).toContain('"in_reply_to":"m1"');
     await expect(broker.send(a, { to: "mirror-b", subject: "x", files: [] })).rejects.toThrow("RECIPIENT_FORBIDDEN");
     for (const subject of ["--help", "-h", "", "x"]) await expect(broker.send(a, { to: "private-v", subject, files: [] })).rejects.toThrow("SUBJECT_REQUIRED");
@@ -92,9 +92,10 @@ describe("vsync broker against a git hub", () => {
     await broker.inbox(a); // clone and fetch
     const other = path.join(root, "other");
     execFileSync("git", ["clone", "-q", remote, other]);
-    fs.appendFileSync(path.join(other, "agents/mirror-a/inbox.jsonl"), `${JSON.stringify({ id: "m3", to: "mirror-a" })}\n`);
+    fs.appendFileSync(path.join(other, "agents/mirror-a/inbox.jsonl"), `${JSON.stringify({ id: "m3", from: "v-from-test", to: "mirror-a" })}\n`);
     git(other, "commit", "-qam", "V writes"); git(other, "push", "-q", "origin", "main");
-    await broker.ack(a, { in_reply_to: "m3", status: "received" });
+    const ack3 = await broker.ack(a, { in_reply_to: "m3", status: "received" });
+    expect(ack3.row.to).toBe("v-from-test"); // goes back to the message's sender
     expect(show("agents/mirror-a/inbox.jsonl")).toContain('"m3"');
     expect(show("agents/mirror-a/ack.jsonl")).toContain('"in_reply_to":"m3"');
     expect((await broker.inbox(a)).rows.map((r) => r.id)).toEqual(["m1", "m3"]);

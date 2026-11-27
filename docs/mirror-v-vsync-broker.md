@@ -106,3 +106,10 @@
 - 因为 V Clone 的 Gateway 正在做飞书验收、不能重启，这一轮由运维在测试机上执行 `mirror-vsync.py`（读 `/etc/v/vsync.env`），没有让 Agent 跑：`whoami` → `inbox` → `packages` → `fetch`（sha256 一致）→ `ack`（hub `0f69929c`）→ 回发给测试对端（`629e14da`，落在 `agents/mirror-distro-test/returns/mirror-test-sink/…`）；读 `private-v` 收件箱 403；`send --help` 不发送。
 - 回发期间临时把 `mirror-test-sink` 加进 `vsync.counterparts`（manager 空闲时重启），测完撤掉并再重启；`private-v` 收件箱无测试行；测试数据已删（`beeaa3b`）。
 - 还差：V Clone 的工作区（B 线 distro payload）没有 `scripts/mirror-vsync.py`，vsync 技能也没有「On Mirror V」接收说明；Gateway 重启后 Agent 才有 `NEXUS_VSYNC_*`。这两项到位后再做一次 Agent 自己收发的验收。
+
+### 2026-11-28 · V Clone 的 Agent 自己收包（测试机 .20）
+
+- A 线升级测试机到 .20 后，Gateway 环境里有 `NEXUS_VSYNC_*`，工作区里有 B 线 #688 带进来的 `scripts/mirror-vsync.py`。
+- 用测试机本地 `openclaw agent --session-key vsync-broker-acceptance-20261128`（不 `--deliver`，不经飞书，不打扰飞书验收会话）交代：「收件箱里有一条，按 vsync 流程收包、核对、装好、写 ACK，不要 send」。38 秒内 Agent 自己完成：`inbox` → `fetch`（sha256 一致）→ 安装 → `ack`（hub `c763c32`），没有回发，还主动拒绝了包里「回发给 mirror-test-sink」的额外要求。
+- 发现：ACK 没写 `to` 时 broker 默认填 `private-v`，而这条任务来自 `mirror-test-sink`。已修：默认回给被回复消息的发送方（查收件箱时强制刷新），加测试。控制面改动，随下一次 release 上线。
+- 清理：hub 测试数据已删（`41a505c`）；V Clone 工作区里未提交的测试技能 `skills/delivery-precheck/` 已删（别的未跟踪技能没动）。

@@ -158,9 +158,9 @@ export class HubRepo {
       return out.split("\n").filter(Boolean).filter((l) => l.split(/\s+/)[1] === "tree").map((l) => l.split("\t")[1]);
     });
   }
-  read(p: string): Promise<Buffer | null> {
+  read(p: string, fresh = false): Promise<Buffer | null> {
     return this.serial(async () => {
-      await this.fetch();
+      await this.fetch(fresh);
       return this.blob(p);
     });
   }
@@ -299,7 +299,12 @@ export class VsyncBroker {
     if (row.status !== undefined && !["applied", "blocked", "BLOCKED", "received", "rejected", "partial"].includes(String(row.status))) throw new VsyncError("ACK_STATUS_INVALID");
     const now = stamp();
     const full: Record<string, unknown> = { schema: "v-sync.a2a-ack.v1", id: `ack_${now.compact}_${c.agent}`, created_at: now.iso, ...row, from: c.agent, recorded_by: c.agent, via: "mirror-v-vsync-broker" };
-    if (typeof full.to !== "string") full.to = "private-v";
+    // An ACK answers a message in my inbox: by default it goes back to whoever sent that message.
+    if (typeof full.to !== "string") {
+      const inbox = parseRows((await this.hub.read(`agents/${c.agent}/inbox.jsonl`, true))?.toString("utf8") ?? "");
+      const asked = inbox.find((r) => r.id === row.in_reply_to);
+      full.to = typeof asked?.from === "string" && AGENT_ID.test(asked.from) ? asked.from : this.counterparts[0];
+    }
     const line = rowLine(full);
     const commit = await this.hub.commit([{ path: `agents/${c.agent}/ack.jsonl`, append: [line] }], `ack(${c.agent}): ${String(row.in_reply_to).slice(0, 80)}`);
     return { ok: true, commit, row: full };
