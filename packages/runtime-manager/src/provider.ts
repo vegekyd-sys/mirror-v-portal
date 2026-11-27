@@ -509,7 +509,7 @@ export class VercelProvider implements RuntimeProvider {
             sessionKey,
             text,
             ...(materialized.some(({image})=>!image.kind) ? { images: materialized.filter(({image})=>!image.kind).map(({image})=>image), imagesFromPreviousTurn: !!context?.attachmentsFromPreviousTurn } : {}),
-            ...(materialized.some(({image})=>image.kind === "video") ? { files: materialized.filter(({image})=>image.kind === "video").map(({image})=>image), filesFromPreviousTurn: !!context?.attachmentsFromPreviousTurn } : {}),
+            ...(materialized.some(({image})=>!!image.kind) ? { files: materialized.filter(({image})=>!!image.kind).map(({image})=>image), filesFromPreviousTurn: !!context?.attachmentsFromPreviousTurn } : {}),
             channel: openclawChannel(context?.channel),
             caps: channelCaps(context?.channel),
           }),

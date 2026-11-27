@@ -68,6 +68,8 @@ export interface Config {
   /** Versioned, approved snapshots for additional signup templates. */
   templates?: Record<string, TemplateRecord>;
   optimizeRuntime?: boolean;
+  /** Gemini model that turns Feishu voice messages into text (default audio-transcribe.ts). */
+  audioTranscribeModel?: string;
   sandboxPrefix: string;
   /** External payload tar, rooted at the workspace. Overrides the in-repo payload. */
   payloadArchive?: string;

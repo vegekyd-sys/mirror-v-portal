@@ -112,3 +112,31 @@ describe('durable inbound user images',()=>{
     run.inherit_attachments=false;store.previousAttachments.mockClear();await manager.process(run.id);expect(store.previousAttachments).not.toHaveBeenCalled();expect(context.attachments).toEqual([]);
   });
 });
+
+describe('inbound documents and voice',()=>{
+  it('a pdf and a voice file reach the turn as real files, with the original name, and a wrong type is refused',()=>{
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'inbound-files-'));
+    try{
+      const ws=path.join(root,'workspace');fs.mkdirSync(path.join(ws,'inbound'),{recursive:true});
+      const pdf=Buffer.from('%PDF-1.7\n'),ogg=Buffer.from('OggS....');
+      const h=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
+      fs.writeFileSync(path.join(ws,'inbound',h(pdf)+'.pdf'),pdf);fs.writeFileSync(path.join(ws,'inbound',h(ogg)+'.opus'),ogg);
+      const files=[
+        {kind:'file',path:path.join(ws,'inbound',h(pdf)+'.pdf'),mimeType:'application/pdf',sha256:h(pdf),bytes:pdf.length,filename:'报价单.pdf'},
+        {kind:'audio',path:path.join(ws,'inbound',h(ogg)+'.opus'),mimeType:'audio/ogg',sha256:h(ogg),bytes:ogg.length},
+      ];
+      const prepared=prepareInboundInput({text:'看看这个',files},config,{workspace:ws,agentId:'makaron'});
+      expect(prepared.input).toContain('【本条消息的用户文件】');expect(prepared.input).toContain('原文件名：报价单.pdf');
+      expect(prepared.input).toContain('【本条消息的用户语音】');expect(prepared.input).toContain(`${h(ogg)}.opus`);
+      expect(()=>prepareInboundInput({text:'',files:[{...files[0],mimeType:'application/x-rar'}]},config,{workspace:ws})).toThrow('INVALID_SANDBOX_FILE');
+      expect(()=>prepareInboundInput({text:'',files:[{...files[0],filename:'../etc/passwd'}]},config,{workspace:ws})).toThrow('INVALID_SANDBOX_FILE');
+    }finally{fs.rmSync(root,{recursive:true,force:true});}
+  });
+  it('receipts accept the new kinds within their own limits',()=>{
+    const s='c'.repeat(64);
+    const doc={kind:'file' as const,mimeType:'application/pdf' as const,storagePath:`inbound/tenant-a/${'d'.repeat(64)}/${s}.pdf`,sha256:s,bytes:100,filename:'a.pdf'};
+    expect(normalizeInboundAttachments([doc],'tenant-a')).toEqual([doc]);
+    expect(()=>normalizeInboundAttachments([{...doc,bytes:31*1024*1024}],'tenant-a')).toThrow('INVALID_INBOUND_ATTACHMENT');
+    expect(()=>normalizeInboundAttachments([{...doc,mimeType:'audio/ogg'}],'tenant-a')).toThrow('INVALID_INBOUND_ATTACHMENT');
+  });
+});

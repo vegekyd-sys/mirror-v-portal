@@ -46,17 +46,24 @@ function prepareImageInput(request,config,{workspace='/vercel/sandbox/agent-data
 }
 
 
-// Videos remain files. Do not put their bytes (or a thumbnail) into input_image.
+// Videos, documents and voice remain files. Do not put their bytes (or a thumbnail) into input_image.
+const FILE_KINDS={
+  video:{max:64*1024*1024,ext:{'video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm'}},
+  file:{max:30*1024*1024,ext:{'application/pdf':'pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document':'docx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx','application/vnd.openxmlformats-officedocument.presentationml.presentation':'pptx','application/msword':'doc','application/vnd.ms-excel':'xls','application/vnd.ms-powerpoint':'ppt','text/csv':'csv','text/plain':'txt','text/markdown':'md','application/json':'json','application/zip':'zip'}},
+  audio:{max:25*1024*1024,ext:{'audio/ogg':'opus'}},
+};
 export function prepareInboundInput(request,config,options={}) {
   const files=request.files??[];
   if(!Array.isArray(files)||files.length+(request.images?.length||0)>4)throw Error('INVALID_SANDBOX_FILES');
   if(!files.length)return prepareImageInput(request,config,options);
   const workspace=options.workspace||'/vercel/sandbox/agent-data/workspace';
-  const lexicalRoot=path.resolve(workspace),root=fs.realpathSync(workspace),extensions={'video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm'};
+  const lexicalRoot=path.resolve(workspace),root=fs.realpathSync(workspace);
   let total=0;
   for(const file of files){
-    if(!file||file.kind!=='video'||typeof file.path!=='string'||!Object.hasOwn(extensions,file.mimeType)||typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256)||!Number.isSafeInteger(file.bytes)||file.bytes<=0||file.bytes>64*1024*1024)throw Error('INVALID_SANDBOX_FILE');
-    const filename=path.resolve(file.path),name=file.sha256+'.'+extensions[file.mimeType],expected=path.join(root,'inbound',name);
+    const kind=FILE_KINDS[file?.kind];
+    if(!kind||typeof file.path!=='string'||!Object.hasOwn(kind.ext,file.mimeType)||typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256)||!Number.isSafeInteger(file.bytes)||file.bytes<=0||file.bytes>kind.max)throw Error('INVALID_SANDBOX_FILE');
+    if(file.filename!==undefined&&(typeof file.filename!=='string'||!file.filename||file.filename.length>200||/[\x00-\x1f/\\]/.test(file.filename)))throw Error('INVALID_SANDBOX_FILE');
+    const filename=path.resolve(file.path),name=file.sha256+'.'+kind.ext[file.mimeType],expected=path.join(root,'inbound',name);
     if(filename!==expected&&filename!==path.join(lexicalRoot,'inbound',name))throw Error('SANDBOX_FILE_PATH_INVALID');
     if(fs.lstatSync(path.join(root,'inbound')).isSymbolicLink()||fs.lstatSync(filename).isSymbolicLink())throw Error('SANDBOX_FILE_SYMLINK_FORBIDDEN');
     if(fs.realpathSync(filename)!==expected)throw Error('SANDBOX_FILE_PATH_INVALID');
@@ -64,8 +71,14 @@ export function prepareInboundInput(request,config,options={}) {
     const bytes=fs.readFileSync(filename);if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('SANDBOX_FILE_CHECKSUM_MISMATCH');
     total+=file.bytes;if(total>64*1024*1024)throw Error('SANDBOX_FILES_TOO_LARGE');
   }
-  const caption=[request.text||'',request.filesFromPreviousTurn?'【同一会话此前提供的视频】':'【本条消息的用户视频】','视频输入：真实本地文件',...files.map((file,index)=>`视频${index+1}: ${file.path} (MIME: ${file.mimeType}; bytes: ${file.bytes}; SHA-256: ${file.sha256})`)].join('\n');
-  return prepareImageInput({...request,text:caption},config,options);
+  const previous=request.filesFromPreviousTurn,label={video:'视频',file:'文件',audio:'语音'};
+  const lines=[request.text||''];
+  for(const kind of ['video','file','audio']){
+    const list=files.filter(file=>file.kind===kind);if(!list.length)continue;
+    lines.push(previous?`【同一会话此前提供的${label[kind]}】`:`【本条消息的用户${label[kind]}】`,`${label[kind]}输入：真实本地文件`);
+    list.forEach((file,index)=>lines.push(`${label[kind]}${index+1}: ${file.path} (${file.filename?`原文件名：${file.filename}; `:''}MIME: ${file.mimeType}; bytes: ${file.bytes}; SHA-256: ${file.sha256})`));
+  }
+  return prepareImageInput({...request,text:lines.join('\n')},config,options);
 }
 
 /**

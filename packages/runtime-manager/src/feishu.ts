@@ -8,7 +8,8 @@ import { StreamingReply } from "./streaming-reply.js";
 import type { Run, Store, Tenant } from "./store.js";
 import { prepareFeishuMedia, uploadKey } from "./feishu-media.js";
 import { FeishuOutboundVault } from "./feishu-outbound.js";
-import { downloadFeishuVideo, persistFeishuVideo, parseFeishuVideos, downloadFeishuImage, parseFeishuContent, persistFeishuImage } from "./feishu-inbound.js";
+import { downloadFeishuVideo, persistFeishuVideo, parseFeishuVideos, downloadFeishuImage, parseFeishuContent, persistFeishuImage, parseFeishuFile, parseFeishuAudio, downloadFeishuResource, persistFeishuFile, persistFeishuAudio, fetchFeishuMessages, mergedTranscript } from "./feishu-inbound.js";
+import { transcribeAudio } from "./audio-transcribe.js";
 import { MAX_INBOUND_IMAGES, normalizeInboundAttachments, type InboundAttachment } from "./inbound-media.js";
 
 // Preserve the SDK's response-unwrapping and $return_headers interceptor; a fresh axios instance loses both.
@@ -219,12 +220,23 @@ export class FeishuEdge implements ChannelEdge {
       },
     );
   }
+  /** Transcript of a voice message, or undefined (no key, or the service failed: the file still goes through). */
+  async transcribe(tenant: Tenant, audio: Buffer): Promise<string | undefined> {
+    const template=this.store.config.templates?.[tenant.template_id ?? ""];
+    const apiKey=template?.runtimeEnv?.GOOGLE_API_KEY;
+    if (!apiKey) return undefined;
+    try {return await transcribeAudio(audio,"audio/ogg",{apiKey,model:this.store.config.audioTranscribeModel});}
+    catch (error:any) {
+      await this.store.event(tenant.id,"feishu-audio-transcribe-failed",{code:/^TRANSCRIBE_[A-Z0-9_]+$/.test(error?.message) ? error.message : "TRANSCRIBE_FAILED"});
+      return undefined;
+    }
+  }
   async receive(tenant: Tenant, api: lark.Client, data: any, connection?: unknown) {
     const receivedAt = Date.now(), m = data.message;
     if (!m?.message_id || data.sender?.sender_type === "app") return;
-    if (!["text","image","post","media","file"].includes(m.message_type)) return;
+    if (!["text","image","post","media","file","audio","merge_forward"].includes(m.message_type)) return;
     const videos=parseFeishuVideos(m.message_type,m.content);
-    if (m.message_type === "file" && !videos.length) return;
+    const document=parseFeishuFile(m.message_type,m.content), voice=parseFeishuAudio(m.message_type,m.content);
     if (typeof m.message_id !== "string" || typeof m.chat_id !== "string" || !m.chat_id) return;
     const content = parseFeishuContent(m.message_type,m.content);
     let text = content.text;
@@ -276,6 +288,65 @@ export class FeishuEdge implements ChannelEdge {
       }
       if(failure){failedImage=true;attachments=[];await this.store.event(tenant.id,"feishu-video-receive-failed",{code:failure,messageType:m.message_type});text="【Portal 附件接收失败】本条飞书视频原文件未能接入；本轮没有可用视频附件。";}
       else if(!text.trim())text="【Portal 附件信息】本条消息只有用户视频，没有附带文字。";
+    }
+    if (document) {
+      // Documents (pdf, Office, text): the agent reads the real file from the workspace.
+      let failure:string|undefined=failedImage ? "FEISHU_IMAGE_RESOURCE_INVALID" : undefined, buffer:Buffer|undefined;
+      if (!failure && !document.mimeType) failure="FEISHU_FILE_TYPE_UNSUPPORTED";
+      if (!failure && attachments.length + 1 > MAX_INBOUND_IMAGES) failure="FEISHU_FILES_TOO_MANY";
+      if (!failure) {try {buffer=await downloadFeishuResource(api,m.message_id,document.fileKey,"file");} catch (error:any) {failure=error.message;}}
+      if (!failure && buffer) {
+        try {attachments.push(await persistFeishuFile(this.store.config.dataDir,tenant.id,m.message_id,buffer,document.mimeType!,document.fileName));}
+        catch (error:any) {if (error?.message !== "FEISHU_FILE_FORMAT_UNSUPPORTED") throw error; failure=error.message;}
+      }
+      if (failure) {
+        failedImage=true;attachments=[];
+        await this.store.event(tenant.id,"feishu-file-receive-failed",{code:failure,messageType:m.message_type});
+        text=failure === "FEISHU_FILE_TYPE_UNSUPPORTED"
+          ? `【Portal 附件信息】主人发来文件「${document.fileName}」，这个类型暂时接不进来（能收 pdf、Word、Excel、PPT、csv、txt、md、json、zip）。本轮没有附件，请主人换成能收的格式，或把要点粘过来。`
+          : `【Portal 附件接收失败】主人发来的文件「${document.fileName}」没能接入（${failure}）。本轮没有附件，请如实告诉主人，并请他重发或把要点粘过来。`;
+      } else if (!text.trim()) text=`【Portal 附件信息】主人发来文件「${document.fileName}」，没有附带文字。`;
+    }
+    if (voice) {
+      // Voice: the audio file plus, when the template has a Google key, a transcript in the turn.
+      let failure:string|undefined, buffer:Buffer|undefined;
+      try {buffer=await downloadFeishuResource(api,m.message_id,voice.fileKey,"audio");} catch (error:any) {failure=error.message;}
+      if (!failure && buffer) {
+        try {attachments.push(await persistFeishuAudio(this.store.config.dataDir,tenant.id,m.message_id,buffer));}
+        catch (error:any) {if (error?.message !== "FEISHU_AUDIO_FORMAT_UNSUPPORTED") throw error; failure=error.message;}
+      }
+      const seconds=voice.durationMs ? `，约 ${Math.max(1,Math.round(voice.durationMs/1000))} 秒` : "";
+      if (failure) {
+        failedImage=true;attachments=[];
+        await this.store.event(tenant.id,"feishu-audio-receive-failed",{code:failure,messageType:m.message_type});
+        text=`【Portal 附件接收失败】主人发来一条语音${seconds}，没能接入（${failure}）。请如实告诉主人，请他重发或改成文字。`;
+      } else {
+        const transcript=await this.transcribe(tenant,buffer!);
+        text=transcript
+          ? `【语音消息${seconds}，下面是平台的自动转写，可能有错字】\n${transcript}`
+          : `【Portal 附件信息】主人发来一条语音${seconds}，平台没能转成文字；音频文件见附件。`;
+      }
+    }
+    if (m.message_type === "merge_forward") {
+      try {
+        const {children}=await fetchFeishuMessages(api,m.message_id);
+        text=children.length
+          ? `【主人转发的聊天记录，共 ${children.length} 条（图片、文件只列出类型，内容没有接入）】\n${mergedTranscript(children,data.sender?.sender_id?.open_id)}`
+          : "【Portal 附件信息】主人转发了一段聊天记录，但里面没有能读到的消息。";
+      } catch (error:any) {
+        await this.store.event(tenant.id,"feishu-merge-forward-failed",{code:/^FEISHU_[A-Z0-9_]+$/.test(error?.message) ? error.message : "FEISHU_MESSAGE_GET_FAILED"});
+        text="【Portal 附件接收失败】主人转发了一段聊天记录，没能读到里面的内容。请如实告诉主人，并请他把要点粘过来。";
+      }
+    }
+    if (typeof m.parent_id === "string" && m.parent_id && m.parent_id !== m.message_id) {
+      // A reply to an earlier message: put what it says in front, so the agent sees what "this" is.
+      try {
+        const {self}=await fetchFeishuMessages(api,m.parent_id);
+        if (self?.text) text=[`【主人回复的是${self.senderType === "app" ? "你之前发的" : "这条"}消息】`,self.text,"【被回复的消息到此为止】",text].join("\n");
+      } catch {
+        await this.store.event(tenant.id,"feishu-quote-failed",{messageType:m.message_type});
+        text=`【主人回复了一条更早的消息，平台没能读到它的内容】\n${text}`;
+      }
     }
     const run=await this.store.enqueue(tenant.id,m.message_id,`${tenant.id}:${m.chat_id}`,text,"feishu",m.message_id,attachments,failedImage ? {inheritAttachments:false} : {});
     if (run.delivery !== "sent") this.typing.start(run,api);

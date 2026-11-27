@@ -148,10 +148,61 @@ test("one unusable rich-post image fails the whole source set rather than editin
   expect(run?.attachments).toEqual([]);expect(run?.inherit_attachments).toBe(false);expect(run?.text).not.toMatch(/不要|必须|不能/);
   expect(f.events.some(event=>event[1]==="feishu-image-receive-failed" && event[2].messageType==="post")).toBe(true);
 });
-test("bot messages and unsupported inbound audio are not mislabeled as text or images",async()=>{
+test("bot messages and message types the Portal does not take are not mislabeled as text or images",async()=>{
   const f=await fixture();
-  for(const [senderType,messageType] of [["app","image"],["user","audio"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});
+  for(const [senderType,messageType] of [["app","image"],["user","sticker"],["user","share_chat"]]) await f.edge.receive(f.tenant,f.api,{sender:{sender_type:senderType},message:{message_id:"m",chat_id:"chat",message_type:messageType,content:'{"text":"text"}'}});
   expect(f.store.enqueue).not.toHaveBeenCalled();expect(f.api.im.messageResource.get).not.toHaveBeenCalled();
+});
+
+const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n");
+const ogg=Buffer.concat([Buffer.from("OggS"),Buffer.alloc(60,1)]);
+const said=(f:any)=>f.store.enqueue.mock.calls.at(-1);
+test("a pdf the owner sends reaches the turn as a file with its original name",async()=>{
+  const f=await fixture();f.api.im.messageResource.get.mockResolvedValue({getReadableStream:()=>Readable.from([pdf])});
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-pdf",chat_id:"chat",message_type:"file",content:JSON.stringify({file_key:"fk",file_name:"报价单 v2.pdf"})}});
+  expect(f.api.im.messageResource.get.mock.calls[0][0]).toEqual({path:{message_id:"m-pdf",file_key:"fk"},params:{type:"file"}});
+  const [, , , text, , , attachments]=said(f);
+  expect(attachments).toEqual([expect.objectContaining({kind:"file",mimeType:"application/pdf",filename:"报价单 v2.pdf",bytes:pdf.length})]);
+  expect(text).toContain("报价单 v2.pdf");
+});
+test("an unsupported file type or bytes that do not match the name are reported, not passed on",async()=>{
+  const f=await fixture();
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-rar",chat_id:"chat",message_type:"file",content:JSON.stringify({file_key:"fk",file_name:"a.rar"})}});
+  expect(f.api.im.messageResource.get).not.toHaveBeenCalled();
+  expect(said(f)[6]).toEqual([]);expect(said(f)[3]).toContain("暂时接不进来");
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-fake",chat_id:"chat",message_type:"file",content:JSON.stringify({file_key:"fk",file_name:"x.pdf"})}});
+  expect(said(f)[6]).toEqual([]);expect(said(f)[3]).toContain("FEISHU_FILE_FORMAT_UNSUPPORTED");
+  expect(f.events.some((e:any[])=>e[1]==="feishu-file-receive-failed")).toBe(true);
+});
+test("a voice message arrives as audio plus the platform transcript; without a transcript the agent is told",async()=>{
+  const f=await fixture();f.api.im.messageResource.get.mockResolvedValue({getReadableStream:()=>Readable.from([ogg])});
+  const transcribe=vi.spyOn(f.edge,"transcribe").mockResolvedValueOnce("下周三前把报价发我").mockResolvedValueOnce(undefined);
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-voice",chat_id:"chat",message_type:"audio",content:JSON.stringify({file_key:"ak",duration:3200})}});
+  expect(transcribe).toHaveBeenCalledWith(f.tenant,ogg);
+  expect(said(f)[6]).toEqual([expect.objectContaining({kind:"audio",mimeType:"audio/ogg"})]);
+  expect(said(f)[3]).toContain("约 3 秒");expect(said(f)[3]).toContain("下周三前把报价发我");
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-voice2",chat_id:"chat",message_type:"audio",content:JSON.stringify({file_key:"ak"})}});
+  expect(said(f)[3]).toContain("没能转成文字");expect(said(f)[6]).toHaveLength(1);
+});
+test("without a Google key there is no transcription call",async()=>{
+  const f=await fixture();
+  await expect(f.edge.transcribe({id:"tenant",template_id:"mirror-v-full"} as any,ogg)).resolves.toBeUndefined();
+});
+test("a merged forward becomes a transcript; a reply carries the message it answers",async()=>{
+  const f=await fixture();
+  f.api.im.message.get=vi.fn(async({path}:any)=>path.message_id==="m-merge" ? {code:0,data:{items:[
+    {message_id:"m-merge",msg_type:"merge_forward",body:{content:"Merged and Forwarded Message"}},
+    {message_id:"c1",upper_message_id:"m-merge",msg_type:"text",sender:{id:"ou_owner",sender_type:"user"},body:{content:'{"text":"价格能再低点吗"}'}},
+    {message_id:"c2",upper_message_id:"m-merge",msg_type:"text",sender:{id:"ou_buyer",sender_type:"user"},body:{content:'{"text":"MOQ 500"}'}},
+  ]}} : {code:0,data:{items:[{message_id:"m-parent",msg_type:"interactive",sender:{id:"cli_bot",sender_type:"app"},body:{content:JSON.stringify({elements:[{tag:"markdown",content:"报价：每件 3.2 美元"}]})}}]}});
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user",sender_id:{open_id:"ou_owner"}},message:{message_id:"m-merge",chat_id:"chat",message_type:"merge_forward",content:'"Merged and Forwarded Message"'}});
+  expect(said(f)[3]).toContain("共 2 条");expect(said(f)[3]).toContain("主人：价格能再低点吗");expect(said(f)[3]).toContain("成员A：MOQ 500");
+  expect(said(f)[3]).not.toContain("ou_");
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-reply",parent_id:"m-parent",chat_id:"chat",message_type:"text",content:'{"text":"这个能改成 3 美元吗"}'}});
+  expect(said(f)[3]).toMatch(/你之前发的消息】\n报价：每件 3\.2 美元\n【被回复的消息到此为止】\n这个能改成 3 美元吗$/);
+  f.api.im.message.get=vi.fn(async()=>({code:230001,msg:"no permission"}));
+  await f.edge.receive(f.tenant,f.api,{sender:{sender_type:"user"},message:{message_id:"m-reply2",parent_id:"m-x",chat_id:"chat",message_type:"text",content:'{"text":"这个呢"}'}});
+  expect(said(f)[3]).toBe("【主人回复了一条更早的消息，平台没能读到它的内容】\n这个呢");
 });
 
 test('a successful attachment-only response gets a neutral caption instead of a failure claim',async()=>{
