@@ -164,9 +164,7 @@
 const DATA = /*__DATA__*/null;
 const S = DATA.stats;
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const THEME = { 'night-shift':'夜班 Night Shift', makaron:'Makaron / 出片', scene:'Scene', xingqing:'星擎 / 天策', dealclaw:'DealClaw / 小元 / Nexus',
-  'mio-aochuang-csm':'米奥 / 奥创 / CSM / 美的', 'feishu-wecom-channel':'飞书 / 企微渠道', 'openclaw-infra':'OpenClaw 基础设施',
-  'memory-self-evolution':'Memory / 自进化', 'versa-business':'Versa 业务', misc:'其他', 'family-personal':'家庭 / 个人', 'companion-private':'私密（只统计）' };
+const THEME = { makaron:'Makaron / 出片', 'memory-self-evolution':'Memory / 自进化', misc:'其他', 'family-personal':'家庭 / 个人' };
 document.getElementById('gen').textContent = `更新于 ${S.generated}`;
 
 // ---------- tabs ----------

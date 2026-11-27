@@ -23,7 +23,7 @@ MEM = ROOT / "memory"
 OUT = MEM / "librarian" / "relation-candidates.json"
 KW = re.compile(r"(?:别名/)?关键词[：:]\s*(.+)")
 LINK = re.compile(r"\]\(([^)#\s]+)")
-GENERIC = {"v", "tianyi", "makaron", "openclaw", "feishu", "飞书", "项目", "main", "agent", "cli", "skill", "cron", "scene", "wiki",
+GENERIC = {"v", "owner", "makaron", "openclaw", "feishu", "飞书", "项目", "main", "agent", "cli", "skill", "cron", "scene", "wiki",
            "project", "workflow", "dashboard", "live board", "策划案", "report", "api", "bot", "prd", "demo", "test"}
 HUB_SHARE = 0.03  # projects named in >3% of daily-log sections: reported as hubs; pair score is cosine-normalised so they do not dominate
 

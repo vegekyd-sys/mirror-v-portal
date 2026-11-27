@@ -97,7 +97,7 @@ def run_incremental_index(workspace: Path, agent: str, openclaw_bin: str, log_fi
 def main() -> int:
     parser = argparse.ArgumentParser(description="Auto-index OpenClaw durable memory after file writes.")
     parser.add_argument("--workspace", default=os.getcwd(), help="OpenClaw workspace path")
-    parser.add_argument("--agent", default="makaron", help="OpenClaw agent id")
+    parser.add_argument("--agent", default="mirror-v-full", help="OpenClaw agent id")
     parser.add_argument("--openclaw-bin", default="openclaw", help="openclaw executable")
     parser.add_argument("--poll-seconds", type=float, default=5.0, help="Filesystem polling interval")
     parser.add_argument("--debounce-seconds", type=float, default=15.0, help="Quiet period before indexing")

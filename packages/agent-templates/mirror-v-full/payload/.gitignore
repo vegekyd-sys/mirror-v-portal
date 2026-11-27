@@ -18,3 +18,8 @@ feishu-auth.png
 # 原因是备份把整个 workspace 连 .git 一起打包，删文件不会让备份变小。
 # heartbeat 的 reflection 游标：运行状态，不是记忆
 .knight-reflection-cursor
+
+# 主动推进每一轮的材料快照、主人 open_id：运行状态，不是记忆
+memory/heartbeat/runs/
+onboarding/owner.json
+links.json

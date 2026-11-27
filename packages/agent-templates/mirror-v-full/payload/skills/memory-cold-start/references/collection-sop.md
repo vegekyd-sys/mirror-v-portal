@@ -6,13 +6,13 @@
 
 ## ① SPA 官网：首页 fetch 只能拿到 `<title>`，正文在 JS 包里
 
-**现象**：`web_fetch https://www.versa-ai.com` 回来的 HTML 里只有一个 `<title>`，`<body>` 是空的 `<div id="app">`。看起来像「这家公司官网没内容」，其实是 Vue / React 单页应用，正文在打包后的 JS 里当 i18n 词条。
+**现象**：`web_fetch https://www.example.com` 回来的 HTML 里只有一个 `<title>`，`<body>` 是空的 `<div id="app">`。看起来像「这家公司官网没内容」，其实是 Vue / React 单页应用，正文在打包后的 JS 里当 i18n 词条。
 
 **步骤：**
 
 1. `web_fetch` 首页，看 `<body>` 里有没有实际文字。只有一个挂载点 `<div id="app">` 就走下面。
 2. 从首页 HTML 里 grep 出 `<script src="...">`，找 `/js/app.<hash>.js`（Vue CLI 默认命名）或 `/assets/index-<hash>.js`（Vite）。
-   实测路径：`https://www.versa-ai.com/js/app.7ded5e48.js`
+   实测路径：`https://www.example.com/js/app.7ded5e48.js`
 3. `web_fetch` 这个 JS 文件（它是文本，不是二进制，可以直接读）。
 4. 在里面找 i18n 词条对象 —— 通常是一大段 `{zh:{...},en:{...},ja:{...}}` 或 `messages:{...}`。Versa 实测拿到中英日三语全量文案。
 5. 顺带抓 `/js/chunk-vendors.*.js` 之外的业务 chunk，产品页 / 关于我们 / 时间线常常各在一个 chunk 里。
@@ -65,14 +65,14 @@
 
 ## ④ 私有端点不采集，但要记一条「这里有东西，我没读」
 
-**现象**：扫子域名会撞到内部系统。实测 `git.versa-ai.com` 返回 GitLab 的 `/users/sign_in` 登录页。
+**现象**：扫子域名会撞到内部系统。实测某公司的 `git.<公司域名>` 返回 GitLab 的 `/users/sign_in` 登录页。
 
 **规则：**
 
 - **不尝试登录、不猜密码、不扫目录、不碰 API。** 返回登录页 = 到此为止。
 - **但不要假装没看见。** 在记忆里记一行：
   ```
-  git.versa-ai.com — 自建 GitLab，返回登录页，未采集（2026-10-20，HTTP 探测）
+  git.example.com — 自建 GitLab，返回登录页，未采集（2026-10-20，HTTP 探测）
   ```
 - 这一行写进对应的项目页：它是一条「我知道这里有什么，但我拿不到」的边界，主人以后想补，照着它补。
 

@@ -53,6 +53,8 @@ export interface SystemSchedule {
   /** `repeat` brings the next run forward while a backlog lasts (schedule-repeat.ts). */
   schedule: ({ kind: "cron"; expr: string; tz?: string } | { kind: "every"; everySeconds: number }) & { repeat?: { while: "imports-pending"; afterSeconds: number; untilHour: number } };
   prompt: string;
+  /** false: registered switched off (the owner can turn it on); default on. */
+  enabled?: boolean;
 }
 
 export interface Config {

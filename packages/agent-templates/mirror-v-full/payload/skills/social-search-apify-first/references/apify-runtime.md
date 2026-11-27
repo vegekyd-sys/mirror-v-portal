@@ -2,7 +2,7 @@
 
 ## 凭据与账号
 默认账号按名字顺序 APIFY_TOKEN → APIFY_API_KEY；每个名字先看进程环境，再看本机 ~/.openclaw/.env。不修改 token 值，不强制两个别名相等。
-**只有默认账号一个作用域**：按名字顺序 APIFY_TOKEN → APIFY_API_KEY，不按账号切换、不传 `--account`（原 `haoyuan` 作用域 2026-10-12 停用，夜班策划案同样走默认 key）。账号失败不自动切换。
+**只有默认账号一个作用域**：按名字顺序 APIFY_TOKEN → APIFY_API_KEY，不按账号切换、不传 `--account`。账号失败不自动切换。
 使用 scripts/apify-client.mjs；脚本内部读取凭据，通过 Authorization 请求头认证，不放在 URL、命令参数、日志或输出。新凭据只用 host-owned masked entry 和受保护配置；不向聊天收集凭据。
 
 ## API 合约与边界

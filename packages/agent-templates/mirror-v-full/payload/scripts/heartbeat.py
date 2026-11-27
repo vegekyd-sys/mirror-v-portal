@@ -703,13 +703,13 @@ def classify_dispatchability(task_text: str) -> tuple[str, str]:
     )):
         return "deferred", "future/deferred optimization"
     if any(marker in text for marker in (
-        "if tianyi wants",
-        "requires tianyi",
-        "awaiting tianyi",
-        "needs tianyi",
-        "需天懿",
-        "需要天懿",
-        "天懿确认",
+        "if the owner wants",
+        "requires the owner",
+        "awaiting the owner",
+        "needs the owner",
+        "需主人",
+        "需要主人",
+        "主人确认",
         "确认后",
         "需要确认",
     )):

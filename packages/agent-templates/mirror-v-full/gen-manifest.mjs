@@ -1,16 +1,16 @@
 // Regenerate payload/payload-manifest.json for the Mirror V full template:
 // every file under payload/ (the builder ships exactly this list) plus the
 // background loops registered for each tenant. Run after editing the payload
-// or after sync-from-v.sh. Usage: node gen-manifest.mjs <version>
+// or after distro/import-workspace.mjs. Usage: node gen-manifest.mjs <version>
 import fs from "node:fs";
 import path from "node:path";
+import { portalSchedules } from "./distro/schedules.mjs";
+import { SANDBOX_VALUES } from "./distro/import-workspace.mjs";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const payload = path.join(here, "payload");
 const version = process.argv[2];
 if (!/^mirror-v-full\.[a-z0-9.-]+$/.test(version ?? "")) throw Error("usage: node gen-manifest.mjs mirror-v-full.<version>");
-// A sync from V that stopped on conflicts is not a releasable payload.
-if (fs.existsSync(path.join(here, ".v-sync-pending"))) throw Error("sync-from-v.sh is unfinished: resolve conflicts, then run sync-from-v.sh --resolved");
 const files = [];
 const walk = (dir, prefix = "") => {
   for (const name of fs.readdirSync(dir).sort()) {
@@ -27,12 +27,15 @@ const walk = (dir, prefix = "") => {
   }
 };
 walk(payload);
-const systemSchedules = JSON.parse(fs.readFileSync(path.join(here, "system-schedules.json"), "utf8"));
+// The workspace's own schedule list (payload/schedules.json), registered by the Portal.
+const systemSchedules = portalSchedules(JSON.parse(fs.readFileSync(path.join(payload, "schedules.json"), "utf8")), SANDBOX_VALUES.TIMEZONE);
+const distro = JSON.parse(fs.readFileSync(path.join(here, "DISTRO_WORKSPACE.json"), "utf8"));
 const manifest = {
   name: "mirror-v-full",
   version,
   description: "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
-  vWorkspaceCommit: fs.readFileSync(path.join(here, "V_WORKSPACE_COMMIT"), "utf8").trim(),
+  // Where the payload came from: the installable V workspace (distro/workspace) at this commit.
+  distroWorkspace: { repo: distro.repo, commit: distro.commit, payloadTree: distro.payloadTree, vCoreCommit: distro.vCoreCommit },
   files: [...files, "payload-manifest.json"],
   systemSchedules,
 };

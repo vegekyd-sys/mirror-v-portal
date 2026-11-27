@@ -14,7 +14,7 @@ class Rank(unittest.TestCase):
     def test_a_space_untouched_for_a_year_gets_a_few_slots_and_goes_last(self):
         word = lambda i: "".join(chr(0x4E00 + (i * 7 + k * 131) % 5000) for k in range(6))
         rows = ([row("old", "OKR " + word(i), 1500, i) for i in range(13)]
-                + [row("wiki", "星擎" + word(100 + i), 10, i) for i in range(3)]
+                + [row("wiki", "产品" + word(100 + i), 10, i) for i in range(3)]
                 + [row(f.DRIVE["space_id"], word(200 + i), 1, i) for i in range(400)])
         f.rank(rows)
         deep = [r for r in rows if r["tier"] == "deep"]

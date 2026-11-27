@@ -8,7 +8,7 @@
 2. Apify 搜索：`node scripts/apify-search.mjs tiktok "<keyword>" --limit 20 --json`，8–12 个关键词并行覆盖（当时单关键词常只回 1 条）。
 3. 下载走 tikwm.com API：检查 `code==0`，优先取 `data.hdplay`，其次 `data.play`。tikwm 限速约 1 req/s；它的视频列表接口被 Cloudflare 拦，不可用。
 4. `ffprobe` 验证同时有 video 和 audio stream：图片帖（`/photo/`）下下来是纯音频，要剔除或标注。
-5. 分批发飞书：`message` 工具发附件，每批 3–4 个，文件名带点赞量；单个 >15MB 常被拦，压缩或逐个发。
+5. 分批发飞书：每一轮回复里写 3–4 行 `MEDIA: /绝对路径`（文件名带点赞量），其余的下一轮再发；单个 >15MB 常被拦，压缩或逐个发。
 
 ## 已知坑
 

@@ -228,7 +228,7 @@ async function gate() {
   }
 
   // D4–D7: the official schedules, triggered exactly as the Portal scheduler does, and their artifacts.
-  const schedules = JSON.parse(fs.readFileSync(`${RELEASE}/packages/agent-templates/mirror-v-full/system-schedules.json`, "utf8"));
+  const schedules = JSON.parse(fs.readFileSync(`${RELEASE}/packages/agent-templates/mirror-v-full/payload/payload-manifest.json`, "utf8")).systemSchedules;
   const official = (name) => schedules.find((s) => s.name.includes(name));
   const trigger = (s) => `${s.kind === "heartbeat" ? "[Nexus heartbeat] 无需创建新的定时任务。没有需提醒事项时只回复 HEARTBEAT_OK。" : "[Nexus 定时任务触发] 执行下面的任务，不要再次创建定时任务。"}\n${s.prompt}`;
   const shanghaiDate = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);

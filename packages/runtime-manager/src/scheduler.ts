@@ -238,9 +238,9 @@ export class Scheduler {
       if (!name || typeof item.prompt !== "string" || !item.prompt.trim() || item.prompt.length > 16000) throw Error("INVALID_SYSTEM_SCHEDULE");
       const next = nextDue(item.schedule);
       const inserted = await this.store.pool.query(
-        `INSERT INTO elastic_schedules(id,tenant_id,session_key,name,kind,spec,prompt,next_at,chat_id)
-         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE NOT EXISTS (SELECT 1 FROM elastic_schedules WHERE tenant_id=$2 AND name=$4)`,
-        [randomUUID(), run.tenant_id, run.session_key, name, item.kind === "heartbeat" ? "heartbeat" : "cron", item.schedule, item.prompt, next, chat],
+        `INSERT INTO elastic_schedules(id,tenant_id,session_key,name,kind,spec,prompt,next_at,chat_id,enabled)
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10 WHERE NOT EXISTS (SELECT 1 FROM elastic_schedules WHERE tenant_id=$2 AND name=$4)`,
+        [randomUUID(), run.tenant_id, run.session_key, name, item.kind === "heartbeat" ? "heartbeat" : "cron", item.schedule, item.prompt, next, chat, item.enabled !== false],
       );
       if (inserted.rowCount) added.push(name);
     }

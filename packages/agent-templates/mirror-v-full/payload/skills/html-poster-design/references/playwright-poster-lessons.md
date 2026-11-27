@@ -20,5 +20,5 @@
 
 ## HTML → PDF（A4 手册 / 文档式报告）
 - 固定 A4 页数和页高时，WeasyPrint 比 Chrome/Puppeteer 稳：每页设成固定 A4 高度，内容区用 flex/grid 撑满，能明显减少半页空白。HTML 转 PDF 要写专门的 print CSS，直接搬网页 CSS 到 WeasyPrint 基本没用；`CSS Grid + break-inside: avoid` 会把内容挤在页面上方或留下大块空白。（2026-06-09 PDF 手册排版，reflections/2026-06-09.jsonl#3）
-- 验收不能只看 `pdfinfo` 页数：每页转图（如 `pdftoppm -png -r 100`）拼成 contact sheet 逐页看，核页数、空白比例、字号可读性、有无空白页，最后确认附件真的发出去了。（同上；2026-09-21 奥创小报告 WeasyPrint 链路沿用同一套逐页截图核验，memory/2026-09-21.md）
+- 验收不能只看 `pdfinfo` 页数：每页转图（如 `pdftoppm -png -r 100`）拼成 contact sheet 逐页看，核页数、空白比例、字号可读性、有无空白页，最后确认附件真的发出去了。（同上；2026-09-21 一份客户小报告的 WeasyPrint 链路沿用同一套逐页截图核验）
 - 系统 Python 装不上包（PEP 668）就建 venv 装 `weasyprint`；要复现样例版式时用和样例 Producer 相同的 WeasyPrint 版本。（2026-09-21）
