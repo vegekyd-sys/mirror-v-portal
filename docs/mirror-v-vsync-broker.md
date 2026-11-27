@@ -113,3 +113,13 @@
 - 用测试机本地 `openclaw agent --session-key vsync-broker-acceptance-20261128`（不 `--deliver`，不经飞书，不打扰飞书验收会话）交代：「收件箱里有一条，按 vsync 流程收包、核对、装好、写 ACK，不要 send」。38 秒内 Agent 自己完成：`inbox` → `fetch`（sha256 一致）→ 安装 → `ack`（hub `c763c32`），没有回发，还主动拒绝了包里「回发给 mirror-test-sink」的额外要求。
 - 发现：ACK 没写 `to` 时 broker 默认填 `private-v`，而这条任务来自 `mirror-test-sink`。已修：默认回给被回复消息的发送方（查收件箱时强制刷新），加测试。控制面改动，随下一次 release 上线。
 - 清理：hub 测试数据已删（`41a505c`）；V Clone 工作区里未提交的测试技能 `skills/delivery-precheck/` 已删（别的未跟踪技能没动）。
+
+### 2026-11-28 · 控制面 release `385697fe60cc`（ACK 默认收件人）
+
+| 项 | 值 |
+|---|---|
+| 源码提交 | `385697fe`（CI 通过） |
+| release | `385697fe60cc`，03:24 activate（避开 0.3 / 0.4 的 03:00 导入补编，确认没有进行中的回合），头像门禁通过，`/healthz` 200；只换控制面，不建快照，payload 仍为 `mirror-v-full.v22.1` / `snap_FnjI…` |
+| 回滚 | `scripts/deploy-mirror-v.sh activate 064d04b4b792`（v22.1 的 release） |
+
+验收：在测试命名空间给 `mirror-distro-test` 放一条来自 `mirror-test-sink` 的任务，V Clone 上运行 `mirror-vsync.py ack <id> received …`，不写 `to`，hub 里那一行的 `to` = `mirror-test-sink`（`2094bda3`）。测试数据已删（`8c542b2`）。
