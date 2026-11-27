@@ -190,7 +190,7 @@ const result = '\t\t\tconst resultAny = result;\n\t\t\tconst resultPayloadText =
 function once(source, anchor, code) {
   if (source.split(anchor).length !== 2) throw Error(code);
 }
-function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, recover, finalAnchor = final, commentary = false) {
+function blocks(bridgeSource, progressVersion, stateVersion, payloadVersion, recover, finalAnchor = final, commentary = false, finalText = false) {
   // v4 adds public text items (commentary + provisional preview); the v3 text stays byte-identical.
   const progress = `${guard}
         // nexus-public-progress-${progressVersion}
@@ -224,17 +224,30 @@ ${commentary ? `          if (["start", "update", "result"].includes(phase)) nex
 \t\t\t\tfinalizeStatus = "completed";
 \t\t\t\tfinalizeRequested = { status: "completed", text: nexusFinalMedia.finalText() || finalizeRequested.text };
 \t\t\t}` : '\t\t\tnexusFinalMedia.complete(resultAny.payloads);';
-  const mediaResult = `\t\t\tconst resultAny = result;\n\t\t\t// nexus-final-media-payload-${payloadVersion}\n${resolution}\n\t\t\tconst resultPayloadText = `;
+  // A harness can split one UTF-8 character across stream deltas, which then decode to U+FFFD;
+  // the run's final payload comes from the transcript and is intact. Hand it over only then.
+  const textRepair = finalText ? `\n\t\t\t// nexus-final-text-v1
+\t\t\tif (!closed && typeof accumulatedText === "string" && accumulatedText.includes("\\uFFFD")) {
+\t\t\t\tconst nexusPayloadText = Array.isArray(resultAny.payloads) ? resultAny.payloads.flatMap((p) => typeof p?.text === "string" && p.text ? [p.text] : []).join("\\n\\n") : "";
+\t\t\t\tif (nexusPayloadText && !nexusPayloadText.includes("\\uFFFD")) writeSseEvent(res, { type: "nexus.final_text", text: nexusPayloadText.slice(0, 200000) });
+\t\t\t}` : '';
+  const mediaResult = `\t\t\tconst resultAny = result;\n\t\t\t// nexus-final-media-payload-${payloadVersion}\n${resolution}${textRepair}\n\t\t\tconst resultPayloadText = `;
   return [progress,mediaState,mediaFinal,mediaResult];
 }
 export function patchProgress(source) {
   const media = createFinalMediaBridge.toString();
   const finalAnchor = source.includes(final91) || source.includes(blocks(media,'v3','v2','v2',true,final91)[2]) ? final91 : final;
   const anchors = [guard,state,finalAnchor,result];
-  const current = blocks(media,'v4','v3','v2',true,finalAnchor,true);
-  if (source.includes('// nexus-public-progress-v4')) {
+  const current = blocks(media,'v5','v3','v3',true,finalAnchor,true,true);
+  if (source.includes('// nexus-public-progress-v5')) {
     for (const block of current) once(source,block,'UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
     return source;
+  }
+  if (source.includes('// nexus-public-progress-v4')) {
+    // v4 (2026-10 to 2026-11-27) lacks only the final-text repair; its exact text reverts to the anchors.
+    const prior = blocks(media,'v4','v3','v2',true,finalAnchor,true);
+    for (const block of prior) once(source,block,'UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
+    for (let i=0;i<prior.length;i++) source = source.replace(prior[i],() => anchors[i]);
   }
   if (source.includes('// nexus-public-progress-v3')) {
     // The exact deployed v3 text is reversible to the original anchors; anything else fails closed.

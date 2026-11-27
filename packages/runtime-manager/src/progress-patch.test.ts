@@ -68,9 +68,9 @@ test('patch exposes run-scoped public tool fields and final typed media, with ex
  expect(()=>patchProgress(`${fixture}\n${guard}`)).toThrow('UNSUPPORTED_OPENRESPONSES_PROGRESS_ANCHOR');
  expect(()=>patchProgress(patched.replace('nexusFinalMedia.emit(finalizeRequested.status);','changed;'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
 });
-test('the exact installed v1 block upgrades to v4 once, while malformed v1 patches fail closed',()=>{
+test('the exact installed v1 block upgrades to v5 once, while malformed v1 patches fail closed',()=>{
  const old=fixture.replace(guard,guard+legacy), patched=patchProgress(old);
- expect(patched).not.toContain('// nexus-public-progress-v1');expect(patched).toContain('// nexus-public-progress-v4');
+ expect(patched).not.toContain('// nexus-public-progress-v1');expect(patched).toContain('// nexus-public-progress-v5');
  expect(patchProgress(patched)).toBe(patched);
  expect(()=>patchProgress(old.replace('name.slice(0, 80)','name.slice(0, 81)'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_PROGRESS_PATCH');
 });
@@ -129,7 +129,7 @@ test('installer checks pinned version and upgrades its only bundle atomically; u
  const file=path.join(root,'dist/openresponses-http-test.js');
  try {
   fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'2026.7.1'}));fs.writeFileSync(file,fixture.replace(guard,guard+legacy));
-  installProgress(root);const installed=fs.readFileSync(file,'utf8');expect(installed).toContain('nexus-public-progress-v4');installProgress(root);expect(fs.readFileSync(file,'utf8')).toBe(installed);
+  installProgress(root);const installed=fs.readFileSync(file,'utf8');expect(installed).toContain('nexus-public-progress-v5');installProgress(root);expect(fs.readFileSync(file,'utf8')).toBe(installed);
   fs.writeFileSync(file,'unsupported');expect(()=>installProgress(root)).toThrow();expect(fs.readFileSync(file,'utf8')).toBe('unsupported');
   fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'2026.9.2'}));expect(()=>installProgress(root)).toThrow('UNSUPPORTED_OPENCLAW_PROGRESS_VERSION');
  }finally{fs.rmSync(root,{recursive:true,force:true});}
@@ -176,8 +176,15 @@ test('final command rejection and explicit tool-choice or incomplete branches ca
  }
 });
 // The exact v3 text deployed before commentary/preview items (2026-10-09).
-function deployedV3(source:string) {
+// The exact v4 text deployed before the final-text repair (2026-10 to 2026-11-27).
+function deployedV4(source:string) {
  return patchProgress(source)
+  .replace('// nexus-public-progress-v5','// nexus-public-progress-v4')
+  .replace('// nexus-final-media-payload-v3','// nexus-final-media-payload-v2')
+  .replace(/\n\t\t\t\/\/ nexus-final-text-v1[\s\S]*?\n\t\t\t\}/,'');
+}
+function deployedV3(source:string) {
+ return deployedV4(source)
   .replace('// nexus-public-progress-v4','// nexus-public-progress-v3')
   .replace('// nexus-final-media-state-v3','// nexus-final-media-state-v2')
   .replace(`\n${createCommentaryBridge.toString()}\n\tconst nexusCommentary = createCommentaryBridge(event => writeSseEvent(res, event));`,'')
@@ -192,7 +199,7 @@ function deployedV2(source:string) {
   .replace('// nexus-final-media-payload-v2','// nexus-final-media-payload-v1')
   .replace('\t\t\tconst nexusRecovered = nexusFinalMedia.complete(resultAny.payloads, resultAny.meta);\n\t\t\tif (nexusRecovered && finalizeRequested?.status === "failed") {\n\t\t\t\tfinalizeStatus = "completed";\n\t\t\t\tfinalizeRequested = { status: "completed", text: nexusFinalMedia.finalText() || finalizeRequested.text };\n\t\t\t}', '\t\t\tnexusFinalMedia.complete(resultAny.payloads);');
 }
-test('known deployed v2 upgrades to v4 exactly and malformed v2 remains fail-closed',()=>{
+test('known deployed v2 upgrades to v5 exactly and malformed v2 remains fail-closed',()=>{
  const old=deployedV2(fixture),patched=patchProgress(old);
  expect(patched).toBe(patchProgress(fixture));expect(patchProgress(patched)).toBe(patched);
  expect(()=>patchProgress(old.replace('failed = true; assistantRefs.clear();','failed = false; assistantRefs.clear();'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
@@ -206,20 +213,36 @@ test('2026.9.1 bundle: final text is computed between usage and close; patch is 
     '\t\t\tconst resultAny = result;\n\t\t\tconst resultPayloadText = resolveResponsePayloadText(result);',
   ].join('\n');
   const patched = patchProgress(source);
-  expect(patched).toContain('// nexus-public-progress-v4');
+  expect(patched).toContain('// nexus-public-progress-v5');
   expect(patchProgress(patched)).toBe(patched);
   const emit = patched.indexOf('\t\t\tnexusFinalMedia.emit(finalizeRequested.status);');
   expect(emit).toBeGreaterThan(patched.indexOf('const finalText = accumulatedText'));
   expect(emit).toBeLessThan(patched.indexOf('\t\t\tclosed = true;'));
 });
 
-test('known deployed v3 upgrades to v4 exactly; v4 is idempotent and a modified v3 or v4 fails closed',()=>{
+test('known deployed v3 upgrades to v5 exactly; v5 is idempotent and a modified v3 or v5 fails closed',()=>{
  const v3=deployedV3(fixture);
  expect(v3).toContain('// nexus-public-progress-v3');expect(v3).not.toContain('nexusCommentary');
- const v4=patchProgress(v3);
- expect(v4).toBe(patchProgress(fixture));expect(patchProgress(v4)).toBe(v4);
+ const v5=patchProgress(v3);
+ expect(v5).toBe(patchProgress(fixture));expect(patchProgress(v5)).toBe(v5);
  expect(()=>patchProgress(v3.replace('name.slice(0, 80)','name.slice(0, 81)'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
- expect(()=>patchProgress(v4.replace("if (data.kind !== 'preamble'","if (data.kind === 'preamble'"))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
+ expect(()=>patchProgress(v5.replace("if (data.kind !== 'preamble'","if (data.kind === 'preamble'"))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
+});
+test('known deployed v4 upgrades to v5 exactly; a modified v4 fails closed',()=>{
+ const v4=deployedV4(fixture);
+ expect(v4).toContain('// nexus-public-progress-v4');expect(v4).not.toContain('nexus-final-text');expect(v4).toContain('nexusCommentary');
+ expect(patchProgress(v4)).toBe(patchProgress(fixture));
+ expect(()=>patchProgress(v4.replace('name.slice(0, 80)','name.slice(0, 81)'))).toThrow('UNSUPPORTED_INSTALLED_OPENRESPONSES_MEDIA_PATCH');
+});
+test('streamed text with U+FFFD gets the intact transcript text before completion; clean text gets nothing',()=>{
+ const withText=(streamed:string)=>fixture.replace(' let closed=false,finalizeRequested;',` let closed=false,finalizeRequested;let accumulatedText=${JSON.stringify(streamed)};`);
+ const damaged=handler(withText('可以再接这几\uFFFD\uFFFD（回数字'));
+ damaged.bridge.event(end);damaged.bridge.complete({payloads:[{text:'可以再接这几样（回数字'}]});
+ expect(damaged.events.map(e=>e.type)).toEqual(['nexus.final_text','response.completed']);
+ expect(damaged.events[0].text).toBe('可以再接这几样（回数字');
+ const clean=handler(withText('完好的文字'));
+ clean.bridge.event(end);clean.bridge.complete({payloads:[{text:'完好的文字'}]});
+ expect(clean.events.map(e=>e.type)).toEqual(['response.completed']);
 });
 test('public text items become nexus.preview / nexus.commentary before the tool event, text only',()=>{
  const {events,bridge}=handler();

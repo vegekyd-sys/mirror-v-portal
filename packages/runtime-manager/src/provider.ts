@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
+import { repairReplacementChars } from "./text-repair.js";
 import { FinalMediaCollector, parseReply, resolveRef, mediaKind, withoutDeliveredDirectives, type MediaDirective } from "./media-directive.js";
 import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
@@ -417,6 +418,7 @@ export class VercelProvider implements RuntimeProvider {
     const decoder = new StringDecoder("utf8");
     let buffer = "";
     let output = "";
+    let transcriptText: string | undefined;
     let completed = false;
     const finalMedia = new FinalMediaCollector();
     let chain = Promise.resolve();
@@ -457,6 +459,9 @@ export class VercelProvider implements RuntimeProvider {
               }
               output += event.delta || "";
               await onEvent("delta", { text: event.delta || "" });
+            } else if (event.type === "nexus.final_text") {
+              // Sent only when the streamed text came out with U+FFFD; see text-repair.ts.
+              if (typeof event.text === "string") transcriptText = event.text;
             } else if (event.type === "nexus.tool") {
               await onEvent("tool-progress", { name: event.name, phase: event.phase, toolCallId: event.toolCallId });
             } else if (event.type === "nexus.public_snapshot") {
@@ -562,6 +567,8 @@ export class VercelProvider implements RuntimeProvider {
             await onEvent("model-timing", timing);
         } catch {}
       }
+    output = repairReplacementChars(output, transcriptText);
+    if (output.includes("\uFFFD")) await onEvent("text-damaged", { count: output.split("\uFFFD").length - 1, repaired: false });
     // The sandbox is about to go idle and its filesystem with it, so anything
     // the agent asked to deliver has to be read out now, while it still exists.
     const media = await this.collectMedia(sbx, output, onEvent, finalMedia.media);
