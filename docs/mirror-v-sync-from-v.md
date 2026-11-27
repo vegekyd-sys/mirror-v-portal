@@ -338,3 +338,62 @@ Mirror 自己的运行时补丁要在新字节上重验：`progress-patch.mjs`�
 - 现象：v19.5 上线后 `mvfull-vsync-01` 一轮（run `c135ffc8…`）仍出现「本地没被改���」，记了 `text-damaged`。该沙盒已装 v5 补丁，会话记录里是完整的「没被改动」，但 `nexus.final_text` 没有发出：Codex harness 下 `result.payloads` 也由同一批坏片段拼成，补丁按设计不发带 U+FFFD 的文本。
 - 修复：`runtime/transcript-text.mjs` 只读打开 agent 的 `openclaw-agent.sqlite`，取本轮开始以后写入会话记录的 assistant 文本；`provider.ts` 在第一次修复后仍有 U+FFFD 时读它再修一次，`text-damaged` 事件记 `repaired` / `left`。用这一轮的真实输出和从沙盒取回的会话文本验证可修复。
 - 发布只换控制面 release，不重建快照；运行时脚本在沙盒下一次唤醒时同步。
+
+### 2026-11-27 · 运行时升到 V 生产的 `db91-lifecycle-proof-20261127`，payload `mirror-v-full.v21`
+
+| 项 | 值 |
+|---|---|
+| 源码提交 | `bd2e5ed1`（升级本体）→ `f37f16c2`（V 的飞书语音胶水）→ `e0b0b0f5` + `e19672bb`（验收中发现的三处，控制面） |
+| release | `f37f16c24cce`（建快照、首次上线）→ `e19672bba63d`（现行，CI 通过、头像门禁通过、`/healthz` 200） |
+| 运行时包 | `/opt/nexus/data/v-release/db91-lifecycle-proof-20261127-full.tgz`，sha256 `c456076c…`（`bd2e5ed1` 打的那份留作 `.bd2e5ed1`，converge 失败过，不要用） |
+| 快照 | `snap_6xmLemCO2x2n2IHbSOyq5CN5RenY`（2026-12-27 过期）；`config.json` 的 `runtime`：v-release `db91-lifecycle-proof-20261127`、codex `0.169.1`、makaron-cli `0.17.30` |
+| 回滚 | 到 v20：`scripts/deploy-mirror-v.sh activate c69dffa5a3cd` + 把 `templates["mirror-v-full"]` 恢复成 `config.json.before-mirror-v-full-2026-11-27T09-53-50-119Z`（v20 / `snap_CTtAY…`）并重启 manager。只回滚 e19672bb 的控制面修补：activate `f37f16c24cce`（但 v21 租户的 Worker 会再次起不来，见下） |
+| 合成租户 | `mvfull-v21-01`、`mvfull-v21-02`（v21 开号）、`mvfull-vsync-02`（v20 开号，老运行时回归），定时任务已全部关闭 |
+
+**换了什么**
+
+- 字节：core 233 个文件（r4 是 131）、Worker 101、Codex 插件整包（对 npm 的 14 改 + 2 增，取代 10-08 手抓的 3 个文件）、V 改过的 4 个 `@openclaw/ai` 文件（含 11-08 的 DSML 工具调用修复；平台捕获不含它们）、V 现场版本的记忆索引器。desktop / V Browser / 语音页的钉子不变（和线上 tgz 逐文件比对，只有扩展 zip 的时间戳不同）。
+- 版本：Codex CLI 0.159.2 → 0.169.1，Makaron CLI 0.15.2 → 0.17.30（`makaron`、`makaron-cli`、`npx makaron-cli` 同一版本，构建时逐个核对；`ac5df6f8` 的同样改动在这里重做，那条分支没合），lark-cli 1.0.89 → 1.0.97（payload `feishu-docs.py` 同步；本地对比 config / whoami / 登录与授权错误输出逐字一致）。
+- 配置（控制面，所有租户下次唤醒生效）：DeepSeek 980000 / 64000；Codex home 加 V 的 `request_max_retries = 1`、`stream_max_retries = 1`（Codex ≥ 0.169 再加 `remote_plugin = false`；保留 Codex 自己追加的 `[projects]` 信任项）；`codexDynamicToolsExclude: ["openclaw"]`；禁用 `message` 工具（见下）。DeepSeek 超时跟快照走：新运行时 90 s（V 10-15 起），r4 仍 300 s。
+- Mirror 的补丁：progress v5 原样适用；stream-preview 加了 V 的 DSML 版本变体（预览范围不变）。
+
+**构建 / 验收中发现并修掉的**
+
+| 问题 | 原因 | 修法 |
+|---|---|---|
+| 第一次建快照 converge 失败，Gateway 起不来 | V 的 `server-methods` 静态导入 `v-feishu-voice-runtime.mjs`，它按相对路径导入 V 机器上自装的飞书插件（`npm/projects/openclaw-feishu-…`） | `deploy/v-release/core-mirror.mjs` 按 V 原字节哈希换成同一中间件、账号永远解析不到：不带 voiceActor 的请求照常，带的拒绝。对整个 core 做了静态导入扫描（对比 npm 基线），V 新引入的未解析导入只有这一处 |
+| 出图做好了但没送到（无 `media-ready`） | V 的新运行时下 agent 用 `message` 工具发图，发到 Gateway 的 `internal-ui`，Portal 后面没有渠道 | 禁用 `message`（同 `ask_user` / `sessions_yield`），回复按 `TOOLS.md` 写 `MEDIA:` 行 |
+| 注入 Codex 503 后回落到 Worker，这一轮仍失败 | V 的 Worker 从 `<core>/node_modules/@openclaw/ai` 加载（V 的目录布局），npm 把它提到 openclaw 旁边：v21 上 Worker 回合全部起不来（回落、ds-pro、Worker 压缩） | boot 和快照安装时把嵌套路径链到同一份；`RUNTIME_PATCHES` 加 `core-ai-link-v1`，运行中的 Gateway 重启一次 |
+| 老租户收不到 Codex 重试设置 | Codex 往 `config.toml` 追加了 `[projects]` 信任项，原来按全文比对 | 只比我们写的那段，信任项原样保留 |
+
+**V 已修问题在 Mirror 上的确认**
+
+| 问题 | 结果 |
+|---|---|
+| 压缩时把交接摘要当回复 | 字节在（Codex 插件 `v-codex-firsttext-v5`）；需要约 90 万 token 的会话才会触发，没复现 |
+| DeepSeek 故障切备用 | 合成租户里把 Codex 的 DeepSeek 地址指向本地 503：Codex 重试 1 次 → 回落 Worker `deepseek-flash` → 正确作答，整轮 24 秒。故障已撤掉 |
+| 工具调用写成文本（DSML） | 字节在（`@openclaw/ai` `dsml-spaced-calls-v1`）；需要模型真输出 DSML 文本，没复现 |
+| 无改动编辑后没有答复 | write → 无改动 edit（返回 No changes made）→ exec → 回复，同一轮完成（vds） |
+| `/vds` 压缩窗口 | Codex rollout `model_context_window` = 950000（v20 是 258400） |
+
+**分场景验收（`mvfull-v21-01`，v21 快照，对照 v19.4 / v20 的记录）**
+
+| 场景 | v21 | 之前 | 结论 |
+|---|---|---|---|
+| 扫码开场 | 首字 21 秒，一条消息（冷启动） | 13–26 秒 | 通过 |
+| 自述 → 更正 → 追问 | 26 / 20 / 10 秒；USER.md 直接改成新值并注明「主人更正；此前说…」，项目页旧值划线带日期；追问答对 | 同 | 通过（追问末尾又问了一次网址，同一步第二次问） |
+| Heartbeat | 12 秒 `HEARTBEAT_OK` | 16 秒 | 通过 |
+| 21:00 Librarian | 28 秒；当天日志按设计明晚进队列，lint 2/2 可达、0 死链，提交 | 40–59 秒 | 通过 |
+| 技术调研（快递100 vs 17TRACK） | 90 秒，先列不确定项，给结论、价格、反向条件和两天验证法 | 42–62 秒 | 通过 |
+| TikTok 文案 | 32 秒，英文、5 个标签、没编造参数 | 24–26 秒 | 通过 |
+| 清关派活 | 74 秒，IOR / HTS / ISF 三点，注明税率日期和要报关行书面确认 | 18–38 秒 | 通过（更长更细） |
+| 出图 | 修前：图做了没送到；修后 188 秒（多轮自检）`media-ready`；`mvfull-v21-02` 上线后 54 秒 | 64–80 秒 | 修复后通过 |
+| 图片搜索 | 136 秒，9 张参考 + 九宫格 + 共同拍法（九宫格只给了路径，没作为附件发） | 54–150 秒 | 通过 |
+| 备份体积 | 55.7 MB / 1190 文件（多了两张 2400px 生成图和参考图） | 35 MB | 低于 80 MB 告警线 |
+| 乱码修复 | 自然出现两次 U+FFFD（调研、图片搜索），都记 `text-damaged` `repaired: true, left: 0` | v20 有一次没修上 | 通过 |
+| 记忆页 | 签名链接 index 200、graph.json 200 | 同 | 通过 |
+| 老运行时回归（`mvfull-vsync-02`，v20 快照） | 新控制面下 exec 回合 18 秒；Codex 配置升级（重试、信任项保留、无 remote_plugin）；超时仍 300；出图 42 秒 `media-ready` | — | 通过 |
+
+**没验到的**：真实飞书里的呈现；大会话压缩（交接摘要、950k 窗口下的真实压缩）；DSML 文本；Worker 作为默认 harness 的整轮（只验了回落）；语音页、虚拟桌面、V Browser（钉子没变）。0.3、0.4 没有发消息，控制面改动在它们下次唤醒时生效（同 `mvfull-vsync-02` 的回归）。
+
+**没带 / 待定**：V Gateway 开着的 `OPENCLAW_DB91_*`、`OPENCLAW_SESSION_HOTSET_*`、`OPENCLAW_FIRSTTEXT_WORKER_PHASES`、`V_FEISHU_TASK_PRESENTATION` 等开关 Mirror 一直没开；V 的压缩 `versa-fast-quality-v1` + qualityGuard + notifyUser 没开；V 的 `.feishu` / `.session-relay` 等渠道捕获不打包；V 改过的 `node-edge-tts/bin.js` 没带（Mirror 不用 TTS）。
