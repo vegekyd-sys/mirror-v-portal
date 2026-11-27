@@ -282,3 +282,22 @@ test("the desktop session starts without xfwm4's software compositor and keeps o
   expect(xml.match(/use_compositing/g)).toHaveLength(1);
 });
 
+
+test("V-host-only core glue is replaced only when it is V's reviewed bytes", async () => {
+  // @ts-expect-error plain .mjs build helper without types
+  const { adaptCore, CORE_REPLACEMENTS } = await import("../../../deploy/v-release/core-mirror.mjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "core-mirror-"));
+  try {
+    const rel = "v-feishu-voice-runtime.mjs";
+    const { mirror } = CORE_REPLACEMENTS[rel];
+    fs.mkdirSync(path.join(root, "dist"));
+    fs.writeFileSync(path.join(root, "dist", rel), "changed by V");
+    fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify({ files: [{ path: `./${rel}`, sha256: sha("changed by V"), kind: "added" }] }));
+    expect(() => adaptCore(root)).toThrow(/CORE_MIRROR_UNREVIEWED_BYTES/);
+    // Already adapted: unchanged, and the manifest matches the installed bytes.
+    fs.writeFileSync(path.join(root, "dist", rel), mirror);
+    fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify({ files: [{ path: `./${rel}`, sha256: sha(mirror), kind: "added" }] }));
+    expect(adaptCore(root)).toEqual([rel]);
+    expect(mirror).not.toContain("npm/projects");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

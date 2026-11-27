@@ -5,6 +5,7 @@
 #   worker/  release/captured/<tag>.worker   on CAPTURED_REF (vlab-agent-worker-isolation plugin)
 #   codex/   release/captured/<tag>.codex    on CAPTURED_REF: V's whole running @openclaw/codex,
 #            reduced to an overlay over npm @openclaw/codex@<upstream> (deploy/v-release/codex-delta.mjs)
+#            minus V-host-only glue, replaced by deploy/v-release/core-mirror.mjs (hash-bound)
 #   ai/      deploy/v-release/ai-<tag>: V's patched files in core/node_modules/@openclaw/ai, which the
 #            platform captures leave out (e.g. the DSML tool-call fix); bytes kept in files/
 #   v-memory-indexer.mjs  scripts/v-memory-indexer.mjs at PLATFORM_REF (V runs the dev version)
@@ -40,6 +41,8 @@ for (const part of fs.readdirSync(root)) { const m=JSON.parse(fs.readFileSync(`$
   for (const f of m.files) { const h=c.createHash("sha256").update(fs.readFileSync(`${root}/${part}/dist/${f.path.replace(/^\.\//,"")}`)).digest("hex");
     if (h!==f.sha256) { console.error(`CAPTURE_BYTES_MISMATCH ${part} ${f.path}`); process.exit(1); } } }' "$cap"
 mv "$cap/$tag" "$tmp/pkg/core"
+# V-host-only glue inside the core capture, replaced for Mirror (hash-bound; see the script).
+core_mirrored="$(node "$repo_root/deploy/v-release/core-mirror.mjs" "$tmp/pkg/core")"
 mv "$cap/$tag.worker" "$tmp/pkg/worker"
 (cd "$tmp/src" && npm pack --silent "@openclaw/codex@$upstream" >/dev/null && mkdir npm-codex && tar -xzf openclaw-codex-*.tgz -C npm-codex)
 mkdir -p "$tmp/pkg/codex"
@@ -71,12 +74,12 @@ git -C "$platform" archive "$voice_commit" lab/gpt-live-h5 lab/realtime-direct-t
 find "$tmp/pkg/voice" -name '*.test.mjs' -delete
 node "$repo_root/deploy/v-release/voice-mirror.mjs" "$tmp/pkg/voice" >/dev/null
 node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({
-  release:{repo:"vegekyd-sys/v-openclaw-platform",tag:process.argv[2],captured:process.argv[3],parts:["core","worker","codex"],ai:process.argv[8]||null},
+  release:{repo:"vegekyd-sys/v-openclaw-platform",tag:process.argv[2],captured:process.argv[3],parts:["core","worker","codex"],ai:process.argv[8]||null,coreMirror:JSON.parse(process.argv[9]).mirrored},
   indexer:{repo:"vegekyd-sys/v-openclaw-platform",commit:process.argv[4],path:"scripts/v-memory-indexer.mjs"},
   desktop:{repo:"vegekyd-sys/v-openclaw-platform",commit:process.argv[5],path:"apps/v-desktop-handoff"},
   vbrowser:{repo:"vegekyd-sys/v-browser",commit:process.argv[6],plugin:"single-owner"},
   voice:{repo:"vegekyd-sys/v-openclaw-platform",commit:process.argv[7],patch:"voice-mirror.mjs"}},null,1))' \
-  "$tmp/pkg/features.json" "$tag" "$(git -C "$platform" rev-parse "$captured_ref")" "$indexer_commit" "$desktop_commit" "$vbrowser_commit" "$voice_commit" "$([ -d "$tmp/pkg/ai" ] && echo "deploy/v-release/ai-$tag")"
+  "$tmp/pkg/features.json" "$tag" "$(git -C "$platform" rev-parse "$captured_ref")" "$indexer_commit" "$desktop_commit" "$vbrowser_commit" "$voice_commit" "$([ -d "$tmp/pkg/ai" ] && echo "deploy/v-release/ai-$tag")" "$core_mirrored"
 # Test fixtures in the Worker capture are not needed at runtime.
 find "$tmp/pkg/worker/dist" -name '*.test.mjs' -delete
 node -e '
