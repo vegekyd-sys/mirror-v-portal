@@ -1,5 +1,7 @@
 # V → Mirror V 同步（mirror-v-full）
 
+> 2026-11-27：分支 `claude/sandbox-latest-v-44e8eb` 上的候选 v22-rc1 改为从可安装 V 的发行包生成 payload，下面的 `sync-from-v.sh` 流程随之退役，见 [mirror-v-from-distro.md](mirror-v-from-distro.md)。候选合并之前，`dev` 上仍按本文。
+
 V 一直在进化（Librarian、heartbeat、skills），Mirror V 的 `mirror-v-full` 模板把其中通用的部分带给每个新租户。这份文档是**每次同步都照着走一遍**的 runbook，以及每次同步的记录。
 
 范围（2026-11-26 与 Tianyi 约定）：
