@@ -304,3 +304,9 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 3. `TOOLS.md` 的 lark-cli 发消息例外（上面那条）是否保留。
 
 **顺带发现（不属于本次）**：v19.5 上线后，`mvfull-vsync-01` 的一轮回复（网页通道，沙盒已是 `nexus-public-progress-v5`）仍有一个 U+FFFD（「本地没被改���」），同时记了 `text-damaged`——修复没能定位。
+
+### 2026-11-27 · 控制面补丁：乱码修复改读会话记录（payload 不变，仍是 v20）
+
+- 现象：v19.5 上线后 `mvfull-vsync-01` 一轮（run `c135ffc8…`）仍出现「本地没被改���」，记了 `text-damaged`。该沙盒已装 v5 补丁，会话记录里是完整的「没被改动」，但 `nexus.final_text` 没有发出：Codex harness 下 `result.payloads` 也由同一批坏片段拼成，补丁按设计不发带 U+FFFD 的文本。
+- 修复：`runtime/transcript-text.mjs` 只读打开 agent 的 `openclaw-agent.sqlite`，取本轮开始以后写入会话记录的 assistant 文本；`provider.ts` 在第一次修复后仍有 U+FFFD 时读它再修一次，`text-damaged` 事件记 `repaired` / `left`。用这一轮的真实输出和从沙盒取回的会话文本验证可修复。
+- 发布只换控制面 release，不重建快照；运行时脚本在沙盒下一次唤醒时同步。

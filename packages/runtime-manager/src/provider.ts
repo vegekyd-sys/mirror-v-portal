@@ -88,7 +88,7 @@ export const RUNTIME_SCRIPTS = [
   "boot.mjs", "invoke.mjs", "inbound-input.mjs", "quiesce.mjs", "model-proxy.mjs", "backup.mjs",
   "progress-patch.mjs", "stream-preview-patch.mjs", "scheduler-plugin.mjs", "agent-config.mjs",
   "v-release.mjs", "v-config.mjs", "v-features.mjs",
-  "sandbox-exec.mjs", "portal-environment.mjs",
+  "sandbox-exec.mjs", "portal-environment.mjs", "transcript-text.mjs",
 ];
 export function runtimeRevision() {
   return createHash("sha256")
@@ -568,7 +568,21 @@ export class VercelProvider implements RuntimeProvider {
         } catch {}
       }
     output = repairReplacementChars(output, transcriptText);
-    if (output.includes("\uFFFD")) await onEvent("text-damaged", { count: output.split("\uFFFD").length - 1, repaired: false });
+    if (output.includes("\uFFFD")) {
+      // The final payload can be built from the same damaged deltas (Codex harness);
+      // the transcript is written from the harness's own final messages.
+      const before = output.split("\uFFFD").length - 1;
+      try {
+        const read = await sbx.runCommand({
+          cmd: "node",
+          args: ["/vercel/sandbox/nexus/transcript-text.mjs", String(invokeStart - 5000)],
+          env: { NEXUS_AGENT_ID: tenant.template_id || "dealclaw" },
+        });
+        if (!read.exitCode) output = repairReplacementChars(output, JSON.parse(await read.stdout()).text);
+      } catch {}
+      const left = output.split("\uFFFD").length - 1;
+      await onEvent("text-damaged", { count: before, repaired: left === 0, left });
+    }
     // The sandbox is about to go idle and its filesystem with it, so anything
     // the agent asked to deliver has to be read out now, while it still exists.
     const media = await this.collectMedia(sbx, output, onEvent, finalMedia.media);
