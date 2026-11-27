@@ -32,3 +32,18 @@ export function makaronCliVerifyScript(version: string, root = "/vercel/sandbox"
     `for cli in ${toolsBin}/makaron makaron makaron-cli "npx --offline makaron-cli"; do got=$($cli --version) && echo "$cli $got" && [ "$got" = "${version}" ] || { echo "MAKARON_CLI_VERSION_MISMATCH: $cli"; exit 1; }; done`,
   ].join(" && ");
 }
+
+/** Tool versions the v-distro package pins (runtime/tools.json, schema v-distro-tools/1). */
+export type DistroTools = { npm?: Record<string, { package?: string; version?: string }> };
+
+/**
+ * The snapshot installs its own pinned CLIs; a v-release archive built from a v-distro package
+ * names the versions V runs. They must agree, or the snapshot would not be the V it claims to be.
+ */
+export function distroToolMismatches(tools: DistroTools | undefined, pins: Record<string, string>): string[] {
+  if (!tools?.npm) return [];
+  return Object.entries(pins).flatMap(([name, version]) => {
+    const want = tools.npm?.[name]?.version;
+    return want && want !== version ? [`${name}: snapshot ${version}, v-distro ${want}`] : [];
+  });
+}

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { makaronCliLinkScript, makaronCliVerifyScript } from "./makaron-cli.js";
+import { distroToolMismatches, makaronCliLinkScript, makaronCliVerifyScript } from "./makaron-cli.js";
 
 // A local stand-in for the npm package: it only prints its version.
 function fakeCli(dir: string, version: string) {
@@ -36,4 +36,14 @@ describe("preinstalled Makaron CLI", () => {
       expect(upgraded.trim().split("\n")).toEqual(["2.0.0", "2.0.0", "2.0.0"]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }, 60_000);
+});
+
+describe("v-distro tool versions", () => {
+  it("names every CLI whose snapshot pin differs from the package", () => {
+    const tools = { npm: { codex: { version: "0.169.1" }, "makaron-cli": { version: "0.17.30" }, "lark-cli": { version: "1.0.97" } } };
+    expect(distroToolMismatches(tools, { codex: "0.169.1", "makaron-cli": "0.17.30", "lark-cli": "1.0.97" })).toEqual([]);
+    expect(distroToolMismatches(tools, { codex: "0.159.2", "makaron-cli": "0.17.30", "lark-cli": "1.0.97" })).toEqual(["codex: snapshot 0.159.2, v-distro 0.169.1"]);
+    // Archives packaged before v-distro carry no tools.json.
+    expect(distroToolMismatches(undefined, { codex: "0.159.2" })).toEqual([]);
+  });
 });

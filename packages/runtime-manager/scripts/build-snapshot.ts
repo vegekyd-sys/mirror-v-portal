@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { Sandbox } from "@vercel/sandbox";
 import { createAgentKitProfile } from "../runtime/agent-config.mjs";
 import { MEDIA_BINARY_PACKAGES } from "../runtime/media-binaries.mjs";
-import { makaronCliLinkScript, makaronCliVerifyScript, V_RELEASE_MAKARON_CLI_VERSION } from "../src/makaron-cli.js";
+import { distroToolMismatches, makaronCliLinkScript, makaronCliVerifyScript, V_RELEASE_MAKARON_CLI_VERSION } from "../src/makaron-cli.js";
 import { loadConfig } from "../src/config.js";
 import { FEISHU_CLI_VERSION, templateUsesFeishuCli } from "../src/templates.js";
 import { resolveTemplatePayload, templateRecord, TEMPLATE_OPENCLAW_VERSION, TEMPLATE_SNAPSHOT_TTL_MS, type TemplatePayload } from "../src/template-payload.js";
@@ -41,6 +41,11 @@ if (vReleaseArchive) {
   vReleaseCore = JSON.parse(execFileSync("tar", ["-xzOf", vReleaseArchive, "./core/manifest.json"], { encoding: "utf8" }));
   if (!vReleaseCore?.release || !/^\d{4}\.\d+\.\d+$/.test(vReleaseCore.upstream)) throw Error("V_RELEASE_ARCHIVE_INVALID");
   console.log(JSON.stringify({ phase: "v-release-selected", release: vReleaseCore.release, upstream: vReleaseCore.upstream }));
+  // Archives packaged from a v-distro carry V's tool versions; the snapshot's pins must match them.
+  let distroTools;
+  try { distroTools = JSON.parse(execFileSync("tar", ["-xzOf", vReleaseArchive, "./tools.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); } catch {}
+  const toolMismatch = distroToolMismatches(distroTools, { codex: V_RELEASE_CODEX_VERSION, "makaron-cli": V_RELEASE_MAKARON_CLI_VERSION, "lark-cli": FEISHU_CLI_VERSION });
+  if (toolMismatch.length) throw Error(`V_RELEASE_TOOL_VERSION_MISMATCH: ${toolMismatch.join("; ")}`);
 }
 const openclawVersion = vReleaseCore?.upstream ?? TEMPLATE_OPENCLAW_VERSION;
 const convergeEnvKeys = [...new Set(["GOOGLE_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY", ...Object.keys(config.templates?.[templateId]?.runtimeEnv ?? {})])]
