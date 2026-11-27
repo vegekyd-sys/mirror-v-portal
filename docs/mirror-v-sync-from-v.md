@@ -255,3 +255,52 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 - `runtime/progress-patch.mjs` 升到 `nexus-public-progress-v5`：在结果处理里，若已拼出的文本含 U+FFFD 而 `result.payloads` 的文本完整，就补发一个 `nexus.final_text`（结果处理先于收尾，`finalUsage` 赋值后收尾走 `setImmediate`）。已装 v4 的沙盒原样还原锚点再打 v5；在 `mvfull-vds-02` 真实 bundle 上验证过迁移、幂等和语法。`boot.mjs` 的 `RUNTIME_PATCHES` 同步改名，运行中的 Gateway 下一轮重启一次以加载补丁。
 - `src/text-repair.ts` + `provider.ts`：收到 `nexus.final_text` 时，按前后文在完整文本里唯一定位每段 U+FFFD，换回原字；定位不唯一就不动，并记一个 `text-damaged` 事件。流式卡片过程中可能短暂出现 �，最终卡片是修好的。
 
+
+### 2026-11-27 · 带上 vsync / 飞书 A2A，payload `mirror-v-full.v20`
+
+| 项 | 值 |
+|---|---|
+| V 提交 | `185eb6e6` → `88528b9f`（8 个提交；已同步路径除本次新增外没有变化） |
+| 源码提交 / release | `593fedea` / `593fedea8503`（CI 通过） |
+| 快照 | `snap_CTtAYIvYKlAzQyzvfsW949yOHEUL`（2026-12-27 过期）；回滚到 v19.5：release `5285940de0a8`、快照 `snap_lYMGFbuD…`（`config.json.before-mirror-v-full-2026-11-27T08-45-52-344Z`） |
+| 合成租户 | `mvfull-vsync-01`（v19.4 开号，沙盒里换上新技能预验）、`mvfull-vsync-02`（v20 开号），验完定时任务已关 |
+
+用户决定 Mirror V 也带上 V 的 `vsync`，让 V 和 Mirror V 能按 VSync 协议互通。
+
+**带过来的**
+
+- `skills/vsync`、`skills/agent-to-agent-protocol-feishu-a2a-defaults`：从不带清单挪到同步清单，按正常流程三方合并（都是新增文件）。
+- 脱敏：`sync-from-v.sh` 把 V 的飞书 open_id 换成 `ou_SENDER_V`；a2a 技能里那段改成「以 VSync 任务给的 open_id 为准，飞书 open_id 按应用区分，不要沿用别处看到的」。
+- `skills/vsync/SKILL.md` 加「On Mirror V」一节（Mirror 的改动，之后的三方合并会保留）：Mirror 是接收方；hub 默认没有权限，先测可达，404 就带证据回 `BLOCKED`，不在对话里要 token；兜底走 11-27 用户和 V 在 0.4 上实测通过的路——V 把文件发到群里并给 sha256，Mirror 下载、自算 sha256、对上才装、同名不覆盖、用新的群正文消息 native @ V 回执，ACK 由 V 代录进 hub（`recorded_by`）。
+- `TOOLS.md`：「lark-cli 只读文档、不发消息」加了唯一例外——VSync 收包与回执，限任务所在的群：`+messages-mget --as user` 读文件消息、`+messages-resources-download` 下载、一条 `+messages-send --as bot --msg-type text` 回执。0.4 那次测试已经这样做了（越过了原规则），这里把它收窄成明文例外。
+- `skills/agent-to-agent-protocol`（通用 A2A 协议）：vsync 的预检要求读它，但 V 把它放在 `~/.agents/skills`，不在工作区 git 里，同步脚本拿不到。payload 里放的是 Mirror 自己的一份：去掉了 V / H / V🍑 的私有架构段和 V 群里的消息 id，其余照抄。V 以后改它不会自动进来。
+- 没带：V 的 `scripts/vsync-*.py`（发包、导入快照、查 private-v 收件箱，都是发起方 / 私有 V 侧的工具）。
+
+**互通链路现状**（11-27 用户在 0.4 上的测试 + 本次核对，只读）
+
+| 环节 | 现状 |
+|---|---|
+| 控制面 `v-sync-hub` | GitHub 私有仓库。沙盒能上 GitHub（200），仓库匿名 404，没有任何 GitHub 凭据。Mirror 收不了包、写不了 ACK |
+| 兜底：飞书群文件 | 通。0.4 用主人身份的 lark-cli 读到 V 指名的文件消息并下载、sha256 一致、安装、回执；V 代录 ACK（hub `057ecdea`） |
+| V → Mirror 唤醒 | 0.4 那次能通，是因为 V 以**用户身份**发的消息。Portal 丢弃机器人发来的消息（`runtime-manager/src/feishu.ts` 的 `sender_type === "app"`），Mirror 的应用也没申请 `im:message.group_at_msg.include_bot:readonly`：V 用机器人身份 @ Mirror，Mirror 收不到 |
+| Mirror → V | 通。Mirror 用 bot 身份发 text + native @，V 收到 |
+| 文件消息直接发给 Mirror | Portal 只收视频类文件（差距清单第 1 项），所以要靠 V 在文字里给 message_id、Mirror 自己去取 |
+
+**验收（合成租户 `mvfull-vsync-01`，不设 `app_id`，不经飞书；模拟 V 的任务，附件预先放进沙盒当作「群文件已下载」）**
+
+| 场景 | 结果 |
+|---|---|
+| 正常收包（`delivery-precheck`，给 sha256） | 34 秒 ACK：自算 sha256 一致、装到 `skills/delivery-precheck/`、无同名、内容审过、说明没有 hub 写权限由发起方代录 |
+| 任务指向 hub | 14 秒 `BLOCKED`：实测 API 404、raw 404、`git ls-remote` 要用户名；没换别的传输、没在对话里要凭据；给出两条路（平台开权限 / 群文件 + sha256） |
+| 同名冲突 + 哈希不符 | 18 秒 `BLOCKED`：`tiktok-publish-copy` 哈希对上但会覆盖正式技能，不装；另一个哈希不符且内容文不对名，拒装；复核本地文件都没变 |
+| 上线后新租户 | `mvfull-vsync-02`：`mirror-v-full.v20` / `snap_CTtAY…`；三个技能在、`On Mirror V` 与 TOOLS.md 例外在、无 V 的 open_id / 主人名 / 仓库名；同一正常收包场景 34 秒 ACK，`openclaw skills list` 显示新装技能 ready（来源 openclaw-workspace）。上线核对：公开目录 `mirror-v-full.v20`、`/healthz` 200、activate 头像门禁通过 |
+
+**没验到的**：真实飞书里的整条链（合成租户没有飞书；不给 V 发测试消息）。0.4 的那次真实测试就是这条链，结果见上表。
+
+**要用户决定的**
+
+1. hub 权限：要 Mirror 直接走仓库通道，得给每个 Mirror 身份一份 v-sync-hub 的凭据。但 hub 里有各个 V 的完整快照（含客户上下文），按仓库授权就是全读。建议不发全库 token，改成按租户只读自己 `agents/<id>/` 的方式（例如 Portal 代取、或每个租户一个独立的小仓库），需要另做。
+2. 是否让 Mirror 接收机器人发来的消息：改 `feishu.ts` 只放行「@ 了本机器人、且不是本应用自己」的 bot 消息，并给新建应用加 `im:message.group_at_msg.include_bot:readonly`（老租户要在开发者后台补权限并发版）。要防两个机器人互相回复成死循环。
+3. `TOOLS.md` 的 lark-cli 发消息例外（上面那条）是否保留。
+
+**顺带发现（不属于本次）**：v19.5 上线后，`mvfull-vsync-01` 的一轮回复（网页通道，沙盒已是 `nexus-public-progress-v5`）仍有一个 U+FFFD（「本地没被改���」），同时记了 `text-damaged`——修复没能定位。
