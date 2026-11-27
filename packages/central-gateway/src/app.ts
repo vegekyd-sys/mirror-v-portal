@@ -235,6 +235,33 @@ export function createApp() {
     } catch { res.status(503).type('html').send('<!doctype html><meta charset="utf-8"><title>记忆</title><p>暂时打不开，请稍后再试。</p>'); }
   });
 
+  // VSync broker: a Mirror V (sandbox tenant or a customer's own deployment) reaches the
+  // private v-sync-hub only through the runtime manager, which checks its agent token and
+  // confines it to its own packages, inbox and ACKs (runtime-manager/src/vsync-hub.ts).
+  app.all(/^\/onboard\/vsync\/v1\/(whoami|inbox|acks|replies|packages|file|ack|send)$/, async (req, res) => {
+    const op = (req.params as Record<string, string>)[0];
+    const write = op === 'ack' || op === 'send';
+    if (req.method !== (write ? 'POST' : 'GET')) { res.status(405).json({ error: 'METHOD_NOT_ALLOWED' }); return; }
+    const query = op === 'file' && typeof req.query.path === 'string' ? `?path=${encodeURIComponent(req.query.path)}` : '';
+    try {
+      const response = await fetch(`${config.provisioningServiceUrl.replace(/\/$/, '')}/v1/vsync/${op}${query}`, {
+        method: req.method,
+        headers: {
+          ...(write ? { 'content-type': 'application/json' } : {}),
+          'x-vsync-agent': String(req.get('x-vsync-agent') ?? ''),
+          'x-vsync-token': String(req.get('x-vsync-token') ?? ''),
+          ...(config.provisioningApiToken ? { Authorization: `Bearer ${config.provisioningApiToken}` } : {}),
+        },
+        body: write ? JSON.stringify(req.body ?? {}) : undefined,
+        signal: AbortSignal.timeout(120000),
+      });
+      res.status(response.status).set({
+        'content-type': response.headers.get('content-type') ?? 'application/json',
+        'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff',
+      }).send(Buffer.from(await response.arrayBuffer()));
+    } catch { res.status(503).json({ error: 'VSYNC_UNAVAILABLE' }); }
+  });
+
   // A component inside a Mirror sandbox (the takeover page's 交还给 V) continues its conversation.
   app.post('/onboard/wake/:tenant/:sig', async (req, res) => {
     const { tenant, sig } = req.params as Record<string, string>;

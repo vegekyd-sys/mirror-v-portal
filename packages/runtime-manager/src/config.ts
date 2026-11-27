@@ -77,6 +77,8 @@ export interface Config {
   publicBaseUrl?: string;
   alibaba?: { apiKey: string; region: string; templateId: string; trialTenantId?: string; enabled?: boolean };
   dataDir: string;
+  /** VSync broker: Mirror V reaches the private v-sync-hub only through the Portal (src/vsync-hub.ts). */
+  vsync?: import("./vsync-hub.js").VsyncConfig;
 }
 
 export function loadConfig(): Config {

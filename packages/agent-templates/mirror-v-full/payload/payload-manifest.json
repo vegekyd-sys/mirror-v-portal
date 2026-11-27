@@ -1,6 +1,6 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v21",
+ "version": "mirror-v-full.v21.1",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "vWorkspaceCommit": "88528b9f22a449d534fd370cc434b5091ed4ec85",
  "files": [
@@ -49,6 +49,7 @@
   "scripts/memory-graph.py",
   "scripts/memory-graph.template.html",
   "scripts/memory-index-verify.py",
+  "scripts/mirror-vsync.py",
   "scripts/onboard-budget.py",
   "scripts/onboard-collect.py",
   "scripts/onboard-progress.py",

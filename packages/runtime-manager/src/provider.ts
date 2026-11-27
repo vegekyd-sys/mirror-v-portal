@@ -2,6 +2,7 @@ import type { TemplateRecord } from "./config.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHmac, createHash, timingSafeEqual } from "node:crypto";
+import { vsyncEnv } from "./vsync-hub.js";
 import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
@@ -348,6 +349,7 @@ export class VercelProvider implements RuntimeProvider {
         NEXUS_WAKE_URL: `${(this.config.publicBaseUrl || "https://mirror-v-portal.vercel.app").replace(/\/$/, "")}/onboard/wake/${encodeURIComponent(tenant.id)}/${this.tenantSecret(tenant.id, "wake").slice(0, 32)}`,
         ...(publicPorts.some(([name]) => name === "voice") ? { NEXUS_VOICE_ACCESS_TOKEN: this.tenantSecret(tenant.id, "voice-access") } : {}),
         NEXUS_PUBLIC_PORTS: JSON.stringify(Object.fromEntries(publicPorts)),
+        ...vsyncEnv(this.config, tenant),
       },
       signal: AbortSignal.timeout(180000),
     });

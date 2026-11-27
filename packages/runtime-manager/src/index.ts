@@ -15,6 +15,7 @@ import { WeixinEdge } from "./weixin.js";
 import { WeixinLogin } from "./weixin-login.js";
 import { DingtalkEdge } from "./dingtalk.js";
 import { WecomEdge } from "./wecom.js";
+import { vsyncRoutes } from "./vsync-routes.js";
 const config = loadConfig(),
   store = new Store(config);
 await store.init();
@@ -58,6 +59,8 @@ await manager.start();
 scheduler.start();
 const app = express();
 app.disable("x-powered-by");
+// Before the 64 kb parser: VSync packages are larger. Same localhost-only gate as the rest.
+app.use("/v1/vsync", (req, res, next) => (["127.0.0.1", "localhost"].includes(req.hostname) ? next() : res.sendStatus(403)), vsyncRoutes(config, store));
 app.use(express.json({ limit: "64kb" }));
 const cookie = randomUUID();
 app.use((req, res, next) => {
