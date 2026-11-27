@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { readAgentKitProfile, seedWorkspace, createOpenClawConfig, assertAgentKitNode, agentKitFingerprint } from "./agent-config.mjs";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
-import { readVRelease, applyCodexCapture, ensureCodexHome, V_RELEASE_ROOT } from "./v-release.mjs";
+import { readVRelease, applyCodexCapture, ensureCodexHome, installedCodexVersion, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
 import { sandboxExecPolicy, sandboxExecEnv, ensureSandboxExecApprovals } from "./sandbox-exec.mjs";
 import { writePortalEnvironment } from "./portal-environment.mjs";
@@ -168,6 +168,8 @@ const cfg = vRelease ? createVReleaseConfig({
   workerPluginPath: `${V_RELEASE_ROOT}/worker/dist`, workers: vRelease.workers,
   pluginPaths: (vRelease.plugins ?? []).filter((plugin) => plugin.path).map((plugin) => `${base}/${plugin.path}`), pluginIds: (vRelease.plugins ?? []).map((plugin) => plugin.id),
   codexCommand: vRelease.codexCommand ? `${base}/${vRelease.codexCommand}` : undefined,
+  // Settings that belong to the runtime build the snapshot carries (v-release-install.mjs).
+  deepseekTimeoutSeconds: vRelease.deepseekTimeoutSeconds,
   extra: featureConfig({ features, data, publicUrls }),
   ownerIds: OWNER_CHANNELS.map((channel) => `${channel}:owner`),
 }) : profile ? createOpenClawConfig({
@@ -244,7 +246,7 @@ const RUNTIME_PATCHES = vRelease ? "progress-v5+reasoning-preview-v1" : "";
 const configHash = createHash("sha256").update(JSON.stringify(cfg) + JSON.stringify(execEnv) + RUNTIME_PATCHES).digest("hex");
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {
-  ensureCodexHome(state, agentId);
+  ensureCodexHome(state, agentId, { codexVersion: vRelease.codexCommand ? installedCodexVersion(`${base}/${vRelease.codexCommand}`) : undefined });
   applyCodexCapture(state);
   mark("codexCapture");
 }

@@ -1,0 +1,38 @@
+{
+ "release": "db91-lifecycle-proof-20261127.ai",
+ "upstream": "2026.9.1",
+ "package": "@openclaw/ai",
+ "capturedFrom": {
+  "host": "v",
+  "runtimeDir": "/opt/openclaw-experiments/db91-release-v2026.9.1-db91.6/core/node_modules/@openclaw/ai/dist",
+  "at": "2026-11-27T17:14+08:00"
+ },
+ "note": "V patches @openclaw/ai inside core/node_modules, which the platform captures exclude (CHANGELOG fallback-dsml-subagent-wake-20261108). Read-only copy of the four files that differ from npm @openclaw/ai@2026.9.1. Same blobs in vegekyd-sys/v-openclaw-platform: openai-completions-stream at f8d9bc96 (#568 DSML), the other three at 52aae9e7 (release/captured/*.ai, not merged to dev).",
+ "removedFromBase": [],
+ "files": [
+  {
+   "path": "./openai-chatgpt-responses-BAJ4gq3i.mjs",
+   "sha256": "c79575722e992eec5ba5a58c799ec3399f831fa6442668824bc5024f2a902977",
+   "kind": "modified",
+   "baseSha256": "cfe0a934ea47ffeedd1c0d13dd2aa4155d91484d6ee700444cc91f0b9107d294"
+  },
+  {
+   "path": "./openai-completions-D0QZ0AyB.mjs",
+   "sha256": "915ac13d0d60cf031a82cabd951eea22d61a093f55cfc28a205d8c97467f5f80",
+   "kind": "modified",
+   "baseSha256": "ea69c7769d81a647bf0b50d46ee3f4f33d0ce6dd00d7bbb4b84e4292a778a6d1"
+  },
+  {
+   "path": "./openai-completions-stream-DZjwK8vp.mjs",
+   "sha256": "a66edfc5c390e921ef1d9a50df29c3e2082bbfb9b7790575d068569030d66291",
+   "kind": "modified",
+   "baseSha256": "9808e03ccb3d6a0967053e983c2a41a46c9fcec17023e541712ac6b363ca7aec"
+  },
+  {
+   "path": "./transports.mjs",
+   "sha256": "7d7ae7a8d8441f11204f4edb8476f00a14ab2cbecdff6a4fcd4dc2c7de2b6d4a",
+   "kind": "modified",
+   "baseSha256": "dd79bb426097bc7b02930ac1f6ddefdf1e062c0bbf3b69fb392b52fb40b1db8b"
+  }
+ ]
+}

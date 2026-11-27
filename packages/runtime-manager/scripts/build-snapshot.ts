@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { Sandbox } from "@vercel/sandbox";
 import { createAgentKitProfile } from "../runtime/agent-config.mjs";
 import { MEDIA_BINARY_PACKAGES } from "../runtime/media-binaries.mjs";
+import { makaronCliLinkScript, makaronCliVerifyScript, V_RELEASE_MAKARON_CLI_VERSION } from "../src/makaron-cli.js";
 import { loadConfig } from "../src/config.js";
 import { FEISHU_CLI_VERSION, templateUsesFeishuCli } from "../src/templates.js";
 import { resolveTemplatePayload, templateRecord, TEMPLATE_OPENCLAW_VERSION, TEMPLATE_SNAPSHOT_TTL_MS, type TemplatePayload } from "../src/template-payload.js";
@@ -26,9 +27,8 @@ if (payloadArchiveArg >= 0 && !privatePayloadArchive) throw new Error("PAYLOAD_A
 // packaged as a tgz with core/, worker/, codex/ and v-memory-indexer.mjs at its root.
 const vReleaseArg = process.argv.indexOf("--v-release");
 const vReleaseArchive = vReleaseArg >= 0 ? path.resolve(process.argv[vReleaseArg + 1] ?? "") : undefined;
-const V_RELEASE_CODEX_VERSION = "0.159.2";
-// Same Makaron CLI as V (/opt/makaron-cli-0.15.2) for image, video, music and design.
-const V_RELEASE_MAKARON_CLI_VERSION = "0.15.2";
+// The Codex CLI V's codex plugin runs against (/opt/codex-0.169.1-v since 2026-11-18).
+const V_RELEASE_CODEX_VERSION = "0.169.1";
 // Optional private sample memory the owner may import during bootstrap (never in Git).
 const seedArg = process.argv.indexOf("--seed-archive");
 const seedArchive = seedArg >= 0 ? path.resolve(process.argv[seedArg + 1] ?? "") : undefined;
@@ -164,7 +164,7 @@ try {
     await sbx.writeFiles([{ path: "/vercel/sandbox/v-release.tgz", content: fs.readFileSync(vReleaseArchive) }]);
     await run("v-release-unpack", "bash", ["-c", "mkdir -p /vercel/sandbox/nexus/v && tar -xzf /vercel/sandbox/v-release.tgz -C /vercel/sandbox/nexus/v && rm /vercel/sandbox/v-release.tgz"]);
     await run("v-release-codex", "npm", ["install", "--prefix", "/vercel/sandbox/nexus/codex", "--omit=dev", "--no-audit", "--no-fund", `@openai/codex@${V_RELEASE_CODEX_VERSION}`]);
-    await run("v-release-makaron", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund makaron-cli@${V_RELEASE_MAKARON_CLI_VERSION} && mkdir -p /vercel/sandbox/nexus/tools/bin && ln -sf /vercel/sandbox/nexus/tools-node/node_modules/makaron-cli/bin/makaron.mjs /vercel/sandbox/nexus/tools/bin/makaron && /vercel/sandbox/nexus/tools/bin/makaron --version`]);
+    await run("v-release-makaron", "bash", ["-c", `npm install --prefix /vercel/sandbox/nexus/tools-node --omit=dev --no-audit --no-fund makaron-cli@${V_RELEASE_MAKARON_CLI_VERSION} && ${makaronCliLinkScript()} && ${makaronCliVerifyScript(V_RELEASE_MAKARON_CLI_VERSION)}`]);
     // Preinstalled so the first onboarding turn can hand out the Feishu consent link
     // within seconds instead of waiting on npm (feishu-docs.py installs it only as a fallback).
     if (templateUsesFeishuCli(templateId)) {

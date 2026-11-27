@@ -139,8 +139,16 @@ export function applyCodexCapture(stateDir, captureDir = path.join(V_RELEASE_ROO
     .map((dist) => applyCapture(captureDir, dist));
 }
 
-/** V's Codex home routes `deepseek/...` turns to DeepSeek's native Responses API. */
-export function codexHomeConfig() {
+/**
+ * V's Codex home routes `deepseek/...` turns to DeepSeek's native Responses API.
+ * One retry each (V 2026-11-09, platform docs/evidence/codex-fallback-chain-20261107): a DeepSeek
+ * outage reaches the OpenClaw fallback in ~11 s instead of ~32 s, and a single transient error still
+ * heals inside Codex. Codex >= 0.169 also gets V's 2026-11-26 setting that keeps remote plugins
+ * (and their MCP servers) from loading: V's incident was process exhaustion.
+ */
+export function codexHomeConfig({ codexVersion } = {}) {
+  const [major = 0, minor = 0] = String(codexVersion ?? "").split(".").map(Number);
+  const remotePluginSwitch = major > 0 || minor >= 169;
   return [
     'approval_policy = "never"',
     'sandbox_mode = "danger-full-access"',
@@ -150,16 +158,53 @@ export function codexHomeConfig() {
     'base_url = "https://api.deepseek.com/v1"',
     'wire_api = "responses"',
     'env_key = "DEEPSEEK_API_KEY"',
+    "request_max_retries = 1",
+    "stream_max_retries = 1",
     "",
+    ...(remotePluginSwitch ? ["[features]", "remote_plugin = false", ""] : []),
   ].join("\n");
 }
 
-export function ensureCodexHome(stateDir, agentId) {
+/** The file this module wrote before 2026-11-27, byte for byte: replaced by the current one. */
+const LEGACY_CODEX_HOME_CONFIG = [
+  'approval_policy = "never"',
+  'sandbox_mode = "danger-full-access"',
+  "",
+  "[model_providers.deepseek]",
+  'name = "DeepSeek"',
+  'base_url = "https://api.deepseek.com/v1"',
+  'wire_api = "responses"',
+  'env_key = "DEEPSEEK_API_KEY"',
+  "",
+].join("\n");
+
+/**
+ * Write the Codex home config. A file this module wrote earlier is upgraded in place; one that
+ * differs (Codex or the agent changed it) is left alone. Returns the file path.
+ */
+export function ensureCodexHome(stateDir, agentId, { codexVersion } = {}) {
   const home = path.join(stateDir, "agents", agentId, "agent", "codex-home");
   const file = path.join(home, "config.toml");
   fs.mkdirSync(home, { recursive: true });
-  if (!fs.existsSync(file)) fs.writeFileSync(file, codexHomeConfig(), { mode: 0o600 });
+  const want = codexHomeConfig({ codexVersion });
+  let have = null;
+  try { have = fs.readFileSync(file, "utf8"); } catch {}
+  const ours = have === null || have === LEGACY_CODEX_HOME_CONFIG
+    || [undefined, "0.169.0"].some((v) => have === codexHomeConfig({ codexVersion: v }));
+  if (ours && have !== want) {
+    fs.writeFileSync(`${file}.tmp`, want, { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  }
   return file;
+}
+
+/** Version of the Codex CLI a snapshot installed (codexCommand lives inside its npm prefix). */
+export function installedCodexVersion(codexCommand) {
+  const marker = "/node_modules/@openai/codex-linux-x64/";
+  if (!codexCommand?.includes(marker)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(codexCommand.slice(0, codexCommand.indexOf(marker)), "node_modules", "@openai", "codex", "package.json"), "utf8")).version;
+  } catch { return undefined; }
 }
 
 export function isVReleaseDaemon(command) {

@@ -50,10 +50,11 @@ bash sync-from-v.sh --dry-run          # 约 2 分钟（V 仓库大）；看 add
    ```
    在 staged release 里构建快照（**快照失败就停，不 activate**）：
    ```bash
-   ssh ... root@43.134.135.143 "export PATH=/root/.nvm/versions/node/v22.22.1/bin:\$PATH; cd /opt/nexus/releases/<sha12>/packages/runtime-manager && NEXUS_CONFIG_PATH=/opt/nexus/data/config.json ./node_modules/.bin/tsx scripts/build-snapshot.ts --template mirror-v-full --v-release /opt/nexus/data/v-release/v2026.9.1-db91.6-firsttext-r4-20261007-full.tgz --seed-archive /opt/nexus/data/mirror-v-v001-payload-v2.tar"
+   ssh ... root@43.134.135.143 "export PATH=/root/.nvm/versions/node/v22.22.1/bin:\$PATH; cd /opt/nexus/releases/<sha12>/packages/runtime-manager && NEXUS_CONFIG_PATH=/opt/nexus/data/config.json ./node_modules/.bin/tsx scripts/build-snapshot.ts --template mirror-v-full --v-release /opt/nexus/data/v-release/<当前运行时>-full.tgz --seed-archive /opt/nexus/data/mirror-v-v001-payload-v2.tar"
    ```
    然后 `scripts/deploy-mirror-v.sh activate <sha12>`（会等没有进行中的回合，并跑头像门禁和健康检查，失败自动回滚）。
-   V 的运行时（openclaw release tgz）升级是另一层风险，**先和 Tianyi 确认**再动。
+   `<当前运行时>` 以 `config.json` 里 `templates["mirror-v-full"].runtime["v-release"]` 为准（2026-11-27 起 `db91-lifecycle-proof-20261127`）。
+   V 的运行时（openclaw release tgz）升级是另一层风险，按下面「运行时升级」一节做。
 8. 核对：`https://mirror-v-portal.vercel.app/onboard/templates?template=mirror-v-full` 的版本号、`config.json` 里 `templates["mirror-v-full"]` 的 `version` / `snapshotId`、`/healthz`。
 9. 验收（下一节），把记录追加到本文末尾，提交。
 
@@ -76,6 +77,33 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 6. 记忆页：Librarian 之后能生成，第一天就有内容；从 Portal 的签名链接打开（`/onboard/memory/<租户>/<签名>/index.html`），图谱和旧日期能加载。
 7. 没有 V 的私有内容：在新租户的工作区 grep 主人名字、V 的路径、V 的飞书 id 与文档链接（同 `sync-from-v.sh` 末尾的规则）。
 8. 合成租户验收完删除或停用，别占沙盒。
+
+## 运行时升级（跟 V 的生产运行时）
+
+V 的运行时由几份字节组成，Mirror 打成一个 tgz 给快照用。打包只读 git，不依赖 `~/v-openclaw-platform` 的检出状态：
+
+| 部分 | 来源 | 进沙盒后 |
+|---|---|---|
+| `core/` | 平台仓库 `captured-store` 分支 `release/captured/<tag>`（dev 上同路径的 manifest 必须一致） | `v-release-install.mjs` 盖到 npm `openclaw@<upstream>` 上，每个文件按 sha256 核对原字节，不对就构建失败 |
+| `worker/` | 同上 `<tag>.worker` | Worker 池插件 |
+| `codex/` | 同上 `<tag>.codex`：V 运行中的整个 `@openclaw/codex` 包。`deploy/v-release/codex-delta.mjs` 对照 npm 同版本算成覆盖层（只能表达成覆盖层才放行） | `boot.mjs` 在 OpenClaw 装好 codex 插件后盖上去 |
+| `ai/` | `deploy/v-release/ai-<tag>/`：V 改过的 `core/node_modules/@openclaw/ai` 文件。平台捕获不含 `node_modules`，这几份字节只能从 V 现场只读拷（`find node_modules -newer package.json` 找候选，再和 npm 逐个比哈希） | 和 `core/` 同样的核对方式 |
+| `v-memory-indexer.mjs` | 平台仓库 `origin/dev`（V 跑的就是它） | 记忆索引守护进程 |
+| desktop / vbrowser / voice | 钉住的提交（默认值在脚本里） | 不随运行时变 |
+
+V 的 `.feishu`、`.session-relay`、钉钉、企微等捕获不打包：渠道由 Portal 自己做。
+
+```bash
+git -C ~/v-openclaw-platform fetch origin dev captured-store
+VBROWSER_REPO=~/v-browser scripts/package-v-release.sh ~/v-openclaw-platform <tag> /tmp/<tag>-full.tgz
+scp -i ~/.ssh/nexus-mirror-v-deploy-20260925 /tmp/<tag>-full.tgz root@43.134.135.143:/opt/nexus/data/v-release/
+```
+
+同时核对的版本钉子（V 现场为准）：Codex CLI `build-snapshot.ts` 的 `V_RELEASE_CODEX_VERSION`（V `/opt/codex-<版本>-v`）、Makaron CLI `src/makaron-cli.ts`（V `/opt/makaron-cli-current`）、lark-cli `src/templates.ts` 的 `FEISHU_CLI_VERSION` 与 payload `scripts/feishu-docs.py` 的 `LARK_VERSION`（V `/opt/node-*/lib/node_modules/@larksuite/cli`）。
+
+Mirror 自己的运行时补丁要在新字节上重验：`progress-patch.mjs`（OpenResponses）、`stream-preview-patch.mjs`（`@openclaw/ai` 流、builtin runner、Worker 公共流）。做法：本地 `npm pack` 出 `openclaw`、`@openclaw/ai`、`@openclaw/codex` 的上游包，把 tgz 里的覆盖层盖上去，再跑 `installProgress` / `installStreamPreview`；锚点对不上就按真实 bundle 加一个变体（`patchExact` 按变体精确匹配，老租户的旧字节仍走原变体），不要放宽匹配。
+
+控制面和快照的边界：`v-config.mjs`、`boot.mjs`、补丁脚本对**所有**租户下次唤醒生效（老租户仍是旧快照里的旧运行时，所以改动必须同时兼容新旧字节）；和运行时绑定的设置（DeepSeek 超时）写在快照的 `v-release.json` 里，由 `v-release-install.mjs` 决定。
 
 ## 回滚
 

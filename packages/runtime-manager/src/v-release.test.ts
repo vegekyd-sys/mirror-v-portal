@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { AGENT_DB, applyCapture, codexHomeConfig, compactAgentDb, ensureCodexHome, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
+import { AGENT_DB, applyCapture, codexHomeConfig, compactAgentDb, ensureCodexHome, installedCodexVersion, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
 import { createVReleaseConfig } from "../runtime/v-config.mjs";
 import { templateRuntimeEnv, templateVcpus } from "./provider.js";
 
@@ -71,16 +71,61 @@ test("backups skip reinstallable plugins and Codex logs but keep sessions and me
   expect(isVReleaseBackupExcluded("state/cache/control-ui-assets/x/mermaid.js")).toBe(true);
 });
 
-test("codex home is written once with DeepSeek routing and no key value", () => {
+test("codex home is written with DeepSeek routing and no key value, and only our own file is upgraded", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
   try {
     const file = ensureCodexHome(root, "mirror-v-full");
     expect(fs.readFileSync(file, "utf8")).toBe(codexHomeConfig());
     expect(codexHomeConfig()).toContain('env_key = "DEEPSEEK_API_KEY"');
+    // As on V: one retry each, so a DeepSeek outage reaches the fallback in seconds.
+    expect(codexHomeConfig()).toMatch(/request_max_retries = 1\nstream_max_retries = 1\n/);
+    expect(codexHomeConfig()).not.toContain("remote_plugin");
+    expect(codexHomeConfig({ codexVersion: "0.169.1" })).toContain("[features]\nremote_plugin = false\n");
+    expect(codexHomeConfig({ codexVersion: "0.159.2" })).not.toContain("remote_plugin");
+    // The file written before 2026-11-27 is upgraded in place.
+    fs.writeFileSync(file, 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n\n[model_providers.deepseek]\nname = "DeepSeek"\nbase_url = "https://api.deepseek.com/v1"\nwire_api = "responses"\nenv_key = "DEEPSEEK_API_KEY"\n');
+    ensureCodexHome(root, "mirror-v-full", { codexVersion: "0.169.1" });
+    expect(fs.readFileSync(file, "utf8")).toBe(codexHomeConfig({ codexVersion: "0.169.1" }));
     fs.writeFileSync(file, "owner edit");
     ensureCodexHome(root, "mirror-v-full");
     expect(fs.readFileSync(file, "utf8")).toBe("owner edit");
     expect(readVRelease(path.join(root, "missing.json"))).toBeNull();
+    const prefix = path.join(root, "codex");
+    fs.mkdirSync(path.join(prefix, "node_modules/@openai/codex"), { recursive: true });
+    fs.writeFileSync(path.join(prefix, "node_modules/@openai/codex/package.json"), JSON.stringify({ version: "0.169.1" }));
+    expect(installedCodexVersion(`${prefix}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex`)).toBe("0.169.1");
+    expect(installedCodexVersion("/elsewhere/codex")).toBeUndefined();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("V's whole-package codex capture becomes a fail-closed overlay that reproduces it", async () => {
+  // @ts-expect-error plain .mjs build helper without types
+  const { codexDelta } = await import("../../../deploy/v-release/codex-delta.mjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-delta-"));
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+  try {
+    const npm = path.join(root, "npm"), cap = path.join(root, "cap"), out = path.join(root, "out");
+    const base = { "package.json": JSON.stringify({ name: "@openclaw/codex", version: "2026.9.1" }), "dist/a.js": "a0", "dist/b.js": "b0" };
+    const v = { ...base, "dist/a.js": "a1", "dist/v.json": "{}" };
+    for (const [rel, text] of Object.entries(base)) write(path.join(npm, rel), text);
+    for (const [rel, text] of Object.entries(v)) write(path.join(cap, "dist", rel), text);
+    const manifest = (files: Record<string, string>) => JSON.stringify({ release: "r.codex", upstream: "@openclaw/codex 2026.9.1", removedFromBase: [],
+      files: Object.entries(files).map(([rel, text]) => ({ path: `./${rel}`, sha256: sha(text), kind: "added" })) });
+    write(path.join(cap, "manifest.json"), manifest(v));
+    fs.mkdirSync(out);
+    expect(codexDelta(cap, npm, out)).toEqual({ release: "r.codex", modified: 1, added: 1 });
+    const pkg = path.join(root, "pkg");
+    fs.cpSync(npm, pkg, { recursive: true });
+    applyCapture(out, path.join(pkg, "dist"));
+    for (const [rel, text] of Object.entries(v)) expect(fs.readFileSync(path.join(pkg, rel), "utf8")).toBe(text);
+    // A package-level difference or an npm file V does not have cannot be expressed as an overlay.
+    write(path.join(npm, "dist/stale.js"), "x");
+    expect(() => codexDelta(cap, npm, fs.mkdtempSync(path.join(root, "o")))).toThrow(/CODEX_DELTA_NPM_ONLY_FILES/);
+    fs.rmSync(path.join(npm, "dist/stale.js"));
+    write(path.join(cap, "dist/package.json"), JSON.stringify({ name: "@openclaw/codex", version: "2026.9.1", x: 1 }));
+    write(path.join(cap, "manifest.json"), manifest({ ...v, "package.json": JSON.stringify({ name: "@openclaw/codex", version: "2026.9.1", x: 1 }) }));
+    expect(() => codexDelta(cap, npm, fs.mkdtempSync(path.join(root, "o")))).toThrow(/CODEX_DELTA_PACKAGE_FILE_DIFFERS/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -106,6 +151,18 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(bare.memory.search.provider).toBe("none");
   expect(bare.agents.defaults.models["deepseek/vds-deepseek-flash"]).toBeUndefined();
   expect(bare.agents.defaults.model).toEqual({ primary: "deepseek/deepseek-flash" });
+  // DeepSeek rejects history + max_tokens above 1,048,576; compaction only watches the window.
+  const models = cfg.models.providers.deepseek.models;
+  expect(models.map((model: any) => model.id)).toEqual(["deepseek-flash", "deepseek-v4-pro", "vds-deepseek-flash"]);
+  for (const model of models) {
+    expect(model).toMatchObject({ contextWindow: 980000, maxTokens: 64000 });
+    expect(model.contextWindow + model.maxTokens).toBeLessThanOrEqual(1048576);
+  }
+  expect(cfg.plugins.entries.codex.config.codexDynamicToolsExclude).toEqual(["openclaw"]);
+  // The DeepSeek timeout follows the snapshot's runtime: 90 s needs a core that falls back on it.
+  expect(cfg.models.providers.deepseek.timeoutSeconds).toBe(300);
+  expect(createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {}, deepseekTimeoutSeconds: 90 })
+    .models.providers.deepseek.timeoutSeconds).toBe(90);
 });
 
 test("template sandbox size and keys are bounded", () => {

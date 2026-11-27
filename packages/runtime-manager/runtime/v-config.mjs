@@ -14,10 +14,14 @@ export const V_RELEASE_PROVIDER_KEYS = Object.freeze({
 
 // As on V: deepseek-flash (and its Codex alias) accept images, which also keeps
 // the computer tool (screenshots) in the agent's tool list; v4-pro is text only.
+// Budget as on V (platform #434, 2026-10-19): DeepSeek rejects history + max_tokens above 1,048,576
+// and OpenClaw compacts against the window alone, so window + output must stay under that limit.
+// It binds the Worker harness (fallback, ds-pro, compaction); Codex (vds) sends no max_tokens and
+// takes its window from the codex plugin's own DeepSeek catalog.
 const deepseekModel = (id) => ({
   id, name: id, reasoning: true, input: id === "deepseek-v4-pro" ? ["text"] : ["text", "image"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1000000, maxTokens: 384000, api: "openai-completions",
+  contextWindow: 980000, maxTokens: 64000, api: "openai-completions",
   compat: { supportsUsageInStreaming: true, supportsReasoningEffort: true, maxTokensField: "max_tokens", thinkingFormat: "deepseek" },
 });
 
@@ -33,6 +37,7 @@ const deepseekModel = (id) => ({
  * @param {Record<string,string>} [o.env] process env, only used to decide which optional providers exist
  * @param {object} [o.workers]
  * @param {string} [o.codexCommand]    codex binary for the codex harness, when installed
+ * @param {number} [o.deepseekTimeoutSeconds] DeepSeek request timeout; the snapshot's runtime decides (default 300)
  * @param {boolean} [o.memoryEmbeddings]
  * @param {object} [o.extra]          featureConfig() output: desktop, browser, plugins, tools
  * @param {string[]} [o.ownerIds]     commands.ownerAllowFrom; the plugins resolve the single owner from it
@@ -50,7 +55,10 @@ export function createVReleaseConfig(o) {
   };
   const providers = {
     deepseek: {
-      baseUrl: "https://api.deepseek.com/v1", apiKey: "${NEXUS_MODEL_KEY}", api: "openai-completions", timeoutSeconds: 300,
+      baseUrl: "https://api.deepseek.com/v1", apiKey: "${NEXUS_MODEL_KEY}", api: "openai-completions",
+      // V runs 90 since its 2026-10-15 release, whose core turns a first-token timeout or a 5xx into a
+      // fallback; older cores (r4) keep 300 because there a timeout only ends the turn.
+      timeoutSeconds: o.deepseekTimeoutSeconds ?? 300,
       models: ["deepseek-flash", "deepseek-v4-pro", ...(o.codexCommand ? ["vds-deepseek-flash"] : [])].map(deepseekModel),
     },
     ...(has("XAI_API_KEY") ? { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "${XAI_API_KEY}", api: "openai-responses", models: [
@@ -122,7 +130,7 @@ export function createVReleaseConfig(o) {
         deepseek: { enabled: true },
         ...(embeddings ? { google: { enabled: true } } : {}),
         ...(has("XAI_API_KEY") ? { xai: { enabled: true } } : {}),
-        ...(o.codexCommand ? { codex: { enabled: true, config: { codexPlugins: { enabled: false }, codexDynamicToolsLoading: "searchable", appServer: { mode: "yolo", approvalPolicy: "never", sandbox: "danger-full-access", command: o.codexCommand } } } } : {}),
+        ...(o.codexCommand ? { codex: { enabled: true, config: { codexPlugins: { enabled: false }, codexDynamicToolsLoading: "searchable", codexDynamicToolsExclude: ["openclaw"], appServer: { mode: "yolo", approvalPolicy: "never", sandbox: "danger-full-access", command: o.codexCommand } } } } : {}),
         ...Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
         "vlab-agent-worker-isolation": {
           enabled: true,

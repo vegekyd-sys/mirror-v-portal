@@ -42,7 +42,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
-LARK_VERSION = "1.0.89"
+LARK_VERSION = "1.0.97"
 # 拉文档实际用到的用户身份只读权限。老版 doc 那一项是按本机实测推的，
 # 以 `lark-cli auth check` 在真实租户上的结果为准。
 REQUIRED_SCOPES = {
