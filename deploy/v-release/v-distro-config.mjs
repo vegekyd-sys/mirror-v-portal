@@ -142,6 +142,9 @@ export function createConfig(o) {
       mode: 'local', bind: 'loopback', port: Number(env.V_GATEWAY_PORT || 18789),
       auth: { mode: 'token', token: ref('OPENCLAW_GATEWAY_TOKEN') },
       http: { endpoints: { responses: { enabled: true } } },
+      // A sandbox never hot-reloads: the Portal rewrites the file and restarts on its own terms,
+      // and a reload here closes the Worker pool for good (V, 2026-09-20).
+      ...(standalone ? {} : { reload: { mode: 'off' } }),
     },
     models: { mode: 'merge', providers: m.providers },
     agents: {
@@ -186,7 +189,9 @@ export function createConfig(o) {
     tools: {
       profile: 'full',
       // A sandbox has no channel to answer an approval or a detached result on (Mirror V's list).
-      deny: standalone ? [] : ['gateway', 'cron', 'ask_user', 'sessions_yield', 'image_generate', 'video_generate', 'music_generate'],
+      // `message` too: with no channel the agent's message tool posts to internal-ui and the
+      // image or text is lost (Mirror V, 2026-11-27). Standalone has Feishu and keeps it.
+      deny: standalone ? [] : ['gateway', 'cron', 'ask_user', 'sessions_yield', 'message', 'image_generate', 'video_generate', 'music_generate'],
       sessions: { visibility: 'all' },
       web: m.webProvider ? { search: { enabled: true, provider: m.webProvider }, fetch: { provider: m.webProvider } } : { search: { enabled: true } },
       elevated: { enabled: false },

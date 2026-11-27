@@ -1,6 +1,8 @@
 {
- "from": "git",
+ "from": "v-distro",
  "repo": "vegekyd-sys/v-openclaw-platform",
+ "distroVersion": "2026.11.27-db91-lifecycle-proof.3",
+ "distroCommit": "e584b69cea33a16e687e0e607e9ec2fe9d99e75c",
  "ref": "origin/claude/distro-workspace-cd7827",
  "commit": "59bf9d55140611ff950b5c132e7370373de85fcc",
  "payloadTree": "c70b7eeffd58893b98eaa092eadc3847e7bc2e67",

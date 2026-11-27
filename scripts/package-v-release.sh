@@ -6,7 +6,7 @@
 #   worker/  v-distro runtime/worker (vlab-agent-worker-isolation plugin)
 #   codex/   v-distro runtime/codex: V's whole running @openclaw/codex, reduced to an overlay over
 #            npm @openclaw/codex@<upstream> (deploy/v-release/codex-delta.mjs)
-#   ai/      V's patched files in core/node_modules/@openclaw/ai: v-distro runtime/ai when the
+#   ai/      V's patched files in core/node_modules/@openclaw/ai: v-distro runtime/core-ai when the
 #            package has it, else deploy/v-release/ai-<release> (bytes in files/)
 #   v-memory-indexer.mjs  v-distro runtime/ops (same bytes as V)
 #   tools.json            v-distro runtime/tools.json (build-snapshot refuses other CLI versions)
@@ -36,7 +36,7 @@ const fs=require("fs"),c=require("crypto"),path=require("path"),[d]=process.argv
 const m=JSON.parse(fs.readFileSync(path.join(d,"manifest.json"),"utf8"));
 if(m.schema!=="v-distro/1")throw Error(`V_DISTRO_SCHEMA:${m.schema}`);
 for(const f of m.files){const p=path.join(d,f.path);const h=c.createHash("sha256").update(fs.readFileSync(p)).digest("hex");if(h!==f.sha256)throw Error(`V_DISTRO_BYTES_MISMATCH:${f.path}`);}
-for(const part of ["core","worker","codex"]){const cm=JSON.parse(fs.readFileSync(path.join(d,"runtime",part,"manifest.json"),"utf8"));
+for(const part of ["core","worker","codex",...(fs.existsSync(path.join(d,"runtime","core-ai"))?["core-ai"]:[])]){const cm=JSON.parse(fs.readFileSync(path.join(d,"runtime",part,"manifest.json"),"utf8"));
   for(const f of cm.files){const p=path.join(d,"runtime",part,"dist",f.path.replace(/^\.\//,""));const h=c.createHash("sha256").update(fs.readFileSync(p)).digest("hex");if(h!==f.sha256)throw Error(`CAPTURE_BYTES_MISMATCH:${part}:${f.path}`);}}
 ' "$d"
 # The sandbox's openclaw.json is checked against the package's generator by v-config-distro.test.ts.
@@ -52,8 +52,8 @@ core_mirrored="$(node "$repo_root/deploy/v-release/core-mirror.mjs" "$tmp/pkg/co
 mkdir -p "$tmp/pkg/codex"
 node "$repo_root/deploy/v-release/codex-delta.mjs" "$d/runtime/codex" "$tmp/src/npm-codex/package" "$tmp/pkg/codex" >/dev/null
 ai_source=""
-if [ -f "$d/runtime/ai/manifest.json" ]; then
-  cp -R "$d/runtime/ai" "$tmp/pkg/ai"; ai_source="v-distro runtime/ai"
+if [ -f "$d/runtime/core-ai/manifest.json" ]; then
+  cp -R "$d/runtime/core-ai" "$tmp/pkg/ai"; ai_source="v-distro runtime/core-ai"
 elif [ -f "$repo_root/deploy/v-release/ai-$release/manifest.json" ]; then
   mkdir -p "$tmp/pkg/ai" && cp "$repo_root/deploy/v-release/ai-$release/manifest.json" "$tmp/pkg/ai/" && cp -R "$repo_root/deploy/v-release/ai-$release/files" "$tmp/pkg/ai/dist"
   ai_source="deploy/v-release/ai-$release"

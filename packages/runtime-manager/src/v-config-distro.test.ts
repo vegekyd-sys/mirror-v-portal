@@ -29,12 +29,12 @@ const flat = (value: any, prefix = "", out: Record<string, string> = {}) => {
  * portal: the Portal architecture (scheduler, channel edge, sandbox paths and secrets).
  * mirror: a product choice made for Mirror V.
  * open:   V behaviour not (yet) in Mirror; changing it changes every tenant, so it is decided on its own.
- * distro: the package's profile should change (reported to the A line).
+ * The package's sandbox profile has Mirror's reload: off and its tool deny list (A line, ed8f1093):
+ * those two are equal now and checked by the first test like everything else.
  */
-const DIFFERENCES: Record<string, [kind: "portal" | "mirror" | "open" | "distro", why: string]> = {
+const DIFFERENCES: Record<string, [kind: "portal" | "mirror" | "open", why: string]> = {
   "gateway.auth.token": ["portal", "the manager injects NEXUS_GATEWAY_TOKEN"],
   "gateway.port": ["portal", "the Portal's runtime contract listens on 18790"],
-  "gateway.reload.mode": ["distro", "a hot reload closed V's Worker pool for good (2026-09-20); the sandbox boot restarts instead"],
   "models.providers.deepseek.apiKey": ["portal", "the platform's model key arrives as NEXUS_MODEL_KEY"],
   "models.providers.deepseek.agentRuntime.id": ["open", "V sets the Worker runtime on the provider too; Mirror sets it per model"],
   "agents.list": ["portal", "Mirror writes agents.list; 2026.9.1 migrates it to agents.entries on start"],
@@ -71,7 +71,6 @@ const DIFFERENCES: Record<string, [kind: "portal" | "mirror" | "open" | "distro"
   "plugins.entries.vlab-agent-worker-isolation.config.gatewayConfigPath": ["portal", "same"],
   "session.maintenance.maxDiskBytes": ["mirror", "sandbox disk and per-turn backups"],
   "tools.alsoAllow": ["portal", "portal_schedule / portal_environment"],
-  "tools.deny": ["distro", "message has no channel behind the Portal (v21 lost an image to internal-ui); the sandbox profile should deny it too"],
   "tools.exec.pathPrepend": ["portal", "the agent's global npm bin in agent-data"],
   "tools.web.search.provider": ["mirror", "Parallel (free) instead of DeepSeek search"],
   "tools.web.fetch.provider": ["mirror", "same"],
@@ -92,4 +91,8 @@ test("model setup, Worker pool, Codex harness and memory are the distro's", () =
   expect(mirror.plugins.entries.codex).toEqual(distro.plugins.entries.codex);
   expect(mirror.memory).toEqual(distro.memory);
   expect(mirror.models.providers.deepseek.timeoutSeconds).toBe(distro.models.providers.deepseek.timeoutSeconds);
+  // Two that matter most behind the Portal: no hot reload (Worker pool), no `message` tool (no channel).
+  expect(mirror.gateway.reload).toEqual({ mode: "off" });
+  expect(distro.gateway.reload).toEqual(mirror.gateway.reload);
+  expect(distro.tools.deny).toEqual(mirror.tools.deny);
 });

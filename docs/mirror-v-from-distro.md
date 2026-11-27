@@ -11,7 +11,7 @@ B 线产工作区（`distro/workspace/`）。Mirror 这边只补「沙盒 / Port
 | 部分 | 来源 | Mirror 这边做什么 |
 |---|---|---|
 | 运行时字节（core / worker / codex / 记忆索引器 / 工具版本） | v-distro 包的 `runtime/` | `scripts/package-v-release.sh <platform> <v-distro.tgz> <out>`：按包清单逐文件核对后取用；codex 整包换算成对 npm 的覆盖层；V 主机专属的胶水按哈希换掉（`core-mirror.mjs`）；`@openclaw/ai` 覆盖层包里没有时用 `deploy/v-release/ai-<release>` |
-| `openclaw.json` | 仍是 `runtime/v-config.mjs` | `src/v-config-distro.test.ts` 逐路径比对包里 `config/openclaw-config.mjs` 的 sandbox profile：每一处不同都写明原因，多一处少一处都失败。打包时核对 vendored 的生成器和包里的逐字节相同 |
+| `openclaw.json` | 仍是 `runtime/v-config.mjs`（不读包里的生成器；两边是两份代码，改一边要同步另一边，靠下面的测试兜住） | `src/v-config-distro.test.ts` 逐路径比对包里 `config/openclaw-config.mjs` 的 sandbox profile：每一处不同都写明原因，多一处少一处都失败。打包时核对 vendored 的生成器和包里的逐字节相同 |
 | 工作区（payload） | `distro/workspace/payload`（B 线） | `packages/agent-templates/mirror-v-full/distro/import-workspace.mjs`：渲染占位符 → 去掉 `sandbox-skip.txt` → 补 `sandbox-files/`（现在为空）→ 打 `sandbox-patches/` → 写进 `payload/`，来源记在 `DISTRO_WORKSPACE.json` |
 | 定时任务 | payload 的 `schedules.json`（9 条） | `gen-manifest.mjs` 经 `distro/schedules.mjs` 映射成 Portal 系统任务（cron / heartbeat，`enabled:false` 照样登记成关闭） |
 
@@ -19,16 +19,22 @@ B 线产工作区（`distro/workspace/`）。Mirror 这边只补「沙盒 / Port
 
 ## 一次更新怎么做
 
+运行时和工作区都从同一个 v-distro 包来（A 线 `distro/build/build.mjs`，只读 git 对象，几秒；包里的 `workspace/` 是 B 的 `payload/**`，占位符原样保留）：
+
 ```bash
 git -C ~/v-openclaw-platform fetch origin
-# 工作区
-node packages/agent-templates/mirror-v-full/distro/import-workspace.mjs --repo ~/v-openclaw-platform --ref origin/<B 的分支或 dev> --dry-run
-node packages/agent-templates/mirror-v-full/distro/import-workspace.mjs --repo ~/v-openclaw-platform --ref origin/<…>
+node <A 的 distro/build/build.mjs> --release <rel> --version <ver> --repo ~/v-openclaw-platform \
+  --source origin/<A 的分支或 dev> --captured-ref origin/captured-store --workspace-ref origin/<B 的分支或 dev> --out <dir>
+tar -xzf <dir>/v-distro-<ver>.tgz -C <tmp>
+# 工作区（来源写进 DISTRO_WORKSPACE.json：包版本、A 的提交、B 的提交和 payload 树）
+node packages/agent-templates/mirror-v-full/distro/import-workspace.mjs --dir <tmp>/v-distro-<ver>/workspace
 git diff -- packages/agent-templates/mirror-v-full/payload      # 逐个审 B 的改动
 node packages/agent-templates/mirror-v-full/gen-manifest.mjs mirror-v-full.v<N>
-# 运行时：在平台仓库用 A 的 build.mjs 出包（只读 git 对象，几秒），再打 Mirror 的运行时包
-VBROWSER_REPO=~/v-browser scripts/package-v-release.sh ~/v-openclaw-platform <v-distro.tgz> <out-full.tgz>
+# 运行时
+VBROWSER_REPO=~/v-browser scripts/package-v-release.sh ~/v-openclaw-platform <dir>/v-distro-<ver>.tgz <out-full.tgz>
 ```
+
+也可以 `import-workspace.mjs --repo ~/v-openclaw-platform --ref origin/<B 的分支>` 直接从 B 的 git 取（结果相同，`.3` 包核对过）。
 
 补丁打不上（`PATCH_DOES_NOT_APPLY`）说明 B 改了沙盒也改过的那几行：看 B 的改动，再在 `import` 出来的树上重做沙盒的改法，
 `git diff` 重新生成补丁。不要放宽成「打不上就跳过」。
@@ -76,6 +82,5 @@ B 的去身份化（客户名、versa-ai 换成示例，不再出现主人名字
 
 ## 给 A、B 的
 
-- A：包的 `workspace/` 打进了 B 的整个 `distro/workspace/`（含 tests），触发自己的密钥扫描；B 的说法是只放 `payload/**`。
-- A：sandbox profile 缺 `gateway.reload.mode: off`（V 2026-09-20 热重载把 Worker 池关死）、缺禁用 `message`；V 的 4 个 `@openclaw/ai` 改动文件不在 captured-store。
+- A：已在 `ed8f1093` / `e584b69c`（包 `2026.11.27-db91-lifecycle-proof.3`）修：workspace/ 只放 payload、sandbox profile 加了 `reload: off` 和禁 `message`、`@openclaw/ai` 覆盖层进包（`runtime/core-ai`，和 Mirror 仓库里那份逐字节相同，打包现在优先用包里的）。
 - B：图谱库、项目 `TODO.md` 两处已在 `59bf9d55` 修。rc2 的沙盒补丁用三方合并带上了 B 在上手引导里加的 `_TEMPLATE` 那一行。

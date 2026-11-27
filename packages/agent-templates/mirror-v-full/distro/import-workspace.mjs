@@ -13,7 +13,7 @@
 //
 // Usage:
 //   node import-workspace.mjs --repo ~/v-openclaw-platform --ref origin/<branch> [--dry-run]
-//   node import-workspace.mjs --dir <v-distro>/workspace [--dry-run]
+//   node import-workspace.mjs --dir <v-distro>/workspace [--dry-run]   (records the package's workspace commit)
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,7 +72,15 @@ export function applySkip(dir, entries) {
 }
 
 function exportPayload({ repo, ref, dir }, out) {
-  if (dir) { fs.cpSync(dir, out, { recursive: true }); return { from: "dir", dir }; }
+  if (dir) {
+    fs.cpSync(dir, out, { recursive: true });
+    // A v-distro package's workspace/: its manifest names the workspace commit it was built from.
+    const pkg = path.join(dir, "..", "manifest.json");
+    const m = fs.existsSync(pkg) ? JSON.parse(fs.readFileSync(pkg, "utf8")) : null;
+    const ws = m?.schema === "v-distro/1" ? m.source?.workspace : null;
+    if (!ws?.commit) return { from: "dir", dir };
+    return { from: "v-distro", repo: m.source.repo, distroVersion: m.version, distroCommit: m.source.commit, ref: ws.ref, commit: ws.commit, payloadTree: ws.tree, vCoreCommit: ws.vCoreCommit };
+  }
   const commit = execFileSync("git", ["-C", repo, "rev-parse", `${ref}^{commit}`], { encoding: "utf8" }).trim();
   const tree = execFileSync("git", ["-C", repo, "rev-parse", `${commit}:distro/workspace/payload`], { encoding: "utf8" }).trim();
   const core = execFileSync("git", ["-C", repo, "show", `${commit}:distro/workspace/V_CORE_COMMIT`], { encoding: "utf8" }).trim();
