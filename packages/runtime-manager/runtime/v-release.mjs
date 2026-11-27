@@ -179,8 +179,9 @@ const LEGACY_CODEX_HOME_CONFIG = [
 ].join("\n");
 
 /**
- * Write the Codex home config. A file this module wrote earlier is upgraded in place; one that
- * differs (Codex or the agent changed it) is left alone. Returns the file path.
+ * Write the Codex home config. A file this module wrote earlier is upgraded in place, keeping the
+ * `[projects."<dir>"]` trust entries Codex appends on its own; one that differs otherwise (the
+ * agent or the owner changed it) is left alone. Returns the file path.
  */
 export function ensureCodexHome(stateDir, agentId, { codexVersion } = {}) {
   const home = path.join(stateDir, "agents", agentId, "agent", "codex-home");
@@ -189,10 +190,17 @@ export function ensureCodexHome(stateDir, agentId, { codexVersion } = {}) {
   const want = codexHomeConfig({ codexVersion });
   let have = null;
   try { have = fs.readFileSync(file, "utf8"); } catch {}
-  const ours = have === null || have === LEGACY_CODEX_HOME_CONFIG
-    || [undefined, "0.169.0"].some((v) => have === codexHomeConfig({ codexVersion: v }));
-  if (ours && have !== want) {
-    fs.writeFileSync(`${file}.tmp`, want, { mode: 0o600 });
+  let next = null;
+  if (have === null) next = want;
+  else {
+    const at = have.search(/^\[projects\."[^"\n]*"\]$/m);
+    const head = at < 0 ? have : have.slice(0, at), tail = at < 0 ? "" : have.slice(at);
+    const onlyProjects = tail.split("\n").every((line) => !line.trim() || /^\[projects\."[^"]*"\]$/.test(line) || /^trust_level = "\w+"$/.test(line));
+    const ours = [LEGACY_CODEX_HOME_CONFIG, codexHomeConfig(), codexHomeConfig({ codexVersion: "0.169.0" })].some((text) => text.trimEnd() === head.trimEnd());
+    if (ours && onlyProjects) next = tail ? `${want.trimEnd()}\n\n${tail}` : want;
+  }
+  if (next !== null && next !== have) {
+    fs.writeFileSync(`${file}.tmp`, next, { mode: 0o600 });
     fs.renameSync(`${file}.tmp`, file);
   }
   return file;

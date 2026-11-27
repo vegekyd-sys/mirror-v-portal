@@ -86,6 +86,17 @@ test("codex home is written with DeepSeek routing and no key value, and only our
     fs.writeFileSync(file, 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n\n[model_providers.deepseek]\nname = "DeepSeek"\nbase_url = "https://api.deepseek.com/v1"\nwire_api = "responses"\nenv_key = "DEEPSEEK_API_KEY"\n');
     ensureCodexHome(root, "mirror-v-full", { codexVersion: "0.169.1" });
     expect(fs.readFileSync(file, "utf8")).toBe(codexHomeConfig({ codexVersion: "0.169.1" }));
+    // Codex appends its own trust entries; they stay, and our part is still upgraded.
+    const trust = '[projects."/vercel/sandbox/agent-data/workspace"]\ntrust_level = "trusted"\n';
+    fs.writeFileSync(file, `${codexHomeConfig()}\n${trust}`);
+    ensureCodexHome(root, "mirror-v-full", { codexVersion: "0.169.1" });
+    expect(fs.readFileSync(file, "utf8")).toBe(`${codexHomeConfig({ codexVersion: "0.169.1" }).trimEnd()}\n\n${trust}`);
+    ensureCodexHome(root, "mirror-v-full", { codexVersion: "0.169.1" });
+    expect(fs.readFileSync(file, "utf8")).toBe(`${codexHomeConfig({ codexVersion: "0.169.1" }).trimEnd()}\n\n${trust}`);
+    fs.writeFileSync(file, `${codexHomeConfig()}\n${trust}[mcp_servers.x]\ncommand = "y"\n`);
+    ensureCodexHome(root, "mirror-v-full", { codexVersion: "0.169.1" });
+    expect(fs.readFileSync(file, "utf8")).toContain("[mcp_servers.x]");
+    expect(fs.readFileSync(file, "utf8")).not.toContain("remote_plugin");
     fs.writeFileSync(file, "owner edit");
     ensureCodexHome(root, "mirror-v-full");
     expect(fs.readFileSync(file, "utf8")).toBe("owner edit");
