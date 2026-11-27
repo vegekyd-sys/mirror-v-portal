@@ -38,6 +38,12 @@ skills/skill-creation-coach
 skills/skill-gate
 skills/openclaw-harness-evaluation
 
+# VSync / A2A: V ↔ Mirror V 互通（2026-11-27 Tianyi 决定带上）。协议本身是通用的；
+# V 的飞书 open_id 在 sync-from-v.sh 里脱敏，Mirror 侧的接收方式写在 payload 的 vsync SKILL.md。
+# 通用的 agent-to-agent-protocol 在 V 的 ~/.agents/skills（不在 git），payload 里是 Mirror 自己的一份。
+skills/vsync
+skills/agent-to-agent-protocol-feishu-a2a-defaults
+
 # Creative / research skills
 skills/auto-travel-vlog
 skills/corporate-video-script

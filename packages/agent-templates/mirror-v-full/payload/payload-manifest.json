@@ -1,8 +1,8 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v19.5",
+ "version": "mirror-v-full.v20",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
- "vWorkspaceCommit": "185eb6e64dbe9805481aaf92464b4df22218dc73",
+ "vWorkspaceCommit": "88528b9f22a449d534fd370cc434b5091ed4ec85",
  "files": [
   ".gitignore",
   "AGENTS.md",
@@ -63,6 +63,8 @@
   "scripts/wiki-maintenance.py",
   "scripts/write-reflection.py",
   "scripts/write-skill-candidate.py",
+  "skills/agent-to-agent-protocol/SKILL.md",
+  "skills/agent-to-agent-protocol-feishu-a2a-defaults/SKILL.md",
   "skills/auto-travel-vlog/SKILL.md",
   "skills/corporate-video-script/SKILL.md",
   "skills/creative-production-orchestrator/SKILL.md",
@@ -123,6 +125,7 @@
   "skills/viral-absurd-demo-video/SKILL.md",
   "skills/viral-extreme-product-demo/SKILL.md",
   "skills/viral-impossible-test-video/SKILL.md",
+  "skills/vsync/SKILL.md",
   "payload-manifest.json"
  ],
  "systemSchedules": [

@@ -109,7 +109,8 @@ sanitise() {  # same rewriting the payload has always received
     -e 's#/home/openclaw/.openclaw/logs/memory-auto-index.log#/vercel/sandbox/agent-data/state/logs/memory-auto-index.log#g' \
     -e 's#agent:makaron:#agent:mirror-v-full:#g' \
     -e "s/Tianyi's/the owner's/g" -e 's/Tianyi/the owner/g' \
-    -e 's|https://versa-ai\.feishu\.cn/[a-z]*/[A-Za-z0-9_#-]*|（V 内部飞书文档，未随附）|g'
+    -e 's|https://versa-ai\.feishu\.cn/[a-z]*/[A-Za-z0-9_#-]*|（V 内部飞书文档，未随附）|g' \
+    -e 's/ou_15273b08310b914c5f97b27af680c149/ou_SENDER_V/g'
   [ -f "$1/scripts/heartbeat-dispatch.py" ] && sed -i '' 's#^DEFAULT_REPORT_CHAT_ID = ".*"#DEFAULT_REPORT_CHAT_ID = ""#' "$1/scripts/heartbeat-dispatch.py"
   return 0
 }

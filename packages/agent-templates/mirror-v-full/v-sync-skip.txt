@@ -45,7 +45,6 @@ skills/browser-fast-run               依赖 V 的决策模型账号（gpt-6-lun
 skills/tianyi-*                       主人个人设备与模板
 skills/voice-tianyi                   主人个人声音
 skills/v-*                            V 自身运维（自我升级、配置、客户运维）
-skills/vsync                          V 自身运维
 skills/launch-mirror-v                V 开 Mirror 的运维技能
 skills/home-assistant-*               主人家里的设备
 skills/remote-ha-*                    主人家里的设备
@@ -59,7 +58,6 @@ skills/feishu-voice-*                 V 的飞书应用运维
 skills/lark-cli-permission-*          V 的飞书应用运维
 skills/gateway-rpc-*                  V 的网关运维
 skills/openclaw-safe-downgrade        V 的运行时运维
-skills/agent-to-agent-*               V 与 Codex 的 A2A 协作
 skills/universal-memory-*             V 的 Universal Memory 服务
 skills/makaron-app-*                  Makaron 产品运营（V 专职）
 skills/makaron-customer-profile       Makaron 产品运营
