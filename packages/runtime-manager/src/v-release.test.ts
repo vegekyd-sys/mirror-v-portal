@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { AGENT_DB, applyCapture, codexHomeConfig, compactAgentDb, ensureCodexHome, installedCodexVersion, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
+import { AGENT_DB, applyCapture, codexHomeConfig, compactAgentDb, ensureCodexHome, installedCodexVersion, linkCoreAi, isVReleaseBackupExcluded, isVReleaseDaemon, readVRelease } from "../runtime/v-release.mjs";
 import { createVReleaseConfig } from "../runtime/v-config.mjs";
 import { templateRuntimeEnv, templateVcpus } from "./provider.js";
 
@@ -155,7 +155,7 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(cfg.memory.search.provider).toBe("gemini");
   expect(cfg.plugins.allow).toContain("google");
   expect(cfg.plugins.entries.google).toEqual({ enabled: true });
-  expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user", "sessions_yield", "image_generate", "video_generate", "music_generate"]);
+  expect(cfg.tools.deny).toEqual(["gateway", "cron", "ask_user", "sessions_yield", "message", "image_generate", "video_generate", "music_generate"]);
   expect(cfg.tools.exec).toEqual({ host: "gateway", security: "full", ask: "off", pathPrepend: ["/d/npm/bin"] });
   expect(cfg.gateway.reload).toEqual({ mode: "off" });
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
@@ -310,5 +310,21 @@ test("V-host-only core glue is replaced only when it is V's reviewed bytes", asy
     fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify({ files: [{ path: `./${rel}`, sha256: sha(mirror), kind: "added" }] }));
     expect(adaptCore(root)).toEqual([rel]);
     expect(mirror).not.toContain("npm/projects");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the Worker finds @openclaw/ai under the core package, as in V's layout", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "core-ai-"));
+  try {
+    expect(linkCoreAi(root)).toBe(false);
+    fs.mkdirSync(path.join(root, "node_modules/@openclaw/ai/dist"), { recursive: true });
+    fs.writeFileSync(path.join(root, "node_modules/@openclaw/ai/package.json"), "{}");
+    fs.writeFileSync(path.join(root, "node_modules/@openclaw/ai/dist/index.mjs"), "export const x = 1;");
+    fs.mkdirSync(path.join(root, "node_modules/openclaw/dist/plugin-sdk"), { recursive: true });
+    expect(linkCoreAi(root)).toBe(true);
+    expect(linkCoreAi(root)).toBe(true);
+    // worker.mjs: new URL("../../node_modules/@openclaw/ai/dist/index.mjs", <core>/dist/plugin-sdk/agent-runtime.js)
+    const nested = new URL("../../node_modules/@openclaw/ai/dist/index.mjs", `file://${root}/node_modules/openclaw/dist/plugin-sdk/agent-runtime.js`);
+    expect(fs.realpathSync(nested)).toBe(fs.realpathSync(path.join(root, "node_modules/@openclaw/ai/dist/index.mjs")));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

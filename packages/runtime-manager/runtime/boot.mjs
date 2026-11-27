@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { readAgentKitProfile, seedWorkspace, createOpenClawConfig, assertAgentKitNode, agentKitFingerprint } from "./agent-config.mjs";
 import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
-import { readVRelease, applyCodexCapture, ensureCodexHome, installedCodexVersion, V_RELEASE_ROOT } from "./v-release.mjs";
+import { readVRelease, applyCodexCapture, ensureCodexHome, installedCodexVersion, linkCoreAi, V_RELEASE_ROOT } from "./v-release.mjs";
 import { createVReleaseConfig } from "./v-config.mjs";
 import { sandboxExecPolicy, sandboxExecEnv, ensureSandboxExecApprovals } from "./sandbox-exec.mjs";
 import { writePortalEnvironment } from "./portal-environment.mjs";
@@ -148,6 +148,8 @@ installProgress(`${base}/runtime/node_modules/openclaw`);
 mark("progressPatch");
 // DeepSeek reasoning turns hold all visible text until the message ends; stream a provisional preview.
 if (vRelease) installStreamPreview({ openclawRoot: `${base}/runtime/node_modules/openclaw`, workerDist: `${V_RELEASE_ROOT}/worker/dist` });
+// The Worker resolves @openclaw/ai under the core package (V's layout), not where npm put it.
+if (vRelease) linkCoreAi(`${base}/runtime`);
 mark("streamPreviewPatch");
 const pluginDir = base + "/scheduler-plugin";
 fs.mkdirSync(pluginDir, { recursive: true });
@@ -242,7 +244,7 @@ const cfg = vRelease ? createVReleaseConfig({
 writePortalEnvironment({ workspace, data, config: cfg });
 fs.rmSync(`${base}/turn-instructions.mjs`, { force: true });
 // Patch revisions count as configuration: a running Gateway restarts once to load new patch code.
-const RUNTIME_PATCHES = vRelease ? "progress-v5+reasoning-preview-v1" : "";
+const RUNTIME_PATCHES = vRelease ? "progress-v5+reasoning-preview-v1+core-ai-link-v1" : "";
 const configHash = createHash("sha256").update(JSON.stringify(cfg) + JSON.stringify(execEnv) + RUNTIME_PATCHES).digest("hex");
 fs.writeFileSync(`${data}/openclaw.json`, JSON.stringify(cfg));
 if (vRelease) {

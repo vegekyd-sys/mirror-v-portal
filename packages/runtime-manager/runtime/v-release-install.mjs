@@ -4,7 +4,7 @@
 // boot.mjs, quiesce.mjs and backup.mjs key on.
 import fs from "node:fs";
 import path from "node:path";
-import { applyCapture, V_RELEASE_ROOT, V_RELEASE_MARKER } from "./v-release.mjs";
+import { applyCapture, linkCoreAi, V_RELEASE_ROOT, V_RELEASE_MARKER } from "./v-release.mjs";
 
 const [runtimeRoot, codexCommand] = process.argv.slice(2);
 const core = JSON.parse(fs.readFileSync(path.join(V_RELEASE_ROOT, "core", "manifest.json"), "utf8"));
@@ -12,6 +12,7 @@ const applied = applyCapture(path.join(V_RELEASE_ROOT, "core"), path.join(runtim
 // V's own edits to @openclaw/ai (outside the core capture), before boot patches the same files.
 const aiDir = path.join(V_RELEASE_ROOT, "ai");
 const ai = fs.existsSync(path.join(aiDir, "manifest.json")) ? applyCapture(aiDir, path.join(runtimeRoot, "node_modules", "@openclaw", "ai", "dist")) : null;
+if (!linkCoreAi(runtimeRoot)) throw Error("V_RELEASE_AI_PACKAGE_MISSING");
 const worker = JSON.parse(fs.readFileSync(path.join(V_RELEASE_ROOT, "worker", "dist", "openclaw.plugin.json"), "utf8"));
 if (worker.id !== "vlab-agent-worker-isolation") throw Error("V_RELEASE_WORKER_PLUGIN_MISSING");
 const workerManifest = JSON.parse(fs.readFileSync(path.join(V_RELEASE_ROOT, "worker", "manifest.json"), "utf8"));

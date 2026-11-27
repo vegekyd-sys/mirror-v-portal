@@ -128,6 +128,23 @@ export function applyCapture(captureDir, distDir) {
   return { release: manifest.release, ...counts };
 }
 
+/**
+ * V's Worker (2026-10-15 on) loads @openclaw/ai from <core>/node_modules, V's nested layout; npm
+ * hoists it next to openclaw instead, and every Worker turn then fails to start (fallback, ds-pro,
+ * compaction). Link the nested path to the hoisted copy: one realpath, so the Worker runs the same
+ * patched files as the Gateway. A real nested copy is left alone. Returns whether the path resolves.
+ */
+export function linkCoreAi(runtimeRoot) {
+  const hoisted = path.join(runtimeRoot, "node_modules", "@openclaw", "ai");
+  const nested = path.join(runtimeRoot, "node_modules", "openclaw", "node_modules", "@openclaw", "ai");
+  if (!fs.existsSync(path.join(hoisted, "package.json"))) return false;
+  if (fs.existsSync(path.join(nested, "package.json"))) return true;
+  fs.mkdirSync(path.dirname(nested), { recursive: true });
+  fs.rmSync(nested, { force: true }); // a dangling link
+  fs.symlinkSync(hoisted, nested);
+  return true;
+}
+
 /** The codex plugin is installed by OpenClaw itself into the state dir; patch every installed copy. */
 export function applyCodexCapture(stateDir, captureDir = path.join(V_RELEASE_ROOT, "codex")) {
   const projects = path.join(stateDir, "npm", "projects");

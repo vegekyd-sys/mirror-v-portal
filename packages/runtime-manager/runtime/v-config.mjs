@@ -113,7 +113,10 @@ export function createVReleaseConfig(o) {
       // with "No response", the media lands after it with nowhere to go: 2026-11-27,
       // mvfull-tz-01). V makes all of these with the makaron CLI inside the turn, and the
       // payload points there too, so these tools are off as on the Makaron template.
-      deny: ["gateway", "cron", "ask_user", "sessions_yield", "image_generate", "video_generate", "music_generate"],
+      // message sends to the Gateway's own channels, and behind the Portal it has none
+      // (OPENCLAW_SKIP_CHANNELS): V's 2026-11 runtime offers it for media, and the image went
+      // to "internal-ui" and nowhere (2026-11-27, mvfull-v21-01). Replies carry media as MEDIA: lines.
+      deny: ["gateway", "cron", "ask_user", "sessions_yield", "message", "image_generate", "video_generate", "music_generate"],
       sessions: { visibility: "all" },
       exec: sandboxExecPolicy(o.dataDir),
       web: { search: pluginIds.includes("parallel") ? { enabled: true, provider: "parallel-free" } : { enabled: true } },
