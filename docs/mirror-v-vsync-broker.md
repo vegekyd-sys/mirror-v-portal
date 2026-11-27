@@ -55,7 +55,7 @@
 
 1. 在 Portal 主机把 agent id 加进 `vsync.deployments`，重启 manager。
 2. `cd /opt/nexus/current/packages/runtime-manager && NEXUS_CONFIG_PATH=/opt/nexus/data/config.json ./node_modules/.bin/tsx scripts/vsync-token.ts <agent id>`。
-3. 人工带外把 `issued/<agent id>.env` 交给安装的人；A 线安装器 `--vsync-env <文件>` 装成 `/etc/v/vsync.env`（0600，只收这三个键），Gateway 的 systemd 单元用它做 EnvironmentFile。
+3. 把 `issued/<agent id>.env` 从 Portal 主机直接管道送到部署机的 `/etc/v/vsync.env`（root 600），不落到别处、不打印：`ssh <portal> cat …/issued/<id>.env | ssh <部署机> 'umask 077; cat > /etc/v/vsync.env.new && mv /etc/v/vsync.env.new /etc/v/vsync.env'`。或者用 A 线安装器的 `--vsync-env <文件>`（只收这三个键）。v-distro 的 `openclaw-gateway.service` 已有 `EnvironmentFile=-/etc/v/vsync.env`；放好后**重启 Gateway** Agent 的 exec 才拿得到。不放进 `/etc/v/secrets.env`：那份文件每次 install/update 按运维的 env 文件重写，手放的令牌会丢。
 4. 部署机只需能用 HTTPS 访问 `mirror-v-portal.vercel.app`，不需要访问 GitHub。
 5. 验收：`python3 scripts/mirror-vsync.py whoami` 返回自己的 agent id 和 `["private-v"]`。
 
@@ -98,3 +98,11 @@
 - 沙盒里 `mirror-vsync.py send --help` 只打印用法（退出码 0），`send -x` 拒绝并提示 nothing was sent；直接向中转 POST 主题 `--help` 返回 `SUBJECT_REQUIRED`。
 - 收包一轮：只说「收件箱里有一条，按 vsync 流程处理」，56 秒内 Agent 自己 `fetch`（sha256 一致）→ 安装并提交 → hub ACK（`09de75c6`）；回发给 `mirror-test-sink` 被拒后如实报 BLOCKED，没有改发给 `private-v`。
 - `private-v` 的收件箱里没有任何合成租户的行；测试数据已删（`cacbee8`）。
+
+### 2026-11-28 · 客户独立部署接入实测（首尔测试机 v-distro-test，实例 V Clone）
+
+- 身份 `mirror-distro-test`（`config.vsync.deployments`），令牌文件从 Portal 主机管道送到 `/etc/v/vsync.env`（root 600），没经过对话、git 或日志。
+- 测试机能用 HTTPS 访问 Portal（healthz 200），不需要访问 GitHub。
+- 因为 V Clone 的 Gateway 正在做飞书验收、不能重启，这一轮由运维在测试机上执行 `mirror-vsync.py`（读 `/etc/v/vsync.env`），没有让 Agent 跑：`whoami` → `inbox` → `packages` → `fetch`（sha256 一致）→ `ack`（hub `0f69929c`）→ 回发给测试对端（`629e14da`，落在 `agents/mirror-distro-test/returns/mirror-test-sink/…`）；读 `private-v` 收件箱 403；`send --help` 不发送。
+- 回发期间临时把 `mirror-test-sink` 加进 `vsync.counterparts`（manager 空闲时重启），测完撤掉并再重启；`private-v` 收件箱无测试行；测试数据已删（`beeaa3b`）。
+- 还差：V Clone 的工作区（B 线 distro payload）没有 `scripts/mirror-vsync.py`，vsync 技能也没有「On Mirror V」接收说明；Gateway 重启后 Agent 才有 `NEXUS_VSYNC_*`。这两项到位后再做一次 Agent 自己收发的验收。
