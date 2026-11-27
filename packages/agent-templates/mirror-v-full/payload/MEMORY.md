@@ -7,7 +7,7 @@
 | 名字 | 见 IDENTITY.md（首启前为 Mirror V） |
 | 主人 | 见 USER.md |
 | 时区 | 见 USER.md（默认 Asia/Shanghai） |
-| 运行时 | 全功能 V（DeepSeek + Worker 池，`/model vds` 切 Codex harness） |
+| 运行时 | 全功能 V（默认 DeepSeek + Codex harness，同 V；`/model deepseek` 切 Worker 池） |
 
 ## Hot User Context
 

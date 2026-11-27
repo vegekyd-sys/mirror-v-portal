@@ -10,14 +10,23 @@ const root = process.env.NEXUS_BACKUP_ROOT || "/vercel/sandbox",
   workspace = data + "/workspace";
 const profile = readAgentKitProfile(root + "/nexus/agent-kit-runtime.json", process.env.NEXUS_AGENT_ID || "dealclaw");
 const base = profile ? payloadWorkspace(root + "/nexus/payload", profile.runtime) : root + "/nexus/payload";
-function entries(dir, prefix = "") {
+// Codex and Chrome create and delete files while we walk (Codex clones its plugin
+// marketplace into CODEX_HOME/.tmp on first use): an excluded tree is not entered,
+// and an entry that vanished between readdir and lstat is simply not there.
+function entries(dir, prefix = "", skip = () => false) {
   const out = [];
-  for (const name of fs.readdirSync(dir)) {
+  let names;
+  try { names = fs.readdirSync(dir); }
+  catch (e) { if (e.code === "ENOENT" || e.code === "ENOTDIR") return out; throw e; }
+  for (const name of names) {
     const rel = path.posix.join(prefix, name),
-      file = path.join(dir, name),
-      st = fs.lstatSync(file);
+      file = path.join(dir, name);
+    if (skip(rel)) continue;
+    let st;
+    try { st = fs.lstatSync(file); }
+    catch (e) { if (e.code === "ENOENT") continue; throw e; }
     out.push({ rel, file, st });
-    if (st.isDirectory()) out.push(...entries(file, rel));
+    if (st.isDirectory()) out.push(...entries(file, rel, skip));
   }
   return out;
 }
@@ -28,7 +37,7 @@ const files = [];
 // boot-time `memory index` rebuilds it after a restore.
 const stage = "/tmp/nexus-backup-stage", staged = [];
 if (vRelease) fs.rmSync(stage, { recursive: true, force: true });
-for (const item of entries(data)) {
+for (const item of entries(data, "", (rel) => Boolean(vRelease) && isVReleaseBackupExcluded(rel))) {
   // Plugin installs come back with the snapshot; Codex logs and caches are disposable.
   if (vRelease && isVReleaseBackupExcluded(item.rel)) continue;
   const db = vRelease && AGENT_DB.exec(item.rel);

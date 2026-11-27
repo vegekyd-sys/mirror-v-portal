@@ -11,9 +11,9 @@
 
 | 切换 | 模型 | 运行方式 |
 |---|---|---|
-| 默认 / `/model deepseek` | DeepSeek V4 Flash（thinking high） | V 的 Worker 池（子进程执行，Gateway 不被卡住） |
+| 默认 / `/model vds` | DeepSeek Flash（thinking high） | Codex harness（和 V 的默认一致；编程任务更稳，逐字流式；失败时自动回落到 Worker 池） |
+| `/model deepseek` | DeepSeek V4 Flash（thinking high） | V 的 Worker 池（子进程执行，Gateway 不被卡住） |
 | `/model ds-pro` | DeepSeek V4 Pro | Worker 池 |
-| `/model vds` | DeepSeek Flash | Codex harness（编程任务更稳，逐字流式） |
 | `/model default` | 回到默认 | |
 
 注意：同一会话从 `vds`（Codex）切回别的模型是可以的；Codex 线程里带着 DeepSeek 的推理记录，不要在同一线程里切到 OpenAI 模型。

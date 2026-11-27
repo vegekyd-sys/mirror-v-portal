@@ -71,7 +71,7 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 1. 新租户是新版本：`create` 输出的 `template` 等于新 payload 版本，`snapshot` 等于新快照。
 2. 扫码开场：一条消息里有开场白 + 授权链接。
 3. 7 个系统定时任务都在（`schedules`）。
-4. 这次同步进来的能力各跑一遍。
+4. 这次同步进来的能力各跑一遍。默认模型和 V 一致：`exec <id> "python3 -c 'import json;print(json.load(open(\"/vercel/sandbox/agent-data/openclaw.json\"))[\"agents\"][\"defaults\"][\"model\"])'"` 与 V 的 `~/.openclaw/openclaw.json` 同为 `deepseek/vds-deepseek-flash`（Codex harness）。
 5. heartbeat 和 21:00 Librarian 各手动触发一次（`fire`），能跑完并提交（`exec <id> "cd /vercel/sandbox/agent-data/workspace && git log --oneline -5"`）。
 6. 记忆页：Librarian 之后能生成，第一天就有内容；从 Portal 的签名链接打开（`/onboard/memory/<租户>/<签名>/index.html`），图谱和旧日期能加载。
 7. 没有 V 的私有内容：在新租户的工作区 grep 主人名字、V 的路径、V 的飞书 id 与文档链接（同 `sync-from-v.sh` 末尾的规则）。
@@ -212,4 +212,32 @@ ssh -i ~/.ssh/nexus-mirror-v-deploy-20260925 -o IdentitiesOnly=yes -o BatchMode=
 | 出图（v19.3） | 66 秒，makaron 出 2K 图，随本轮送达（`media-ready`） | 一致 | 通过 |
 | 引导追问（v19.2） | 每个回答底下都挂同一份「还想让我多了解你一点」 | V 没有引导，不追问 | v19.3 修复 |
 | 引导追问（v19.3） | 同一步提过一次没人接，之后两条派活回复都不再追问 | 一致 | 通过 |
+
+### 2026-11-27 · 默认 harness 改为 vds（同 V），payload `mirror-v-full.v19.4`
+
+| 项 | 值 |
+|---|---|
+| 源码提交 / release | 见下方「上线」 |
+| 合成租户 | `mvfull-vds-01`（新用户，v19.3 快照 + 测试沙盒内换上新 `v-config.mjs` / `backup.mjs`），验完定时任务已关 |
+
+- 发现：V 的默认模型是 `deepseek/vds-deepseek-flash`（Codex harness，失败回落 `openai/gpt-6-luna`）；Mirror 一直默认 `deepseek/deepseek-flash`（vlab-worker），vds 只能 `/model vds` 手动切。v19.3 及以前的验收都没覆盖 vds。
+- `runtime/v-config.mjs`：装了 codex 时默认 `deepseek/vds-deepseek-flash`，回落 `deepseek/deepseek-flash`（同一模型走 Worker 池；Mirror 平台没有 OpenAI key，不照搬 V 的 gpt-6-luna）。vds 条目参数与 V 一字不差。属于控制面：老租户下次唤醒时配置哈希变化，Gateway 自动重启后生效。
+- 上线前验证方法：控制面脚本按 `runtime-revision.txt` 同步，只在测试沙盒里替换 `/vercel/sandbox/nexus/*.mjs`、不改 revision 文件，下一轮唤醒就用新配置，线上其他租户不受影响。
+- vds 下暴露两处问题，已修：
+  - `runtime/backup.mjs`：Codex 首次使用时往 `codex-home/.tmp` 克隆插件市场（96 MB，边下边删）。备份先遍历再过滤，遍历时撞上刚删掉的文件 `lstat` 抛 ENOENT，整轮报 `STATE_BACKUP_FAILED`（B4 那一轮）。现在排除的目录不进入，遍历中消失的文件跳过。沙盒里连跑 3 次成功，35 MB。
+  - `src/provider.ts` + `media-directive.ts`：Worker 的 OpenResponses 会删掉正文里的 `MEDIA:` 行，Codex 不删，主人会在飞书卡片里看到一行沙盒路径。现在已作为附件送出的 `MEDIA:` 行从正文删掉（V 的原生飞书渠道也是这样处理的）。
+
+| 场景 | vds（v19.4 配置） | vlab-worker（v19.3） | 结论 |
+|---|---|---|---|
+| 扫码开场 | 首字 19 秒，一条消息 | 26 秒 | 通过 |
+| 自述 → 更正 → 追问 | 自述当轮就建项目页；更正后项目页旧值划线带日期，USER.md 直接改成新值；追问答对，但说成「昨天纠正」（实为当天） | 划线在 USER.md，项目页等 21:00 才建 | 通过（措辞小瑕疵） |
+| Heartbeat | 16 秒 `HEARTBEAT_OK` | 19 秒 | 通过 |
+| 21:00 Librarian | 59 秒；当天日志按设计明晚进队列；把 index 里过时的「8 人、亚马逊」对齐更正；可达 3/3、死链 0 | 40 秒 | 通过 |
+| 技术调研 | 42 秒，结论清楚，补了 17TRACK / AfterShip 这条更适合跨境的路 | 62 秒 | 通过 |
+| TikTok 文案 / 改短 | 26 秒 / 18 秒，中英两版、不编造 | 24 秒 / 20 秒 | 通过 |
+| 社媒搜索 | 42 秒，如实说凭据失效，给二手出处的规律，没给扫码登录的路 | 80 秒，给了接管电脑扫码 | 通过（能力差异同前，待定） |
+| 图片搜索 | 第一次 150 秒后 `STATE_BACKUP_FAILED`；修备份后重跑 54 秒，8 张 + 参考板 | 108 秒 | 修复后通过 |
+| 出图 | 64 秒，makaron 2K 图随本轮送达；正文残留 `MEDIA:` 行 | 66 秒 | 修复后通过 |
+| 清关派活 | 38 秒，三点 + 时效提醒 | 18 秒 | 通过 |
+| 备份体积 | 35 MB / 810 文件（`.tmp` 已排除） | — | 低于 H5 告警线 80 MB |
 

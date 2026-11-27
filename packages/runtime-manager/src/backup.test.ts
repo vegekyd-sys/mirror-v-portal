@@ -78,3 +78,30 @@ test("compact backup preserves state, edits, new files, and payload deletions", 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+const gnuTar = /GNU tar/.test(execFileSync("tar", ["--version"], { encoding: "utf8" }));
+// The v-release path passes GNU tar flags (the sandbox and CI run GNU tar; macOS ships bsdtar).
+test.skipIf(!gnuTar)("a v-release backup never walks an excluded tree that Codex is still writing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-backup-vrel-"));
+  const tmp = root + "/agent-data/state/agents/mirror-v-full/agent/codex-home/.tmp";
+  try {
+    fs.mkdirSync(root + "/nexus/payload", { recursive: true });
+    fs.mkdirSync(root + "/agent-data/workspace", { recursive: true });
+    fs.writeFileSync(root + "/nexus/v-release.json", JSON.stringify({ schemaVersion: 1, release: "r", upstream: "2026.9.1" }));
+    fs.mkdirSync(tmp + "/plugins-clone", { recursive: true });
+    fs.writeFileSync(tmp + "/plugins-clone/pack", "x");
+    fs.writeFileSync(root + "/agent-data/state/agents/mirror-v-full/agent/codex-home/state_5.sqlite", "s");
+    // An unreadable directory stands in for one whose files vanish mid-walk: entering it would throw.
+    fs.chmodSync(tmp, 0o000);
+    const archive = root + "/backup.tgz";
+    execFileSync(process.execPath, [fileURLToPath(new URL("../runtime/backup.mjs", import.meta.url))], {
+      env: { ...process.env, NEXUS_BACKUP_ROOT: root, NEXUS_BACKUP_ARCHIVE: archive },
+    });
+    const listed = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" });
+    expect(listed).toContain("codex-home/state_5.sqlite");
+    expect(listed).not.toContain(".tmp");
+  } finally {
+    fs.chmodSync(tmp, 0o755);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

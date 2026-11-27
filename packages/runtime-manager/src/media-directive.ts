@@ -60,13 +60,28 @@ export function resolveRef(ref: string, workspace = "/vercel/sandbox/agent-data/
   return `${workspace}/${cleaned}`;
 }
 
+// Strip quotes and markdown link decoration agents sometimes add.
+const cleanRef = (raw: string) => raw.trim().replace(/^[<"'`]+|[>"'`]+$/g, "");
+
+/**
+ * Drop the MEDIA: lines whose file is being delivered as an attachment.
+ * OpenResponses (the Worker harness) already removes them; the Codex harness
+ * leaves them in the reply text, where the owner would read a sandbox path.
+ */
+export function withoutDeliveredDirectives(output: string, delivered: Iterable<string>): string {
+  const refs = new Set(delivered);
+  if (!output || !refs.size) return output;
+  const lines = output.split(/\r?\n/);
+  const kept = lines.filter((line) => { const m = line.match(MEDIA_LINE); return !(m && refs.has(cleanRef(m[1]))); });
+  return kept.length === lines.length ? output : kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function parseReply(output: string): ParsedReply {
   if (!output) return { text: "", media: [] };
   const media: MediaDirective[] = [];
   const seen = new Set<string>();
   const add = (raw: string) => {
-    // Strip quotes and markdown link decoration agents sometimes add.
-    const ref = raw.trim().replace(/^[<"'`]+|[>"'`]+$/g, "");
+    const ref = cleanRef(raw);
     if (!ref || seen.has(ref)) return;
     seen.add(ref);
     media.push({ ref, remote: isRemote(ref) });

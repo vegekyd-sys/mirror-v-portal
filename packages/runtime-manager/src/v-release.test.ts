@@ -93,6 +93,8 @@ test("v-release config routes models through the Worker pool and holds only env 
   expect(text).not.toMatch(/"(?:g|x)"/);
   expect(cfg.agents.defaults.models["deepseek/deepseek-flash"].agentRuntime.id).toBe("vlab-worker");
   expect(cfg.agents.defaults.models["deepseek/vds-deepseek-flash"].agentRuntime.id).toBe("codex");
+  // V's default: the Codex harness, with the Worker pool on the same model as the fallback.
+  expect(cfg.agents.defaults.model).toEqual({ primary: "deepseek/vds-deepseek-flash", fallbacks: ["deepseek/deepseek-flash"] });
   expect(cfg.plugins.entries["vlab-agent-worker-isolation"].config.workerConfigPath).toBe("/d/worker-openclaw.json");
   expect(cfg.memory.search.provider).toBe("gemini");
   expect(cfg.plugins.allow).toContain("google");
@@ -103,6 +105,7 @@ test("v-release config routes models through the Worker pool and holds only env 
   const bare = createVReleaseConfig({ agentId: "a", workspace: "/w", dataDir: "/d", schedulerPath: "/s", workerPluginPath: "/wk", env: {} });
   expect(bare.memory.search.provider).toBe("none");
   expect(bare.agents.defaults.models["deepseek/vds-deepseek-flash"]).toBeUndefined();
+  expect(bare.agents.defaults.model).toEqual({ primary: "deepseek/deepseek-flash" });
 });
 
 test("template sandbox size and keys are bounded", () => {

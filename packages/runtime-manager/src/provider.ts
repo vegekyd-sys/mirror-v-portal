@@ -6,7 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { finished } from "node:stream/promises";
 import { Writable } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
-import { FinalMediaCollector, parseReply, resolveRef, mediaKind, type MediaDirective } from "./media-directive.js";
+import { FinalMediaCollector, parseReply, resolveRef, mediaKind, withoutDeliveredDirectives, type MediaDirective } from "./media-directive.js";
 import { readInboundImage, normalizeInboundAttachments, InboundMediaError, type InboundAttachment } from "./inbound-media.js";
 import type { Config } from "./config.js";
 import { unsealWith, type Tenant } from "./store.js";
@@ -569,6 +569,7 @@ export class VercelProvider implements RuntimeProvider {
     if (localRefs.length && !media.length) throw new Error("OUTBOUND_MEDIA_UNAVAILABLE");
     if (media.length) await onEvent("media-ready", { count: media.length, refs: media.map((m) => m.ref) });
     if (media.length && output.trim() === "No response from OpenClaw.") output = "";
+    output = withoutDeliveredDirectives(output, media.map((m) => m.ref));
     return { output, media };
   }
 

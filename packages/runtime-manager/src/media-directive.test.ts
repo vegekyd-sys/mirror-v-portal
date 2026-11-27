@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FinalMediaCollector, parseReply, resolveRef, mediaKind } from "./media-directive.js";
+import { FinalMediaCollector, parseReply, resolveRef, mediaKind, withoutDeliveredDirectives } from "./media-directive.js";
 
 describe("OpenResponses final media side channel", () => {
   it("accepts only the current response's final refs and deduplicates repeats", () => {
@@ -92,5 +92,15 @@ describe("media kind", () => {
     expect(mediaKind("a.opus")).toBe("audio");
     expect(mediaKind("a.pdf")).toBe("file");
     expect(mediaKind("https://x/a.png?v=2")).toBe("image");
+  });
+});
+
+describe("delivered directives", () => {
+  it("removes only the MEDIA lines whose file goes out as an attachment (Codex harness leaves them in)", () => {
+    const out = "图做好了。\n\n要改就说。\n\nMEDIA:/vercel/sandbox/agent-data/workspace/artifacts/a.png\nMEDIA: https://x.test/b.png";
+    expect(withoutDeliveredDirectives(out, ["/vercel/sandbox/agent-data/workspace/artifacts/a.png"]))
+      .toBe("图做好了。\n\n要改就说。\n\nMEDIA: https://x.test/b.png");
+    expect(withoutDeliveredDirectives("只有文字", ["/a.png"])).toBe("只有文字");
+    expect(withoutDeliveredDirectives(out, [])).toBe(out);
   });
 });

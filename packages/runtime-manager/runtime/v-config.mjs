@@ -68,7 +68,11 @@ export function createVReleaseConfig(o) {
     agents: {
       defaults: {
         workspace: o.workspace,
-        model: { primary: "deepseek/deepseek-flash" },
+        // Same default as V: DeepSeek Flash through the Codex harness (vds), falling back to the
+        // Worker-pool harness on the same model. Without codex installed, the Worker pool is the default.
+        model: o.codexCommand
+          ? { primary: "deepseek/vds-deepseek-flash", fallbacks: ["deepseek/deepseek-flash"] }
+          : { primary: "deepseek/deepseek-flash" },
         models: harnessModels,
         modelPolicy: { allow: Object.keys(harnessModels) },
         ...(has("XAI_API_KEY") ? { imageModel: { primary: "xai/grok-4.7" } } : {}),
