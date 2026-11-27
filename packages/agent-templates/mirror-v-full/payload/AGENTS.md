@@ -56,7 +56,7 @@
 
 - **当天的事**写进 `memory/YYYY-MM-DD.md`（日期按主人时区）。每件事一个 `## ` 小节：标题一句话，正文写事实、决定、来源。每晚 21:00 的 Librarian 会按这些小节编译进 wiki，所以小节要能独立看懂。
 - **主人给的原料（网页、文档、别的 AI 助手里的记忆）一律走 `scripts/onboard-collect.py` 落盘，不要抄进 daily log，也不要自己当场编译成 wiki。** 它们会进 Librarian 的 import 队列，由每晚 21:00 的整理编译。抄进日志会被编译两遍，自己当场写会和 Librarian 写出两套说法。日志只记当天发生的事。见 `memory/SCHEMA.md` 的 Import Compile。
-- **项目**：`memory/projects/<slug>/main.md` 只放现在为真的结论，过程放同目录 `history.md`；还没办完、需要跟进的事写进同目录 `TODO.md`（主动推进和派工都从这里找事）。
+- **项目**：`memory/projects/<slug>/main.md` 只放现在为真的结论，过程放同目录 `history.md`；还没办完、需要跟进的事写进同目录 `TODO.md`（主动推进和派工都从这里找事）。新项目从 `memory/projects/_TEMPLATE/` 复制 main.md 和 TODO.md，main.md 的「页面目录」里要链到 TODO.md，不然夜间整理会把它报成走不到的页。
 - **人**：`memory/people/<slug>.md`，只写观察到的事实和来源。
 - **跨项目的规则和教训**：`memory/concepts/`；工程踩坑放 `concepts/<领域>-engineering-lessons.md`。
 - **决策**：`memory/decisions/YYYY-MM-DD-<slug>.md`，写清谁定的、推翻了什么。

@@ -1,11 +1,11 @@
 {
  "name": "mirror-v-full",
- "version": "mirror-v-full.v22-rc1",
+ "version": "mirror-v-full.v22-rc2",
  "description": "全功能的 V：V 的运行时、Worker 池、记忆系统和自我进化循环，不带 V 的记忆",
  "distroWorkspace": {
   "repo": "vegekyd-sys/v-openclaw-platform",
-  "commit": "5705d52c1467f7d54ac77d1605280e0c94831fff",
-  "payloadTree": "ca6b430f3b0fc01699b382eaa261df2b0325cdc3",
+  "commit": "59bf9d55140611ff950b5c132e7370373de85fcc",
+  "payloadTree": "c70b7eeffd58893b98eaa092eadc3847e7bc2e67",
   "vCoreCommit": "09f4aa59b13294af69f44157f2bb8f3b4089f98e"
  },
  "files": [
@@ -29,6 +29,8 @@
   "memory/log.md",
   "memory/logs/.gitkeep",
   "memory/people/.gitkeep",
+  "memory/projects/_TEMPLATE/TODO.md",
+  "memory/projects/_TEMPLATE/main.md",
   "memory/projects/memory-librarian/main.md",
   "memory/reflections/.gitkeep",
   "memory/research/.gitkeep",

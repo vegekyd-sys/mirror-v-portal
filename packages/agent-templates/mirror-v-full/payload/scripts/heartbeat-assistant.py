@@ -139,6 +139,8 @@ def recent_files(pattern: str, days: int, limit: int) -> list[dict]:
 def open_todos(limit: int = 40) -> list[dict]:
     out = []
     for p in sorted((WS / "memory" / "projects").glob("*/TODO.md")):
+        if p.parent.name.startswith("_"):
+            continue  # _TEMPLATE
         for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             if re.match(r"\s*[-*]\s*\[ \]", line):
                 out.append({"file": str(p.relative_to(WS)), "line": i, "text": line.strip()[:200]})

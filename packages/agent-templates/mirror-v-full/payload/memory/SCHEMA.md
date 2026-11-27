@@ -20,7 +20,7 @@ Daily log 记录"发生了什么"，wiki 保存"现在什么是真的"。新信�
 - **memory/ 下的页都要进 git**：普通会话新建或改过的页常常只写不提交。21:00 编译第一步用 `scripts/librarian-adopt-untracked.py --stage` 收编：
   - 没进 git 的新文件（adoptable），以及别的会话改了但没提交的已有 .md 页（adoptable_modified，例如 ai-patterns.md、项目 main.md），只要超过 2 小时没改、新增内容没扫出 secret，就由 Librarian 先单独提交一次，再在这个基础上照常更新——不要绕开，也不要把本该写进去的内容挪去新子页。
   - 2 小时内还在改的页当晚不动，要写进这些页的日志段留在队列里，第二晚再编译。扫出 secret 的不提交，只把文件名和行号报给主人。json/log 这类状态文件和删除操作不收编。
-- `projects/<slug>/main.md`：项目实体页，是主干。放项目状态、群 ID、关键决策、当前规则、未决事项。细节可以拆子页，但必须从 main.md 链过去。
+- `projects/<slug>/main.md`：项目实体页，是主干。放项目状态、群 ID、关键决策、当前规则、未决事项。细节可以拆子页，但必须从 main.md 链过去。新建项目从 `projects/_TEMPLATE/` 复制 main.md 和 TODO.md：main.md 的「页面目录」已经链好 TODO.md 和 history.md，后加的子页也挂进这一节。
 - `people/<slug>.md`：人物卡。只写观察到的事实和来源，不推断性格/观点。
 - `concepts/<slug>.md`：跨项目的规则、SOP、机制、教训。一个主题一页。
 - `decisions/YYYY-MM-DD-<slug>.md`：有日期的决策。写明谁定的、推翻了哪条旧结论。

@@ -2,8 +2,8 @@
  "from": "git",
  "repo": "vegekyd-sys/v-openclaw-platform",
  "ref": "origin/claude/distro-workspace-cd7827",
- "commit": "5705d52c1467f7d54ac77d1605280e0c94831fff",
- "payloadTree": "ca6b430f3b0fc01699b382eaa261df2b0325cdc3",
+ "commit": "59bf9d55140611ff950b5c132e7370373de85fcc",
+ "payloadTree": "c70b7eeffd58893b98eaa092eadc3847e7bc2e67",
  "vCoreCommit": "09f4aa59b13294af69f44157f2bb8f3b4089f98e",
  "rendered": [
   "WORKSPACE",
@@ -12,9 +12,7 @@
   "TIMEZONE"
  ],
  "skipped": 12,
- "sandboxFiles": [
-  "artifacts/memory-graph/vendor/force-graph.min.js"
- ],
+ "sandboxFiles": [],
  "patches": [
   "01-portal-sandbox.patch"
  ]

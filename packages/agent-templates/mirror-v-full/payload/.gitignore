@@ -1,4 +1,6 @@
 tmp/
+# 平台仓库根的 .gitignore 忽略所有 artifacts/；这里重新纳入，下面再只放行图谱库原件
+!artifacts/
 *.log
 __pycache__/
 # 记忆页是每晚重建的产物（index.html、graph.json、graph-lib.js、days/、history.jsonl），不进 git；只有随模板带的图谱库原件进

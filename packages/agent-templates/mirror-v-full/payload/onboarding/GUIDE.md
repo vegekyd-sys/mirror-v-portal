@@ -88,6 +88,7 @@
    - `USER.md`：主人是谁。只写资料里明确写着的：称呼、职位、公司、负责什么。
    - `memory/projects/<公司或主业的 slug>/main.md`：公司或主业一页。写清做什么、产品、客户、阶段、关键的人。
    - 主人手上最主要的 1 到 3 件事，各一页 `memory/projects/<slug>/main.md`。资料里看不出来就不写。
+   - 新项目页都从 `memory/projects/_TEMPLATE/` 复制 main.md（和要用时的 TODO.md）；main.md 的「页面目录」保留指向 TODO.md 的那一行。
    - 新页挂进 `memory/index.md`；`memory/log.md` 追加 `## [日期] import | 上手初稿`。
    - 拿不准的写进页面的 `## 待确认` 一节，不当事实写。资料互相矛盾的，两种说法都写，标上各自来源。
    - 这几份原文不用标去向，晚上的整理会再完整编译一遍，并合并进这些页。

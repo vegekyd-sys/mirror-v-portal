@@ -1,5 +1,5 @@
 diff --git a/AGENTS.md b/AGENTS.md
-index e5f4d8c..03c95f2 100644
+index 4a3b016..28d352c 100644
 --- a/AGENTS.md
 +++ b/AGENTS.md
 @@ -1,4 +1,4 @@
@@ -316,7 +316,7 @@ index 47d5508..ec7b719 100644
    "timezone": "Asia/Shanghai",
    "storage": {
 diff --git a/onboarding/GUIDE.md b/onboarding/GUIDE.md
-index 07cba6b..e55d9ec 100644
+index 2329c03..0499cbb 100644
 --- a/onboarding/GUIDE.md
 +++ b/onboarding/GUIDE.md
 @@ -27,14 +27,12 @@
@@ -357,7 +357,7 @@ index 07cba6b..e55d9ec 100644
    这一轮的回复：第一句是 `headline` 原文，最后一句「我在整理我对你的理解，大约 5 分钟后发给你。这期间有别的事可以直接找我。」
  
  `remaining > 0` 不用管：今晚的同步会接着读，不要现在接着跑。
-@@ -111,7 +109,7 @@
+@@ -112,7 +110,7 @@
  
     哪里不对直接告诉我，我马上改；都对的话回「对」。
     ```
@@ -366,7 +366,7 @@ index 07cba6b..e55d9ec 100644
  
  读到的资料太少、写不出像样的初稿时，就如实说「资料里关于你本人的内容不多」，把能写的写上，然后请主人用两三句话介绍一下自己和公司。
  
-@@ -172,9 +170,9 @@
+@@ -173,9 +171,9 @@
  
  ## 第 6 步 · 收尾（step = naming → done）
  
@@ -379,7 +379,7 @@ index 07cba6b..e55d9ec 100644
  4. **主人回了之后**，一次写完下面这些：
     - `IDENTITY.md`：名字、主人；
     - `USER.md`：补上称呼、时区（默认 Asia/Shanghai）、语言、主要是帮公司还是帮个人、这次明确说过的偏好、拒绝过的来源；
-@@ -184,11 +182,8 @@
+@@ -185,11 +183,8 @@
  
     ```bash
     git add -- IDENTITY.md USER.md memory/ && git commit -m "onboarding: <名字>"
